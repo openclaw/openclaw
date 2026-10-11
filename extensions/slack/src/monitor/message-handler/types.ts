@@ -30,17 +30,14 @@ export type PreparedSlackMessage = {
   replyTarget: string;
   ctxPayload: FinalizedMsgContext;
   turn: {
-    storePath: string;
     record: InboundReplyRecordOptions;
   };
   replyToMode: "off" | "first" | "all" | "batched";
   forcedReplyThreadTs?: string;
   sessionDisplayName?: string;
   slackMessageMetadata?: MessageMetadata;
-  requireMention: boolean;
   isDirectMessage: boolean;
   isRoomish: boolean;
-  preview: string;
   ackReactionMessageTs?: string;
   ackReactionValue: string;
   ackReactionPromise: Promise<boolean> | null;

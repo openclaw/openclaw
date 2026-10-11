@@ -1,6 +1,6 @@
-// Linux OOM score helpers adjust child process OOM priority when supported.
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
+import { readChildRuntimeViability } from "../infra/child-runtime-viability.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 
 /**
@@ -155,13 +155,13 @@ function prepareOomScoreAdjustedSpawnWithExecEnvPolicy(
     env: options?.env,
     wrapped: false,
   };
-  // POSIX sh implementations such as dash do not support `exec --`. A command
-  // starting with "-" could be parsed as an exec option, so keep that rare
-  // shape on the original direct-spawn path instead of wrapping it.
+  // POSIX sh lacks `exec --`; a leading dash would become an exec option.
   if (
     !command ||
     command.startsWith("-") ||
     !shouldWrapChildForOomScore(options) ||
+    // A shell would start successfully and hide the removed runtime's native ENOENT.
+    (command === process.execPath && !readChildRuntimeViability().available) ||
     (options?.argv0 !== undefined && options.argv0 !== command)
   ) {
     // POSIX sh cannot preserve an argv0 that differs from the exec pathname.

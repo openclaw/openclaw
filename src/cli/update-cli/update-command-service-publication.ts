@@ -2,9 +2,6 @@
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { resolveGatewayProfileSuffix } from "../../daemon/constants.js";
-import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
 import {
   isScheduledTaskDefinitelyNotRunning,
@@ -15,7 +12,6 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
-import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { hasNodeErrorCode, isPathInside } from "../../infra/path-guards.js";
@@ -32,6 +28,7 @@ import {
   observedSystemdManagerUid,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
+import { assertManagedGatewayArtifactPublication } from "./update-command-service-revalidation.js";
 
 export async function isManagedGatewayServiceOffline(state: GatewayServiceState): Promise<boolean> {
   // Loaded LaunchAgents can respawn even while disabled. Windows needs the live
@@ -80,6 +77,13 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         `${inspectionDetail}Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the original command.`,
         { cause },
       );
+    };
+    const inspectionFailed = (error: unknown): never => {
+      assertCurrent();
+      if (error instanceof UpdatePreMutationError) {
+        throw error;
+      }
+      return refuse(error);
     };
     const service = resolveGatewayService();
     type PathIdentity = { real: string; stat?: Stats };
@@ -155,36 +159,24 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         timeoutMs: params.timeoutMs,
       });
       assertCurrent();
-      const layout = await summarizeGatewayServiceLayout(state.command);
-      assertCurrent();
       const database = await outputIdentity(resolveOpenClawStateSqlitePath(state.env));
       assertCurrent();
-      const serviceName =
-        process.platform === "darwin"
-          ? resolveLaunchAgentLabel(state.env)
-          : process.platform === "win32"
-            ? resolveTaskName(state.env)
-            : resolveSystemdServiceName(state.env);
-      const nativeIdentity = stableStringify({
-        command: state.command,
-        serviceName,
-        profile: resolveGatewayProfileSuffix(state.env.OPENCLAW_PROFILE),
-        managerUid: observedSystemdManagerUid(state),
-      });
-      let serving: { root: PathIdentity; entrypoint: PathIdentity } | undefined;
-      let disjoint = false;
-      if (layout?.packageRootReal && layout.entrypointReal) {
+      const inspectServing = async (command: GatewayServiceState["command"]) => {
+        const layout = await summarizeGatewayServiceLayout(command);
+        assertCurrent();
+        if (!layout?.packageRootReal || !layout.entrypointReal) {
+          return undefined;
+        }
         const [installed, entrypoint] = await Promise.all([
           identity(layout.packageRootReal),
           outputIdentity(layout.entrypointReal),
         ]);
         assertCurrent();
-        serving = { root: installed, entrypoint };
         const servingOutputs = await Promise.all(
           outputPaths.map((output) => outputIdentity(path.join(installed.real, output))),
         );
         assertCurrent();
-        disjoint =
+        const disjoint =
           !same(target, installed) &&
           !destinations.some(
             (destination) =>
@@ -197,19 +189,19 @@ export async function withGatewayRuntimeArtifactPublication<T>(
                   isPathInside(output.real, destination.real),
               ),
           );
-      } else if (
-        state.command ||
-        state.installed ||
-        state.loadState.status !== "not-loaded" ||
-        !state.runtime?.missingUnit
-      ) {
-        refuse();
-      }
+        return { serving: { root: installed, entrypoint }, disjoint };
+      };
+      const inspected = await inspectServing(state.command);
+      const serving = inspected?.serving;
+      const disjoint = inspected?.disjoint ?? false;
       const absent =
         !state.command &&
         !state.installed &&
         state.loadState.status === "not-loaded" &&
         state.runtime?.missingUnit === true;
+      if (!inspected && !absent) {
+        refuse();
+      }
       if (
         !disjoint &&
         (state.running ||
@@ -241,51 +233,32 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           refuse();
         }
       }
-      return { state, disjoint, parents, destinations, database, nativeIdentity, serving };
+      await assertManagedGatewayArtifactPublication({
+        roots: [params.root],
+        env: params.env,
+        timeoutMs: params.timeoutMs,
+        assertCurrent,
+        updateInstallKind: "git",
+        shouldRestart: false,
+        inspectOverlap: async (_root, command) => {
+          const consumer = await inspectServing(command);
+          return consumer ? !consumer.disjoint : null;
+        },
+      });
+      return { disjoint, database, serving, root: target.real, destinations };
     };
-    const inspect = async () => {
-      try {
-        return await readInspection();
-      } catch (error) {
-        assertCurrent();
-        if (error instanceof UpdatePreMutationError) {
-          throw error;
-        }
-        return refuse(error);
-      }
-    };
+    const inspect = () => readInspection().catch(inspectionFailed);
     const before = await inspect();
     assertCurrent();
     if (before.serving && !before.serving.entrypoint.stat) {
       refuse();
     }
     const assertPublicationCurrent = async () => {
+      // Pin write destinations, but let current service facts replace older observations.
       const current = await inspect();
-      assertCurrent();
-      const changedIdentity = (previous: PathIdentity, next: PathIdentity) =>
-        previous.real !== next.real ||
-        Boolean(
-          previous.stat &&
-          (!next.stat ||
-            previous.stat.dev !== next.stat.dev ||
-            previous.stat.ino !== next.stat.ino),
-        );
       if (
-        before.disjoint !== current.disjoint ||
-        before.database.real !== current.database.real ||
-        before.nativeIdentity !== current.nativeIdentity ||
-        before.parents.some((parent, index) => changedIdentity(parent, current.parents[index]!)) ||
-        before.destinations.some(
-          (destination, index) => destination.real !== current.destinations[index]!.real,
-        ) ||
-        (before.serving &&
-          (!current.serving ||
-            changedIdentity(before.serving.root, current.serving.root) ||
-            before.serving.entrypoint.real !== current.serving.entrypoint.real ||
-            (!before.destinations.some((destination) =>
-              isPathInside(destination.real, current.serving!.entrypoint.real),
-            ) &&
-              changedIdentity(before.serving.entrypoint, current.serving.entrypoint))))
+        current.root !== before.root ||
+        current.destinations.some((entry, index) => entry.real !== before.destinations[index]!.real)
       ) {
         refuse();
       }
@@ -309,22 +282,14 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           });
         }
       } catch (error) {
-        assertCurrent();
-        if (error instanceof UpdatePreMutationError) {
-          throw error;
-        }
-        refuse(error);
+        inspectionFailed(error);
       }
       const publishOwned = async () => {
         try {
           await assertPublicationCurrent();
           assertCurrent();
         } catch (error) {
-          assertCurrent();
-          if (error instanceof UpdatePreMutationError) {
-            throw error;
-          }
-          refuse(error);
+          inspectionFailed(error);
         }
         // The publisher joins its rollback before settling, keeping both exclusions held.
         const result = await publish(assertPublicationCurrent);
@@ -335,18 +300,13 @@ export async function withGatewayRuntimeArtifactPublication<T>(
     } catch (error) {
       publicationFailures.push(error);
     }
-    try {
-      await maintenance?.close();
-    } catch (error) {
-      if (!publicationFailures.includes(error)) {
-        publicationFailures.push(error);
-      }
-    }
-    try {
-      processOwner?.release();
-    } catch (error) {
-      if (!publicationFailures.includes(error)) {
-        publicationFailures.push(error);
+    for (const close of [() => maintenance?.close(), () => processOwner?.release()]) {
+      try {
+        await close();
+      } catch (error) {
+        if (!publicationFailures.includes(error)) {
+          publicationFailures.push(error);
+        }
       }
     }
     throwSqliteLifecycleErrors(

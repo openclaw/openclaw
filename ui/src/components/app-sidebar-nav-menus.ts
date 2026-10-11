@@ -1,23 +1,15 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
   isSessionsHubRoute,
   isSettingsNavigationRoute,
-  navigationIconForRoute,
-  serializeSidebarEntry,
   type NavigationRouteId,
-  SIDEBAR_NAV_ROUTES,
-  type SidebarNavRoute,
-  sidebarMoreRoutes,
-  titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
-import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { icons, type IconName } from "./icons.ts";
+import { renderMenuTrigger } from "./menu-surface.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
@@ -40,19 +32,30 @@ export function renderSidebarMenuAction(
   </wa-dropdown-item>`;
 }
 
-export function renderSidebarMenuTrigger(
-  position: SidebarMenuPosition,
-  label: string,
-  edge: "top" | "bottom" = "top",
-) {
-  return html`<button
-    slot="trigger"
-    type="button"
-    tabindex="-1"
-    aria-hidden="true"
-    aria-label=${label}
-    style="position: fixed; left: ${position.x}px; ${edge}: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-  ></button>`;
+export function renderSidebarDropdown(params: {
+  position: SidebarMenuPosition;
+  className: string;
+  label: string;
+  onSelect: (item: HTMLElement & { value: string }) => void;
+  onTabAway: () => void;
+  onClose: (restoreFocus: boolean) => void;
+  content: unknown;
+}) {
+  return html`<wa-dropdown
+    class=${params.className}
+    .open=${true}
+    placement="bottom-start"
+    .distance=${0}
+    aria-label=${params.label}
+    @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value: string } }>) => {
+      event.preventDefault();
+      params.onSelect(event.detail.item);
+    }}
+    @keydown=${(event: KeyboardEvent) => trackDropdownKeyboardDismissal(event, params.onTabAway)}
+    @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
+  >
+    ${renderMenuTrigger(params.position, params.label)} ${params.content}
+  </wa-dropdown>`;
 }
 
 /** Settings routes highlight Settings; hub tabs highlight their hub entry. */
@@ -75,7 +78,6 @@ export function isSidebarRouteActive(
   return activeRouteId === routeId;
 }
 
-/** Stable ordering for plugin-provided sidebar tabs. */
 export function sidebarPluginTabs(
   tabs: readonly GatewayControlUiPluginTab[] | undefined,
 ): GatewayControlUiPluginTab[] {
@@ -85,29 +87,34 @@ export function sidebarPluginTabs(
   );
 }
 
-type SidebarNavRouteParams = {
-  routeId: NavigationRouteId;
+export function renderSidebarNavLink(params: {
   href: string;
   active: boolean;
+  icon: TemplateResult;
+  label: string;
   onNavigate: () => void;
-  onPreload: (event: Event, immediate?: boolean) => void;
-  onCancelPreload: (event: Event) => void;
-};
-
-export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
+  onPreload?: (event: Event, immediate?: boolean) => void;
+  onCancelPreload?: (event: Event) => void;
+}) {
+  const onPreload = params.onPreload;
   return html`
     <a
+      draggable="false"
       href=${params.href}
       class="nav-item ${params.active ? "nav-item--active" : ""}"
       aria-current=${params.active ? "page" : nothing}
-      @focus=${(event: Event) => params.onPreload(event)}
-      @blur=${params.onCancelPreload}
-      @pointerenter=${(event: Event) => params.onPreload(event)}
-      @pointerleave=${params.onCancelPreload}
-      @touchstart=${{
-        handleEvent: (event: TouchEvent) => params.onPreload(event, true),
-        passive: true,
-      }}
+      @focus=${onPreload ? (event: Event) => onPreload(event) : nothing}
+      @blur=${params.onCancelPreload ?? nothing}
+      @pointerenter=${onPreload ? (event: Event) => onPreload(event) : nothing}
+      @pointerleave=${params.onCancelPreload ?? nothing}
+      @touchstart=${
+        onPreload
+          ? {
+              handleEvent: (event: TouchEvent) => onPreload(event, true),
+              passive: true,
+            }
+          : nothing
+      }
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;
@@ -116,206 +123,39 @@ export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
         params.onNavigate();
       }}
     >
-      <span class="nav-item__icon" aria-hidden="true"
-        >${icons[navigationIconForRoute(params.routeId)]}</span
-      >
-      <span class="nav-item__text">${titleForRoute(params.routeId)}</span>
+      <span class="nav-item__icon" aria-hidden="true">${params.icon}</span>
+      <span class="nav-item__text">${params.label}</span>
     </a>
   `;
 }
 
-export function renderSidebarPluginTab(params: {
-  tab: GatewayControlUiPluginTab;
-  basePath: string;
-  active: boolean;
-  onNavigate: (location: ReturnType<typeof pluginTabLocation>) => void;
+export function renderSidebarPluginNavigationMenu(params: {
+  position: SidebarMenuPosition;
+  item: ControlUiNavigationItem;
+  onSelect: (id: string) => Promise<void>;
+  onTabAway: () => void;
+  onClose: (restoreFocus: boolean) => void;
 }) {
-  const location = pluginTabLocation(params.tab, params.basePath);
-  const iconName = Object.hasOwn(icons, params.tab.icon!) ? (params.tab.icon as IconName) : "plug";
-  return html`
-    <a
-      href=${`${location.pathname}${location.search}`}
-      class="nav-item ${params.active ? "nav-item--active" : ""}"
-      aria-current=${params.active ? "page" : nothing}
-      @click=${(event: MouseEvent) => {
-        if (!shouldHandleNavigationClick(event)) {
-          return;
-        }
-        event.preventDefault();
-        params.onNavigate(location);
-      }}
-    >
-      <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
-      <span class="nav-item__text">${params.tab.label}</span>
-    </a>
-  `;
-}
-
-type SidebarMenuNavigationHandlers = {
-  onNavigateRoute: (routeId: SidebarNavRoute) => void;
-  onPreloadRoute: (routeId: SidebarNavRoute, event: Event) => void;
-  onCancelPreload: (event: Event) => void;
-};
-
-type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
-  position: SidebarMenuPosition;
-  basePath: string;
-  activeRouteId: NavigationRouteId | undefined;
-  sidebarEntries: readonly string[];
-  isRouteEnabled: (routeId: NavigationRouteId) => boolean;
-  onEditPinnedItems: () => void;
-  onTabAway: () => void;
-  onClose: (restoreFocus: boolean) => void;
-};
-
-function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavRoute) {
-  const active = isSidebarRouteActive(params.activeRouteId, routeId);
-  return html`
-    <wa-dropdown-item
-      value=${routeId}
-      class="sidebar-customize-menu__item ${active ? "sidebar-customize-menu__item--active" : ""}"
-      aria-current=${active ? "page" : nothing}
-      @pointerenter=${(event: Event) => params.onPreloadRoute(routeId, event)}
-      @pointerleave=${params.onCancelPreload}
-      @click=${(event: MouseEvent) => {
-        if (!shouldHandleNavigationClick(event)) {
-          // wa-select also fires for native clicks; mark them so it does not add SPA navigation.
-          (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";
-          return;
-        }
-        event.preventDefault();
-      }}
-    >
-      <a href=${pathForRoute(routeId, params.basePath)} tabindex="-1">
-        <span class="nav-item__icon" aria-hidden="true"
-          >${icons[navigationIconForRoute(routeId)]}</span
+  return renderSidebarDropdown({
+    ...params,
+    className: "sidebar-customize-menu sidebar-plugin-navigation-menu",
+    label: params.item.label,
+    onSelect: ({ value }) => void params.onSelect(value),
+    content: html`
+      ${(params.item.actions ?? []).map((action) => {
+        const icon =
+          action.icon && Object.hasOwn(icons, action.icon)
+            ? icons[action.icon as IconName] // SAFETY: only own keys of the shared icon registry are admitted.
+            : nothing;
+        return html`<wa-dropdown-item
+          class="sidebar-customize-menu__item ${action.destructive ? "session-menu__item--destructive" : ""}"
+          value=${action.id}
+          variant=${action.destructive ? "danger" : "neutral"}
         >
-        <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
-      </a>
-    </wa-dropdown-item>
-  `;
-}
-
-export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
-  const position = params.position;
-  const moreRoutes = sidebarMoreRoutes(params.sidebarEntries).filter((routeId) =>
-    params.isRouteEnabled(routeId),
-  );
-  return html`
-    <wa-dropdown
-      class="sidebar-customize-menu sidebar-more-menu"
-      .open=${true}
-      placement="bottom-start"
-      .distance=${0}
-      aria-label=${t("nav.more")}
-      @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-        event.preventDefault();
-        const item = event.detail.item;
-        if (item.dataset.nativeNavigation) {
-          delete item.dataset.nativeNavigation;
-          return;
-        }
-        const value = item.value;
-        if (value === "customize") {
-          params.onEditPinnedItems();
-          return;
-        }
-        if (value && moreRoutes.includes(value as SidebarNavRoute)) {
-          params.onNavigateRoute(value as SidebarNavRoute);
-        }
-      }}
-      @keydown=${(event: KeyboardEvent) => trackDropdownKeyboardDismissal(event, params.onTabAway)}
-      @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
-    >
-      ${renderSidebarMenuTrigger(position, t("nav.more"))}
-      ${moreRoutes.map((routeId) => renderMoreMenuRoute(params, routeId))}
-      <div class="sidebar-customize-menu__separator" role="separator"></div>
-      ${renderSidebarMenuAction("customize", t("nav.customize"), "penLine")}
-    </wa-dropdown>
-  `;
-}
-
-type SidebarCustomizeMenuParams = {
-  position: SidebarMenuPosition;
-  sidebarEntries: readonly string[];
-  preferencesBrowserOnly: boolean;
-  isRouteEnabled: (routeId: NavigationRouteId) => boolean;
-  pluginNavigation: ControlUiRegistration<ControlUiNavigationItem>[];
-  onToggleRoute: (routeId: SidebarNavRoute) => void;
-  onTogglePlugin: (key: string) => void;
-  onReset: () => void;
-  onTabAway: () => void;
-  onClose: (restoreFocus: boolean) => void;
-};
-
-export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
-  const position = params.position;
-  return html`
-    <wa-dropdown
-      class="sidebar-customize-menu sidebar-pin-editor-menu"
-      .open=${true}
-      placement="bottom-start"
-      .distance=${0}
-      aria-label=${t("nav.customize")}
-      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        event.preventDefault();
-        const value = event.detail.item.value;
-        if (value === "reset") {
-          params.onReset();
-        } else if (value?.startsWith("plugin:")) {
-          const key = value.slice("plugin:".length);
-          if (params.pluginNavigation.some((entry) => entry.key === key)) {
-            params.onTogglePlugin(key);
-          }
-        } else if (value && SIDEBAR_NAV_ROUTES.includes(value as SidebarNavRoute)) {
-          params.onToggleRoute(value as SidebarNavRoute);
-        }
-      }}
-      @keydown=${(event: KeyboardEvent) => trackDropdownKeyboardDismissal(event, params.onTabAway)}
-      @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
-    >
-      ${renderSidebarMenuTrigger(position, t("nav.customize"))}
-      <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
-      ${
-        params.preferencesBrowserOnly
-          ? html`<div class="sidebar-customize-menu__provenance" role="note">
-              ${t("quickSettings.personal.browserOnly")}
-            </div>`
-          : nothing
-      }
-      ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
-        const visible = params.sidebarEntries.includes(
-          serializeSidebarEntry({ type: "route", route: routeId }),
-        );
-        return html`
-          <wa-dropdown-item
-            class="sidebar-customize-menu__item"
-            type="checkbox"
-            value=${routeId}
-            .checked=${visible}
-          >
-            <span slot="icon" class="nav-item__icon" aria-hidden="true"
-              >${icons[navigationIconForRoute(routeId)]}</span
-            >
-            <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
-          </wa-dropdown-item>
-        `;
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icon}</span>
+          <span class="sidebar-customize-menu__text">${action.label}</span>
+        </wa-dropdown-item>`;
       })}
-      ${params.pluginNavigation
-        .filter((entry) => entry.value.defaultVisible === false)
-        .map(
-          (entry) => html` <wa-dropdown-item
-            class="sidebar-customize-menu__item"
-            type="checkbox"
-            value=${`plugin:${entry.key}`}
-            .checked=${params.sidebarEntries.includes(`plugin:${entry.key}`)}
-          >
-            <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.plug}</span>
-            <span class="sidebar-customize-menu__text">${entry.value.label}</span>
-          </wa-dropdown-item>`,
-        )}
-      <div class="sidebar-customize-menu__separator" role="separator"></div>
-      ${renderSidebarMenuAction("reset", t("nav.customizeReset"), "refresh")}
-    </wa-dropdown>
-  `;
+    `,
+  });
 }

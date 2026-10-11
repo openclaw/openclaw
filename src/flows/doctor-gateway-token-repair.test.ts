@@ -15,7 +15,7 @@ import {
   writeSecretStoreEntry,
 } from "../secrets/store/secret-store.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -30,14 +30,14 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const tokenRef = { source: "store", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" } as const;
 
-function createFixture(
+async function createFixture(
   value = REDACTED_SENTINEL,
   options: DoctorOptions = {},
   kind: "secret" | "env" = "secret",
 ) {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("doctor-gateway-token-repair-") };
   const entry = { scope: { kind: "team" as const }, name: tokenRef.id, database: { env } };
-  writeSecretStoreEntry({
+  await writeSecretStoreEntry({
     ...entry,
     value: "synthetic-original-token",
     kind,
@@ -80,16 +80,16 @@ async function runGatewayAuth(ctx: ReturnType<typeof createDoctorHealthFlowConte
 }
 
 beforeEach(() => vi.mocked(note).mockClear());
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 describe("Doctor Gateway token store repair", () => {
   it.each(["config", "environment"])(
     "records a warning for a redacted optional proxy password from %s",
     async (source) => {
-      const fixture = createFixture("synthetic-healthy-token", {
+      const fixture = await createFixture("synthetic-healthy-token", {
         repair: true,
         generateGatewayToken: true,
       });
@@ -124,43 +124,56 @@ describe("Doctor Gateway token store repair", () => {
     },
   );
 
-  it("names a redacted store entry and its remedy without mutating diagnostic state", async () => {
-    const fixture = createFixture();
-    expect(await detectGatewayAuthHealth(fixture.ctx)).toEqual([
-      expect.objectContaining({
-        severity: "error",
-        requirement: "SECRET_REF_REDACTED_VALUE",
-        message: expect.stringContaining(tokenRef.id),
-        fixHint: expect.stringContaining("openclaw doctor --fix"),
-      }),
-    ]);
-    await runGatewayAuth(fixture.ctx);
-    expect(note).toHaveBeenCalledWith(expect.stringContaining(tokenRef.id), "Gateway auth");
-    expect(readSecretStoreValue(fixture.entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
-    expect(fixture.backups()).toEqual([]);
-  });
+  it.each([false, true])(
+    "leaves a managed SecretRef unchanged without an eligible repair (healthy=%s)",
+    async (healthy) => {
+      const value = healthy ? "synthetic-healthy-token" : REDACTED_SENTINEL;
+      const fixture = await createFixture(value, healthy ? { generateGatewayToken: true } : {});
+      expect(await detectGatewayAuthHealth(fixture.ctx)).toEqual(
+        healthy
+          ? []
+          : [
+              expect.objectContaining({
+                severity: "error",
+                requirement: "SECRET_REF_REDACTED_VALUE",
+                message: expect.stringContaining(tokenRef.id),
+                fixHint: expect.stringContaining("openclaw doctor --fix"),
+              }),
+            ],
+      );
+      await runGatewayAuth(fixture.ctx);
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining(
+          healthy
+            ? `generation skipped because gateway.auth.token is managed by SecretRef store:default:${tokenRef.id}`
+            : tokenRef.id,
+        ),
+        "Gateway auth",
+      );
+      expect(await readSecretStoreValue(fixture.entry)).toEqual({ ok: true, value });
+      expect(fixture.backups()).toEqual([]);
+    },
+  );
 
   it.each([
     { kind: "secret", options: { repair: true } },
-    { kind: "env", options: { repair: true } },
-    { kind: "secret", options: { generateGatewayToken: true } },
     { kind: "env", options: { generateGatewayToken: true } },
   ] as const)(
     "repairs redacted $kind state with $options while preserving the reference and verified backup",
     async ({ kind, options }) => {
-      const fixture = createFixture(REDACTED_SENTINEL, options, kind);
+      const fixture = await createFixture(REDACTED_SENTINEL, options, kind);
       await runGatewayAuth(fixture.ctx);
-      const repaired = readSecretStoreValue(fixture.entry);
+      const repaired = await readSecretStoreValue(fixture.entry);
       expect(repaired).toEqual({ ok: true, value: expect.stringMatching(/^[a-f0-9]{48}$/u) });
       expect(fixture.ctx.cfg.gateway?.auth?.token).toEqual(tokenRef);
       expect(await detectGatewayAuthHealth(fixture.ctx)).toEqual([]);
-      expect(listSecretStoreEntries(fixture.entry)).toEqual([
+      expect(await listSecretStoreEntries(fixture.entry)).toEqual([
         expect.objectContaining({
           kind,
           ...(kind === "secret" ? { allowedHosts: ["gateway.example.test"] } : {}),
         }),
       ]);
-      const execEnvironment = readSecretStoreExecEnvironment({
+      const execEnvironment = await readSecretStoreExecEnvironment({
         includeSecretSentinels: false,
         database: fixture.entry.database,
       });
@@ -169,7 +182,7 @@ describe("Doctor Gateway token store repair", () => {
       );
       const backup = expectDefined(fixture.backups()[0], "verified Gateway token backup");
       expect(fixture.backups()).toHaveLength(1);
-      expect(readSecretStoreValue({ ...fixture.entry, database: { path: backup } })).toEqual({
+      expect(await readSecretStoreValue({ ...fixture.entry, database: { path: backup } })).toEqual({
         ok: true,
         value: REDACTED_SENTINEL,
       });
@@ -178,78 +191,53 @@ describe("Doctor Gateway token store repair", () => {
     },
   );
 
-  it("explains why explicit generation leaves a usable SecretRef unchanged", async () => {
-    const fixture = createFixture("synthetic-healthy-token", { generateGatewayToken: true });
-    await runGatewayAuth(fixture.ctx);
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        `generation skipped because gateway.auth.token is managed by SecretRef store:default:${tokenRef.id}`,
-      ),
-      "Gateway auth",
-    );
-    expect(readSecretStoreValue(fixture.entry)).toEqual({
-      ok: true,
-      value: "synthetic-healthy-token",
-    });
-    expect(fixture.backups()).toEqual([]);
-  });
-
-  it("records backup failure as a warning and leaves the original row intact", async () => {
-    const fixture = createFixture(REDACTED_SENTINEL, { repair: true });
-    vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockRejectedValueOnce(
-      new Error("synthetic disk full"),
-    );
-    await runGatewayAuth(fixture.ctx);
-    expect(readSecretStoreValue(fixture.entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
-    expect(fixture.ctx.updateWarnings).toContainEqual(
-      expect.stringContaining("synthetic disk full"),
-    );
-    expect(fixture.backups()).toEqual([]);
-  });
-
-  it("preserves a replacement made while the backup was running", async () => {
-    const fixture = createFixture(REDACTED_SENTINEL, { repair: true });
-    const snapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
-    vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockImplementationOnce(
-      async (options) => {
-        const result = await snapshot(options);
-        writeSecretStoreEntry({
-          ...fixture.entry,
-          kind: "secret",
-          value: "synthetic-concurrent-replacement",
-          updatedBy: "concurrent-writer",
+  it.each(["backup failure", "replacement", "kind change"] as const)(
+    "settles token repair safely after %s during the backup",
+    async (change) => {
+      const fixture = await createFixture(REDACTED_SENTINEL, { repair: true });
+      const snapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
+      const backup = vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot");
+      if (change === "backup failure") {
+        backup.mockRejectedValueOnce(new Error("synthetic disk full"));
+      } else {
+        backup.mockImplementationOnce(async (options) => {
+          const result = await snapshot(options);
+          if (change === "replacement") {
+            await writeSecretStoreEntry({
+              ...fixture.entry,
+              kind: "secret",
+              value: "synthetic-concurrent-replacement",
+              updatedBy: "concurrent-writer",
+            });
+          } else {
+            openOpenClawStateDatabase(fixture.entry.database)
+              .db.prepare(
+                "UPDATE secret_store_entries SET kind = 'env', allowed_hosts = NULL WHERE name = ?",
+              )
+              .run(tokenRef.id);
+          }
+          return result;
         });
-        return result;
-      },
-    );
-    await runGatewayAuth(fixture.ctx);
-    expect(readSecretStoreValue(fixture.entry)).toEqual({
-      ok: true,
-      value: "synthetic-concurrent-replacement",
-    });
-    expect(fixture.ctx.updateWarnings).toContainEqual(expect.stringContaining(tokenRef.id));
-  });
-
-  it("preserves a kind change made while the backup was running", async () => {
-    const fixture = createFixture(REDACTED_SENTINEL, { repair: true });
-    const snapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
-    vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockImplementationOnce(
-      async (options) => {
-        const result = await snapshot(options);
-        openOpenClawStateDatabase(fixture.entry.database)
-          .db.prepare(
-            "UPDATE secret_store_entries SET kind = 'env', allowed_hosts = NULL WHERE name = ?",
-          )
-          .run(tokenRef.id);
-        return result;
-      },
-    );
-    await runGatewayAuth(fixture.ctx);
-    expect(
-      readSecretStoreExecEnvironment({
-        includeSecretSentinels: false,
-        database: fixture.entry.database,
-      }).env?.[tokenRef.id],
-    ).toMatch(/^[a-f0-9]{48}$/u);
-  });
+      }
+      await runGatewayAuth(fixture.ctx);
+      if (change === "kind change") {
+        const result = await readSecretStoreExecEnvironment({
+          includeSecretSentinels: false,
+          database: fixture.entry.database,
+        });
+        expect(result.env?.[tokenRef.id]).toMatch(/^[a-f0-9]{48}$/u);
+      } else {
+        expect(await readSecretStoreValue(fixture.entry)).toEqual({
+          ok: true,
+          value: change === "replacement" ? "synthetic-concurrent-replacement" : REDACTED_SENTINEL,
+        });
+        expect(fixture.ctx.updateWarnings).toContainEqual(
+          expect.stringContaining(change === "replacement" ? tokenRef.id : "synthetic disk full"),
+        );
+        if (change === "backup failure") {
+          expect(fixture.backups()).toEqual([]);
+        }
+      }
+    },
+  );
 });

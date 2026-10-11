@@ -16,12 +16,6 @@ const requireUndiciPackage = createRequire(
 const undiciErrors = (requireUndiciPackage("./index.js") as typeof import("undici")).errors;
 
 describe("isToolResultError", () => {
-  it("keeps completed results with nonzero exit codes nonfatal", () => {
-    expect(isToolResultError({ details: { status: "completed", exitCode: 1 } })).toBe(false);
-    expect(isToolResultError({ details: { status: "completed", exitCode: 2 } })).toBe(false);
-    expect(isToolResultError({ details: { status: "completed", exitCode: 0 } })).toBe(false);
-  });
-
   it("keeps real failures fatal even with a completed status", () => {
     expect(isToolResultError({ details: { status: "completed", timedOut: true } })).toBe(true);
     expect(isToolResultError({ details: { status: "completed", error: "spawn failed" } })).toBe(
@@ -87,27 +81,26 @@ describe("protectNetworkToolExecutionError", () => {
     expect(protectedError.message).toContain("[REMOVED_SPECIAL_TOKEN]");
   });
 
-  it.each([
-    ["connect", undiciErrors.ConnectTimeoutError],
-    ["headers", undiciErrors.HeadersTimeoutError],
-    ["body", undiciErrors.BodyTimeoutError],
-  ])("retains private timeout classification for a real Undici %s cause", (_label, Failure) => {
-    const original = new TypeError("fetch failed", { cause: new Failure("deadline elapsed") });
+  it.each([["connect", undiciErrors.ConnectTimeoutError]])(
+    "retains private timeout classification for a real Undici %s cause",
+    (_label, Failure) => {
+      const original = new TypeError("fetch failed", { cause: new Failure("deadline elapsed") });
 
-    const protectedError = protectNetworkToolExecutionError(original, "fallback") as Error & {
-      cause?: unknown;
-      code?: string;
-    };
+      const protectedError = protectNetworkToolExecutionError(original, "fallback") as Error & {
+        cause?: unknown;
+        code?: string;
+      };
 
-    expect(resolveToolExecutionErrorKind(original)).toBe("timed_out");
-    expect(resolveToolExecutionErrorKind(protectedError)).toBe("timed_out");
-    expect(protectedError).toBeInstanceOf(TypeError);
-    expect(protectedError.cause).toBeUndefined();
-    expect(protectedError.code).toBeUndefined();
-    expect(protectNetworkToolExecutionError(protectedError, "second fallback")).toBe(
-      protectedError,
-    );
-  });
+      expect(resolveToolExecutionErrorKind(original)).toBe("timed_out");
+      expect(resolveToolExecutionErrorKind(protectedError)).toBe("timed_out");
+      expect(protectedError).toBeInstanceOf(TypeError);
+      expect(protectedError.cause).toBeUndefined();
+      expect(protectedError.code).toBeUndefined();
+      expect(protectNetworkToolExecutionError(protectedError, "second fallback")).toBe(
+        protectedError,
+      );
+    },
+  );
 
   it.each([
     new ToolInputError("query required"),

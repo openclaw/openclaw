@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import { createGatewayRequestContext } from "../../../gateway/server-request-context.js";
 import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
 import { resetHeartbeatEventsForTest } from "../../../infra/heartbeat-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
@@ -16,8 +17,8 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import {
   blockSubagentCompletionDelivery,
-  publishCommittedRecords,
-  settleRequesterCompletionBatch,
+  SubagentCompletionSourceChangedError,
+  mutateRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
 import {
   admitCompletionFixtureDatabase,
@@ -28,24 +29,33 @@ import {
 } from "../completion/subagent-completion-admission.test-helpers.js";
 import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import * as lifecycleCleanup from "./subagent-registry-lifecycle-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   activateSubagentRegistry,
   initSubagentRegistry,
   leasePendingAgentSteeringItems,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+function publishCommittedRecords(row: SubagentRunRecord): void {
+  subagentRuns.set(row.runId, row);
+  publishSubagentRunsAfterAtomicStore(subagentRuns, [row.runId])();
+}
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let settleRootWork: ReturnType<typeof observeRootWork>;
 vi.mock("../../../config/config.js", { spy: true });
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.useFakeTimers();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-child-store-replaced-"));
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   vi.mocked(getRuntimeConfig).mockReturnValue({});
   settleRootWork = observeRootWork();
   publishSystemEventStoreResolver(() => "original-store");
@@ -54,13 +64,50 @@ beforeEach(() => {
 afterEach(async () => {
   await settleRootWork();
   await closeOpenClawStateDatabaseAsync();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   publishSystemEventStoreResolver(undefined);
   resetHeartbeatEventsForTest();
   vi.mocked(getRuntimeConfig).mockReset();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.useRealTimers();
+});
+
+it("leaves yielded tasks with their owner until a final result needs store retirement", async () => {
+  const { subagent } = records();
+  subagent.requesterStorePath = "original-store";
+  markSubagentRunPausedAfterYield({ entry: subagent });
+  seedSubagentCompletionDelivery({ subagent });
+  publishCommittedRecords(subagent);
+  using runWorker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+
+  for (let publication = 0; publication < 3; publication++) {
+    publishSystemEventStoreResolver(() => "replacement-store");
+    await settleRootWork(true);
+  }
+  expect(runWorker).not.toHaveBeenCalled();
+  expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(false);
+  expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
+    pauseReason: "sessions_yield",
+    delivery: { status: "pending" },
+  });
+
+  const completed = structuredClone(
+    expectDefined(subagentRuns.get(subagent.runId), "yielded task"),
+  );
+  delete completed.pauseReason;
+  completed.execution.outcome = { status: "ok" };
+  completed.completion = { required: true, resultText: "retained final result" };
+  seedSubagentCompletionDelivery({ subagent: completed });
+  publishCommittedRecords(completed);
+  publishSystemEventStoreResolver(() => "replacement-store");
+  publishSystemEventStoreResolver(() => "original-store");
+  expect(subagentRuns.isCompletionAuthorityRetired(completed)).toBe(true);
+  await settleRootWork(true);
+  expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
+    completion: { resultText: "retained final result" },
+    delivery: { status: "suspended", disposition: "intentional_non_delivery" },
+  });
 });
 
 it.each([false, true])(
@@ -139,12 +186,19 @@ it.each([false, true])(
           throw new Error("a replaced store must not admit a delivery attempt");
         },
         completeBatch: async (batch, _generation, outcome, onCommitted) => {
-          await settleRequesterCompletionBatch({
-            entries: batch.map((subagent) => ({
-              subagent,
-            })),
-            outcome: expectDefined(outcome, "store replacement disposition"),
-            isCurrent: () => batch.every((entry) => subagentRuns.get(entry.runId) === entry),
+          await mutateRequesterCompletionBatch({
+            entries: batch,
+            operation: {
+              kind: "settle",
+              outcome: expectDefined(outcome, "store replacement disposition"),
+            },
+            assertCurrent: () => {
+              if (!batch.every((entry) => subagentRuns.get(entry.runId) === entry)) {
+                throw new SubagentCompletionSourceChangedError(
+                  "Subagent completion owner changed before settlement",
+                );
+              }
+            },
           });
           onCommitted?.();
         },
@@ -202,7 +256,7 @@ it("keeps an observed late-result store retirement after the original selector r
     },
   );
   try {
-    expect(driver.controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    expect(driver.controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
     const announce = await entered.promise;
     expect(announce.isCompletionDeliveryAllowed?.()).toBe(false);
     publishSystemEventStoreResolver(() => "original-store");
@@ -230,7 +284,7 @@ it("keeps an observed late-result store retirement after the original selector r
   ).toEqual([]);
 });
 
-it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
+it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"] as const)(
   "keeps automatic child notification disposition through store publication: %s",
   async (change) => {
     const input = change === "failed" ? failedRecords("failed", { status: "error" }) : records();
@@ -239,8 +293,7 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
     input.subagent.controllerStorePath = unknownStore ? undefined : "original-store";
     input.subagent.cleanupCompletedAt = undefined;
     input.subagent.delivery = {
-      status: change === "delivered" ? "delivered" : "pending",
-      ...(change === "delivered" ? { deliveredAt: Date.now(), announcedAt: Date.now() } : {}),
+      status: "pending",
       payload: loadPendingFinalDeliveryPayload(input.subagent),
     };
     const executionBefore = structuredClone(input.subagent.execution);
@@ -251,20 +304,66 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
       "persisted notification receipt",
     );
     subagentRuns.set(input.subagent.runId, input.subagent);
-    initSubagentRegistry();
+    await initSubagentRegistry();
+    using retireNotifications = vi.spyOn(lifecycleCleanup, "suspendReplacedStoreNotifications");
     if (change === "unknown retry") {
       await admitCompletionFixtureDatabase();
       database.db.exec(
         "CREATE TRIGGER reject_store_retirement BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'retirement write rejected'); END",
       );
     }
-    if (change === "restore") {
-      resetSubagentRegistryForTests({ persist: false });
+    if (change === "pending acknowledgment") {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let observed = false;
+      let settling: Promise<void> | undefined;
+      const held = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        const result = await scope.execute(command, executeOptions);
+        if (command.type === "sessionDelivery.mutateSubagentCompletion") {
+          observed = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return result;
+      });
+      try {
+        publishSystemEventStoreResolver(() => "replacement-store");
+        publishSystemEventStoreResolver(() => "original-store");
+        expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
+        settling = settleRootWork(true);
+        await Promise.race([entered.promise, settling]);
+        expect(observed).toBe(true);
+        expect(() => subagentRuns.runWithCompletionAuthority(input.subagent, () => "send")).toThrow(
+          /store was retired/,
+        );
+        expect(() =>
+          subagentRuns.runWithCompletionBatchAuthority([input.subagent], () => "send"),
+        ).toThrow(/store was retired/);
+        const successor = { ...structuredClone(input.subagent), runId: "replacement-completion" };
+        subagentRuns.transferCompletionAuthority(input.subagent, successor);
+        expect(() => subagentRuns.runWithCompletionAuthority(successor, () => "send")).toThrow(
+          /store was retired/,
+        );
+        expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
+        expect(subagentRuns.isCompletionAuthorityRetired(successor)).toBe(true);
+      } finally {
+        release.resolve();
+        await settling;
+        await settleRootWork(true);
+        held.mockRestore();
+      }
+      expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
+        status: "suspended",
+        disposition: "intentional_non_delivery",
+      });
+      expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
+    } else if (change === "restore") {
+      await resetSubagentRegistryForTests({ persist: false });
       publishSystemEventStoreResolver(() => "replacement-store");
-      initSubagentRegistry();
+      await initSubagentRegistry();
       const context = createGatewayRequestContext(makeContextParams());
       context.resolveGatewayContext = () => context;
-      activateSubagentRegistry(() => context);
+      await activateSubagentRegistry(() => context);
     } else {
       publishSystemEventStoreResolver(() =>
         change === "same" || unknownStore ? "original-store" : "replacement-store",
@@ -274,12 +373,22 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
     if (change === "unknown retry") {
       const context = createGatewayRequestContext(makeContextParams());
       context.resolveGatewayContext = () => context;
-      activateSubagentRegistry(() => context);
+      await activateSubagentRegistry(() => context);
       try {
+        expect(retireNotifications).toHaveBeenCalled();
+        await expect(retireNotifications.mock.results[0]?.value).rejects.toThrow(
+          "retirement write rejected",
+        );
         await expect(settleRootWork(true)).rejects.toMatchObject({
-          errors: expect.arrayContaining([
-            expect.objectContaining({ message: "retirement write rejected" }),
-          ]),
+          name: "AggregateError",
+          message: "Failed to settle subagent cleanup roots",
+          errors: [
+            {
+              name: "SubagentRegistryWriteError",
+              outcome: "not-committed",
+              cause: { message: "retirement write rejected" },
+            },
+          ],
         });
         expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery).toEqual(
           receipt,
@@ -306,9 +415,7 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
         .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
         .all(),
     ).toEqual([]);
-    if (change === "delivered") {
-      expect(persisted?.delivery).toEqual(receipt);
-    } else if (change !== "same") {
+    if (change !== "same") {
       expect(persisted?.delivery).toMatchObject({
         status: "suspended",
         disposition: "intentional_non_delivery",
@@ -328,72 +435,3 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
     }
   },
 );
-
-it("keeps retirement authority closed when the original selector returns before the worker acknowledgment", async () => {
-  const input = records();
-  input.subagent.requesterStorePath = "original-store";
-  input.subagent.delivery = {
-    status: "pending",
-    payload: loadPendingFinalDeliveryPayload(input.subagent),
-  };
-  seedSubagentCompletionDelivery({ subagent: input.subagent });
-  subagentRuns.set(input.subagent.runId, input.subagent);
-  initSubagentRegistry();
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const runWorker = stateWorker.runOpenClawStateWorkerOperation;
-  let observed = false;
-  let settling: Promise<void> | undefined;
-  const held = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      runWorker(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === "sessionDelivery.mutateSubagentCompletion") {
-                observed = true;
-                entered.resolve();
-                await release.promise;
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
-  try {
-    publishSystemEventStoreResolver(() => "replacement-store");
-    publishSystemEventStoreResolver(() => "original-store");
-    expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
-    settling = settleRootWork(true);
-    await Promise.race([entered.promise, settling]);
-    expect(observed).toBe(true);
-    expect(() => subagentRuns.runWithCompletionAuthority(input.subagent, () => "send")).toThrow(
-      /store was retired/,
-    );
-    expect(() =>
-      subagentRuns.runWithCompletionBatchAuthority([input.subagent], () => "send"),
-    ).toThrow(/store was retired/);
-    const successor = { ...structuredClone(input.subagent), runId: "replacement-completion" };
-    const rollback = subagentRuns.transferCompletionAuthority(input.subagent, successor);
-    expect(() => subagentRuns.runWithCompletionAuthority(successor, () => "send")).toThrow(
-      /store was retired/,
-    );
-    rollback();
-    expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
-    expect(subagentRuns.isCompletionAuthorityRetired(successor)).toBe(true);
-  } finally {
-    release.resolve();
-    await settling;
-    await settleRootWork(true);
-    held.mockRestore();
-  }
-  expect(input.subagent.delivery).toMatchObject({
-    status: "suspended",
-    disposition: "intentional_non_delivery",
-  });
-  expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
-});

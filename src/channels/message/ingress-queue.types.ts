@@ -1,12 +1,8 @@
 import type { Selectable } from "kysely";
 import type { ChannelIngressEvents } from "../../state/openclaw-state-db.generated.js";
 
-/** Pending or retryable inbound channel event stored in the durable ingress queue. */
-export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = {
+export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = ChannelIngressScope & {
   id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
   payload: TPayload;
   metadata?: TMetadata;
   receivedAt: number;
@@ -17,7 +13,6 @@ export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = {
   lastError?: string;
 };
 
-/** Pending ingress event currently claimed by a worker. */
 export type ChannelIngressQueueClaim<TPayload, TMetadata = unknown> = ChannelIngressQueueRecord<
   TPayload,
   TMetadata
@@ -38,31 +33,21 @@ export type ChannelIngressQueueClaimRef = {
 };
 
 /** Claim identity available when a stale row's payload cannot be decoded. */
-export type ChannelIngressQueueCorruptClaim = {
+export type ChannelIngressQueueCorruptClaim = ChannelIngressScope & {
   id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
   laneKey?: string;
   reason: "corrupt_payload";
-  claim: {
-    token: string;
-    ownerId: string;
-    claimedAt: number;
-  };
+  claim: ChannelIngressQueueClaim<unknown>["claim"];
 };
 
 /** Completed ingress event tombstone retained for duplicate detection. */
-export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
-  id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
-  completedAt: number;
-  metadata?: TCompletedMetadata;
-};
+export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> =
+  ChannelIngressScope & {
+    id: string;
+    completedAt: number;
+    metadata?: TCompletedMetadata;
+  };
 
-/** Retention options for pending, completed, and failed ingress queue rows. */
 export type ChannelIngressQueuePruneOptions = {
   pendingTtlMs?: number;
   completedTtlMs?: number;
@@ -75,11 +60,8 @@ export type ChannelIngressQueuePruneOptions = {
 };
 
 /** Failed ingress event tombstone retained for duplicate detection. */
-type ChannelIngressQueueFailedRecord = {
+type ChannelIngressQueueFailedRecord = ChannelIngressScope & {
   id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
   failedAt: number;
   reason: string;
   message?: string;
@@ -99,7 +81,6 @@ export type ChannelIngressQueueDeadLetterRecord<
   lastAttemptAt?: number;
 };
 
-/** Outcome of asking a channel/account queue to re-enqueue one failed event. */
 type ChannelIngressQueueResubmitResult<
   TPayload,
   TMetadata = unknown,
@@ -121,7 +102,6 @@ type ChannelIngressQueueResubmitResult<
       record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
     };
 
-/** Result of enqueueing a possibly duplicate ingress event id. */
 type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
       kind: "accepted";
@@ -149,7 +129,6 @@ type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
       record: ChannelIngressQueueFailedRecord;
     };
 
-/** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
   enqueue(
     id: string,
@@ -237,7 +216,6 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   purge?(options?: { signal?: AbortSignal }): Promise<number>;
 };
 
-/** Construction options for a channel/account-scoped ingress queue. */
 export type CreateChannelIngressQueueOptions = {
   channelId: string;
   accountId?: string;

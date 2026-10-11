@@ -1,19 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { setSessionActivitySummaryState } from "./session-activity-summary-state.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { defaultPersistDigest } from "./session-observer-model.js";
+import type { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
-const persistence = vi.hoisted(() => ({ patch: vi.fn(), load: vi.fn() }));
-vi.mock("../config/sessions/session-accessor.js", () => ({
+const persistence = vi.hoisted(() => ({
+  patch: vi.fn(),
+  load: vi.fn<typeof loadGatewaySessionEntryReadOnlyInWorker>(),
+}));
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
   patchSessionEntryCore: persistence.patch,
+  patchSessionEntryTarget: persistence.patch,
   loadSessionEntryReadOnly: vi.fn(),
   readSessionTranscriptWatermark: vi.fn(),
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
 }));
-vi.mock("./session-utils.js", () => ({ loadSessionEntry: persistence.load }));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: persistence.load,
+}));
 
 const target = {
   sessionKey: "agent:main:owner-publications",
@@ -23,12 +33,17 @@ const target = {
 let entry: InternalSessionEntry;
 let rejectCommit: boolean;
 beforeEach(() => {
+  setRuntimeConfigSnapshot({}, {});
   entry = { sessionId: "owner-publications", updatedAt: 1_000 };
   rejectCommit = false;
-  persistence.load.mockReset().mockImplementation(() => ({
+  persistence.load.mockReset().mockImplementation(async ({ cfg }) => ({
+    cfg,
     ...target,
     canonicalKey: target.sessionKey,
+    storeKeys: [target.sessionKey],
+    store: { [target.sessionKey]: entry },
     entry,
+    legacyKey: undefined,
   }));
   persistence.patch
     .mockReset()
@@ -62,61 +77,57 @@ function observeChanges() {
 }
 
 describe("gateway session row change publications", () => {
-  it.each(["start", "end", "error"] as const)(
-    "publishes lifecycle %s only after an accepted commit",
-    async (phase) => {
+  it.each(["lifecycle errors", "observer digests"] as const)(
+    "publishes %s only after an accepted commit",
+    async (source) => {
       const { changed, facts, unsubscribe } = observeChanges();
       const write = (sessionId = entry.sessionId) =>
-        persistGatewaySessionLifecycleEvent({
-          sessionKey: target.sessionKey,
-          agentId: target.agentId,
-          event: { sessionId, runId: "row-run", ts: 2_000, data: { phase } },
-        });
+        source === "lifecycle errors"
+          ? persistGatewaySessionLifecycleEvent({
+              sessionKey: target.sessionKey,
+              agentId: target.agentId,
+              event: { sessionId, runId: "row-run", ts: 2_000, data: { phase: "error" } },
+            })
+          : defaultPersistDigest({
+              ...target,
+              sessionId,
+              digest: {
+                sessionKey: target.sessionKey,
+                runId: "row-run",
+                revision: 1,
+                updatedAt: 2_000,
+                headline: "Checking files",
+                health: "on-track",
+              },
+            });
       try {
         rejectCommit = true;
         await expect(write()).rejects.toThrow("commit rejected");
         expect(changed).not.toHaveBeenCalled();
+        expect(facts).not.toHaveBeenCalled();
         rejectCommit = false;
-        await write();
-        expect(changed).toHaveBeenCalledExactlyOnceWith(target);
-        expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, facts: { kind: "unchanged" } });
-        await write("replaced-generation");
+        const committed = await write();
+        if (source === "observer digests") {
+          expect(committed).toBe(true);
+        }
+        expect(changed).toHaveBeenCalledExactlyOnceWith({ ...target, scope: "runtime" });
+        expect(facts).toHaveBeenCalledExactlyOnceWith({
+          ...target,
+          scope: "runtime",
+          facts: { kind: "unchanged" },
+        });
+        if (source === "lifecycle errors") {
+          await write("replaced-generation");
+        } else {
+          expect(await write()).toBe(false);
+        }
         expect(changed).toHaveBeenCalledTimes(1);
+        expect(facts).toHaveBeenCalledTimes(1);
       } finally {
         unsubscribe();
       }
     },
   );
-
-  it("publishes observer digests only after an accepted commit", async () => {
-    const { changed, facts, unsubscribe } = observeChanges();
-    const write = () =>
-      defaultPersistDigest({
-        ...target,
-        sessionId: entry.sessionId,
-        digest: {
-          sessionKey: target.sessionKey,
-          runId: "row-run",
-          revision: 1,
-          updatedAt: 2_000,
-          headline: "Checking files",
-          health: "on-track",
-        },
-      });
-    try {
-      rejectCommit = true;
-      await expect(write()).rejects.toThrow("commit rejected");
-      expect(changed).not.toHaveBeenCalled();
-      rejectCommit = false;
-      expect(await write()).toBe(true);
-      expect(changed).toHaveBeenCalledExactlyOnceWith(target);
-      expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, facts: { kind: "unchanged" } });
-      expect(await write()).toBe(false);
-      expect(changed).toHaveBeenCalledTimes(1);
-    } finally {
-      unsubscribe();
-    }
-  });
 
   it("publishes activity admission, updates, and owner-held drops", () => {
     const changed = vi.fn();
@@ -151,6 +162,7 @@ describe("gateway session row change publications", () => {
           {
             sessionKey: target.sessionKey,
             agentId: target.agentId,
+            scope: "runtime",
           },
         ]),
       );

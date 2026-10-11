@@ -2,6 +2,14 @@
 
 This directory owns Control UI-specific guidance that should not live in the repo root.
 
+## Solid migration
+
+For Lit 3/Web Awesome ports and new Solid 2 components or projections, follow the
+[Solid skill](../.agents/skills/solid/SKILL.md) and the
+assigned migration work order. It owns conversion, lifecycle, interop, and proof
+guidance. The state-ownership rules below still apply. The browser floor is in place;
+the Lit-specific guidance below goes with the final Lit sweep.
+
 ## State Ownership And Async Results
 
 - The Gateway owns shared state that other clients or channels can change.
@@ -34,10 +42,51 @@ This directory owns Control UI-specific guidance that should not live in the rep
   envelope. Unknown rows, incomplete ancestor coverage, broad changes, catalog
   changes, Gateway-owned filters, failed reads,
   owner-prefix boundary uncertainty, and overlapping reads retain an authoritative
-  refresh. Events never create list membership.
+  refresh. Events never create filtered list membership; Current Work's complete
+  unfiltered active-only window may admit a certified full active row as described below.
+- List callers use compact rows and bounded source attribution. Enrichment flags
+  and inclusion of global/unknown kinds do not change held membership when kind
+  stays unchanged; dashboard filters require matching `hasBoard`/`boardFace`
+  receipts. Gallery pagination extends the shared managed window. Full settings
+  come from row descriptors on demand. Applied row traffic retains one fallback
+  through the refresh coordinator after at least 60 seconds.
+  Child-query membership uses `childOwnerSessionKeys` from the Gateway's retention
+  owner. Parent-only events must certify the complete child window; unheld
+  ancestors need explicit exclusion facts, or an admitted reference resolved
+  through the connection's existing row provenance.
 - Re-adopting cached lineage rows changes presentation without invalidating
   managed list membership. Fresh descriptor reads and Gateway events retain
   their authoritative invalidation paths.
+- Descriptor observations apply admitted rows immediately; incomplete ancestor coverage retains one paced authoritative descriptor refresh through the coordinator instead of a read per event.
+- Activity's current-work and unfiltered history views apply admitted row events without refetching the list.
+  History uses the shared row-provenance owner: admitted live rows retain field clocks,
+  including recap updates and clearing receipts, while returned lists remain the sole
+  membership authority. Its `excludeSubagents` query ignores key-proven child exclusions
+  only with complete access-scoped ancestor coverage; held parent snapshots and certified
+  references still update locally. Missing held parents or supplied unheld ancestors
+  require authority; named unheld parents absent from certified coverage may be invisible.
+  Refreshes merge those live facts instead of replaying/coalescing
+  History packets; missing initial membership retains a catch-up read. Query/connection
+  changes reset provenance. Current Work coalesces only consecutive full active snapshots
+  for one generation, retaining the first receipt and latest tail. Partial events,
+  references, terminal snapshots, and other identities are FIFO barriers. A complete Current Work window below its limit
+  admits a certified active snapshot sampled after the accepted list and that session
+  generation's observed retirement and liveness clocks, with a real session ID and kind, preserving
+  the Gateway's cron-run exclusion. Truncated/full windows, conflicting generations,
+  partial unknown rows, ambiguous settlement, and removals from an incomplete window require an authoritative
+  refresh. History requires forward activity clocks and retains omitted recap enrichment;
+  person/search filters keep authoritative refreshes. Healthy row traffic retains one
+  fallback refresh after at least 60 seconds, including whole-query people and pulse facets.
+  Current Work applies supplied ancestor snapshots and references through the shared
+  row reconciler; pending references retain their prerequisite full row receipts.
+  Its controller retains at most 1,000 fence records, coalesced by session generation;
+  the Current Work reconciler owns their independent retirement, liveness-observation,
+  and generation-authority facts. Only retirements prune stale returned rows. A fresh
+  certified full row can resolve older clocked liveness, while unclocked observations
+  and conflicting generations require a list read. Query/connection changes clear
+  records; an authoritative list clears uncertainty and covered retirements before
+  pending events replay, preserving later retirements. Saturation blocks
+  unseen admission until an authoritative read restores the bounded state.
 - `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
   collect events in a four-to-five-second window sampled once when armed so
   browsers spread their reads and subsequent events cannot postpone them.
@@ -70,7 +119,8 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## CSS / Template Linting
 
-- `pnpm lint:ui:styles` runs stylelint over `ui/src` stylesheets and Lit `css` templates (postcss-lit). `pnpm lint` includes it; error-class rules only, oxfmt owns formatting. Config: `config/stylelint.config.mjs`.
+- `pnpm lint` applies `eslint-plugin-solid`'s Solid 2 rules to `ui/**/*.tsx` through oxlint. Never destructure component props; use split effects, current Solid APIs, and `prop:` for explicit DOM properties. The private `tools/solid-lint` workspace isolates the plugin's TypeScript 5.9 tooling dependencies from the repository's TypeScript 7 checker. Its positive/negative corpus runs with `pnpm test test/scripts/oxlint-solid.test.ts --maxWorkers=1`.
+- `pnpm lint:ui:styles` runs stylelint over `ui/src` stylesheets and Lit `css` templates in TypeScript and TSX (postcss-lit). `pnpm lint` includes it; error-class rules only, oxfmt owns formatting. Config: `config/stylelint.config.mjs`.
 - Icons: shared 24x24 Lucide icons go through `strokeIcon()` in `ui/src/components/icons-tools.ts` so stroke presentation attributes stay inline and render inside shadow roots. Icon bodies are `svg\`\``fragments, never`html\`\`` (wrong namespace renders nothing).
 - `pnpm lint:ui:lit` is an opt-in lit-analyzer diagnostic for template bindings (slow, ~9 min; known baseline of pre-existing findings). It is not a CI gate.
 
@@ -93,7 +143,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Build Chunking
 
-- `ui/config/control-ui-boot-modules.json` is generated from ready `/new` and `/chat` captures. Shared modules and each route's exclusive modules get separate `control-ui-boot-*` groups in `ui/config/control-ui-chunking.ts`, reducing requests without pulling chat-only code into New Session. Regenerate with `pnpm ui:boot-manifest:gen` when boot-path surfaces change materially; it builds into a temporary directory with all measured boot groups disabled so stale entries cannot feed back into the capture. Rebuild with `pnpm ui:build` afterward to verify grouped output. Do not hand-edit the manifest.
+- `ui/config/control-ui-boot-modules.json` is generated from ready `/new` and `/chat` captures. Each route records only fetched modules reachable from the HTML entry and the dynamic entries it requested (static imports, plus dynamic imports that resolve into an already-fetched chunk without a request), so chat-only code co-located in a fetched common chunk stays out of New Session. Shared modules and each route's exclusive modules get separate `control-ui-boot-*` groups in `ui/config/control-ui-chunking.ts`, reducing requests without pulling chat-only code into New Session. Its `entries` record contains the dynamic entry points actually requested by each route; `control-ui-boot-preloads.ts` follows their static dependencies to emit inert route preload templates, which the Gateway activates for the requested route. CSS hints preload bytes without changing stylesheet insertion order. Regenerate with `pnpm ui:boot-manifest:gen` when boot-path surfaces change materially; it builds into a temporary directory with all measured boot groups disabled and inactive preload templates so stale entries cannot feed back into the capture. Rebuild with `pnpm ui:build` afterward to verify grouped output. Do not hand-edit the manifest.
 
 ## Live Verification
 

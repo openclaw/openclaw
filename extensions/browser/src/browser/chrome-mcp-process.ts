@@ -9,20 +9,11 @@ import {
   CHROME_MCP_PROCESS_EXIT_GRACE_MS,
   ChromeMcpProcessSnapshotError,
   type ChromeMcpOwnedProcess,
-  type ChromeMcpProcessCleanupDeps,
   type ChromeMcpProcessCleanupState,
   type ChromeMcpProcessCleanupTarget,
   type ChromeMcpProcessSnapshot,
   type ChromeMcpSession,
 } from "./chrome-mcp-contracts.js";
-
-let processCleanupDeps: ChromeMcpProcessCleanupDeps | null = null;
-
-export function setChromeMcpProcessCleanupDepsForTest(
-  deps: ChromeMcpProcessCleanupDeps | null,
-): void {
-  processCleanupDeps = deps;
-}
 
 function readChromeMcpTransportPid(transport: StdioClientTransport): number | undefined {
   const pid = transport.pid;
@@ -72,8 +63,7 @@ function parseChromeMcpDelimitedProcessList(
   });
 }
 
-/** Parse one C-locale Unix process table for focused process-identity tests. */
-export function parseChromeMcpUnixProcessListForTest(
+function parseChromeMcpUnixProcessList(
   stdout: string,
   platform: NodeJS.Platform,
 ): ChromeMcpProcessSnapshot[] {
@@ -81,14 +71,9 @@ export function parseChromeMcpUnixProcessListForTest(
   return parseChromeMcpDelimitedProcessList(delimited, platform);
 }
 
-async function listChromeMcpPlatformProcesses(
-  deps: ChromeMcpProcessCleanupDeps | null,
-): Promise<ChromeMcpProcessSnapshot[]> {
+async function listChromeMcpPlatformProcesses(): Promise<ChromeMcpProcessSnapshot[]> {
   try {
-    if (deps?.listProcesses) {
-      return await deps.listProcesses();
-    }
-    const platform = deps?.platform ?? process.platform;
+    const platform = process.platform;
     if (platform === "linux") {
       return await listChromeMcpLinuxProcesses();
     }
@@ -115,7 +100,7 @@ async function listChromeMcpPlatformProcesses(
     }
     // lstart is a fixed 24-byte C-locale field. Command shares the same row so
     // PID reuse within its one-second resolution cannot match another executable.
-    return parseChromeMcpUnixProcessListForTest(stdout, platform);
+    return parseChromeMcpUnixProcessList(stdout, platform);
   } catch (err) {
     throw new ChromeMcpProcessSnapshotError(
       err instanceof Error ? err.message : "Unable to inspect the Chrome MCP process tree.",
@@ -128,8 +113,7 @@ function captureChromeMcpProcessTarget(
   rootPid: number,
   snapshots: ChromeMcpProcessSnapshot[],
 ): ChromeMcpProcessCleanupTarget {
-  const byPid = new Map(snapshots.map((snapshot) => [snapshot.pid, snapshot]));
-  const root = byPid.get(rootPid);
+  const root = snapshots.findLast((snapshot) => snapshot.pid === rootPid);
   if (!root) {
     throw new ChromeMcpProcessSnapshotError(
       `Chrome MCP process identity unavailable for pid ${rootPid}.`,
@@ -143,23 +127,14 @@ function captureChromeMcpProcessTarget(
   }
   const descendants: ChromeMcpOwnedProcess[] = [];
   const queue = [...(childrenByParent.get(rootPid) ?? [])];
-  while (queue.length > 0) {
-    const next = queue.shift();
-    if (!next || next.pid === process.pid || next.pid === rootPid) {
+  for (const next of queue) {
+    if (next.pid === process.pid || next.pid === rootPid) {
       continue;
     }
     descendants.push({ pid: next.pid, identity: next.identity });
     queue.push(...(childrenByParent.get(next.pid) ?? []));
   }
   return { root: { pid: root.pid, identity: root.identity }, descendants };
-}
-
-function sameChromeMcpProcesses(
-  targets: ChromeMcpOwnedProcess[],
-  snapshots: ChromeMcpProcessSnapshot[],
-): ChromeMcpOwnedProcess[] {
-  const currentByPid = new Map(snapshots.map((snapshot) => [snapshot.pid, snapshot.identity]));
-  return targets.filter((target) => currentByPid.get(target.pid) === target.identity);
 }
 
 export function cleanupTarget(
@@ -185,7 +160,7 @@ export async function refreshChromeMcpCleanupProcess(session: ChromeMcpSession):
       }
       return;
     }
-    const snapshots = await listChromeMcpPlatformProcesses(processCleanupDeps);
+    const snapshots = await listChromeMcpPlatformProcesses();
     // A catalog reply can start a final census while transport cleanup is already waiting for exit.
     if (session.processCleanup?.status === "closed") {
       return;
@@ -230,14 +205,7 @@ export async function refreshChromeMcpCleanupProcess(session: ChromeMcpSession):
   }
 }
 
-async function taskkillChromeMcpProcessTree(
-  rootPid: number,
-  deps: ChromeMcpProcessCleanupDeps | null,
-): Promise<void> {
-  if (deps?.taskkillProcessTree) {
-    await deps.taskkillProcessTree(rootPid);
-    return;
-  }
+async function taskkillChromeMcpProcessTree(rootPid: number): Promise<void> {
   await runExec("taskkill", ["/pid", String(rootPid), "/t", "/f"], {
     logOutput: false,
     maxBuffer: 64 * 1024,
@@ -247,9 +215,10 @@ async function taskkillChromeMcpProcessTree(
 
 async function currentChromeMcpProcesses(
   targets: ChromeMcpOwnedProcess[],
-  deps: ChromeMcpProcessCleanupDeps | null,
 ): Promise<ChromeMcpOwnedProcess[]> {
-  return sameChromeMcpProcesses(targets, await listChromeMcpPlatformProcesses(deps));
+  const snapshots = await listChromeMcpPlatformProcesses();
+  const currentByPid = new Map(snapshots.map((snapshot) => [snapshot.pid, snapshot.identity]));
+  return targets.filter((target) => currentByPid.get(target.pid) === target.identity);
 }
 
 async function terminateChromeMcpProcessTree(
@@ -259,70 +228,52 @@ async function terminateChromeMcpProcessTree(
     return;
   }
 
-  const deps = processCleanupDeps;
   const targets = [...target.descendants.toReversed(), target.root];
-  let surviving = await currentChromeMcpProcesses(targets, deps);
+  let surviving = await currentChromeMcpProcesses(targets);
   // A fresh absence proof ends cleanup; snapshots from before awaited shutdown
   // must never authorize signals against a recycled PID.
   if (surviving.length === 0) {
     return;
   }
-  if ((deps?.platform ?? process.platform) === "win32") {
-    let firstError: Error | undefined;
-    if (surviving.some(({ pid }) => pid === target.root.pid)) {
-      try {
-        await taskkillChromeMcpProcessTree(target.root.pid, deps);
-      } catch (err) {
-        firstError ??= toErrorObject(err, "Chrome MCP process-tree cleanup failed.");
+  let firstError: Error | undefined;
+  const windows = process.platform === "win32";
+  for (const secondPass of [false, true]) {
+    if (windows) {
+      // Taskkill the root tree first, then any retained descendants it missed.
+      const candidates = secondPass
+        ? surviving.filter(({ pid }) => pid !== target.root.pid)
+        : surviving.filter(({ pid }) => pid === target.root.pid).slice(0, 1);
+      for (const owned of candidates) {
+        // An earlier awaited taskkill can recycle the next descendant's PID.
+        if (secondPass && (await currentChromeMcpProcesses([owned])).length === 0) {
+          continue;
+        }
+        try {
+          await taskkillChromeMcpProcessTree(owned.pid);
+        } catch (err) {
+          firstError ??= toErrorObject(err, "Chrome MCP process-tree cleanup failed.");
+        }
+      }
+    } else {
+      for (const owned of surviving) {
+        try {
+          process.kill(owned.pid, secondPass ? "SIGKILL" : "SIGTERM");
+        } catch {
+          // An owned process can exit after its identity was revalidated.
+        }
       }
     }
-    await (deps?.sleep ?? sleepTimeout)(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
-    surviving = await currentChromeMcpProcesses(targets, deps);
-    if (surviving.length === 0) {
-      return;
-    }
-    for (const descendant of surviving.filter(({ pid }) => pid !== target.root.pid)) {
-      // An earlier awaited taskkill can recycle the next descendant's PID.
-      if ((await currentChromeMcpProcesses([descendant], deps)).length === 0) {
-        continue;
-      }
-      try {
-        await taskkillChromeMcpProcessTree(descendant.pid, deps);
-      } catch (err) {
-        firstError ??= toErrorObject(err, "Chrome MCP process-tree cleanup failed.");
-      }
-    }
-    await (deps?.sleep ?? sleepTimeout)(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
-    surviving = await currentChromeMcpProcesses(targets, deps);
-    if (surviving.length > 0) {
-      throw (
-        firstError ??
-        new Error(
-          `Chrome MCP process cleanup failed for pid ${surviving.map(({ pid }) => pid).join(", ")}.`,
-        )
-      );
-    }
-    return;
-  }
-
-  const killProcess = deps?.killProcess ?? ((pid, signal) => process.kill(pid, signal));
-  const sleep = deps?.sleep ?? sleepTimeout;
-  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-    for (const owned of surviving) {
-      try {
-        killProcess(owned.pid, signal);
-      } catch {
-        // An owned process can exit after its identity was revalidated.
-      }
-    }
-    await sleep(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
-    surviving = await currentChromeMcpProcesses(targets, deps);
+    await sleepTimeout(CHROME_MCP_PROCESS_EXIT_GRACE_MS);
+    surviving = await currentChromeMcpProcesses(targets);
     if (surviving.length === 0) {
       return;
     }
   }
-  throw new Error(
-    `Chrome MCP process cleanup failed for pid ${surviving.map(({ pid }) => pid).join(", ")}.`,
+  throw (
+    firstError ??
+    new Error(
+      `Chrome MCP process cleanup failed for pid ${surviving.map(({ pid }) => pid).join(", ")}.`,
+    )
   );
 }
 
@@ -339,8 +290,7 @@ export async function closeChromeMcpSessionHandle(session: ChromeMcpSession): Pr
   };
   await attempt(async () => await refreshChromeMcpCleanupProcess(session));
   const target = session.processCleanup ? cleanupTarget(session.processCleanup) : undefined;
-  const terminateFirst =
-    Boolean(target) && (processCleanupDeps?.platform ?? process.platform) === "win32";
+  const terminateFirst = Boolean(target) && process.platform === "win32";
   if (terminateFirst) {
     await attempt(async () => await terminateChromeMcpProcessTree(target));
   }

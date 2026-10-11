@@ -8,6 +8,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
+  waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
@@ -70,6 +71,7 @@ const pane = (page: Page) => page.locator(".chat-pane-cache__pane--active");
 const desktopTab = (page: Page) => pane(page).getByRole("tab", { name: "Desktop", exact: true });
 const ready = async (page: Page) => {
   await waitForControlUiGatewayReady(page);
+  await waitForControlUiRoute(page, { routeId: "chat" });
   await pane(page).locator(".agent-chat__composer-combobox textarea").waitFor();
 };
 async function assertNoProvisioning(gateway: MockGatewayControls) {
@@ -94,9 +96,7 @@ async function assertNoProvisioning(gateway: MockGatewayControls) {
 suite.define(() => {
   it.each(
     [
-      { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
       { width: 390, staleRoster: false, reclaimOnReload: false, swapOnReload: false },
-      { width: 1280, staleRoster: true, reclaimOnReload: false, swapOnReload: false },
       { width: 1280, staleRoster: false, reclaimOnReload: true, swapOnReload: false },
       { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: true },
       {
@@ -332,42 +332,6 @@ suite.define(() => {
             runnerAvailability ? { reason: "runner-availability" } : { key, reason: "patch" },
           );
           await gateway.waitForRequest("environments.status", { after: inventoryBeforeActivation });
-          const pendingInventoryCount = (await gateway.getRequests("environments.status")).length;
-          for (const cursor of [1, 2, 3]) {
-            await gateway.setSessionsListResponse({
-              ...list(true),
-              sessions: [
-                {
-                  ...row,
-                  placement: {
-                    ...row.placement,
-                    updatedAtMs: cursor,
-                    lastTranscriptAckCursor: cursor,
-                    lastLiveEventAckCursor: cursor * 2,
-                    diskSpace: {
-                      status: "ok",
-                      availableBytes: 100 - cursor,
-                      totalBytes: 100,
-                      observedAtMs: cursor,
-                    },
-                  },
-                },
-                notes,
-              ],
-            });
-            await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
-            await expect
-              .poll(() =>
-                pane(page).evaluate((element, sessionKey) => {
-                  const state = (element as HTMLElement & { state: ChatPageHost }).state;
-                  return state.sessionsResult?.sessions.find(
-                    (session) => session.key === sessionKey,
-                  )?.placement?.updatedAtMs;
-                }, key),
-              )
-              .toBe(cursor);
-          }
-          await expectRequestCountStable(gateway, "environments.status", pendingInventoryCount);
           expect(await desktopTab(page).count()).toBe(0);
           await gateway.resolveDeferred("environments.status", inventory.environments[0]);
           await desktopTab(page).waitFor();

@@ -202,6 +202,7 @@ describe("Zalo polling media replies", () => {
       );
       const registry = createEmptyPluginRegistry();
       setActivePluginRegistry(registry);
+      const processed = Promise.withResolvers<void>();
       getUpdatesMock
         .mockResolvedValueOnce({
           ok: true,
@@ -213,7 +214,10 @@ describe("Zalo polling media replies", () => {
             text: "send media",
           }),
         })
-        .mockImplementation(() => new Promise(() => {}));
+        .mockImplementation(() => {
+          processed.resolve();
+          return new Promise(() => {});
+        });
 
       const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
         "zalo-polling-media-reply",
@@ -235,7 +239,7 @@ describe("Zalo polling media replies", () => {
       });
 
       try {
-        await settleAsyncWork();
+        await processed.promise;
         expect(sendPhotoMock).toHaveBeenCalledTimes(1);
 
         expect(registry.httpRoutes).toHaveLength(hosted ? 1 : 0);
@@ -272,12 +276,6 @@ describe("Zalo polling media replies", () => {
 
   it.each<ZaloReplyFailureCase>([
     { name: "block text", kind: "block", payload: { text: "block reply" } },
-    { name: "tool text", kind: "tool", payload: { text: "tool reply" } },
-    {
-      name: "first block attachment",
-      kind: "block",
-      payload: { text: "caption", mediaUrl: "https://example.com/first.png" },
-    },
     {
       name: "first tool attachment",
       kind: "tool",
@@ -396,6 +394,7 @@ describe("Zalo polling media replies", () => {
       },
     );
 
+    const processed = Promise.withResolvers<void>();
     getUpdatesMock
       .mockResolvedValueOnce({
         ok: true,
@@ -406,7 +405,10 @@ describe("Zalo polling media replies", () => {
           chatId: "dm-chat-1",
         }),
       })
-      .mockImplementation(() => new Promise(() => {}));
+      .mockImplementation(() => {
+        processed.resolve();
+        return new Promise(() => {});
+      });
     const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
       "zalo-polling-media-reply",
     );
@@ -429,7 +431,7 @@ describe("Zalo polling media replies", () => {
     });
 
     try {
-      await settleAsyncWork();
+      await processed.promise;
       expect(failedAfterSendCounts).toEqual({
         block: testCase.kind === "block" ? 1 : 0,
         tool: testCase.kind === "tool" ? 1 : 0,

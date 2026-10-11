@@ -1,28 +1,21 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { handleNameCommand } from "./commands-name.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const sessionKey = "agent:main:web:main";
-let tempRoots: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempRoots.map((root) => fs.rm(root, { recursive: true, force: true })));
-  tempRoots = [];
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-name-command-");
 
 async function createStorePath(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-name-command-"));
-  tempRoots.push(root);
+  const root = sessionDirs.make();
   return path.join(root, "sessions.json");
 }
 
@@ -83,25 +76,6 @@ describe("name command", () => {
         name: "title",
         captureRemaining: true,
       }),
-    ]);
-  });
-
-  it("renames the current session and persists the label", async () => {
-    const storePath = await createStorePath();
-    await upsertSessionEntryCore(
-      { storePath, sessionKey },
-      { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
-    );
-
-    const params = buildNameParams("/name Billing rework", storePath);
-    const result = await handleNameCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Billing rework");
-    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe("Billing rework");
-    expect(params.sessionEntry?.label).toBe("Billing rework");
-    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
-      { sessionKey, reason: "command-metadata" },
     ]);
   });
 

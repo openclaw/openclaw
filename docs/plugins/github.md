@@ -58,6 +58,10 @@ and unavailable results remain distinct; a partial response never implies that
 all checks passed. These results describe CI, not approval or merge readiness.
 Use **Refresh** to fetch the current PR and its checks again.
 
+Descriptions and replies render named emoji shortcodes such as `:white_check_mark:`
+and `:rocket:` in prose, tables, link labels, and disclosure summaries. Code, URLs,
+unknown shortcodes, and plain emoticons such as `:)` stay literal.
+
 HTML comments in descriptions and replies stay hidden, matching
 GitHub; literal comment examples inside code remain visible.
 Markdown images and standalone HTML image attachments can display inline. The
@@ -106,6 +110,12 @@ hovercard, and GitHub links open externally.
   up to 100 results. Incomplete or unavailable checks retain a link to GitHub.
 - Long text and patches are bounded. Incomplete content is labeled rather than
   presented as a complete conversation or diff.
+- Uncached hover previews share a two-second upstream request budget. Slow avatars
+  or co-author lookups are omitted; slow required metadata returns a retryable
+  unavailable error. The full reader keeps its longer request timeout.
+- Hover previews are shared for one minute across readers using the same GitHub
+  identity. Concurrent requests share a fetch, but each reader must still have
+  access when the result arrives. **Refresh** bypasses the cached preview.
 - **Refresh** requests the current item again. Rate limits, deleted items, and
   unavailable services show their specific explanation in the reader and hovercards,
   including GitHub's retry delay when available. Cached preview details stay visible

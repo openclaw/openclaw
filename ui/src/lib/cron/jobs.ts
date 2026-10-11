@@ -4,7 +4,7 @@ import { formatUiError } from "../format-error.ts";
 import { getCronJobPayload } from "./payload.ts";
 import type { CronJobsState } from "./types.ts";
 
-function readCanonicalCronJobsPage<Row>(
+export function readCanonicalCronJobsPage<Row>(
   value: CronJobsListResult<Row>,
   requestedLimit: number,
 ): CronJobsListResult<Row> {
@@ -35,7 +35,10 @@ function readCanonicalCronJobsPage<Row>(
   return value;
 }
 
-function assertCanonicalCronJobsCursor(page: CronJobsListResult<unknown>, requestedOffset: number) {
+export function assertCanonicalCronJobsCursor(
+  page: CronJobsListResult<unknown>,
+  requestedOffset: number,
+) {
   const nextOffset = requestedOffset + page.jobs.length;
   if (
     page.offset !== requestedOffset ||
@@ -75,6 +78,11 @@ type CronJobsProjection<Row> = {
   compact?: true;
   readRows: (rows: Row[]) => Row[];
 };
+
+const cronInventoryScopes = new WeakMap<
+  CronJobsState<unknown>,
+  CronJobsState["cronAgentId" | "cronSessionFilter"]
+>();
 
 const fullCronJobsProjection: CronJobsProjection<CronJob> = {
   readRows: (rows) => rows.filter((job) => getCronJobPayload(job) !== null),
@@ -144,6 +152,18 @@ async function loadCronJobsProjectionPage<Row>(
   if (!state.client || !state.connected || state.canRefresh?.() === false) {
     return;
   }
+  const scope = state.cronSessionFilter ?? state.cronAgentId;
+  const isCurrentScope = () => (state.cronSessionFilter ?? state.cronAgentId) === scope;
+  // An editor can survive scope hydration; its inventory cannot. Retire both
+  // retained rows and late responses before a failed replacement can expose them.
+  if (cronInventoryScopes.has(state) && cronInventoryScopes.get(state) !== scope) {
+    state.cronJobs = [];
+    state.cronJobsSnapshotRevision = null;
+    state.cronJobsTotal = 0;
+    state.cronJobsHasMore = false;
+    state.cronJobsNextOffset = null;
+  }
+  cronInventoryScopes.set(state, scope);
   const append = opts?.append === true;
   if (state.cronLoading || state.cronJobsLoadingMore) {
     if (!append) {
@@ -155,11 +175,8 @@ async function loadCronJobsProjectionPage<Row>(
   if (append && !state.cronJobsHasMore) {
     return;
   }
-  if (append) {
-    state.cronJobsLoadingMore = true;
-  } else {
-    state.cronLoading = true;
-  }
+  const loadingKey = append ? "cronJobsLoadingMore" : "cronLoading";
+  state[loadingKey] = true;
   state.cronJobsError = null;
   try {
     const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
@@ -182,6 +199,9 @@ async function loadCronJobsProjectionPage<Row>(
       sortBy: state.cronJobsSortBy,
       sortDir: state.cronJobsSortDir,
     });
+    if (!isCurrentScope()) {
+      return;
+    }
     const page = readCanonicalCronJobsPage<Row>(res, state.cronJobsLimit);
     if (
       append &&
@@ -203,13 +223,11 @@ async function loadCronJobsProjectionPage<Row>(
     // A filtered/paged list is not deletion authority. Only an explicit remove
     // may clear an editor opened from an exact job definition.
   } catch (err) {
-    state.cronJobsError = formatUiError(err);
-  } finally {
-    if (append) {
-      state.cronJobsLoadingMore = false;
-    } else {
-      state.cronLoading = false;
+    if (isCurrentScope()) {
+      state.cronJobsError = formatUiError(err);
     }
+  } finally {
+    state[loadingKey] = false;
     await drainPendingCronJobsReload(state, projection);
   }
 }

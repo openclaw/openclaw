@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import type { PortUsage } from "../infra/ports-types.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
@@ -26,9 +26,6 @@ const readGatewayOwnerLease = vi.hoisted(() =>
 );
 const readWindowsProcessStartTimeSync = vi.hoisted(() =>
   vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessStartTimeSync>(),
-);
-const readWindowsProcessAncestorsSync = vi.hoisted(() =>
-  vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessAncestorsSync>(),
 );
 type SpawnSyncResult = {
   pid: number;
@@ -72,8 +69,8 @@ vi.mock("../infra/gateway-processes.js", () => ({
 }));
 vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
 vi.mock("../gateway/call.js", () => ({ callGatewayCli }));
-vi.mock("../infra/windows-process-start.js", () => ({
-  readWindowsProcessAncestorsSync,
+vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
   readWindowsProcessStartTimeSync,
 }));
 vi.mock("../utils.js", async () => {
@@ -256,7 +253,6 @@ beforeEach(() => {
   readGatewayOwnerLease.mockReset();
   readWindowsProcessStartTimeSync.mockReset();
   readWindowsProcessStartTimeSync.mockReturnValue(GATEWAY_OWNER.startedAt);
-  readWindowsProcessAncestorsSync.mockReset().mockReturnValue({ pids: [], complete: false });
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
   findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
   timeState.now = 0;

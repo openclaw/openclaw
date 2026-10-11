@@ -3,7 +3,7 @@ import { definePage, redirect } from "@openclaw/uirouter";
 import { html } from "lit";
 import { pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ModelSetupRouteData } from "./model-setup-page.ts";
+import type { ModelSetupRouteData } from "./first-run-setup.ts";
 
 export const page = definePage({
   ...routePageSpec("model-setup"),
@@ -25,7 +25,7 @@ export const page = definePage({
         });
   },
   component: () =>
-    import("./model-setup-page.ts").then(() => ({
+    import("./model-setup-page.tsx").then(() => ({
       header: true,
       render: (data: ModelSetupRouteData | undefined) =>
         html`<openclaw-model-setup-page .routeData=${data}></openclaw-model-setup-page>`,

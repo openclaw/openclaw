@@ -8,6 +8,7 @@ import {
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 import {
   chooseSidebarOwner,
   chooseSidebarMenuOption,
@@ -52,7 +53,8 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:owner-0"));
-        const filter = page.getByRole("button", { name: "Filter & sort" });
+        await selectAllSidebarSessions(page);
+        const filter = page.getByRole("button", { name: "Filter & sort", exact: true });
         const menu = page.locator(".sidebar-session-sort-menu");
         await filter.click();
         await chooseSidebarMenuOption(menu.page(), "Group by", "Person");

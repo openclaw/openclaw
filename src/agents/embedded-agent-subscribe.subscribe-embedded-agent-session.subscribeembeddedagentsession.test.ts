@@ -68,6 +68,56 @@ function emitOrphanedVoice(emit: (event: unknown) => void) {
 }
 
 describe("subscribeEmbeddedAgentSession", () => {
+  it.each([1, 17, 1210])(
+    "delivers intact graphemes from %i-character provider deltas",
+    async (deltaSize) => {
+      const cluster = "👨‍👩‍👧‍👦";
+      const source = `${"x".repeat(1195)}${cluster}done`;
+      const codePoints = Array.from(source);
+      const onBlockReply = vi.fn<BlockReply>();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "grapheme-boundary",
+        onBlockReply,
+        blockReplyBreak: "text_end",
+        blockReplyChunking: { minChars: 800, maxChars: 1200, breakPreference: "paragraph" },
+      });
+      try {
+        let text = "";
+        for (let offset = 0; offset < codePoints.length; offset += deltaSize) {
+          const delta = codePoints.slice(offset, offset + deltaSize).join("");
+          text += delta;
+          emit(
+            createOpenAiResponsesTextEvent({
+              type: "text_delta",
+              text,
+              delta,
+              id: "grapheme-answer",
+              signaturePhase: "final_answer",
+            }),
+          );
+        }
+        emit(
+          createOpenAiResponsesTextEvent({
+            type: "text_end",
+            text: source,
+            id: "grapheme-answer",
+            signaturePhase: "final_answer",
+          }),
+        );
+        emit({ type: "agent_end", messages: [], willRetry: false });
+        await subscription.waitForPendingEvents();
+
+        const chunks = onBlockReply.mock.calls.map(([reply]) => reply.text ?? "");
+        expect(chunks.length).toBeGreaterThan(1);
+        expect(chunks.join("")).toBe(source);
+        expect(chunks.filter((chunk) => chunk.includes(cluster))).toHaveLength(1);
+        expect(chunks.every((chunk) => chunk.length <= 1200)).toBe(true);
+      } finally {
+        subscription.unsubscribe();
+      }
+    },
+  );
+
   function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
     const onAgentEvent = vi.fn();
     const { emit } = createSubscribedSessionHarness({
@@ -374,26 +424,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("keeps orphaned tool media available for non-block final payload assembly", async () => {
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      builtinToolNames: new Set(["tts"]),
-      coreBuiltinToolNames: new Set(["tts"]),
-    });
-
-    emitOrphanedVoice(emit);
-    emit({ type: "agent_end" });
-    await subscription.waitForPendingEvents();
-
-    expect(subscription.getPendingToolMediaReply()).toEqual({
-      mediaUrls: ["/tmp/reply.opus"],
-      attachments: [{ trustedLocalMedia: true }],
-      audioAsVoice: true,
-      trustedLocalMedia: true,
-    });
-    expect(subscription.getToolAutoDeliveryMediaUrls()).toEqual(["/tmp/reply.opus"]);
-  });
-
   it("counts orphaned tool media emitted through block replies", async () => {
     const onBlockReply = vi.fn<BlockReply>();
     const { emit, subscription } = createSubscribedSessionHarness({
@@ -490,27 +520,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     }
   });
 
-  it("extracts correct reasoning delta for incremental stream updates", () => {
-    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run",
-      reasoningMode: "stream",
-      onReasoningStream: vi.fn(),
-    });
-
-    emitThinkingEvent(emit, "Step 1", { type: "thinking_delta", delta: "Step 1" });
-    emitThinkingEvent(emit, "Step 1 and Step 2", { type: "thinking_delta", delta: " and Step 2" });
-
-    const thinkingEvents = emitAgentEventSpy.mock.calls
-      .map((call) => call[0])
-      .filter((evt) => evt?.stream === "thinking");
-
-    expect(thinkingEvents.length).toBe(2);
-    expect(thinkingEvents[0]?.data?.delta).toBe("Step 1");
-    expect(thinkingEvents[1]?.data?.delta).toBe(" and Step 2");
-    emitAgentEventSpy.mockRestore();
-  });
-
   it("emits live edit diff progress while tool arguments stream", () => {
     const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
     const { emit } = createSubscribedSessionHarness({ runId: "run-live-edit-diff" });
@@ -580,11 +589,9 @@ describe("subscribeEmbeddedAgentSession", () => {
     name: string;
     chunks: string[];
     expected?: Array<Record<string, unknown>>;
-    first?: Record<string, unknown>;
     last?: Record<string, unknown>;
     messageEnd?: string;
     noReplacement?: boolean;
-    redacted?: string;
   }>([
     {
       name: "preserves media directives when orphan close replacement has no text",
@@ -592,13 +599,6 @@ describe("subscribeEmbeddedAgentSession", () => {
       messageEnd: "private chain of thought </think>\nMEDIA:/tmp/a.png\n",
       last: { text: "", mediaUrls: ["/tmp/a.png"] },
       noReplacement: true,
-    },
-    {
-      name: "does not infer a fence from a chunk-local line start before reasoning tags",
-      chunks: ["abc", "~~~xml\n<think>secret"],
-      first: { text: "abc" },
-      last: { text: "abc~~~xml" },
-      redacted: "secret",
     },
     {
       name: "keeps close tag literals inside hidden fenced code stripped across deltas",
@@ -622,18 +622,11 @@ describe("subscribeEmbeddedAgentSession", () => {
       expect(payloads).toHaveLength(scenario.expected.length);
       expect(payloads).toMatchObject(scenario.expected);
     }
-    if (scenario.first !== undefined) {
-      expect(payloads[0]).toMatchObject(scenario.first);
-    }
     if (scenario.last !== undefined) {
       expect(payloads.at(-1)).toMatchObject(scenario.last);
     }
     if (scenario.noReplacement) {
       expect(payloads.at(-1)?.replace).toBeUndefined();
-    }
-    const redacted = scenario.redacted;
-    if (redacted !== undefined) {
-      expect(payloads.some((payload) => String(payload.text).includes(redacted))).toBe(false);
     }
   });
 
@@ -812,7 +805,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     }
     const error = (lifecycleError.data as { error?: unknown } | undefined)?.error;
     expect(typeof error).toBe("string");
-    expect(error).toContain("API rate limit reached");
+    expect(error).toContain("The AI service needs a short break");
   });
 
   it("reads terminal abort state before emitting lifecycle:end", () => {

@@ -383,6 +383,15 @@
           "remoteWorkspaceRoot": {
             "type": "string"
           },
+          "nativeHookRelay": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "credentialDirectory"],
+            "properties": {
+              "url": { "type": "string", "format": "uri" },
+              "credentialDirectory": { "type": "string" }
+            }
+          },
           "codeModeOnly": {
             "type": "boolean",
             "default": false
@@ -409,7 +418,7 @@
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"] },
-          "enableUltrafast": { "type": "boolean", "default": false },
+          "enableUltrafast": { "type": "boolean", "default": true },
           "cyberFailover": {
             "type": "object",
             "additionalProperties": false,
@@ -548,7 +557,7 @@
     },
     "computerUse.liveTestTimeoutMs": {
       "label": "Live Test Timeout",
-      "help": "Maximum time for the Computer Use list_apps readiness probe before status and startup treat the live test as failed.",
+      "help": "Maximum time for the Computer Use list_apps readiness check before status and startup treat the live test as failed.",
       "advanced": true
     },
     "computerUse.toolCallTimeoutMs": {
@@ -558,7 +567,7 @@
     },
     "computerUse.healthCheckEnabled": {
       "label": "Periodic Health Checks",
-      "help": "When true, run periodic Computer Use live probes on the configured cadence.",
+      "help": "When true, run periodic Computer Use live checks on the configured cadence.",
       "advanced": true
     },
     "computerUse.healthCheckIntervalMinutes": {
@@ -573,7 +582,7 @@
     },
     "computerUse.strictReadiness": {
       "label": "Strict Readiness",
-      "help": "When true, a failed Computer Use live probe stops Codex-mode startup. The default false value preserves existing enabled setups by continuing with a warning.",
+      "help": "When true, a failed Computer Use live check stops Codex-mode startup. The default false value preserves existing enabled setups by continuing with a warning.",
       "advanced": true
     },
     "computerUse.autoRepair": {
@@ -748,8 +757,8 @@
       "advanced": true
     },
     "appServer.enableUltrafast": {
-      "label": "Enable Ultrafast (for supported models)",
-      "help": "Use Ultrafast when the selected model advertises access; otherwise keep the current tier. Shared Fast off remains off.",
+      "label": "Allow explicit Ultrafast (for supported models)",
+      "help": "Allow Ultrafast only when the effective shared Fast-mode selection is explicitly ultrafast and the authenticated app-server catalog advertises it for the selected native model. Unset or true permits explicit selection; false hides Ultrafast for the Codex runtime in the picker, sends ordinary Fast (priority) for an explicit selection, and skips the Ultrafast catalog check. Fast, Auto, and unspecified selections never automatically upgrade. Standard and inactive Auto remain off.",
       "advanced": true
     },
     "appServer.networkProxy": {

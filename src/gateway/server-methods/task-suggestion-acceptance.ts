@@ -1,11 +1,14 @@
-// Settlement and rollback for claimed task suggestions and partial sessions.
 import {
   ErrorCodes,
   errorShape,
   type TaskSuggestion,
   type TaskSuggestionsAcceptResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import {
+  loadGatewaySessionEntryReadOnly,
+  withGatewaySessionEntry,
+} from "../session-utils-store.js";
 import {
   abandonTaskSuggestionAcceptance,
   cancelTaskSuggestionAcceptance,
@@ -50,7 +53,7 @@ async function rollbackSuggestedTaskSession(params: {
   agentId?: string;
   options: GatewayRequestHandlerOptions;
 }): Promise<boolean> {
-  let deletionResponse: { ok: true; worktreePreserved: boolean } | { ok: false } | undefined;
+  let deletionConfirmed = false;
   try {
     const deleteSession = sessionDeleteHandlers["sessions.delete"];
     if (!deleteSession) {
@@ -65,31 +68,35 @@ async function rollbackSuggestedTaskSession(params: {
         emitLifecycleHooks: false,
       },
       respond: (ok, payload) => {
-        if (
-          !ok ||
-          !payload ||
-          typeof payload !== "object" ||
-          !("deleted" in payload) ||
-          typeof payload.deleted !== "boolean"
-        ) {
-          deletionResponse = { ok: false };
-          return;
-        }
-        deletionResponse = {
-          ok: true,
-          worktreePreserved:
-            "worktreePreserved" in payload && payload.worktreePreserved !== undefined,
-        };
+        deletionConfirmed = Boolean(
+          ok &&
+          payload &&
+          typeof payload === "object" &&
+          "deleted" in payload &&
+          typeof payload.deleted === "boolean" &&
+          (!("worktreePreserved" in payload) || payload.worktreePreserved === undefined),
+        );
       },
     });
-  } catch {
-    return false;
-  }
-  if (!deletionResponse?.ok || deletionResponse.worktreePreserved) {
-    return false;
-  }
-  try {
-    return !loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }).entry;
+    const source = captureIncognitoSessionSource({
+      sessionKey: params.key,
+      agentId: params.agentId,
+    });
+    if (source && "kind" in source) {
+      source.assertCurrent();
+      return deletionConfirmed;
+    }
+    return (
+      deletionConfirmed &&
+      (source
+        ? await withGatewaySessionEntry(
+            params.key,
+            { agentId: params.agentId },
+            (session) => !session.entry,
+            params.options.context.getRuntimeConfig(),
+          )
+        : !loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }).entry)
+    );
   } catch {
     return false;
   }

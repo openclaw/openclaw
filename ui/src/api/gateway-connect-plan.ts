@@ -1,5 +1,6 @@
 import {
   buildGatewayConnectAuth,
+  buildDeviceAuthPayload,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   resolveGatewayConnectScopes,
@@ -23,8 +24,8 @@ import type {
   NativeGatewayAuthorization,
   NativeGatewayConnectAuth,
 } from "../app/native-gateway-auth.ts";
-import { loadOrCreateDeviceIdentity } from "../lib/nodes/index.ts";
-import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
+import { i18n } from "../i18n/index.ts";
+import { loadOrCreateDeviceIdentity, signDevicePayload } from "../lib/nodes/index.ts";
 
 export type GatewayBrowserConnectOptions = {
   url: string;
@@ -79,7 +80,6 @@ export async function buildBrowserGatewayConnectPlan({
   serverCapabilities,
   nativeSignal,
   selectAuth,
-  onDeviceIdentityReady,
 }: {
   opts: GatewayBrowserConnectOptions;
   connectNonce: string | null;
@@ -88,7 +88,6 @@ export async function buildBrowserGatewayConnectPlan({
   serverCapabilities: readonly string[];
   nativeSignal: AbortSignal;
   selectAuth: (input: { role: string; deviceId: string }) => GatewayConnectAuthSelection;
-  onDeviceIdentityReady: (hasDeviceIdentity: boolean) => void;
 }): Promise<ConnectPlan> {
   const role = CONTROL_UI_OPERATOR_ROLE;
   // Gateway Coupling makes the connect handshake the only version-skew gate.
@@ -147,7 +146,6 @@ export async function buildBrowserGatewayConnectPlan({
   // Native devices retain their signing key and grants in the app. Never mint
   // a browser identity or persist hello credentials for this connection path.
   const deviceIdentity = nativeAuth ? null : await loadOrCreateDeviceIdentity().catch(() => null);
-  onDeviceIdentityReady(deviceIdentity !== null);
   if (deviceIdentity) {
     selectedAuth = selectAuth({ role, deviceId: deviceIdentity.deviceId });
   }
@@ -168,18 +166,34 @@ export async function buildBrowserGatewayConnectPlan({
       storedScopes: selectedAuth.storedScopes,
       defaultScopes: CONTROL_UI_OPERATOR_SCOPES,
     });
-  const device =
-    nativeAuth?.device ??
-    (await buildGatewayConnectDevice({
-      deviceIdentity,
-      client,
+  let device = nativeAuth?.device;
+  if (deviceIdentity) {
+    if (connectChallengeTs === null) {
+      throw new Error("gateway connect challenge timestamp invalid");
+    }
+    // The Control UI alone supports pre-challenge Gateways; that timeout fallback has no server time.
+    const signedAt = connectChallengeTs ?? Date.now();
+    const nonce = connectNonce ?? "";
+    const payload = buildDeviceAuthPayload({
+      deviceId: deviceIdentity.deviceId,
+      clientId: client.id,
+      clientMode: client.mode,
       role,
       scopes,
-      authToken: selectedAuth.signatureToken,
-      connectNonce,
-      connectChallengeTs,
-    }));
-  const plan: ConnectPlan = {
+      signedAtMs: signedAt,
+      token: selectedAuth.signatureToken ?? null,
+      nonce,
+    });
+    const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
+    device = {
+      id: deviceIdentity.deviceId,
+      publicKey: deviceIdentity.publicKey,
+      signature,
+      signedAt,
+      nonce,
+    };
+  }
+  return {
     generation,
     params: {
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
@@ -205,16 +219,16 @@ export async function buildBrowserGatewayConnectPlan({
           "inline-widgets",
           "model-selection-policy",
           "ui-commands",
+          "ultrafast",
           "usage-refreshing",
         ],
       }),
       auth: nativeAuth?.auth ?? buildGatewayConnectAuth(selectedAuth),
       userAgent: navigator.userAgent,
-      locale: navigator.language,
+      locale: i18n.getRequestedLocale(),
     },
     explicitGatewayToken: nativeAuth ? undefined : explicitGatewayToken,
     selectedAuth,
     deviceIdentity,
   };
-  return plan;
 }

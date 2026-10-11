@@ -41,14 +41,18 @@ const { createDeferred, routeState } = await vi.hoisted(async () => {
     },
   };
 });
-vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
+vi.mock("openclaw/plugin-sdk/webhook-targets", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-targets")>()),
   registerPluginHttpRoute: (route: Parameters<typeof registerPluginHttpRoute>[0]) => {
     if (routeState.fail) {
       throw new Error("route conflict");
     }
     routeState.routes.push(route);
     routeState.ready.resolve();
-    return routeState.unregister;
+    return () => {
+      routeState.routes = routeState.routes.filter((entry) => entry !== route);
+      routeState.unregister();
+    };
   },
 }));
 
@@ -111,8 +115,8 @@ vi.mock("@microsoft/teams.apps", () => ({
 }));
 
 vi.mock("./monitor-handler.js", () => ({
-  isCardActionInvokeAuthorized,
-  isSigninInvokeAuthorized,
+  isMSTeamsInvokeAuthorized: ({ invokeKind }: { invokeKind: string }) =>
+    invokeKind === "card action" ? isCardActionInvokeAuthorized() : isSigninInvokeAuthorized(),
   createMSTeamsActivityHandler,
 }));
 

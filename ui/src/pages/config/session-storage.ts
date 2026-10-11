@@ -39,6 +39,10 @@ function storageSize(bytes: number) {
   });
 }
 
+function externalizedTranscripts(count: number): string {
+  return count > 0 ? t("configView.sessionStorage.externalized", { count: String(count) }) : "";
+}
+
 class SessionStorageSettings extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true }) private context!: ApplicationContext;
   @property({ type: Boolean }) mutationDisabled = false;
@@ -46,10 +50,9 @@ class SessionStorageSettings extends OpenClawLightDomElement {
   @property({ type: Boolean }) advancedExpanded = false;
 
   @state() private ageDraft: string | null = null;
-  @state() private runBusy = false;
   @state() private runError: string | null = null;
   @state() private runOutcome: string | null = null;
-  private runOperation: object | null = null;
+  @state() private runOperation: object | null = null;
   private followingRun = false;
 
   private connectionHello: unknown;
@@ -73,7 +76,6 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     this.followingRun = false;
     this.ageDraft = null;
     this.runOperation = null;
-    this.runBusy = false;
     this.runError = null;
     this.runOutcome = null;
   }
@@ -163,11 +165,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
             t("configView.sessionStorage.runCompleted", {
               count: String(status.maintenance.archivedTranscripts),
             }),
-            status.maintenance.externalizedTranscripts > 0
-              ? t("configView.sessionStorage.externalized", {
-                  count: String(status.maintenance.externalizedTranscripts),
-                })
-              : "",
+            externalizedTranscripts(status.maintenance.externalizedTranscripts),
           ]
             .filter(Boolean)
             .join(" ");
@@ -186,7 +184,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     const config = this.context.runtimeConfig;
     return (
       this.mutationDisabled ||
-      this.runBusy ||
+      this.runOperation !== null ||
       !this.client ||
       !config.canSet ||
       !config.state.connected ||
@@ -237,7 +235,6 @@ class SessionStorageSettings extends OpenClawLightDomElement {
     const gateway = this.context.gateway;
     const hello = gateway.snapshot.hello;
     this.runOperation = operation;
-    this.runBusy = true;
     this.runError = null;
     this.runOutcome = null;
     const isCurrent = () =>
@@ -263,7 +260,6 @@ class SessionStorageSettings extends OpenClawLightDomElement {
       }
     } finally {
       if (isCurrent()) {
-        this.runBusy = false;
         this.runOperation = null;
       }
     }
@@ -293,12 +289,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
       }),
       { transcripts: 0, cold: 0, database: 0, wal: 0, archives: 0, embedded: 0 },
     );
-    const externalized =
-      status.maintenance.externalizedTranscripts > 0
-        ? t("configView.sessionStorage.externalized", {
-            count: String(status.maintenance.externalizedTranscripts),
-          })
-        : "";
+    const externalized = externalizedTranscripts(status.maintenance.externalizedTranscripts);
     return html`
       ${renderSettingsRow({
         title: t("configView.sessionStorage.transcripts"),
@@ -471,7 +462,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
                   @click=${() => void this.runNow()}
                 >
                   ${t(
-                    this.runBusy || status?.maintenance.running
+                    this.runOperation !== null || status?.maintenance.running
                       ? "configView.sessionStorage.running"
                       : "configView.sessionStorage.runNow",
                   )}
@@ -506,16 +497,4 @@ class SessionStorageSettings extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-session-storage-settings")) {
   customElements.define("openclaw-session-storage-settings", SessionStorageSettings);
-}
-
-export function renderSessionStorage(props: {
-  mutationDisabled: boolean;
-  advancedExpanded: boolean;
-  editor: TemplateResult | typeof nothing;
-}) {
-  return html`<openclaw-session-storage-settings
-    .mutationDisabled=${props.mutationDisabled}
-    .advancedExpanded=${props.advancedExpanded}
-    .editor=${props.editor}
-  ></openclaw-session-storage-settings>`;
 }

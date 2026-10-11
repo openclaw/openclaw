@@ -2,12 +2,9 @@
 import os from "node:os";
 import path from "node:path";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
-import { isBetaTag } from "../infra/update-channels.js";
-import type { Tone } from "../memory-host-sdk/status.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusSummary } from "../status/summary.js";
-import { VERSION } from "../version.js";
 import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
 import type { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
@@ -26,7 +23,7 @@ export const baseStatusCfg = {
   gateway: { bind: "loopback" },
 } as const;
 
-export const baseStatusUpdate = {
+const baseStatusUpdate = {
   installKind: "git",
   git: {
     branch: "main",
@@ -40,17 +37,11 @@ export const baseStatusUpdate = {
   registry: { latestVersion: "2026.4.10" },
 } as never;
 
-export const baseStatusExpectedUpdateChannelInfo = isBetaTag(VERSION)
-  ? {
-      channel: "beta",
-      source: "installed-version",
-      label: "beta (installed version)",
-    }
-  : {
-      channel: "stable",
-      source: "config",
-      label: "stable (config)",
-    };
+export const baseStatusExpectedUpdateChannelInfo = {
+  channel: "stable",
+  source: "config",
+  label: "stable (config)",
+} as const;
 
 export const baseStatusExpectedUpdateChannelLabel = baseStatusExpectedUpdateChannelInfo.label;
 
@@ -69,7 +60,7 @@ export const baseStatusGatewaySnapshot = {
   gatewaySelf: { host: "gateway", version: "1.2.3" },
 } as const;
 
-export const baseStatusOverviewScanFields = {
+const baseStatusOverviewScanFields = {
   cfg: baseStatusCfg,
   update: baseStatusUpdate,
   tailscaleMode: "serve",
@@ -235,23 +226,6 @@ function createStatusHealth() {
   };
 }
 
-const statusTestDecorators = {
-  ok: (value: string) => `ok(${value})`,
-  warn: (value: string) => `warn(${value})`,
-  muted: (value: string) => `muted(${value})`,
-};
-
-const statusTestFormatting = {
-  formatTimeAgo: (value: number) => `${value}ms`,
-  formatKTokens: (value: number) => `${Math.round(value / 1000)}k`,
-};
-
-const statusTestMemoryResolvers = {
-  resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" as Tone }),
-  resolveMemoryFtsState: () => ({ state: "ready", tone: "warn" as Tone }),
-  resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" as Tone }),
-};
-
 export function createStatusCommandOverviewRowsParams(
   overrides: Partial<StatusCommandOverviewRowsParams> = {},
 ): StatusCommandOverviewRowsParams {
@@ -268,9 +242,6 @@ export function createStatusCommandOverviewRowsParams(
     memory: baseStatusMemory,
     memoryPlugin: baseStatusMemoryPlugin,
     pluginCompatibility: baseStatusPluginCompatibility,
-    ...statusTestDecorators,
-    ...statusTestFormatting,
-    ...statusTestMemoryResolvers,
     updateValue: "available · custom update",
     ...overrides,
   };

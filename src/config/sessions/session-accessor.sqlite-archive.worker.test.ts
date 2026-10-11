@@ -3,9 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.js";
+import { recordAcpParentStreamEventsForTest as recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
+import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.test-support.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -13,7 +13,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { decodeSessionArchiveBytes, readSessionArchiveContentSync } from "./archive-compression.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
@@ -26,12 +26,10 @@ import {
 } from "./session-accessor.js";
 import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import {
-  deleteMaterializedSessionStatePlans,
-  planSessionStateDeleteIfUnreferenced,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
@@ -266,7 +264,9 @@ describe("SQLite transcript archive worker", () => {
     const result = await deletion(target.sessionKey);
     expect(result.deleted).toBe(true);
     const archivePath = result.archivedTranscripts[0]?.archivedPath ?? "";
-    expect(path.dirname(archivePath)).toBe(path.join(tempDir, "backup", "sessions"));
+    expect(fs.realpathSync.native(path.dirname(archivePath))).toBe(
+      fs.realpathSync.native(path.join(tempDir, "backup", "sessions")),
+    );
     expect(archiveLines(archivePath)).toEqual([JSON.stringify(transcript)]);
     const bytes = fs.statSync(archivePath).size;
     for (const selector of [storePath, resolveSqliteTargetFromSessionStorePath(storePath).path]) {
@@ -457,7 +457,7 @@ describe("SQLite transcript archive worker", () => {
     ]);
     appendSqliteTrajectoryRuntimeEvents(target, [trajectory(target.sessionId)]);
     const db = database();
-    recordAcpParentStreamEvents({
+    await recordAcpParentStreamEvents({
       agentId: db.agentId,
       path: db.path,
       sessionId: target.sessionId,
@@ -600,7 +600,7 @@ describe("SQLite transcript archive worker", () => {
         appendSqliteTrajectoryRuntimeEvents(target, [trajectory(sessionId)]);
         break;
       case "ACP parent-stream":
-        recordAcpParentStreamEvents({
+        await recordAcpParentStreamEvents({
           agentId: db.agentId,
           path: db.path,
           sessionId,

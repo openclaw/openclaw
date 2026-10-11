@@ -25,19 +25,6 @@ import {
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
 
-export {
-  ANTHROPIC_CONTEXT_1M_TOKENS,
-  ANTHROPIC_FABLE_CONTEXT_TOKENS,
-  ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS,
-  ANTHROPIC_OPUS_5_CONTEXT_TOKENS,
-  ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
-  ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
-} from "./context-resolution.js";
-export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
-export {
-  applyConfiguredContextWindows,
-  applyDiscoveredContextWindows,
-} from "./context-cache-projection.js";
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -97,9 +84,6 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
   }
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = Promise.resolve()
     .then(async () => {
-      if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-        return;
-      }
       let stagedTokenCache = new Map<string, number>();
       try {
         const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
@@ -107,16 +91,8 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
           config: cfg,
           readOnly: true,
         });
-        if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-          return;
-        }
         stagedTokenCache = await prepareDiscoveredContextTokenCache({
           modelCatalog: owner.modelCatalog,
-          assertCurrent: () => {
-            if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-              throw new Error("context window cache generation was superseded");
-            }
-          },
         });
       } catch {
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
@@ -154,9 +130,6 @@ export async function prewarmContextWindowCacheAfterReady(params: {
   const loadPromise = (async () => {
     const { getPublishedPreparedModelCatalogOwnerSnapshot } =
       await loadPreparedModelCatalogRuntime();
-    if (shouldStop()) {
-      return;
-    }
     const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
       config: params.config,
       allowGatewaySubagentBinding: true,
@@ -164,20 +137,13 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     if (!owner) {
       throw new Error("published Gateway model catalog owner is unavailable");
     }
-    if (shouldStop()) {
-      return;
-    }
     // Gateway publication intentionally exposes configured/static turn facts. Full catalog
     // inventory is a separate control-plane load and must not run in post-ready warmup.
     const caches = await prepareContextWindowCaches({
       config: owner.config,
       modelCatalog: owner.modelCatalog,
-      assertCurrent: () => {
-        if (shouldStop()) {
-          throw new Error("context window cache prewarm cancelled");
-        }
-      },
     });
+    // Superseded projections may finish; only publication needs the current generation.
     if (shouldStop()) {
       return;
     }
@@ -282,7 +248,7 @@ export function resolveModelContextTokenProjection(
 ): ModelContextTokenProjection {
   prepareContextWindowCache({
     allowAsyncLoad: params.allowAsyncLoad,
-    skipRuntimeConfigLoad: Boolean(params.cfg),
+    skipRuntimeConfigLoad: Boolean(params.cfg) || params.allowCacheLookup === false,
   });
   return resolveModelContextTokenProjectionFromCache(params);
 }

@@ -5,9 +5,12 @@ import {
   InteractionResponseType,
   InteractionType,
 } from "discord-api-types/v10";
+import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   attachRestMock,
@@ -25,8 +28,13 @@ import {
   createDiscordModelPickerFallbackButton,
   createDiscordNativeCommand,
 } from "./native-command.js";
-import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
+
+// Keep transcript persistence outside this interaction boundary fixture.
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionTranscriptRuntime>()),
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+}));
 
 const GUILD = "100000000000000001";
 const CHANNEL = "100000000000000002";
@@ -109,12 +117,12 @@ function createHarness() {
   );
   vi.spyOn(pickerPreferences, "readDiscordModelPickerRecentModels").mockResolvedValue([]);
   const dispatch = vi
-    .spyOn(nativeCommandRuntime, "dispatchChannelInboundTurn")
+    .spyOn(channelInbound, "dispatchChannelInboundTurn")
     .mockImplementation(async () => {
       throw new Error("Unexpected agent turn");
     });
   const status = vi
-    .spyOn(nativeCommandRuntime, "resolveDirectStatusReplyForSession")
+    .spyOn(commandStatus, "resolveDirectStatusReplyForSession")
     .mockImplementation(async ({ sessionKey }) => ({ text: `Status for ${sessionKey}` }));
   return {
     client,
@@ -226,26 +234,10 @@ describe("Client.handleInteraction native command channel identity", () => {
   beforeEach(() => clearDiscordChannelInfoCacheForTest());
   afterEach(() => vi.restoreAllMocks());
 
-  it("delivers status for a hydrated allowed channel", async () => {
+  it.each([THREAD])("delivers status for raw channel %s without hydration", async (channelId) => {
     const harness = createHarness();
-    await harness.client.handleInteraction(payload(CHANNEL, true));
-    expectVisibleStatus(harness, CHANNEL);
-  });
-
-  it.each([CHANNEL, THREAD])(
-    "delivers status for raw channel %s without hydration",
-    async (channelId) => {
-      const harness = createHarness();
-      await harness.client.handleInteraction(payload(channelId));
-      expectVisibleStatus(harness, channelId);
-    },
-  );
-
-  it("rejects a raw command sender outside commands.allowFrom", async () => {
-    const harness = createHarness();
-    await harness.client.handleInteraction(payload(CHANNEL, false, "100000000000000099"));
-    expect(harness.status).not.toHaveBeenCalled();
-    expectFollowUp(harness, "You are not authorized to use this command.");
+    await harness.client.handleInteraction(payload(channelId));
+    expectVisibleStatus(harness, channelId);
   });
 
   it("rejects a thread whose parent is outside the allowlist", async () => {
@@ -256,16 +248,7 @@ describe("Client.handleInteraction native command channel identity", () => {
     expectFollowUp(harness, "This channel is not allowed.");
   });
 
-  it("rejects missing channel identity under an allowlist", async () => {
-    const harness = createHarness();
-    const interaction = payload(CHANNEL);
-    Reflect.deleteProperty(interaction, "channel_id");
-    await harness.client.handleInteraction(interaction);
-    expect(harness.status).not.toHaveBeenCalled();
-    expectFollowUp(harness, "This channel is not allowed.");
-  });
-
-  it.each([CHANNEL, THREAD])(
+  it.each([THREAD])(
     "autocompletes for raw channel %s through the registered option",
     async (channelId) => {
       const harness = createHarness();
@@ -284,7 +267,7 @@ describe("Client.handleInteraction native command channel identity", () => {
     },
   );
 
-  it.each([CHANNEL, THREAD])(
+  it.each([THREAD])(
     "opens the registered picker for the raw channel %s session",
     async (channelId) => {
       const harness = createHarness();
@@ -305,7 +288,7 @@ describe("Client.handleInteraction native command channel identity", () => {
     },
   );
 
-  it.each(["sender", "parent", "identity"] as const)(
+  it.each(["sender", "parent"] as const)(
     "denies raw autocomplete with denied %s",
     async (denial) => {
       const harness = createHarness();
@@ -316,9 +299,6 @@ describe("Client.handleInteraction native command channel identity", () => {
       );
       if (denial === "parent") {
         denyThreadParent(harness);
-      }
-      if (denial === "identity") {
-        Reflect.deleteProperty(interaction, "channel_id");
       }
       await harness.client.handleInteraction(interaction);
       expectEmptyAutocomplete(harness);

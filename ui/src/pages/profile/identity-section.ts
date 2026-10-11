@@ -36,16 +36,6 @@ type IdentitySectionProps = {
   onGitCoauthorChange: (enabled: boolean) => void;
 };
 
-function avatarViewer(profile: UserProfile, avatarUrl: string | null): PresenceViewer {
-  return {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-    email: profile.emails[0],
-    avatarUrl: avatarUrl ?? undefined,
-    watchedSessions: [],
-  };
-}
-
 export function renderIdentitySection(props: IdentitySectionProps) {
   const canWrite = props.canWrite !== false;
   const savedName = props.profile.displayName ?? "";
@@ -67,7 +57,15 @@ export function renderIdentitySection(props: IdentitySectionProps) {
           control: html`
             <span class="identity-avatar-control">
               <openclaw-viewer-avatar
-                .user=${avatarViewer(props.profile, props.avatarUrl)}
+                .user=${
+                  {
+                    id: props.profile.id,
+                    name: props.profile.displayName ?? undefined,
+                    email: props.profile.emails[0],
+                    avatarUrl: props.avatarUrl ?? undefined,
+                    watchedSessions: [],
+                  } satisfies PresenceViewer
+                }
                 variant="profile"
               ></openclaw-viewer-avatar>
               ${
@@ -75,7 +73,7 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                   ? html`<button
                         type="button"
                         class="btn btn--sm"
-                        ?disabled=${!canWrite || props.busy !== null}
+                        ?disabled=${props.busy !== null}
                         @click=${(event: Event) => {
                           const button = event.currentTarget;
                           const input =
@@ -99,7 +97,7 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                         type="file"
                         accept="image/png,image/jpeg,image/webp"
                         hidden
-                        ?disabled=${!canWrite || props.busy !== null}
+                        ?disabled=${props.busy !== null}
                         @change=${(event: Event) => {
                           const input = event.currentTarget as HTMLInputElement;
                           const file = input.files?.[0];

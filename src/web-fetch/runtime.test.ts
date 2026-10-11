@@ -4,6 +4,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginWebFetchProviderEntry } from "../plugins/types.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   createWebFetchTestProvider,
@@ -96,11 +97,9 @@ function requireResolvedWebFetch(
 
 describe("web fetch runtime", () => {
   let resolveWebFetchDefinition: typeof import("./runtime.js").resolveWebFetchDefinition;
-  let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
 
   beforeAll(async () => {
     ({ resolveWebFetchDefinition } = await import("./runtime.js"));
-    ({ clearSecretsRuntimeSnapshot } = await import("../secrets/runtime.js"));
   });
 
   beforeEach(() => {

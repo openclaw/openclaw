@@ -1,11 +1,10 @@
-// Provides schema hint metadata for config docs and UI labels.
 import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
 } from "@openclaw/net-policy/redact-sensitive-url";
 import type { z } from "zod";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
-import { isKernelOwnedChannelConfigKey } from "./channel-config-keys.js";
+import { isPluginOwnedChannelConfigPath } from "./channel-config-keys.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { INHERITED_DEFAULT_PLACEHOLDERS } from "./schema.inherited-defaults.js";
 import { FIELD_LABELS } from "./schema.labels.js";
@@ -27,6 +26,7 @@ const GROUP_HINTS = [
   ["nodeHost", "Node Host", 35],
   ["cloudWorkers", "Cloud Workers", 37],
   ["desktop", "Desktop", 38],
+  ["storage", "Storage", 39],
   ["agents", "Agents", 40],
   ["tools", "Tools", 50],
   ["bindings", "Bindings", 55],
@@ -38,6 +38,7 @@ const GROUP_HINTS = [
   ["cron", "Automations", 100],
   ["worktreeRoot", "Worktree Root", 105],
   ["worktreeAcceleration", "Worktree Acceleration", 106],
+  ["worktreeMaxCount", "Maximum Managed Worktrees", 107],
   ["hooks", "Hooks", 110],
   ["ui", "UI", 120],
   ["browser", "Browser", 130],
@@ -91,9 +92,11 @@ const SECTION_DOCS_URLS = {
   voicewake: "https://docs.openclaw.ai/nodes/voicewake",
   presence: "https://docs.openclaw.ai/concepts/presence",
   cloudWorkers: "https://docs.openclaw.ai/gateway/cloud-workers",
+  storage: "https://docs.openclaw.ai/concepts/storage-locations",
   desktop: "https://docs.openclaw.ai/gateway/configuration",
   worktreeRoot: "https://docs.openclaw.ai/concepts/managed-worktrees",
   worktreeAcceleration: "https://docs.openclaw.ai/concepts/managed-worktrees",
+  worktreeMaxCount: "https://docs.openclaw.ai/concepts/managed-worktrees",
   proxy: "https://docs.openclaw.ai/security/network-proxy",
   transcripts: "https://docs.openclaw.ai/plugins/meeting-plugins",
   surfaces: "https://docs.openclaw.ai/concepts/messages",
@@ -115,20 +118,8 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
-  "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.entries.*.identity.avatar": "avatars/openclaw.png",
 };
-
-const CHANNEL_NAMESPACE_PREFIX = "channels.";
-
-/** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
-function isPluginOwnedChannelHintPath(path: string): boolean {
-  if (!path.startsWith(CHANNEL_NAMESPACE_PREFIX)) {
-    return false;
-  }
-  const channelKey = path.slice(CHANNEL_NAMESPACE_PREFIX.length).split(".", 1)[0];
-  return channelKey === undefined || !isKernelOwnedChannelConfigKey(channelKey);
-}
 
 /** Build core config UI hints while leaving plugin-owned channel hints to plugin schemas. */
 export function buildBaseHints(): ConfigUiHints {
@@ -150,7 +141,7 @@ export function buildBaseHints(): ConfigUiHints {
     [INHERITED_DEFAULT_PLACEHOLDERS, "placeholder"],
   ] as const) {
     for (const [path, value] of Object.entries(metadata)) {
-      if (!isPluginOwnedChannelHintPath(path)) {
+      if (!isPluginOwnedChannelConfigPath(path)) {
         hints[path] = { ...hints[path], [field]: value };
       }
     }

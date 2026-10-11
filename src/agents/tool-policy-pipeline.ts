@@ -106,36 +106,24 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
       suppressUnavailableCoreToolWarningAllowlist:
         params.providerProfileUnavailableCoreWarningAllowlist,
     },
-    {
-      policy: params.globalPolicy,
-      source: params.sources?.global,
-      label: "tools.allow",
-    },
-    {
-      policy: params.globalProviderPolicy,
-      source: params.sources?.globalProvider,
-      label: "tools.byProvider.allow",
-    },
-    {
-      policy: params.agentPolicy,
-      source: params.sources?.agent,
-      label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-    },
-    {
-      policy: params.agentProviderPolicy,
-      source: params.sources?.agentProvider,
-      label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
-    },
-    {
-      policy: params.groupPolicy,
-      source: { kind: "session" },
-      label: "group tools.allow",
-    },
-    {
-      policy: params.senderPolicy,
-      source: { kind: "session" },
-      label: "tools.toolsBySender",
-    },
+    ...(
+      [
+        [params.globalPolicy, params.sources?.global, "tools.allow"],
+        [params.globalProviderPolicy, params.sources?.globalProvider, "tools.byProvider.allow"],
+        [
+          params.agentPolicy,
+          params.sources?.agent,
+          agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
+        ],
+        [
+          params.agentProviderPolicy,
+          params.sources?.agentProvider,
+          agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
+        ],
+        [params.groupPolicy, { kind: "session" }, "group tools.allow"],
+        [params.senderPolicy, { kind: "session" }, "tools.toolsBySender"],
+      ] as const
+    ).map(([policy, source, label]) => ({ policy, source, label })),
   ];
   for (const step of steps) {
     step.stripPluginOnlyAllowlist = true;

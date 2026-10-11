@@ -25,7 +25,6 @@ import {
   createUpdateStatusRefresher,
   projectUpdateSentinel,
   projectUpdateStatusResponse,
-  projectUpdateCheckoutResponse,
   projectUpdateRunFailure,
   resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
@@ -182,7 +181,7 @@ export function createApplicationUpdateOverlays(
     });
   }
 
-  function publish() {
+  function publish(syncCampaign = false) {
     const campaign = snapshot.updateSchedule?.campaign;
     const applying =
       campaign?.state === "applying" && snapshot.updateRun?.origin.campaignId !== campaign.id;
@@ -221,6 +220,9 @@ export function createApplicationUpdateOverlays(
               : null,
     };
     onChange();
+    if (syncCampaign) {
+      updateCampaignPoller.sync();
+    }
   }
 
   const publishError = (error: unknown, source?: "read") => {
@@ -260,8 +262,7 @@ export function createApplicationUpdateOverlays(
       recordedUpdateAttempt: failure?.attempt ?? null,
       updateStatusBanner: failure?.banner ?? null,
     };
-    publish();
-    updateCampaignPoller.sync();
+    publish(true);
   };
 
   const refreshRun = async () => {
@@ -309,12 +310,9 @@ export function createApplicationUpdateOverlays(
     }
   };
 
-  const applyUpdateStatusResponse = (
-    response: UpdateRestartStatusResponse,
-    preserveInstall = false,
-  ) => {
+  const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
     const { failure, updateStatusBanner, recordedUpdateAttempt, ...status } =
-      projectUpdateStatusResponse(response, snapshot, preserveInstall);
+      projectUpdateStatusResponse(response, snapshot);
     const run = response.activeRun ?? response.lastRun;
     const history = updateAttempt?.history;
     // A failed history read is not an empty baseline. Until a current identity
@@ -352,7 +350,7 @@ export function createApplicationUpdateOverlays(
   const refreshUpdateStatus = createUpdateStatusRefresher({
     getClient: () => activeClient,
     getEpoch: () => connectedEpoch,
-    getRevision: () => updateStatusRevision,
+    getAuthorization: () => activeHello?.auth,
     canRefresh: () => !disposed && operatorAccess.canAdmin,
     isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
     onRefreshing: (updateStatusRefreshing) => {
@@ -360,19 +358,6 @@ export function createApplicationUpdateOverlays(
       publish();
     },
     onStatus: applyUpdateStatusResponse,
-    onCheckout: (response, preserveSchedule) => {
-      snapshot = {
-        ...snapshot,
-        ...projectUpdateCheckoutResponse(
-          response,
-          snapshot,
-          preserveSchedule ? "schedule" : undefined,
-        ),
-        updateStatusCheckBanner: null,
-      };
-      publish();
-      updateCampaignPoller.sync();
-    },
     onError: (error, mode) => {
       if (mode === "completion" && snapshot.updateStatusCheckBanner?.mode === "manual") {
         return;
@@ -505,8 +490,7 @@ export function createApplicationUpdateOverlays(
           controlUiBuildDiffersFrom(serverBuildIdentity)
         : snapshot.controlUiRefreshRequired,
     };
-    publish();
-    updateCampaignPoller.sync();
+    publish(true);
     if ((connectedSourceChanged || scopeChanged || accessGranted) && operatorAccess.canAdmin) {
       void runConnectionBootstrap("update-run", () =>
         runId ? refreshRun() : refreshUpdateStatus("background"),
@@ -557,8 +541,7 @@ export function createApplicationUpdateOverlays(
       const previousCampaign = snapshot.updateSchedule?.campaign;
       updateStatusRevision++;
       snapshot = { ...snapshot, ...projectUpdateAvailableEvent(snapshot, payload) };
-      publish();
-      updateCampaignPoller.sync();
+      publish(true);
       if (
         previousCampaign?.state === "applying" &&
         snapshot.updateSchedule?.campaign?.state !== "applying"
@@ -576,7 +559,7 @@ export function createApplicationUpdateOverlays(
         publish();
       }
     },
-    async runUpdate(this: void, options?: { sessionKey?: string }) {
+    async runUpdate(this: void) {
       const client = activeClient;
       if (
         !client ||
@@ -587,7 +570,7 @@ export function createApplicationUpdateOverlays(
         return;
       }
       const generation = ++updateRunGeneration;
-      const sessionKey = options?.sessionKey ?? hooks.getActiveSessionKey?.();
+      const sessionKey = hooks.getActiveSessionKey?.();
       updateStatusRevision++;
       updateReadGeneration++;
       const attempt: UpdateAdmissionAttempt = {
@@ -657,8 +640,7 @@ export function createApplicationUpdateOverlays(
       } finally {
         if (isCurrent()) {
           updateRequestRunning = false;
-          publish();
-          updateCampaignPoller.sync();
+          publish(true);
         }
       }
     },
@@ -715,9 +697,7 @@ export function createApplicationUpdateOverlays(
         updateHoldInFlight = false;
       }
     },
-    async reportUpdateFailure(this: void, attemptId: string) {
-      await updateFailureReporter.report(attemptId);
-    },
+    reportUpdateFailure: updateFailureReporter.report,
     dispose() {
       disposed = true;
       updateFailureReporter.invalidate();

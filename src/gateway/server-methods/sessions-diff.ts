@@ -7,20 +7,34 @@ import {
   type SessionsDiffParams,
   type SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
+import { retainSessionScopedRead } from "./session-scoped-read.js";
+import { withSessionFileRoot } from "./sessions-files.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export async function loadSessionDiff(
   params: SessionsDiffParams,
   context?: GatewayRequestContext,
+  assertAuthorized: () => void = () => {},
 ): Promise<SessionsDiffResult> {
+  let worktreeCount = 0;
+  let returnedFileCount = 0;
+  using timing =
+    context &&
+    startSlowRequestDiagnostics<"resolve" | "git" | "response">(
+      context.logGateway,
+      "slow session checkout diff",
+      "sessions.diff",
+      "resolve",
+      () => ({ worktreeCount, returnedFileCount, scope: params.scope ?? "all" }),
+    );
   const empty = (
     unavailableReason?: NonNullable<SessionsDiffResult["unavailableReason"]>,
   ): SessionsDiffResult => ({
@@ -30,62 +44,75 @@ export async function loadSessionDiff(
     deletions: 0,
     ...(unavailableReason ? { unavailableReason } : {}),
   });
-  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
-  const { cfg, agentId: loadedAgentId, entry, storePath, canonicalKey } = loaded;
-  // Same session scoping as sessions.files.*: an unknown session must not fall
-  // back to some agent workspace and surface another checkout's diff.
-  if (!entry?.sessionId || !storePath) {
-    return empty("unknown_session");
-  }
-  const agentId = normalizeAgentId(
-    loadedAgentId ??
-      parseAgentSessionKey(canonicalKey)?.agentId ??
-      params.agentId ??
-      parseAgentSessionKey(params.sessionKey)?.agentId,
+  return withSessionFileRoot(
+    { ...params, projection: ["sessionDiffBaseline"] },
+    context?.getRuntimeConfig() ?? getRuntimeConfig(),
+    async (loaded, assertSourceCurrent) => {
+      const { agentId, entry, storePath } = loaded;
+      const assertCurrent = () => {
+        assertSourceCurrent();
+        assertAuthorized();
+      };
+      assertCurrent();
+      // Same session scoping as sessions.files.*: an unknown session must not fall
+      // back to some agent workspace and surface another checkout's diff.
+      if (!entry?.sessionId || !storePath || !agentId) {
+        return empty("unknown_session");
+      }
+      const repository = await resolveRepositoryWorkspaceAccess({ ...loaded, agentId }, context);
+      assertCurrent();
+      if (repository) {
+        if (repository.kind === "stored") {
+          const result = await loadRepositoryArtifactDiff(repository, params);
+          assertCurrent();
+          return result;
+        }
+        if (!repository.repository.baseCommit) {
+          throw new Error("The cloud repository is still preparing its base revision.");
+        }
+        const result = await repository.inspect("diff", {
+          scope: params.scope ?? "all",
+          commit: params.commit,
+          baseCommit: repository.repository.baseCommit,
+        });
+        assertCurrent();
+        // Remote paths are not Gateway-local checkout or native editor destinations.
+        delete result.root;
+        return result;
+      }
+      const cwd = loaded.diffCwd;
+      const checkoutPending = Boolean(entry.pendingWorktree || entry.pendingProjectGitUrl);
+      if (!cwd) {
+        return empty(checkoutPending ? undefined : "unknown_session");
+      }
+      worktreeCount = 1;
+      timing?.mark("git");
+      const input = { cwd, sessionKey: params.sessionKey };
+      let result: SessionsDiffResult;
+      if (params.scope === "commit") {
+        if (!params.commit) {
+          throw new TypeError("commit scope requires a commit");
+        }
+        result = await loadCheckoutDiff({ ...input, commit: params.commit, scope: "commit" });
+      } else {
+        result = await loadCheckoutDiff({
+          ...input,
+          scope: params.scope ?? "all",
+          baseline: entry.sessionDiffBaseline,
+          sessionId: entry.sessionId,
+        });
+      }
+      assertCurrent();
+      returnedFileCount = result.files.length;
+      timing?.mark("response");
+      return result;
+    },
   );
-  const repository = resolveRepositoryWorkspaceAccess({ ...loaded, agentId }, context);
-  if (repository) {
-    if (repository.kind === "stored") {
-      return await loadRepositoryArtifactDiff(repository, params);
-    }
-    if (!repository.repository.baseCommit) {
-      throw new Error("The cloud repository is still preparing its base revision.");
-    }
-    const result = await repository.inspect("diff", {
-      scope: params.scope ?? "all",
-      commit: params.commit,
-      baseCommit: repository.repository.baseCommit,
-    });
-    // Remote paths are not Gateway-local checkout or native editor destinations.
-    delete result.root;
-    return result;
-  }
-  const { diffCwd: cwd, checkoutPending } = resolveSessionWorkspaceRoots(cfg, agentId, entry);
-  if (!cwd) {
-    return empty(checkoutPending ? undefined : "unknown_session");
-  }
-  if (params.scope === "commit") {
-    if (!params.commit) {
-      throw new TypeError("commit scope requires a commit");
-    }
-    return await loadCheckoutDiff({
-      commit: params.commit,
-      cwd,
-      scope: "commit",
-      sessionKey: params.sessionKey,
-    });
-  }
-  return await loadCheckoutDiff({
-    cwd,
-    scope: params.scope ?? "all",
-    sessionKey: params.sessionKey,
-    baseline: entry.sessionDiffBaseline,
-    sessionId: entry.sessionId,
-  });
 }
 
 export const sessionsDiffHandlers: GatewayRequestHandlers = {
-  "sessions.diff": async ({ params, respond, context }) => {
+  "sessions.diff": async (options) => {
+    const { params, respond, context } = options;
     if (!assertValidParams(params, validateSessionsDiffParams, "sessions.diff", respond)) {
       return;
     }
@@ -110,15 +137,29 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    respond(
-      true,
-      await loadSessionDiff(
+    const read =
+      requestedAgent.agentId &&
+      captureIncognitoSessionSource({
+        sessionKey: params.sessionKey,
+        agentId: requestedAgent.agentId,
+      })
+        ? retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
+            requireMaterialized: true,
+          })
+        : undefined;
+    try {
+      const result = await loadSessionDiff(
         {
           ...params,
           ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
         },
         context,
-      ),
-    );
+        () => read?.assertCurrent(),
+      );
+      read?.assertCurrent();
+      respond(true, result);
+    } finally {
+      read?.release();
+    }
   },
 };

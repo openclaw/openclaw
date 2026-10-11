@@ -4,6 +4,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
@@ -22,8 +27,9 @@ export const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => (
 }));
 export const projectsHandlers = createProjectsHandlers({
   listRegistryRecords,
-  resolveRepositoryIdentity,
-} as never);
+  resolveRepositoryIdentities: (roots: string[]) =>
+    Promise.all(roots.map(resolveRepositoryIdentity)),
+});
 
 export async function initializeRepository(
   root: string,
@@ -50,6 +56,8 @@ export async function invokeProjectMethod(
   profileId?: string,
   handlers = projectsHandlers,
   projection?: SessionRowProjection,
+  getConfig: () => OpenClawConfig = () => cfg as OpenClawConfig,
+  lifetime: { signal?: AbortSignal; hasCurrentClientAuthority?: () => boolean } = {},
 ) {
   const capture: {
     result: {
@@ -62,17 +70,18 @@ export async function invokeProjectMethod(
   let ownedProjection: SessionRowProjection | undefined;
   try {
     ownedProjection =
-      !projection && method === "projects.list" && profileId && !params.includeObserved
+      !projection && method === "projects.list" && (profileId || params.includeObserved)
         ? await createSessionRowProjection({ cfg, modelCatalog: [] })
         : undefined;
     await handlers[method]!({
+      ...lifetime,
       req: {} as never,
       params,
       respond: (ok, payload, error) => {
         capture.result = { ok, payload, error };
       },
       context: bindSessionRowProjection(
-        { getRuntimeConfig: () => cfg as OpenClawConfig },
+        { getRuntimeConfig: getConfig, trackExecution: trackAsyncWork },
         () => projection ?? ownedProjection,
       ) as never,
       client: {
@@ -86,4 +95,8 @@ export async function invokeProjectMethod(
     ownedProjection?.dispose();
     releaseForegroundWork();
   }
+}
+
+export function withProjectState(run: (state: OpenClawTestState) => Promise<void>) {
+  return withOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" }, run);
 }

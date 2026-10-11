@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Builds OpenClaw packages and plugin SDK artifacts with cache-aware orchestration.
 
-import type { SpawnSyncOptions } from "node:child_process";
+import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
 import {
@@ -18,18 +20,21 @@ import {
 } from "./lib/dist-artifact-ownership.mts";
 import { formatDurationElapsed } from "./lib/format-duration.mts";
 import { resolveLiveManagedGatewayDistFence } from "./lib/live-gateway-dist-fence.mts";
+import {
+  BUILD_STAMP_FILE,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+  writeBuildStamp,
+  writeRuntimePostBuildStamp,
+} from "./lib/local-build-metadata.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import type { MemoryLimitParams } from "./lib/process-memory.mts";
+import { resolveRunNodeInputSignature } from "./lib/run-node-input-state.mts";
 import { preflightInstalledSourceArtifacts } from "./lib/source-update-artifact-preflight.mts";
-import {
-  TSDOWN_PACKAGE_CONFIG_GROUP,
-  TSDOWN_UNIFIED_CONFIG_GROUP,
-} from "./lib/tsdown-config-groups.mts";
+import { TSDOWN_PACKAGE_CONFIG_GROUP } from "./lib/tsdown-config-groups.mts";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
-import { resolvePnpmRunner } from "./pnpm-runner.mts";
 import {
   TSDOWN_MAX_OLD_SPACE_MB_ENV,
   TSDOWN_DECLARATION_EXTENSIONS,
@@ -41,11 +46,7 @@ import {
 
 const nodeBin = resolveNodeRuntimeExecutable() ?? process.execPath;
 
-export type BuildAllStep = BuildCacheStep &
-  (
-    | { kind: "pnpm"; args?: never; pnpmArgs: string[]; windowsNodeOptions?: string }
-    | { kind?: "node"; args: string[]; pnpmArgs?: never; windowsNodeOptions?: string }
-  );
+export type BuildAllStep = BuildCacheStep & { args: string[] };
 
 type BuildAllTiming = { label: string; durationMs: number; status: string };
 
@@ -55,94 +56,71 @@ export type BuildAllResult = {
   admissionRefused?: true;
 };
 type BuildAllStepParams = {
-  platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   nodeExecPath?: string;
-  npmExecPath?: string;
-  comSpec?: string;
+  deferIsolatedAssets?: boolean;
 };
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 const TSDOWN_AI_OUTPUT_ROOT = tsdownPackageOutputRoot("ai");
 const TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter(
   (root) => root !== TSDOWN_AI_OUTPUT_ROOT,
 );
-const declarationCacheOutputs = (roots: string[]) =>
-  roots.map((root) => ({ path: root, extensions: TSDOWN_DECLARATION_EXTENSIONS }));
 const tsxScript = (script: string, ...args: string[]) => ["--import", "tsx", script, ...args];
-const nodeStep = (label: string, args: string[]): Extract<BuildAllStep, { kind?: "node" }> => ({
+const nodeStep = (label: string, args: string[]): BuildAllStep => ({
   label,
-  kind: "node",
   args,
 });
 const tsxStep = (label: string, script: string, ...args: string[]) =>
   nodeStep(label, tsxScript(script, ...args));
-const PNPM_STEP_NODE_FALLBACKS = new Map([
-  ["plugins:assets:build", tsxScript("scripts/bundled-plugin-assets.mts", "--phase", "build")],
-  ["plugins:assets:copy", tsxScript("scripts/bundled-plugin-assets.mts", "--phase", "copy")],
-  ["ui:build", ["scripts/ui.js", "build"]],
-]);
+const declarationStep = (
+  label: string,
+  config: string,
+  roots: string[],
+  ...args: string[]
+): BuildAllStep => ({
+  ...tsxStep(label, "scripts/tsdown-build.mts", "--config", config, ...args),
+  cache: {
+    inputs: [...TSDOWN_DECLARATION_TOOL_INPUTS, config, TSDOWN_PACKAGES_CACHE_INPUT],
+    outputs: roots.map((root) => ({ path: root, extensions: TSDOWN_DECLARATION_EXTENSIONS })),
+    restore: "always",
+    runOnHit: { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } },
+  },
+});
+const pluginAssetStep = (phase: "build" | "copy") =>
+  nodeStep(`plugins:assets:${phase}`, [
+    "--import",
+    "./scripts/tsx.mjs",
+    "scripts/bundled-plugin-assets.mts",
+    "--phase",
+    phase,
+  ]);
 export const BUILD_ALL_STEPS: BuildAllStep[] = [
+  nodeStep("native-protocol", ["scripts/prepare-native-protocol.mjs"]),
   nodeStep("clean:dist", [
     "-e",
     'require("node:fs").rmSync("dist", { recursive: true, force: true })',
   ]),
-  { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
-  tsxStep("tsdown", "scripts/tsdown-build.mts"),
+  pluginAssetStep("build"),
   {
-    ...tsxStep("tsdown-ai", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"),
-    cache: {
-      inputs: [
-        ...TSDOWN_DECLARATION_TOOL_INPUTS,
-        "tsdown.ai.config.ts",
-        TSDOWN_PACKAGES_CACHE_INPUT,
-      ],
-      outputs: declarationCacheOutputs([TSDOWN_AI_OUTPUT_ROOT]),
-      restore: "always",
-      runOnHit: {
-        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      },
-    },
-  },
-  {
-    ...tsxStep(
-      "tsdown-packages",
-      "scripts/tsdown-build.mts",
-      "--config",
-      "tsdown.config.ts",
-      "--filter",
-      TSDOWN_PACKAGE_CONFIG_GROUP,
-    ),
-    cache: {
-      inputs: [...TSDOWN_DECLARATION_TOOL_INPUTS, "tsdown.config.ts", TSDOWN_PACKAGES_CACHE_INPUT],
-      outputs: declarationCacheOutputs(TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS),
-      restore: "always",
-      runOnHit: {
-        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      },
-    },
-  },
-  {
-    ...tsxStep(
-      "tsdown-unified",
-      "scripts/tsdown-build.mts",
-      "--config",
-      "tsdown.config.ts",
-      "--filter",
-      TSDOWN_UNIFIED_CONFIG_GROUP,
-    ),
+    // Cap overlapping native bundle allocations in the shared runtime pass.
+    ...tsxStep("tsdown", "scripts/tsdown-build.mts", "--concurrency", "1"),
     env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
   },
+  declarationStep("tsdown-ai", "tsdown.ai.config.ts", [TSDOWN_AI_OUTPUT_ROOT]),
+  declarationStep(
+    "tsdown-packages",
+    "tsdown.config.ts",
+    TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS,
+    "--filter",
+    TSDOWN_PACKAGE_CONFIG_GROUP,
+  ),
   {
     ...tsxStep("write-unified-entry-dts", "scripts/write-unified-entry-dts.ts"),
     env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
   },
   tsxStep("external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"),
   tsxStep("check-cli-bootstrap-imports", "scripts/check-cli-bootstrap-imports.mts"),
-  {
-    label: "plugins:assets:copy",
-    kind: "pnpm",
-    pnpmArgs: ["plugins:assets:copy"],
-  },
+  pluginAssetStep("copy"),
   tsxStep("runtime-postbuild", "scripts/runtime-postbuild.mts"),
   tsxStep("build-stamp", "scripts/build-stamp.mts"),
   tsxStep("runtime-postbuild-stamp", "scripts/runtime-postbuild-stamp.mts"),
@@ -152,9 +130,7 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   },
   tsxStep("check-plugin-sdk-exports", "scripts/check-plugin-sdk-exports.mts"),
   {
-    label: "ui:build",
-    kind: "pnpm",
-    pnpmArgs: ["ui:build"],
+    ...nodeStep("ui:build", ["scripts/ui.js", "build"]),
     // No build-all cache: ui/vite.config.ts derives the Control UI build ID
     // from package.json, git HEAD, and OPENCLAW_CONTROL_UI_BUILD_ID env, so a
     // file-input signature cannot exactly invalidate generated assets and a
@@ -195,41 +171,49 @@ const ASSET_RUNTIME_STEP_LABELS = [
   ...RUNTIME_FINALIZE_STEP_LABELS,
 ];
 const BUILD_METADATA_STEP_LABELS = ["write-build-info", "write-cli-startup-metadata"] as const;
-const SDK_DECLARATION_STEP_LABELS = [
-  "write-plugin-sdk-entry-dts",
-  "check-plugin-sdk-exports",
-] as const;
 const FINAL_BUILD_ARTIFACTS_STEP_LABELS = [
-  ...SDK_DECLARATION_STEP_LABELS,
+  "check-plugin-sdk-exports",
   "ui:build",
   ...BUILD_METADATA_STEP_LABELS,
 ] as const;
 const CI_ARTIFACT_STEP_LABELS = [
+  "native-protocol",
   ...ASSET_RUNTIME_STEP_LABELS,
+  "write-plugin-sdk-entry-dts",
   ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
 ];
-const FULL_COMPILER_STEP_LABELS = [
-  "tsdown-ai",
-  "tsdown-packages",
-  "tsdown-unified",
-  "write-unified-entry-dts",
-] as const;
-// Typed builds cache declaration groups separately from the runtime graph.
+// The final runtime pass rewrites package JS without declaration modules, whose
+// shared helpers otherwise change chunk boundaries between full/runtime builds.
+// Isolated plugin assets finish before declarations capture their inputs.
 const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
-  step === "tsdown" ? FULL_COMPILER_STEP_LABELS : [step],
+  step === "tsdown"
+    ? ["tsdown-ai", "tsdown-packages", "tsdown"]
+    : step === "external-plugins:local-dist"
+      ? [step, "write-unified-entry-dts"]
+      : [step],
 );
-const FULL_BUILD_STEP_LABELS = [...FULL_RUNTIME_STEP_LABELS, ...FINAL_BUILD_ARTIFACTS_STEP_LABELS];
+const FULL_BUILD_STEP_LABELS = [
+  "native-protocol",
+  ...FULL_RUNTIME_STEP_LABELS,
+  ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
+];
+const RUNTIME_ONLY_STEP_LABELS = [
+  "native-protocol",
+  ...ASSET_RUNTIME_STEP_LABELS,
+  "ui:build",
+  ...BUILD_METADATA_STEP_LABELS,
+];
 
-export const BUILD_ALL_PROFILES: Record<string, string[]> = {
+const BUILD_ALL_PROFILES: Record<string, string[]> = {
   full: [...FULL_BUILD_STEP_LABELS],
   package: ["clean:dist", ...FULL_BUILD_STEP_LABELS],
+  runtime: RUNTIME_ONLY_STEP_LABELS,
   ciArtifacts: [...CI_ARTIFACT_STEP_LABELS],
   // Smoke builds retain typed compilation and publication checks without the UI/metadata tail.
-  strictSmoke: [...FULL_RUNTIME_STEP_LABELS, ...SDK_DECLARATION_STEP_LABELS],
+  strictSmoke: [...FULL_RUNTIME_STEP_LABELS, "check-plugin-sdk-exports"],
   pluginSdkStrictSmoke: [
-    ...FULL_COMPILER_STEP_LABELS,
-    ...RUNTIME_STEP_LABELS,
-    ...SDK_DECLARATION_STEP_LABELS,
+    ...FULL_RUNTIME_STEP_LABELS.filter((step) => !step.startsWith("plugins:assets:")),
+    "check-plugin-sdk-exports",
   ],
   gatewayWatch: ["tsdown", ...RUNTIME_STEP_LABELS],
   qaRuntime: [...ASSET_RUNTIME_STEP_LABELS],
@@ -237,34 +221,19 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   cliStartup: ["tsdown", ...RUNTIME_STEP_LABELS, "write-cli-startup-metadata"],
 };
 
-const FULL_RUNTIME_ONLY_STEPS = [
-  ...ASSET_RUNTIME_STEP_LABELS,
-  "ui:build",
-  ...BUILD_METADATA_STEP_LABELS,
-];
-
-export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
-  full: {
-    tsdown: {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-    "tsdown-unified": {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
+const FULL_BUILD_PROFILE_STEP_ENV = {
+  tsdown: {
+    OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
   },
-  package: {
-    tsdown: {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-    "tsdown-unified": {
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-    },
-  },
+};
+const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
+  full: FULL_BUILD_PROFILE_STEP_ENV,
+  package: FULL_BUILD_PROFILE_STEP_ENV,
   ciArtifacts: {
     tsdown: {
       // Global declaration emission is ~95% of the tsdown wall clock and PR
       // CI's dist consumers are runtime JS only; the plugin-sdk gate below
-      // stages the two canonical SDK declaration groups instead. Release/package builds
+      // stages the canonical SDK-only declaration graph instead. Release/package builds
       // (full profile, docker packaging) keep canonical dts.
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
@@ -350,33 +319,32 @@ export function resolveBuildAllSteps(
   const runtimeOnly = buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1";
   const labels =
     profile === "full" && runtimeOnly
-      ? FULL_RUNTIME_ONLY_STEPS
+      ? RUNTIME_ONLY_STEP_LABELS
       : profile === "package" && runtimeOnly
-        ? ["clean:dist", ...FULL_RUNTIME_ONLY_STEPS]
+        ? ["clean:dist", ...RUNTIME_ONLY_STEP_LABELS]
         : profileLabels;
-  const selected = labels.map((label) => BUILD_ALL_STEPS.find((step) => step.label === label));
-  if (selected.some((step) => !step)) {
-    const missing = labels.filter((label) => !BUILD_ALL_STEPS.some((step) => step.label === label));
-    throw new Error(`Build profile ${profile} references unknown steps: ${missing.join(", ")}`);
-  }
-  const envOverrides = BUILD_ALL_PROFILE_STEP_ENV[profile] ?? {};
-  return selected
-    .filter((step): step is NonNullable<typeof step> => step !== undefined)
-    .map((step) => {
-      const env = envOverrides[step.label];
-      if (!env) {
-        return step;
-      }
-      const mergedEnv = Object.assign({}, "env" in step ? step.env : undefined, env);
-      // Source-run rebuilds share qaRuntime but retain the caller's explicit
-      // declaration choice. The other partial profiles remain runtime-only.
-      if (profile === "qaRuntime" && step.label === "tsdown") {
-        mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] =
-          buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV];
-      }
-      const merged: BuildAllStep = Object.assign({}, step, { env: mergedEnv });
-      return merged;
-    });
+  const envOverrides = BUILD_ALL_PROFILE_STEP_ENV[profile === "runtime" ? "full" : profile] ?? {};
+  return labels.map((label) => {
+    const step = BUILD_ALL_STEPS.find((candidate) => candidate.label === label);
+    if (!step) {
+      throw new Error(`Build profile ${profile} references unknown step: ${label}`);
+    }
+    const env = envOverrides[step.label];
+    if (!env && profile !== "runtime") {
+      return step;
+    }
+    const mergedEnv = Object.assign({}, "env" in step ? step.env : undefined, env);
+    if (profile === "runtime") {
+      mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] = "1";
+    }
+    // Source-run rebuilds share qaRuntime but retain the caller's explicit
+    // declaration choice. The other partial profiles remain runtime-only.
+    if (profile === "qaRuntime" && step.label === "tsdown") {
+      mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] =
+        buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV];
+    }
+    return Object.assign({}, step, { env: mergedEnv });
+  });
 }
 
 /** Pin one source identity for every child process that contributes to this build. */
@@ -402,7 +370,7 @@ export function resolveBuildAllEnvironment(
   return buildEnv;
 }
 
-export function resolveBuildAllTsdownPlan(
+function resolveBuildAllTsdownPlan(
   profile: string,
   env: NodeJS.ProcessEnv,
   params: Omit<MemoryLimitParams, "env"> = {},
@@ -411,7 +379,9 @@ export function resolveBuildAllTsdownPlan(
   heapShortfall: ReturnType<typeof resolveTsdownBuildPlan>["heapShortfall"];
 } {
   if (
-    !["full", "package", "ciArtifacts", "strictSmoke", "pluginSdkStrictSmoke"].includes(profile)
+    !["full", "package", "runtime", "ciArtifacts", "strictSmoke", "pluginSdkStrictSmoke"].includes(
+      profile,
+    )
   ) {
     return { env, heapShortfall: null };
   }
@@ -423,66 +393,26 @@ export function resolveBuildAllTsdownPlan(
   };
 }
 
-function resolveStepEnv(step: BuildAllStep, env: NodeJS.ProcessEnv, platform: NodeJS.Platform) {
-  const stepEnv = step.env ? Object.assign({}, env, step.env) : env;
-  if (platform !== "win32" || !step.windowsNodeOptions) {
-    return stepEnv;
-  }
-  const currentNodeOptions = stepEnv.NODE_OPTIONS?.trim() ?? "";
-  if (currentNodeOptions.includes(step.windowsNodeOptions)) {
-    return stepEnv;
-  }
-  return {
-    ...stepEnv,
-    NODE_OPTIONS: currentNodeOptions
-      ? `${currentNodeOptions} ${step.windowsNodeOptions}`
-      : step.windowsNodeOptions,
-  };
-}
-
 export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepParams = {}) {
-  const platform = params.platform ?? process.platform;
-  const env = resolveStepEnv(step, params.env ?? process.env, platform);
-  const nodeArgs =
-    step.kind !== "pnpm"
-      ? step.args
-      : env.OPENCLAW_BUILD_ALL_NO_PNPM === "1"
-        ? PNPM_STEP_NODE_FALLBACKS.get(step.label)
-        : undefined;
-  if (nodeArgs) {
-    return {
-      command: params.nodeExecPath ?? nodeBin,
-      args: nodeArgs,
-      options: {
-        stdio: "inherit",
-        env,
-        // Managed commands default to a Windows shell; Node needs literal argv,
-        // including percent-encoded file URLs passed to --import.
-        shell: false,
-      } satisfies SpawnSyncOptions,
-    };
-  }
-  const runner = resolvePnpmRunner({
-    env,
-    pnpmArgs: step.pnpmArgs,
-    nodeExecPath: params.nodeExecPath ?? nodeBin,
-    npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec,
-    platform,
-  });
+  const env = step.env
+    ? Object.assign({}, params.env ?? process.env, step.env)
+    : (params.env ?? process.env);
+  const assetArgs =
+    params.deferIsolatedAssets && step.label === "plugins:assets:build" ? ["--defer-isolated"] : [];
   return {
-    command: runner.command,
-    args: runner.args,
+    command: params.nodeExecPath ?? nodeBin,
+    args: [...step.args, ...assetArgs],
     options: {
       stdio: "inherit",
       env,
-      shell: runner.shell,
-      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+      // Managed commands default to a Windows shell; Node needs literal argv,
+      // including percent-encoded file URLs passed to --import.
+      shell: false,
     } satisfies SpawnSyncOptions,
   };
 }
 
-export function resolveBuildAllStepOnCacheHit(step: BuildAllStep) {
+function resolveBuildAllStepOnCacheHit(step: BuildAllStep) {
   if (!step.cache?.runOnHit) {
     return null;
   }
@@ -549,6 +479,7 @@ export async function runBuildAllSteps(
     params.memoryLimit,
   );
   const steps = params.steps ?? resolveBuildAllSteps(profile, buildEnv);
+  const deferIsolatedAssets = steps.some((step) => step.label === "external-plugins:local-dist");
   const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
   const logger = params.logger ?? console;
   // One owner for both `pnpm build` and run-node dirty-tree auto-build: both
@@ -571,10 +502,57 @@ export async function runBuildAllSteps(
   const resolveCacheState = params.resolveCacheState ?? resolveBuildStepCacheState;
   const restoreCache = params.restoreCache ?? restoreBuildStepCacheOutputs;
   const finalizeCache = params.finalizeCache ?? finalizeBuildStepCache;
+  const cwd = params.cwd ?? process.cwd();
+  const inputDeps = { cwd, distRoot: path.join(cwd, "dist"), fs, env: buildEnv, spawnSync };
+  const capturesNativeInputs =
+    !params.runStep && steps.some((step) => step.label.endsWith("build-stamp"));
+  const hasAssetBuild =
+    capturesNativeInputs && steps.some((step) => step.label === "plugins:assets:build");
+  let buildInputSignature =
+    capturesNativeInputs && !hasAssetBuild && steps.some((step) => step.label === "build-stamp")
+      ? resolveRunNodeInputSignature(inputDeps, "build")
+      : null;
+  const runtimeEnv = {
+    ...buildEnv,
+    ...steps.find((step) => step.label === "runtime-postbuild")?.env,
+  };
+  let runtimeInputSignature =
+    capturesNativeInputs &&
+    !hasAssetBuild &&
+    steps.some((step) => step.label === "runtime-postbuild-stamp")
+      ? resolveRunNodeInputSignature({ ...inputDeps, env: runtimeEnv }, "runtime")
+      : null;
+  let stampsInvalidated = false;
+  const invalidateInputStamps = () => {
+    // Injected steps own their fixture writes; native writers share this lifecycle.
+    if (
+      stampsInvalidated ||
+      params.runStep ||
+      !steps.some((step) => step.label.endsWith("build-stamp"))
+    ) {
+      return;
+    }
+    for (const name of [BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE]) {
+      fs.rmSync(path.join(cwd, "dist", name), { force: true });
+    }
+    stampsInvalidated = true;
+  };
   const runStep =
     params.runStep ??
     (async (invocation: ReturnType<typeof resolveBuildAllStep>) => {
       const script = invocation.args[2];
+      if (
+        script === "scripts/build-stamp.mts" ||
+        script === "scripts/runtime-postbuild-stamp.mts"
+      ) {
+        const buildStamp = script === "scripts/build-stamp.mts";
+        (buildStamp ? writeBuildStamp : writeRuntimePostBuildStamp)({
+          cwd,
+          env: buildStamp ? buildEnv : runtimeEnv,
+          inputSignature: buildStamp ? buildInputSignature : runtimeInputSignature,
+        });
+        return { status: 0 };
+      }
       return {
         status: await runManagedCommand({
           bin: invocation.command,
@@ -609,8 +587,11 @@ export async function runBuildAllSteps(
     let stepToRun = step;
     let reusedCache = false;
     if (cacheEnabled && cacheState.fresh) {
-      if (cacheState.restorable && !restoreCache(cacheState)) {
-        throw new Error(`Build cache changed before restoration: ${step.label}; rerun the build`);
+      if (cacheState.restorable) {
+        invalidateInputStamps();
+        if (!restoreCache(cacheState)) {
+          throw new Error(`Build cache changed before restoration: ${step.label}; rerun the build`);
+        }
       }
       const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
       if (!cacheHitStep) {
@@ -623,7 +604,8 @@ export async function runBuildAllSteps(
       stepToRun = cacheHitStep;
     }
     logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
-    const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
+    const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv, deferIsolatedAssets });
+    invalidateInputStamps();
     const result = await runStep(invocation);
     params.signal?.throwIfAborted();
     const durationMs = cacheDurationMs + now() - startedAt;
@@ -632,6 +614,13 @@ export async function runBuildAllSteps(
       logger.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
       exitCode = typeof result.status === "number" ? result.status : 1;
       break;
+    }
+    if (step.label === "plugins:assets:build" && !params.runStep) {
+      buildInputSignature = resolveRunNodeInputSignature(inputDeps, "build");
+      runtimeInputSignature = resolveRunNodeInputSignature(
+        { ...inputDeps, env: runtimeEnv },
+        "runtime",
+      );
     }
     // Runtime-only tsdown cleans its output roots. Cache hits restore
     // declarations again after that pass so the full build stays complete.

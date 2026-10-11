@@ -12,7 +12,7 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
-import { claimUnprocessedFeishuMessage } from "./dedup.js";
+import { claimUnprocessedFeishuMessage, finalizeFeishuMessageProcessing } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import {
@@ -276,27 +276,6 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it("recovers an uncompleted envelope with a fresh drain and dispatches exactly once", async () => {
-    await withQueue(async (queue, startIngress) => {
-      const interrupted = startIngress({ queue, dispatcher: createDispatcher() });
-      await interrupted.invoke(messageEnvelope({ eventId: "evt-restart" }), { needCheck: false });
-      await interrupted.stop();
-
-      const dispatch = vi.fn(async (data: ReturnType<typeof messageEnvelope>) => {
-        await recovered.resolveLifecycle(flattenEnvelope(data))?.onAdopted();
-      });
-      const recovered = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
-      recovered.start();
-      await recovered.waitForIdle();
-
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect((await queue.enqueue("evt-restart", {} as FeishuIngressPayload)).kind).toBe(
-        "completed",
-      );
-      await recovered.stop();
-    });
-  });
-
   it("retains completion so one event_id dispatches only once", async () => {
     await withQueue(async (queue, startIngress) => {
       const dispatch = vi.fn(async (data: ReturnType<typeof messageEnvelope>) => {
@@ -379,43 +358,43 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it("keeps the permanent logical guard for different event_id and message_id twins", async () => {
+  it("suppresses a captioned post redelivery after upgrade when the pre-upgrade record exists", async () => {
     await withQueue(async () => {
-      const firstEnvelope = messageEnvelope({
-        eventId: "evt-twin-a",
-        messageId: "om-twin-a",
-      });
-      const secondEnvelope = messageEnvelope({
-        eventId: "evt-twin-b",
-        messageId: "om-twin-b",
-      });
-      const first = firstEnvelope.event as FeishuMessageEvent;
-      const second = secondEnvelope.event as FeishuMessageEvent;
-      const firstKey = resolveFeishuMessageDedupeKey(first);
-      const secondKey = resolveFeishuMessageDedupeKey(second);
-      expect(firstEnvelope.header.event_id).not.toBe(secondEnvelope.header.event_id);
-      expect(firstKey).toBe(secondKey);
-
-      const claim = await claimUnprocessedFeishuMessage({
-        messageId: firstKey,
-        namespace: "default",
-      });
-      expect(claim.kind).toBe("claimed");
-      if (claim.kind !== "claimed") {
-        throw new Error(`expected claimed logical twin, received ${claim.kind}`);
-      }
-      const transport = createLifecycle();
-      const { lifecycle } = buildFeishuFlushIngressLifecycle([
-        { lifecycle: transport.lifecycle, replayClaim: claim.handle },
-      ]);
-      lifecycle?.onAdoptionFinalizing();
-      await lifecycle?.onAdopted();
-
+      const preUpgradeKey = "om_post";
       await expect(
-        claimUnprocessedFeishuMessage({ messageId: secondKey, namespace: "default" }),
+        finalizeFeishuMessageProcessing({
+          messageId: preUpgradeKey,
+          namespace: "default",
+        }),
+      ).resolves.toBe(true);
+      await closeOpenClawStateDatabaseAsync();
+      feishuDedupeState.reset();
+
+      const redelivery: FeishuMessageEvent = {
+        sender: { sender_id: { open_id: "ou-user" } },
+        message: {
+          message_id: preUpgradeKey,
+          chat_id: "oc-chat",
+          chat_type: "p2p",
+          message_type: "post",
+          content: JSON.stringify({
+            title: "",
+            content: [[{ tag: "text", text: "这是账本" }]],
+            files: [
+              {
+                file_key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+                file_name: "amount-2026-08-01_2026-08-31.csv",
+                is_folder: false,
+              },
+            ],
+          }),
+        },
+      };
+      const currentKey = resolveFeishuMessageDedupeKey(redelivery);
+      expect(currentKey).toBe(preUpgradeKey);
+      await expect(
+        claimUnprocessedFeishuMessage({ messageId: currentKey, namespace: "default" }),
       ).resolves.toEqual({ kind: "duplicate" });
-      expect(transport.calls.finalizing).toHaveBeenCalledTimes(1);
-      expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
     });
   });
 

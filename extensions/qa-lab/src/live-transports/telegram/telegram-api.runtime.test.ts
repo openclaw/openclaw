@@ -3,18 +3,15 @@ import { buildTelegramQaConfig, waitForTelegramChannelRunning } from "./telegram
 
 describe("Telegram QA API boundary", () => {
   it("builds the isolated Test Server gateway config", () => {
-    const config = buildTelegramQaConfig(
-      { plugins: { allow: ["qa-lab"] } },
-      {
-        apiRoot: "http://127.0.0.1:8080",
-        groupId: "-100123",
-        sutToken: "placeholder",
-        testerUserId: "1",
-        sutAccountId: "sut",
-      },
-    );
+    const config = buildTelegramQaConfig({
+      apiRoot: "http://127.0.0.1:8080",
+      groupId: "-100123",
+      sutToken: "placeholder",
+      testerUserId: "1",
+      sutAccountId: "sut",
+    });
 
-    expect(config.plugins?.allow).toEqual(["qa-lab", "telegram"]);
+    expect(config.plugins?.allow).toEqual(["telegram"]);
     expect(config.channels?.telegram?.groups).toBeUndefined();
     expect(config.channels?.telegram).toMatchObject({
       enabled: true,
@@ -23,7 +20,8 @@ describe("Telegram QA API boundary", () => {
         sut: {
           botToken: "placeholder",
           apiRoot: "http://127.0.0.1:8080",
-          dmPolicy: "disabled",
+          dmPolicy: "allowlist",
+          allowFrom: ["1"],
           groups: {
             "-100123": {
               groupPolicy: "allowlist",
@@ -36,37 +34,14 @@ describe("Telegram QA API boundary", () => {
     });
   });
 
-  it("allows only the leased tester in direct-message mode", () => {
-    const config = buildTelegramQaConfig(
-      {},
-      {
-        apiRoot: "http://127.0.0.1:8080",
-        directMessageOnly: true,
-        groupId: "-100123",
-        sutToken: "placeholder",
-        testerUserId: "1",
-        sutAccountId: "sut",
-      },
-    );
-
-    expect(config.channels?.telegram?.accounts?.sut).toMatchObject({
-      allowFrom: ["1"],
-      dmPolicy: "allowlist",
-    });
-  });
-
   it("omits apiRoot for a production Bot API qualification", () => {
-    const config = buildTelegramQaConfig(
-      {},
-      {
-        groupId: "-10042",
-        sutAccountId: "sut",
-        sutToken: "secret-token",
-        testerUserId: "100",
-        additionalTesterUserIds: ["101"],
-        enableDirectMessages: true,
-      },
-    );
+    const config = buildTelegramQaConfig({
+      groupId: "-10042",
+      sutAccountId: "sut",
+      sutToken: "secret-token",
+      testerUserId: "100",
+      additionalTesterUserIds: ["101"],
+    });
 
     expect(config.channels?.telegram?.accounts?.sut).not.toHaveProperty("apiRoot");
     expect(config.channels?.telegram?.accounts?.sut).toMatchObject({

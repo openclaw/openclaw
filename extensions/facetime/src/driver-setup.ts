@@ -36,11 +36,8 @@ export async function inspectFaceTimeDriver(
 }
 
 export async function installFaceTimeDriver(
-  params: DriverSetupParams & { callActive: boolean },
+  params: DriverSetupParams,
 ): Promise<{ changed: boolean; status: "current" }> {
-  if (params.callActive) {
-    throw new Error("Cannot install the FaceTime audio driver during an active or pending call");
-  }
   const before = await inspectFaceTimeDriver(params);
   if (before === "current") {
     return { changed: false, status: "current" };

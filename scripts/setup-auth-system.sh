@@ -1,10 +1,4 @@
 #!/bin/bash
-# Setup OpenClaw Auth Management System
-# Run this once to set up:
-# 1. Long-lived Claude Code token
-# 2. Auth monitoring with notifications
-# 3. Instructions for Termux widgets
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,12 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "=== OpenClaw Auth System Setup ==="
 echo ""
 
-# Step 1: Check current auth status
 echo "Step 1: Checking current auth status..."
 "$SCRIPT_DIR/claude-auth-status.sh" full || true
 echo ""
 
-# Step 2: Set up long-lived token
 echo "Step 2: Long-lived token setup"
 echo ""
 echo "Option A: Use 'claude setup-token' (recommended)"
@@ -38,7 +30,6 @@ fi
 
 echo ""
 
-# Step 3: Set up auth monitoring
 echo "Step 3: Auth monitoring setup"
 echo ""
 echo "The auth monitor checks expiry every 30 minutes and notifies you."
@@ -46,7 +37,6 @@ echo ""
 echo "Configure notification channels:"
 echo ""
 
-# Check for ntfy
 echo "  ntfy.sh: Free push notifications to your phone"
 echo "  1. Install ntfy app on your phone"
 echo "  2. Subscribe to a topic (e.g., 'openclaw-alerts')"
@@ -54,13 +44,11 @@ echo ""
 echo "Enter ntfy.sh topic (or leave blank to skip):"
 read -r NTFY_TOPIC
 
-# Phone notification
 echo ""
 echo "  OpenClaw message: Send warning via OpenClaw itself"
 echo "Enter your phone number for alerts (or leave blank to skip):"
 read -r PHONE_NUMBER
 
-# Install systemd units
 SERVICE_TEMPLATE="$SCRIPT_DIR/systemd/openclaw-auth-monitor.service"
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 SERVICE_TARGET="$SYSTEMD_USER_DIR/openclaw-auth-monitor.service"
@@ -148,7 +136,6 @@ systemctl --user enable --now openclaw-auth-monitor.timer
 echo "Auth monitor installed and running."
 echo ""
 
-# Step 4: Termux widget setup
 echo "Step 4: Termux widget setup (for phone)"
 echo ""
 echo "To set up quick auth from your phone:"
@@ -171,7 +158,6 @@ echo "The quick widget (ClawdAuth) shows status and opens auth URL if needed."
 echo "The full widget (ClawdAuth-Full) provides guided re-auth flow."
 echo ""
 
-# Summary
 echo "=== Setup Complete ==="
 echo ""
 echo "What's configured:"

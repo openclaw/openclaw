@@ -9,8 +9,6 @@ import {
   type WorkboardRouteData,
 } from "./route-location.ts";
 
-export type { WorkboardRouteData } from "./route-location.ts";
-
 export const page = definePage({
   ...routePageSpec("workboard"),
   loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
@@ -24,7 +22,7 @@ export const page = definePage({
   loader: (context: ApplicationContext, { location }) =>
     resolveWorkboardRouteLocation(location, context.basePath),
   component: () =>
-    import("../plugin/plugin-page.ts").then(() => ({
+    import("../plugin/plugin-page.tsx").then(() => ({
       header: true,
       render: (data: WorkboardRouteData | undefined) =>
         html`<openclaw-plugin-page

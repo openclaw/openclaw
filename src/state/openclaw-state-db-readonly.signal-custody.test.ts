@@ -1,10 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   adoptPreparedLocation,
   cleanupSnapshotOperations,
 } from "../infra/sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-async-lifecycle.js";
@@ -14,6 +18,10 @@ import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
+import {
+  observeAsyncFixture,
+  retainFixturePreparation,
+} from "./openclaw-state-db-readonly.test-support.js";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadLocation,
@@ -21,8 +29,12 @@ import type {
 } from "./openclaw-state-read.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 const mocks = vi.hoisted(() => ({
-  source: "/synthetic/state/source.sqlite",
+  cleanupKey: Symbol("signal-custody snapshot cleanup"),
+  source: "",
+  sourceIdentity: { key: "", canonicalPath: "" },
   directory: "/synthetic/state/snapshot",
   resources: new Set<OpenClawStateDatabaseAsyncResource>(),
   removed: [] as string[],
@@ -47,18 +59,37 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
+// Synthetic files and captured exit callbacks must not reuse another file's native cleanup owner.
+vi.mock("../shared/global-singleton.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shared/global-singleton.js")>();
+  return {
+    ...actual,
+    resolveGlobalSingleton: (...args: Parameters<typeof actual.resolveGlobalSingleton>) => {
+      const [key, ...rest] = args;
+      return actual.resolveGlobalSingleton(
+        key === Symbol.for("openclaw.sqliteSnapshotCleanup") ? mocks.cleanupKey : key,
+        ...rest,
+      );
+    },
+  };
+});
+
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const remove = (file: string) => {
+  const remove = (
+    file: Parameters<typeof actual.rmSync>[0],
+    options?: Parameters<typeof actual.rmSync>[1],
+  ) => {
+    if (file !== mocks.directory && file !== "/synthetic/state/initial-snapshot") {
+      return actual.rmSync(file, options);
+    }
     mocks.removed.push(file);
     mocks.events.push("remove");
   };
   return {
     ...actual,
-    statSync: () => ({}),
     default: {
       ...actual,
-      existsSync: () => false,
       rmSync: remove,
       promises: { ...actual.promises, rm: mocks.removeAsync },
     },
@@ -70,7 +101,7 @@ vi.mock("./openclaw-state-db-cache.js", () => ({
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
     coordinationKey: databasePath,
     databasePath,
-    identity: { key: databasePath, canonicalPath: databasePath },
+    identity: mocks.sourceIdentity,
     assertCurrent() {},
   }),
   registerOpenClawStateDatabaseAsyncResource: (resource: OpenClawStateDatabaseAsyncResource) => {
@@ -94,7 +125,7 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
     admission: {
       coordinationKey: path,
       databasePath: path,
-      identity: { key: path, canonicalPath: path },
+      identity: mocks.sourceIdentity,
       assertCurrent() {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic/state" },
@@ -103,7 +134,16 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
 
 vi.mock("../infra/sqlite-snapshot-source.js", () => ({
   prepareSqliteReadOnlyLocation: mocks.prepare,
-  prepareSqliteReadOnlyLocationAsync: mocks.prepare,
+  startSqliteReadOnlyLocationAsync: (...args: Parameters<typeof mocks.prepare>) =>
+    retainFixturePreparation(
+      observeAsyncFixture(async () => {
+        const prepared = await mocks.prepare(...args);
+        return {
+          ...prepared,
+          startCleanup: () => observeAsyncFixture(() => prepared.cleanupAsync()),
+        };
+      }),
+    ),
   prepareSqliteReadOnlyLocationSync: mocks.forbidden,
 }));
 vi.mock("../infra/sqlite-readonly-location.js", () => ({
@@ -120,13 +160,10 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
 vi.mock("./openclaw-state-db-schema-version.js", () => ({
   assertSupportedStateSchemaVersion: mocks.forbidden,
 }));
-vi.mock("./openclaw-state-read-worker.js", () => ({
-  createOpenClawStateReadTransport: () => ({
-    validateFresh: async () => {},
-    read: mocks.read,
-    close: mocks.close,
-  }),
-}));
+vi.mock("./openclaw-state-read-worker.js", async () => {
+  const { createReadWorkerFixture } = await import("./openclaw-state-db-readonly.test-support.js");
+  return createReadWorkerFixture(mocks.read, mocks.close);
+});
 
 let exitCleanup: (() => void) | undefined;
 let restoreExitSpy: () => void;
@@ -141,9 +178,20 @@ beforeAll(() => {
   });
   restoreExitSpy = () => spy.mockRestore();
 });
-afterAll(() => restoreExitSpy());
+afterAll(async () => {
+  try {
+    await cleanupSnapshotOperations();
+    expect(mocks.resources.size).toBe(0);
+    Reflect.deleteProperty(globalThis, mocks.cleanupKey);
+  } finally {
+    restoreExitSpy();
+  }
+});
 
 beforeEach(() => {
+  mocks.source = join(tempDirs.make("openclaw-signal-custody-source-"), "source.sqlite");
+  fs.writeFileSync(mocks.source, "Controlled source identity; this fixture never opens SQLite.");
+  mocks.sourceIdentity = readDatabasePathIdentitySync(mocks.source);
   mocks.removed.length = 0;
   mocks.events.length = 0;
   mocks.forbidden.mockClear();
@@ -158,7 +206,7 @@ beforeEach(() => {
     );
   mocks.close.mockReset().mockResolvedValue();
   mocks.read.mockReset().mockResolvedValue({
-    value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] },
+    value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });
 });
 
@@ -174,7 +222,7 @@ afterEach(async () => {
 
 function runDirectRead() {
   return withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead({ path: mocks.source }, { type: "fleet.list" }),
+    executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
   );
 }
 
@@ -207,7 +255,9 @@ it.each(["direct", "snapshot"] as const)(
         ? runDirectRead()
         : withOpenClawStateDatabaseReadSnapshot(async () => "complete", { path: mocks.source }),
     );
-    await preparing.promise;
+    expect(await Promise.race([preparing.promise.then(() => "preparing"), operation])).toBe(
+      "preparing",
+    );
     const cleanup = cleanupSnapshotOperations();
     try {
       assertFilesRetained();
@@ -230,7 +280,7 @@ it("joins the direct reader and its transport close before deleting prepared byt
     reading.resolve();
     await finishRead.promise;
     mocks.events.push("read-settled");
-    return { value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } };
+    return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
   });
   mocks.close.mockImplementation(async () => {
     closing.resolve();
@@ -276,7 +326,7 @@ it("retains an enclosing snapshot callback while cleanup closes new read admissi
     const rejected = await escaped(() =>
       captureOutcome(
         Promise.resolve().then(() =>
-          executeExistingOpenClawStateRead({ path: mocks.source }, { type: "fleet.list" }),
+          executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
         ),
       ),
     );
@@ -385,7 +435,7 @@ it("forwards caller cancellation while retaining descendants and transport close
   mocks.read.mockImplementation(async () => {
     reading.resolve();
     await finishRead.promise;
-    return { value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } };
+    return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
   });
   mocks.close.mockImplementation(async () => {
     closing.resolve();
@@ -409,7 +459,7 @@ it("forwards caller cancellation while retaining descendants and transport close
             mocks.events.push("descendant-settled");
           });
           reader = captureOutcome(
-            executeExistingOpenClawStateRead({ path: mocks.source }, { type: "fleet.list" }),
+            executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
           );
           entered.resolve();
           await finishCallback.promise;

@@ -20,7 +20,7 @@ import { TranscriptsSummaryChangedError } from "../transcripts/store-errors.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { normalizeMeetingObservationProvenance } from "./observation-provenance.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
-import type { MeetingSessionRecord, MeetingTranscriptLine } from "./session-types.js";
+import type { MeetingSessionRecord } from "./session-types.js";
 import type {
   MeetingDurableTranscriptBridge,
   MeetingDurableTranscriptsOptions,
@@ -49,62 +49,6 @@ type Subscriber = {
   onStatus?: TranscriptStartRequest["onStatus"];
   onUtterance: TranscriptStartRequest["onUtterance"];
 };
-
-function descriptorForSession(
-  session: MeetingSessionRecord,
-  options: MeetingDurableTranscriptsOptions,
-): TranscriptSessionDescriptor {
-  return {
-    sessionId: session.id,
-    title: `${options.providerName} meeting`,
-    source: sanitizeTranscriptSourceLocator({
-      providerId: options.providerId,
-      kind: "live-caption",
-      meetingUrl: session.url,
-    }),
-    startedAt: session.createdAt,
-    metadata: {
-      agentId: session.agentId,
-      // The meeting owner supplies this transcript ID.
-      sessionIdOrigin: "supplied",
-      meetingSessionId: session.id,
-      mode: session.mode,
-      participantIdentity: session.participantIdentity,
-    },
-  };
-}
-
-function utteranceFromLine(params: {
-  line: MeetingTranscriptLine;
-  providerId: string;
-  session: MeetingSessionRecord;
-  sequence: number;
-}): TranscriptUtterance {
-  return {
-    id: `${params.session.id}:${params.sequence}`,
-    sessionId: params.session.id,
-    startedAt: params.line.at,
-    speaker: params.line.speaker ? { label: params.line.speaker } : undefined,
-    text: params.line.text,
-    final: true,
-    metadata: {
-      agentId: params.session.agentId,
-      meetingSessionId: params.session.id,
-      ...(params.line.provenance !== undefined
-        ? {
-            meetingObservationProvenance: normalizeMeetingObservationProvenance(
-              params.line.provenance,
-              {
-                observer: params.providerId,
-                observedAt: params.line.at,
-                speaker: params.line.speaker,
-              },
-            ),
-          }
-        : {}),
-    },
-  };
-}
 
 export function createMeetingDurableTranscriptBridge<
   TSession extends MeetingSessionRecord,
@@ -150,7 +94,24 @@ export function createMeetingDurableTranscriptBridge<
         if (!isEnabled() || captures.has(session.id)) {
           return;
         }
-        const descriptor = descriptorForSession(session, params.options);
+        const descriptor: TranscriptSessionDescriptor = {
+          sessionId: session.id,
+          title: `${params.options.providerName} meeting`,
+          source: sanitizeTranscriptSourceLocator({
+            providerId: params.options.providerId,
+            kind: "live-caption",
+            meetingUrl: session.url,
+          }),
+          startedAt: session.createdAt,
+          metadata: {
+            agentId: session.agentId,
+            // The meeting owner supplies this transcript ID.
+            sessionIdOrigin: "supplied",
+            meetingSessionId: session.id,
+            mode: session.mode,
+            participantIdentity: session.participantIdentity,
+          },
+        };
         const active: ActiveCapture = {
           closing: false,
           descriptor,
@@ -160,7 +121,7 @@ export function createMeetingDurableTranscriptBridge<
           utteranceCount: 0,
         };
         captures.set(session.id, active);
-        // Start and stop share runLifecycle(session.id), so teardown cannot mark
+        // Start and stop share the session's lifecycle queue, so teardown cannot mark
         // this published capture closing while initialization awaits.
         const initialize = async () => {
           if (active.initialized) {
@@ -171,6 +132,7 @@ export function createMeetingDurableTranscriptBridge<
               (await store.readSummarySnapshot(descriptor, 1))?.nextSequence ?? 0;
             await store.writeSession(descriptor);
             active.summaryUpdates = await createTranscriptSummaryUpdates({
+              stateDir,
               config,
               cfg: params.options.openclawConfig,
               store,
@@ -235,12 +197,30 @@ export function createMeetingDurableTranscriptBridge<
       await tasks.enqueue(session.id, async () => {
         for (const line of lines) {
           const sequence = active.utteranceCount;
-          const utterance = utteranceFromLine({
-            line,
-            providerId: params.options.providerId,
-            session,
-            sequence,
-          });
+          const utterance: TranscriptUtterance = {
+            id: `${session.id}:${sequence}`,
+            sessionId: session.id,
+            startedAt: line.at,
+            speaker: line.speaker ? { label: line.speaker } : undefined,
+            text: line.text,
+            final: true,
+            metadata: {
+              agentId: session.agentId,
+              meetingSessionId: session.id,
+              ...(line.provenance !== undefined
+                ? {
+                    meetingObservationProvenance: normalizeMeetingObservationProvenance(
+                      line.provenance,
+                      {
+                        observer: params.options.providerId,
+                        observedAt: line.at,
+                        speaker: line.speaker,
+                      },
+                    ),
+                  }
+                : {}),
+            },
+          };
           await store.appendUtteranceForSession(active.descriptor, utterance);
           for (const [subscriberSessionId, subscriber] of subscribers) {
             if (
@@ -349,6 +329,7 @@ export function createMeetingDurableTranscriptBridge<
             await tasks.enqueue(session.id, async () => {
               await store.writeSession(stopped);
               await persistTranscriptSummary({
+                stateDir,
                 config,
                 cfg: params.options.openclawConfig,
                 store,

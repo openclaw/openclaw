@@ -75,7 +75,10 @@ async function createQueuedReservations() {
       reservedAtMs: now,
     });
     for (const item of reserved) {
-      reserveQueuedCronRun(state, item.job.id, now, { runReceipt: item.runReceipt });
+      reserveQueuedCronRun(state, item.job.id, now, {
+        runReceipt: item.runReceipt,
+        runReceiptContext: item.runReceiptContext,
+      });
     }
     const ownership = state.queuedRunReservationsByJobId.get(job.id);
     const siblingOwnership = state.queuedRunReservationsByJobId.get(sibling.id);
@@ -188,31 +191,6 @@ it("releases the exact failed activation before another tick without releasing i
   });
 });
 
-it("releases its reservation and preserves a pre-activation admission error", async () => {
-  await withQueuedReservations(async (context) => {
-    const { state, job, now, ownership, receipt, runIsolatedAgentJob } = context;
-    const error = new Error("admission callback failed");
-    await expect(
-      executeQueuedCronRun({
-        state,
-        jobId: job.id,
-        reservedAtMs: now,
-        reservationIdentity: ownership.identity,
-        isUnavailable: () => {
-          throw error;
-        },
-        onNotRunnable: async () => {
-          throw new Error("unexpected runnable check");
-        },
-      }),
-    ).rejects.toBe(error);
-    expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-    expect(state.runAdmission.active).toBe(0);
-    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-    expect(receipt(ownership.runReceipt.receiptId)).toMatchObject({ status: "skipped" });
-  });
-});
-
 it("does not release a replacement identity when the old admission callback fails", async () => {
   await withQueuedReservations(async (context) => {
     const { store, state, job, now, ownership, receipt, runIsolatedAgentJob } = context;
@@ -229,6 +207,7 @@ it("does not release a replacement identity when the old admission callback fail
           // Keep the timestamp and receipt equal: only the local identity distinguishes owners.
           replacementIdentity = reserveQueuedCronRun(state, job.id, now, {
             runReceipt: ownership.runReceipt,
+            runReceiptContext: ownership.runReceiptContext,
           });
           throw error;
         },

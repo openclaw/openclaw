@@ -8,6 +8,23 @@ function getGraphemeSegmenter(): Intl.Segmenter {
   return graphemeSegmenter;
 }
 
+/** Uses the same source text that created segments. */
+export function containingSegment(
+  segments: Intl.Segments,
+  text: string,
+  index: number,
+): Intl.SegmentData | undefined {
+  // JSC can include the preceding segment for high-surrogate queries in grapheme,
+  // word, and sentence mode. Query the low half of a valid pair instead.
+  // https://github.com/oven-sh/WebKit/pull/753
+  // Integer-normalize first, as containing() does, so the offset cannot round past a boundary.
+  const position = Number.isNaN(index) ? 0 : Math.trunc(index);
+  const codePoint = text.codePointAt(position);
+  return segments.containing(
+    codePoint !== undefined && codePoint > 0xffff ? position + 1 : position,
+  );
+}
+
 /**
  * Chooses a whole-grapheme cut within the hard budget, honoring a usable preference.
  * If no whole grapheme fits, allowPartial permits a surrogate-safe progress cut;
@@ -32,10 +49,26 @@ export function findGraphemeChunkEnd(
     return preferred;
   }
 
+  // Adjacent ASCII code units always break except CRLF. Avoid copying the entire
+  // source into ICU for each chunk of a long reply; non-ASCII boundaries need ICU.
+  const before = text.charCodeAt(preferred - 1);
+  const after = text.charCodeAt(preferred);
+  if (
+    Number.isInteger(preferred) &&
+    before <= 0x7f &&
+    after <= 0x7f &&
+    !(before === 0x0d && after === 0x0a)
+  ) {
+    return preferred;
+  }
+
   const segments = getGraphemeSegmenter().segment(text);
-  let end = segments.containing(preferred)?.index ?? preferred;
+  let end = containingSegment(segments, text, preferred)?.index ?? preferred;
   if (end <= start && preferred < hardEnd) {
-    end = hardEnd === text.length ? hardEnd : (segments.containing(hardEnd)?.index ?? hardEnd);
+    end =
+      hardEnd === text.length
+        ? hardEnd
+        : (containingSegment(segments, text, hardEnd)?.index ?? hardEnd);
   }
   return end > start
     ? end
@@ -49,7 +82,7 @@ export function firstGraphemeClusterLength(text: string): number {
   if (!text) {
     return 0;
   }
-  return getGraphemeSegmenter().segment(text).containing(0)?.segment.length ?? 0;
+  return containingSegment(getGraphemeSegmenter().segment(text), text, 0)?.segment.length ?? 0;
 }
 
 const WHITESPACE_GRAPHEME_RE = /^\s+$/u;
@@ -66,7 +99,7 @@ export function skipWhitespaceGraphemes(
   const segments = getGraphemeSegmenter().segment(text);
   let cursor = start;
   for (let count = 0; count < maxGraphemes && cursor < text.length; count += 1) {
-    const cluster = segments.containing(cursor);
+    const cluster = containingSegment(segments, text, cursor);
     if (!cluster || cluster.index !== cursor || !WHITESPACE_GRAPHEME_RE.test(cluster.segment)) {
       break;
     }
@@ -83,7 +116,7 @@ export function trimEndWhitespaceGraphemes(text: string, end = text.length): str
   const segments = getGraphemeSegmenter().segment(text);
   let cursor = end;
   while (cursor > 0) {
-    const cluster = segments.containing(cursor - 1);
+    const cluster = containingSegment(segments, text, cursor - 1);
     if (
       !cluster ||
       cluster.index + cluster.segment.length > cursor ||

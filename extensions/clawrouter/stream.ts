@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { prepareClawRouterRequestModel } from "./provider-catalog.js";
 
 const ENV_API_KEY_MARKER = "CLAWROUTER_API_KEY";
@@ -42,19 +43,9 @@ const REQUEST_ID_POLICY: BoundedIdPolicy = {
   preservedSuffixPattern: REQUEST_ID_SUFFIX_PATTERN,
 };
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function normalizeHeaderId(value: string | undefined): string | undefined {
   const normalized = value?.trim();
-  if (!normalized || hasControlCharacter(normalized)) {
+  if (!normalized || containsAsciiControlCharacter(normalized)) {
     return undefined;
   }
   return normalized;
@@ -90,12 +81,7 @@ function sanitizeBoundedId(value: string | undefined, policy: BoundedIdPolicy): 
 
 function findHeader(headers: Record<string, string>, target: string): string | undefined {
   const normalizedTarget = target.toLowerCase();
-  for (const [name, value] of Object.entries(headers)) {
-    if (name.toLowerCase() === normalizedTarget) {
-      return value;
-    }
-  }
-  return undefined;
+  return Object.entries(headers).find(([name]) => name.toLowerCase() === normalizedTarget)?.[1];
 }
 
 function setHeaderDefault(

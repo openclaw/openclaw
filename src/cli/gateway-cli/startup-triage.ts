@@ -17,7 +17,7 @@ export async function triageGatewayStartupFailure(
     );
     return;
   }
-  await triage.triageAfterFailure(
+  return await triage.triageAfterFailure(
     runtime,
     {
       kind: "gateway-startup",

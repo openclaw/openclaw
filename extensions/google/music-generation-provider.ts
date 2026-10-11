@@ -11,7 +11,6 @@ import {
   resolveProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveGoogleGenerativeAiApiOrigin } from "./api.js";
 import { toStandardGoogleProviderBase64 } from "./base64.js";
 import type { GoogleGenerateContentResponse } from "./generate-content-response.js";
 import {
@@ -21,6 +20,7 @@ import {
   GOOGLE_PRO_MUSIC_MODEL,
 } from "./generation-provider-metadata.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
+import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 

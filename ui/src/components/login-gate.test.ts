@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import { showToast } from "../lib/toast.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "./login-gate.ts";
 
 type LoginGateElement = HTMLElement & {
@@ -28,7 +29,7 @@ async function mountFailure(lastError: string, lastErrorCode: string | null, sec
     onToggleGatewaySecret: vi.fn(),
     onConnect: vi.fn(),
   };
-  document.body.append(element);
+  mountSolid(() => element);
   await element.updateComplete;
   return element;
 }
@@ -186,12 +187,14 @@ describe("login gate failure recovery", () => {
 
     expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
     expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
-      "Profile verification unavailable",
+      "Couldn't verify your account",
     );
-    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
+    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(
+      "OpenClaw couldn't check your account right now. Please try again shortly.",
+    );
     expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
     expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
-      "Gateway administrator",
+      "person who manages OpenClaw",
     );
     expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
     expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
@@ -568,6 +571,15 @@ describe("login gate failure recovery", () => {
     });
     expect(writeText.mock.calls).toEqual([["openclaw status"], ["openclaw gateway run"]]);
     expect(buttons[2]?.getAttribute("aria-label")).toBe("Copy command");
+    element.props = { ...element.props, showGatewaySecret: true };
+    await element.updateComplete;
+    const retained = element.querySelectorAll<HTMLButtonElement>(
+      ".login-gate__failure-steps .login-gate__command .chat-copy-btn",
+    );
+    expect(retained[0]).toBe(buttons[0]);
+    expect(retained[0]?.getAttribute("aria-label")).toBe("Copied!");
+    expect(retained[1]).toBe(buttons[1]);
+    expect(retained[1]?.getAttribute("aria-label")).toBe("Copied!");
   });
 
   it("keeps the latest command-copy feedback until its own reset", async () => {

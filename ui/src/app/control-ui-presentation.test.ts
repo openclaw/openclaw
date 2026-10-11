@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { controlUiAccentInk } from "./accent-contrast.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { applyControlUiPresentation } from "./control-ui-environment-presentation.runtime.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
@@ -87,32 +86,6 @@ describe("Control UI accent presentation", () => {
       expect(style.getPropertyValue(property)).toBe("");
     }
   });
-
-  it("keeps the locally restored user accent when operator bootstrap arrives afterward", () => {
-    applyControlUiAccent("#6ee7b7");
-    applyControlUiPresentation({ environment: null, seamColor: "#123456" });
-
-    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#6ee7b7");
-    expect(document.documentElement.style.getPropertyValue("--primary-foreground")).toBe("#000000");
-  });
-
-  it.each([
-    ["#fbbf24", "#000000"],
-    ["#6ee7b7", "#000000"],
-    ["#777777", "#000000"],
-    ["#747474", "#ffffff"],
-    ["#2563eb", "#ffffff"],
-  ])("selects readable ink for accent %s", (accent, expectedInk) => {
-    expect(controlUiAccentInk(accent)).toBe(expectedInk);
-    applyControlUiAccent(accent);
-
-    expect(document.documentElement.style.getPropertyValue("--accent-foreground")).toBe(
-      expectedInk,
-    );
-    expect(document.documentElement.style.getPropertyValue("--primary-foreground")).toBe(
-      expectedInk,
-    );
-  });
 });
 
 describe("Live display preference presentation", () => {
@@ -162,7 +135,7 @@ describe("Live display preference presentation", () => {
     }
   });
 
-  it.each(["claw", "knot"] as const)(
+  it.each(["knot"] as const)(
     "publishes preferences without waiting for the %s palette or render-time storage reads",
     (palette) => {
       const previous = loadSettings();

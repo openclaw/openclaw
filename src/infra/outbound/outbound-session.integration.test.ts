@@ -1,34 +1,35 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
 import {
   listConversations,
+  prepareConversationRegistryScope,
   registerConversationAddresses,
-  resolveConversation,
+  readConversation,
 } from "../../config/sessions/conversation-registry.js";
+import { resolveConversationRouteFingerprint } from "../../config/sessions/conversation-route-fingerprint.js";
 import {
   loadExactSessionEntry,
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  disposeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { requireNodeSqlite } from "../node-sqlite.js";
 import {
   bindOutboundSessionEntry,
   captureOutboundSessionBinding,
@@ -40,21 +41,20 @@ import {
 describe("outbound session persistence", () => {
   let storePath: string;
 
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-outbound-session-");
 
   beforeEach(() => {
-    storePath = path.join(tempDirs.make("openclaw-outbound-session-"), "sessions.json");
+    storePath = path.join(sessionDirs.make(), "sessions.json");
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    closeOpenClawAgentDatabasesForTest();
   });
 
   it.each([" External ", "internal"])(
     "resolves home paths before carrying only normalized state context (%s)",
     (supervisorMode) => {
-      const root = tempDirs.make("openclaw-outbound-binding-context-");
+      const root = sessionDirs.make();
       const captured = captureOutboundSessionBinding({
         cfg: { session: { store: "~/sessions/{agentId}.json" } },
         scope: {
@@ -82,7 +82,7 @@ describe("outbound session persistence", () => {
   );
 
   it("keeps destination and source policy stores separate across asynchronous routing", async () => {
-    const root = tempDirs.make("openclaw-outbound-binding-");
+    const root = sessionDirs.make();
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     const destinationPath = path.join(root, "destination.sqlite");
     openOpenClawAgentDatabase({ agentId: "keeper", path: destinationPath, env });
@@ -177,7 +177,7 @@ describe("outbound session persistence", () => {
   it.each([false, true])(
     "rechecks route authority after its captured writer queue waits (revoked: %s)",
     async (revoked) => {
-      const root = tempDirs.make("openclaw-outbound-binding-queue-");
+      const root = sessionDirs.make();
       const env = { ...process.env, OPENCLAW_STATE_DIR: root };
       const destinationPath = path.join(root, "destination.sqlite");
       const scope = {
@@ -255,7 +255,7 @@ describe("outbound session persistence", () => {
   );
 
   it("refuses a replacement physical source owner with the same logical session", async () => {
-    const root = tempDirs.make("openclaw-outbound-source-owner-");
+    const root = sessionDirs.make();
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     const cfg: OpenClawConfig = { session: { store: path.join(root, "{agentId}.sqlite") } };
     const sourcePath = path.join(root, "source.sqlite");
@@ -284,7 +284,7 @@ describe("outbound session persistence", () => {
         sourceSessionKey: sourceScope.sessionKey,
       }),
     );
-    expect(disposeOpenClawAgentDatabaseByPath(sourcePath, { env })).toBe(true);
+    expect(await disposeOpenClawAgentDatabaseByPath(sourcePath, { env })).toBe(true);
     fs.renameSync(sourcePath, path.join(root, "retired-source.sqlite"));
     openOpenClawAgentDatabase({ agentId: "replacement", path: sourcePath, env });
     replaceSessionEntrySync(sourceScope, { sessionId: "same-session", updatedAt: 100 });
@@ -306,6 +306,71 @@ describe("outbound session persistence", () => {
     expect(
       loadSessionEntryReadOnly({ ...destination, sessionKey: route.sessionKey }),
     ).toBeUndefined();
+  });
+
+  it("refuses a foreign address change while the binding waits for its writer", async () => {
+    const cfg = { session: { store: storePath } };
+    const identity = buildConversationIdentity({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer",
+      deliveryTarget: "user:peer",
+    })!;
+    await registerConversationAddresses({ agentId: "main", storePath }, [identity]);
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config: cfg });
+    const discovered = (await readConversation(scope, identity.conversationRef))!;
+    const prepared = prepareOutboundSessionBinding(captureOutboundSessionBinding({ cfg, scope }));
+    const entered = createDeferred();
+    const release = createDeferred();
+    const blocker = runOpenClawAgentWriteAdmission(
+      { agentId: scope.databaseAgentId, path: scope.storePath, env: scope.env },
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    );
+    await Promise.race([entered.promise, blocker]);
+    const sessionKey = "agent:main:reef:direct:peer";
+    const pending = bindOutboundSessionEntry(
+      {
+        cfg,
+        channel: "reef",
+        route: {
+          sessionKey,
+          baseSessionKey: sessionKey,
+          peer: { kind: "direct", id: "peer" },
+          chatType: "direct",
+          from: "reef:peer",
+          to: identity.deliveryTarget,
+        },
+        workerGuard: {
+          conversation: {
+            conversationRef: identity.conversationRef,
+            expectedRouteFingerprint: resolveConversationRouteFingerprint(discovered),
+          },
+        },
+      },
+      prepared,
+    );
+    const outcome = expect(pending).rejects.toThrow("Conversation is no longer available");
+    try {
+      const { DatabaseSync } = requireNodeSqlite();
+      const foreign = new DatabaseSync(scope.storePath);
+      try {
+        foreign
+          .prepare("UPDATE conversations SET delivery_target = ? WHERE conversation_id = ?")
+          .run("user:changed", identity.conversationRef);
+      } finally {
+        foreign.close();
+      }
+    } finally {
+      release.resolve();
+      await blocker;
+      await outcome;
+    }
+    expect(loadSessionEntryReadOnly({ ...scope, sessionKey })).toBeUndefined();
+    expect((await readConversation(scope, identity.conversationRef))?.target).toBe("user:changed");
   });
 
   it("binds a discovered canonical peer through a different delivery alias", async () => {
@@ -331,27 +396,42 @@ describe("outbound session persistence", () => {
       nativeDirectUserId: "peer-agent",
     });
     expect(identity).toBeDefined();
-    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 200);
-    expect(
-      resolveConversation({ agentId: "main", storePath }, identity!.conversationRef),
-    ).not.toMatchObject({ sessionId: expect.any(String) });
+    await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 200);
+    const discovered = await readConversation(
+      { agentId: "main", storePath },
+      identity!.conversationRef,
+    );
+    expect(discovered).not.toMatchObject({ sessionId: expect.any(String) });
+    const sql = observeHostDataSql();
+    try {
+      await bindOutboundSessionEntry({
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        channel: "reef",
+        accountId: "default",
+        route: {
+          sessionKey,
+          baseSessionKey: sessionKey,
+          peer: { kind: "direct", id: "peer-agent" },
+          chatType: "direct",
+          from: "reef:peer-agent",
+          to: "@molty",
+        },
+        workerGuard: {
+          conversation: {
+            conversationRef: identity!.conversationRef,
+            expectedRouteFingerprint: resolveConversationRouteFingerprint(discovered!),
+          },
+        },
+      });
+      expect(
+        sql.queries.filter((query) => /\b(?:conversations|session_conversations)\b/i.test(query)),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
 
-    await bindOutboundSessionEntry({
-      cfg: { session: { store: storePath } } as OpenClawConfig,
-      channel: "reef",
-      accountId: "default",
-      route: {
-        sessionKey,
-        baseSessionKey: sessionKey,
-        peer: { kind: "direct", id: "peer-agent" },
-        chatType: "direct",
-        from: "reef:peer-agent",
-        to: "@molty",
-      },
-    });
-
     expect(
-      resolveConversation({ agentId: "main", storePath }, identity!.conversationRef),
+      await readConversation({ agentId: "main", storePath }, identity!.conversationRef),
     ).toMatchObject({
       sessionId: "shared-main-session",
       sessionKey,
@@ -395,13 +475,13 @@ describe("outbound session persistence", () => {
     expect(threadlessIdentity).toBeDefined();
     const established = loadExactSessionEntry({ agentId: "main", sessionKey, storePath });
     expect(established).toBeDefined();
-    registerConversationAddresses(
+    await registerConversationAddresses(
       { agentId: "main", storePath },
       [threadlessIdentity!],
       established!.entry.updatedAt + 1,
     );
 
-    const discovered = listConversations({ agentId: "main", storePath }, { channel: "reef" });
+    const discovered = await listConversations({ agentId: "main", storePath }, { channel: "reef" });
     expect(discovered[0]?.conversationRef).toBe(threadlessIdentity!.conversationRef);
     expect(discovered[0]).not.toMatchObject({ sessionId: expect.any(String) });
 
@@ -420,7 +500,7 @@ describe("outbound session persistence", () => {
     });
 
     expect(
-      resolveConversation({ agentId: "main", storePath }, threadlessIdentity!.conversationRef),
+      await readConversation({ agentId: "main", storePath }, threadlessIdentity!.conversationRef),
     ).toMatchObject({
       sessionId: "shared-main-session",
       sessionKey,
@@ -443,9 +523,9 @@ describe("outbound session persistence", () => {
       nativeDirectUserId: "peer-agent",
     });
     expect(identity).toBeDefined();
-    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 200);
+    await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 200);
     expect(
-      resolveConversation({ agentId: "main", storePath }, identity!.conversationRef),
+      await readConversation({ agentId: "main", storePath }, identity!.conversationRef),
     ).not.toMatchObject({ sessionId: expect.any(String) });
 
     await bindOutboundSessionEntry({
@@ -463,7 +543,7 @@ describe("outbound session persistence", () => {
     });
 
     expect(
-      resolveConversation({ agentId: "main", storePath }, identity!.conversationRef),
+      await readConversation({ agentId: "main", storePath }, identity!.conversationRef),
     ).toMatchObject({
       sessionId: expect.any(String),
       sessionKey,
@@ -486,7 +566,7 @@ describe("outbound session persistence", () => {
       nativeChannelId: channelId,
     });
     expect(identity).not.toBeNull();
-    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 200);
+    await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 200);
 
     await bindOutboundSessionEntry({
       cfg: { session: { store: storePath } } as OpenClawConfig,
@@ -509,7 +589,7 @@ describe("outbound session persistence", () => {
       from,
     });
     expect(
-      resolveConversation({ agentId: "main", storePath }, identity!.conversationRef),
+      await readConversation({ agentId: "main", storePath }, identity!.conversationRef),
     ).toMatchObject({
       kind: "group",
       nativeChannelId: channelId,

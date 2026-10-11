@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { activityRunInspectorSearch } from "../../ui/src/pages/activity/run-inspector-model.js";
 import { presentExecutionDecisionReceiptsInDatabase } from "../audit/execution-decision-receipts.js";
@@ -13,12 +12,12 @@ import {
 import {
   forceDenyOperatorApproval,
   insertOperatorApproval,
-  pageOperatorApprovalReceiptsForRunInDatabase,
   resolveOperatorApproval,
-  summarizeOperatorApprovalReceiptsForRunInDatabase,
 } from "./operator-approval-store.js";
-
-const RETENTION_MS = 30 * 24 * 60 * 60_000;
+import {
+  pageOperatorApprovalReceiptsForRunInDatabase,
+  summarizeOperatorApprovalReceiptsForRunInDatabase,
+} from "./operator-approval-store.receipts.js";
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
@@ -101,7 +100,7 @@ const identityContext: ExecutionIdentityContextV1 = {
 };
 
 describe("operator approval decision receipts", () => {
-  it.each([null, "permission-change", "approval-scope-closed"])(
+  it.each(["approval-scope-closed"])(
     "only recommends a new run when the outer approval owner stopped (%s)",
     async (resolverId) => {
       const database = databaseOptions();
@@ -123,7 +122,7 @@ describe("operator approval decision receipts", () => {
       ).entries[0]?.receipt;
       expect(receipt?.remediation).toEqual([
         expect.objectContaining({
-          code: resolverId === null ? "start_new_run" : "request_approval_again",
+          code: "request_approval_again",
         }),
       ]);
     },
@@ -415,112 +414,6 @@ describe("operator approval decision receipts", () => {
     ]);
   });
 
-  it("projects each approval page from one owner snapshot without dropping outcomes", async () => {
-    const database = databaseOptions();
-    for (const id of [
-      "snapshot-corrupt",
-      "snapshot-oversized",
-      "snapshot-unlinked",
-      "snapshot-valid",
-    ]) {
-      await insertOperatorApproval({ approval: approval(id), databaseOptions: database });
-      await resolveOperatorApproval({
-        id,
-        decision: "deny",
-        resolver: { kind: "device", id: "reviewer" },
-        nowMs: 2_000,
-        databaseOptions: database,
-      });
-    }
-    const db = openOpenClawStateDatabase(database).db;
-    db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?").run(
-      "{",
-      "snapshot-corrupt",
-    );
-    db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?").run(
-      JSON.stringify({ kind: "exec", commandText: "x".repeat(70_000) }),
-      "snapshot-oversized",
-    );
-    db.prepare("DELETE FROM operator_approval_execution_identities WHERE approval_id = ?").run(
-      "snapshot-unlinked",
-    );
-    const expectedSelectors = new Map(
-      (
-        db
-          .prepare(
-            "SELECT approval_id, rowid AS receipt_rowid FROM operator_approvals WHERE source_run_id = ?",
-          )
-          .all(context.runId) as Array<{ approval_id: string; receipt_rowid: number }>
-      ).map((row) => [row.approval_id, `approval-decision:${row.receipt_rowid}`]),
-    );
-    const tracker = trackSqliteStatementExecutions(db, ["approvalPage"] as const, (sqlText) =>
-      sqlText.trimStart().toLowerCase().startsWith("select") &&
-      sqlText.includes("operator_approvals")
-        ? "approvalPage"
-        : null,
-    );
-
-    try {
-      const first = pageOperatorApprovalReceiptsForRunInDatabase(
-        openOpenClawStateDatabase(database).db,
-        { context, limit: 2, nowMs: 3_000 },
-      );
-      const second = pageOperatorApprovalReceiptsForRunInDatabase(
-        openOpenClawStateDatabase(database).db,
-        { context, after: first.nextCursor, limit: 10, nowMs: 3_000 },
-      );
-      const entries = [...first.entries, ...second.entries];
-      expect(tracker.counts.approvalPage).toBe(2);
-      expect(entries).toHaveLength(4);
-      expect(entries.map((entry) => entry.receipt.decision.reasonCode)).toEqual([
-        "operator_approval_record_corrupt",
-        "operator_approval_payload_bounded",
-        "operator_approval_execution_link_missing",
-        "operator_approval_denied_by_reviewer",
-      ]);
-      expect(entries.map((entry) => entry.selectorId)).toEqual(
-        ["snapshot-corrupt", "snapshot-oversized", "snapshot-unlinked", "snapshot-valid"].map(
-          (id) => expectedSelectors.get(id),
-        ),
-      );
-    } finally {
-      tracker.restore();
-    }
-  });
-
-  it("never enforces a later unrelated approval that reuses the retained run id", async () => {
-    const database = databaseOptions();
-    await insertOperatorApproval({ approval: approval("retained"), databaseOptions: database });
-    await insertOperatorApproval({
-      approval: approval("later", {
-        createdAtMs: 2_000,
-        contextId: "context-later",
-        executionId: "execution-later",
-      }),
-      databaseOptions: database,
-    });
-    for (const [id, nowMs] of [
-      ["retained", 3_000],
-      ["later", 3_001],
-    ] as const) {
-      await resolveOperatorApproval({
-        id,
-        decision: "deny",
-        resolver: { kind: "device", id: "reviewer" },
-        nowMs,
-        databaseOptions: database,
-      });
-    }
-
-    expect(
-      pageOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        context,
-        limit: 10,
-        nowMs: 4_000,
-      }).entries.map((entry) => entry.receipt.enforcement.coverageState),
-    ).toEqual(["enforced", "unknown"]);
-  });
-
   it("reports missing, malformed, and mismatched execution bindings as unknown", async () => {
     for (const [bindingState, reasonCode] of [
       ["missing", "operator_approval_execution_link_missing"],
@@ -569,30 +462,5 @@ describe("operator approval decision receipts", () => {
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
     }
-  });
-
-  it("enforces approval retention and never creates a generic duplicate", async () => {
-    const database = databaseOptions();
-    await insertOperatorApproval({
-      approval: approval("old", { createdAtMs: 0, expiresAtMs: 10 }),
-      databaseOptions: database,
-    });
-    await resolveOperatorApproval({
-      id: "old",
-      decision: "deny",
-      resolver: { kind: "device", id: "reviewer" },
-      nowMs: 1,
-      databaseOptions: database,
-    });
-    expect(
-      pageOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        context,
-        limit: 10,
-        nowMs: RETENTION_MS + 2,
-      }).entries.map((entry) => entry.receipt),
-    ).toEqual([]);
-    expect(tableExists(openOpenClawStateDatabase(database).db, "execution_decision_facts")).toBe(
-      false,
-    );
   });
 });

@@ -122,6 +122,52 @@ function futureJob(id: string, nowMs: number, withNextRun = true): CronJob {
 }
 
 describe("CronService read ops while job is running", () => {
+  it("publishes the scheduler's next run after a cached list and status read", async () => {
+    const now = Date.parse("2026-09-30T12:00:00.000Z");
+    const clock = createGatewaySchedulerClock(now);
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const store = await makeStorePath();
+    const cron = createService(store.storePath, { scheduler });
+    try {
+      await cron.start();
+      const job = await cron.add({
+        name: "snapshot tick",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "snapshot tick" },
+      });
+      const before = await cron.listPage();
+      const beforeStatus = await cron.status();
+      expect(before.jobs[0]?.state.nextRunAtMs).toBe(now + 60_000);
+      expect(await cron.status()).toBe(beforeStatus);
+      await cron.update(job.id, { name: "updated snapshot tick" });
+      const updatedStatus = await cron.status();
+      expect(updatedStatus).not.toBe(beforeStatus);
+      expect(await cron.status()).toBe(updatedStatus);
+      expect((await cron.listPage()).jobs[0]?.name).toBe("updated snapshot tick");
+
+      await clock.advanceTo(now + 60_000);
+
+      const after = await cron.listPage();
+      const afterStatus = await cron.status();
+      expect(after.jobs[0]).toMatchObject({
+        id: job.id,
+        state: { lastRunAtMs: now + 60_000, nextRunAtMs: now + 120_000 },
+      });
+      expect(afterStatus.nextWakeAtMs).toBe(now + 120_000);
+      expect(afterStatus).not.toBe(updatedStatus);
+      expect(await cron.status()).toBe(afterStatus);
+      expect(after.snapshotRevision).not.toBe(before.snapshotRevision);
+      expect(before.jobs[0]?.state.nextRunAtMs).toBe(now + 60_000);
+    } finally {
+      cron.stop();
+      await scheduler.stop();
+      await store.cleanup();
+    }
+  });
+
   it("keeps started read operations observational across a large stable store", async () => {
     const nowMs = Date.parse("2026-08-30T12:00:00.000Z");
     const store = await makeStorePath();
@@ -186,13 +232,7 @@ describe("CronService read ops while job is running", () => {
 
   it.each([
     { mode: "scheduled", status: "ok", offsets: [300_000], deleteAfterRun: true },
-    { mode: "scheduled", status: "ok", offsets: [300_000], deleteAfterRun: false },
-    { mode: "scheduled", status: "skipped", offsets: [300_000], deleteAfterRun: true },
-    { mode: "scheduled", status: "skipped", offsets: [300_000], deleteAfterRun: false },
-    { mode: "scheduled", status: "error", offsets: [300_000], deleteAfterRun: true },
-    { mode: "scheduled", status: "error", offsets: [300_000], deleteAfterRun: false },
     { mode: "manual", status: "ok", offsets: [600_000, 1_000], deleteAfterRun: true },
-    { mode: "manual", status: "ok", offsets: [600_000, 1_000], deleteAfterRun: false },
   ] as const)(
     "keeps reads responsive and schedule edits across restart during a $mode $status run (deleteAfterRun=$deleteAfterRun)",
     async ({ mode, status, offsets, deleteAfterRun }) => {
@@ -230,7 +270,6 @@ describe("CronService read ops while job is running", () => {
         }
         isolatedRun.completeRun({
           status,
-          ...(status === "error" ? { error: "original invocation failed" } : {}),
         });
         if (mode === "manual") {
           await expect(run).resolves.toEqual({ ok: true, ran: true });

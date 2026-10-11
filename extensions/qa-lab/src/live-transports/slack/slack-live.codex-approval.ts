@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractGatewayMessageText } from "../../gateway-log-sentinel.js";
 import { formatApprovalResultValue } from "../shared/live-approval-result.js";
@@ -9,7 +10,7 @@ import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
   type SlackQaCodexApprovalMethod,
   type SlackQaCodexApprovalScenarioRun,
-  type SlackQaScenarioContext,
+  type SlackQaApprovalContext,
   type SlackQaScenarioMetadata,
   type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
@@ -92,9 +93,7 @@ export async function waitForSlackReaction(params: {
     if (Date.now() >= deadline) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    await sleep(1_000);
   }
   throw new Error(
     `Slack message ${params.messageId} did not receive ${params.expectedReactionName} from ${params.sutUserId}`,
@@ -129,7 +128,7 @@ function assertCodexApprovalTranscriptSucceeded(
 }
 
 export async function assertCodexApprovalOperationSucceeded(params: {
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   run: SlackQaCodexApprovalScenarioRun;
   sessionKey: string;
 }) {
@@ -193,7 +192,7 @@ export async function assertPendingCodexPluginApproval(params: {
   approvalId: string;
   appServerMethod: SlackQaCodexApprovalMethod;
   channelId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   sessionKey: string;
   sutAccountId: string;
 }) {
@@ -221,7 +220,7 @@ export async function assertPendingCodexPluginApproval(params: {
 
 export async function startCodexApprovalAgentRun(params: {
   channelId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   runId: string;
@@ -266,7 +265,7 @@ export function buildCodexApprovalSessionKey(params: {
 }
 
 export async function waitForCodexApprovalAgentRun(params: {
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   runId: string;
   timeoutMs: number;
 }) {
@@ -284,7 +283,7 @@ export async function waitForCodexApprovalAgentRun(params: {
 }
 
 export async function quiesceCodexApprovalAgentRun(params: {
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   preserveDebugArtifacts: boolean;
   runId: string;
   sessionKey: string;

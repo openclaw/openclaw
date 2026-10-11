@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
@@ -52,7 +53,7 @@ function coerceSchedule(schedule: UnknownRecord) {
       : undefined;
   const exprRaw = normalizeOptionalString(next.expr) ?? "";
   const timezone = normalizeOptionalString(next.tz);
-  const commandRaw = normalizeOptionalString(next.command) ?? "";
+  const commandRaw = readNonBlankString(next.command) ?? "";
   const streamCommand = normalizeCronCommandArgv(next.command);
   const cwdRaw = normalizeOptionalString(next.cwd) ?? "";
   const streamMode = normalizeOptionalLowercaseString(next.mode);
@@ -179,8 +180,6 @@ function coerceDelivery(delivery: UnknownRecord) {
   const parsed = parseDeliveryInput(next);
   if (parsed.mode !== undefined) {
     next.mode = parsed.mode;
-  } else if ("mode" in next) {
-    delete next.mode;
   }
   for (const field of ["channel", "to", "threadId", "accountId"] as const) {
     if (next[field] === null) {

@@ -2,7 +2,6 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { API, EmitOnly, type EmitOutputFile } from "typescript/unstable/async";
-import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
 import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import { createDeclarationFileSystem } from "./native-declaration-filesystem.mts";
 import {
@@ -25,11 +24,10 @@ type NativeCompilationOptions = {
   diagnostics?: "declarations" | "all";
   compilerRoot?: string;
   assertInput?: (file: string) => string;
-  producedFiles?: ReadonlySet<string>;
   emit?: boolean;
 };
 
-/** Compile behind one filesystem boundary; callers publish only the sealed result. */
+/** Compile behind one filesystem boundary; callers publish only successful results. */
 export async function compileNativeProject({
   cwd,
   configFile,
@@ -38,7 +36,6 @@ export async function compileNativeProject({
   diagnostics = "all",
   compilerRoot,
   assertInput,
-  producedFiles,
   emit = true,
 }: NativeCompilationOptions) {
   // Build/lint callers require a checkout boundary. SDK revision rendering
@@ -69,32 +66,14 @@ export async function compileNativeProject({
     // retain the native executable's extended-length spelling.
     const binary = compiler.executable;
     const compilerPackage = admit(compiler.packageJson);
-    const toolchainFiles = nativeTypeScriptToolchainFiles(compilerPackage, admit);
-    const args = [
-      "bounded-native-api",
-      JSON.stringify({ roots, compilerOptions, diagnostics, emit }),
-    ];
-    const snapshot = () =>
-      new CompilerInputSnapshot(root, {
-        toolchainFiles,
-        generatorInputs: [],
-        assertInput: assertInput ? admit : undefined,
-      });
-    const before = snapshot();
-    before.signature(admittedConfig, args, [], stage);
-    const preparationStartedAt = Date.now();
+    nativeTypeScriptToolchainFiles(compilerPackage, admit);
     // Keep the private config beside its source so relative overrides, inherited
     // paths and ${configDir} retain the compiler's own interpretation.
     const config = path.join(path.dirname(admittedConfig), `${path.basename(stage)}.tsconfig.json`);
     const virtualFiles = new Map([
       [config, JSON.stringify({ extends: admittedConfig, compilerOptions })],
     ]);
-    view = createDeclarationFileSystem(
-      root,
-      assertInput ? admit : undefined,
-      virtualFiles,
-      before.readText,
-    );
+    view = createDeclarationFileSystem(root, assertInput ? admit : undefined, virtualFiles);
     const manifestFile = admit(path.join(root, "package.json"));
     const manifestText = view.filesystem.readFile(manifestFile);
     view.assertValid();
@@ -145,6 +124,8 @@ export async function compileNativeProject({
           // emit result for declaration errors without a second preflight.
           noEmitOnError: false,
           noCheck: false,
+          // Parallel emit can give shared inferred properties different readonly modifiers.
+          ...(emit ? { singleThreaded: true } : {}),
         },
       }),
     );
@@ -194,7 +175,13 @@ export async function compileNativeProject({
       }
     }
     for (const file of await project.program.getSourceFileNames()) {
-      view.inputs.add(admit(file));
+      const accepted = admit(file);
+      if (assertInput && !view.inputs.has(accepted)) {
+        throw new Error(
+          `Native compiler source was not observed through its filesystem: ${accepted}`,
+        );
+      }
+      view.inputs.add(accepted);
     }
     view.assertValid();
     await api.close();
@@ -204,9 +191,7 @@ export async function compileNativeProject({
     if (canonicalRoots.some((file) => !consumedInputs.has(file))) {
       throw new Error("Incomplete native compiler source membership");
     }
-    const after = snapshot();
-    after.seal(admittedConfig, args, inputs, before, preparationStartedAt, stage, producedFiles);
-    return { inputs, outputFiles };
+    return { inputs, outputFiles, lookups: view.getLookups() };
   } catch (error) {
     view?.assertValid();
     throw error;

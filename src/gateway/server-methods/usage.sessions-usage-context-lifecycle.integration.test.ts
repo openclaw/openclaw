@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
@@ -10,24 +11,34 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import * as sessionCostUsage from "../../infra/session-cost-usage.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import * as usageSessionSelection from "./usage-session-selection.js";
 
-it.for(["session reset", "incognito transition"] as const)(
-  "does not attach saved context after %s while usage summaries settle",
+it.for([
+  "session reset",
+  "incognito transition",
+  "revocation during target read",
+  "revocation after context read",
+] as const)(
+  "does not expose revoked usage context after %s",
   async (change, { signal, onTestFinished }) => {
     const state = await createOpenClawTestState({ label: "usage-context-lifecycle" });
     const release = createDeferred();
+    const targetReadStarted = createDeferred();
     const summaryLoaded =
       createDeferred<
         Awaited<ReturnType<typeof sessionCostUsage.loadSessionCostSummariesFromCache>>
       >();
     let request: Promise<unknown> | undefined;
     let restoreSummaryLoader: (() => void) | undefined;
+    let restoreTargetReader: (() => void) | undefined;
     let cleanupPromise: Promise<void> | undefined;
     const releaseSummary = () => release.resolve();
     const cleanup = () =>
@@ -38,6 +49,7 @@ it.for(["session reset", "incognito transition"] as const)(
           await state.cleanup();
         } finally {
           restoreSummaryLoader?.();
+          restoreTargetReader?.();
           signal.removeEventListener("abort", releaseSummary);
         }
       })());
@@ -57,7 +69,7 @@ it.for(["session reset", "incognito transition"] as const)(
             default: "guest",
             definitions: {
               guest: {
-                sessions: { others: "none" },
+                sessions: { others: change === "revocation after context read" ? "view" : "none" },
                 agents: "*",
                 scopes: ["operator.read", "operator.write"],
               },
@@ -136,10 +148,34 @@ it.for(["session reset", "incognito transition"] as const)(
         .mockImplementation(async (params) => {
           const result = await actualLoad(params);
           summaryLoaded.resolve(result);
-          await release.promise;
+          if (change !== "revocation after context read") {
+            await release.promise;
+          }
           return result;
         });
       restoreSummaryLoader = () => summaryLoader.mockRestore();
+      if (change === "revocation after context read") {
+        const actualRead = usageSessionSelection.loadUsageSessionContext;
+        const reader = vi
+          .spyOn(usageSessionSelection, "loadUsageSessionContext")
+          .mockImplementation(async (...args) => {
+            await actualRead(...args);
+            targetReadStarted.resolve();
+            await release.promise;
+          });
+        restoreTargetReader = () => reader.mockRestore();
+      }
+      if (change === "revocation during target read") {
+        const actualRead = sessionEntryReads.withSessionEntryReadOnlyInWorker;
+        const reader = vi
+          .spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker")
+          .mockImplementationOnce(async (input, assertCurrent, consume) => {
+            targetReadStarted.resolve();
+            await release.promise;
+            return actualRead(input, assertCurrent, consume);
+          });
+        restoreTargetReader = () => reader.mockRestore();
+      }
       const respond = vi.fn();
       request = Promise.resolve(
         expectDefined(
@@ -147,7 +183,13 @@ it.for(["session reset", "incognito transition"] as const)(
           "registered usage handler",
         )({
           req: { type: "req", id: "context-lifecycle", method: "sessions.usage" },
-          params: { agentId: "main", range: "all", limit: 1, includeContextWeight: true },
+          params: {
+            agentId: "main",
+            range: "all",
+            limit: 1,
+            includeContextWeight: true,
+            ...(change === "revocation during target read" ? { key: scope.sessionKey } : {}),
+          },
           respond,
           client,
           isWebchatConnect: () => false,
@@ -155,13 +197,17 @@ it.for(["session reset", "incognito transition"] as const)(
         }),
       );
       const loaded = await Promise.race([
-        summaryLoaded.promise,
+        change === "revocation during target read" || change === "revocation after context read"
+          ? targetReadStarted.promise
+          : summaryLoaded.promise,
         request.then(() => {
-          throw new Error("Usage request returned before the summary hold");
+          throw new Error("Usage request returned before the read hold");
         }),
       ]);
-      expect(loaded.cacheStatus.status).toBe("fresh");
-      expect(loaded.summaries).toHaveLength(1);
+      if (loaded) {
+        expect(loaded.cacheStatus.status).toBe("fresh");
+        expect(loaded.summaries).toHaveLength(1);
+      }
       expect(respond).not.toHaveBeenCalled();
       signal.throwIfAborted();
 
@@ -186,12 +232,32 @@ it.for(["session reset", "incognito transition"] as const)(
       expect(loadSessionEntryReadOnly(scope)).toMatchObject({
         sessionId: change === "session reset" ? "usage-after-reset" : sessionId,
         systemPromptReport: changedReport,
-        ...(change === "incognito transition" ? { incognito: true } : {}),
+        ...(change === "session reset" ? {} : { incognito: true }),
       });
 
-      releaseSummary();
-      await request;
+      if (change === "revocation after context read") {
+        invalidateOperatorRolePolicy(viewer.id);
+      }
+      const sql = change === "revocation after context read" ? observeHostDataSql() : undefined;
+      try {
+        releaseSummary();
+        await request;
+        if (sql) {
+          expect(sql.queries).toEqual([]);
+        }
+      } finally {
+        sql?.restore();
+      }
       expect(respond).toHaveBeenCalledOnce();
+      if (change === "revocation during target read") {
+        expect(summaryLoader).not.toHaveBeenCalled();
+        expect(respond.mock.calls[0]).toEqual([
+          false,
+          undefined,
+          { code: "INVALID_REQUEST", message: `Invalid session reference: ${scope.sessionKey}` },
+        ]);
+        return;
+      }
       const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
       expect(ok).toBe(true);
       const result = payload as SessionsUsageResult;

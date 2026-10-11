@@ -1,3 +1,5 @@
+import { syncBuiltinESMExports } from "node:module";
+import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
@@ -17,7 +19,6 @@ const observed = vi.hoisted(() => ({
   now: 0,
   coreChecks: [] as DoctorHealthCheck[],
   runtimePreparations: 0,
-  pluginError: false,
   reports: 0,
 }));
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -50,7 +51,7 @@ vi.mock("../flows/bundled-health-checks.js", async (importOriginal) => {
         detect: async () => [
           {
             checkId: "fixture/fleet-inspection",
-            severity: observed.pluginError ? "error" : "warning",
+            severity: "warning",
             message: "Synthetic optional plugin diagnostic.",
           },
         ],
@@ -64,7 +65,6 @@ beforeEach(() => {
   clearHealthChecksForTest();
   observed.coreChecks = [];
   observed.runtimePreparations = 0;
-  observed.pluginError = false;
   observed.reports = 0;
 });
 afterEach(() => {
@@ -73,11 +73,8 @@ afterEach(() => {
   clearHealthChecksForTest();
 });
 
-async function runLintFixture(
-  agentCount: number,
-  options: DoctorLintCliOptions = {},
-  copied = true,
-) {
+async function runLintFixture(agentCount: number, options: DoctorLintCliOptions = {}) {
+  const processTempDir = os.tmpdir();
   return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -91,7 +88,7 @@ async function runLintFixture(
     await state.writeConfig(cfg);
     const env = {
       ...state.env,
-      ...(copied ? buildUpdateRehearsalPathEnv(state.stateDir) : {}),
+      ...buildUpdateRehearsalPathEnv(state.stateDir),
       ...buildUpdateDoctorEnv({
         allowGatewayServiceRepair: false,
         allowGatewayActivation: false,
@@ -99,7 +96,7 @@ async function runLintFixture(
         deferConfiguredPluginInstallRepair: true,
       }),
       OPENCLAW_UPDATE_IN_PROGRESS: "0",
-      OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: copied ? "1" : "0",
+      OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
       OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
       OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
     };
@@ -110,6 +107,10 @@ async function runLintFixture(
     );
     recordUpdateRunPhase(run.runId, "validating", {}, { env });
     closeOpenClawStateDatabaseForTest();
+    // Emulate the child's rehearsal env without moving the process-lived broker
+    // socket into state that this fixture removes after each case.
+    vi.spyOn(os, "tmpdir").mockReturnValue(processTempDir);
+    syncBuiltinESMExports();
     for (const [key, value] of Object.entries(env)) {
       if (value !== process.env[key]) {
         vi.stubEnv(key, value);
@@ -135,6 +136,7 @@ async function runLintFixture(
     } finally {
       stdout.mockRestore();
       vi.restoreAllMocks();
+      syncBuiltinESMExports();
       vi.unstubAllEnvs();
     }
   });
@@ -148,7 +150,7 @@ it.each([3, 480])(
     expect(result.exitCode, result.stdout).toBe(0);
     expect(report).toMatchObject({ ok: true, findings: [] });
     expect(result.elapsedMs).toBeLessThan(298_000);
-    expect(report.checksRun).toBe(agentCount === 3 ? 1 : 0);
+    expect(report.checksRun).toBe(agentCount === 3 ? 2 : 0);
     expect(report.warnings).toEqual([
       agentCount === 3
         ? {
@@ -167,7 +169,7 @@ it.each([3, 480])(
   },
 );
 
-it.each(["rehearsal", "standalone", "selected", "required-error", "plugin-error"])(
+it.each(["selected", "required-error"])(
   "defers optional rehearsal inspection without weakening lint gates (%s)",
   async (mode) => {
     const runtimeCheckId = "core/doctor/runtime-tool-schemas";
@@ -209,15 +211,10 @@ it.each(["rehearsal", "standalone", "selected", "required-error", "plugin-error"
         },
       } satisfies Pick<DoctorHealthCheck, "kind" | "description" | "detect">),
     );
-    observed.pluginError = mode === "plugin-error";
-    const pendingLint = runLintFixture(
-      8,
-      {
-        skipIds: ["core/doctor/skipped"],
-        ...(mode === "selected" ? { onlyIds: [runtimeCheckId] } : {}),
-      },
-      mode !== "standalone",
-    );
+    const pendingLint = runLintFixture(8, {
+      skipIds: ["core/doctor/skipped"],
+      ...(mode === "selected" ? { onlyIds: [runtimeCheckId] } : {}),
+    });
     let result: Awaited<ReturnType<typeof runLintFixture>>;
     try {
       if (mode !== "selected") {
@@ -235,26 +232,19 @@ it.each(["rehearsal", "standalone", "selected", "required-error", "plugin-error"
     }
     expect(observed.reports).toBe(1);
     const report = parseReleasedDoctorLintReport(result.stdout);
-    const deferred = mode !== "standalone" && mode !== "selected";
-    const failed = mode === "required-error" || mode === "plugin-error";
+    const deferred = mode !== "selected";
+    const failed = mode === "required-error";
     expect(result.exitCode, result.stdout).toBe(failed ? 1 : 0);
     expect(report.ok).toBe(!failed);
     expect(observed.runtimePreparations).toBe(deferred ? 0 : 1);
     expect(detected.toSorted()).toEqual(
-      (mode === "selected"
-        ? [runtimeCheckId]
-        : [
-            ...required.map((check) => check.id),
-            ...(deferred ? [] : [runtimeCheckId, "core/doctor/standalone"]),
-          ]
-      ).toSorted(),
+      (mode === "selected" ? [runtimeCheckId] : required.map((check) => check.id)).toSorted(),
     );
     expect(report.findings).toEqual(
       failed
         ? [
             expect.objectContaining({
-              checkId:
-                mode === "required-error" ? "core/doctor/finalize" : "fixture/fleet-inspection",
+              checkId: "core/doctor/finalize",
               severity: "error",
             }),
           ]
@@ -276,7 +266,7 @@ it.each(["rehearsal", "standalone", "selected", "required-error", "plugin-error"
         : [],
     );
     if (deferred) {
-      expect(report.checksRun).toBe(required.length + 1);
+      expect(report.checksRun).toBe(required.length + 2);
       expect(JSON.parse(result.stdout).checksSkipped).toBe(optional.length);
       expect(result.elapsedMs).toBeLessThan(72_000);
     }

@@ -1,3 +1,6 @@
+import { AsyncResource } from "node:async_hooks";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginRegistryHandle } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
@@ -8,10 +11,12 @@ import {
   capturePluginRegistryLifecycleEpoch,
   capturePluginRegistryLifecycleSignal,
   isPluginRecordActive,
+  isPluginRegistryPreparing,
   isPluginRegistryLifecycleEpochActive,
   markPluginRegistryActive,
   markPluginRegistryRetired,
   revokePluginRecord,
+  withPluginRegistryPreparationScope,
 } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -42,6 +47,73 @@ afterEach(() => resetPluginRuntimeStateForTest());
 afterEach(resetPluginLoaderTestStateForTest);
 
 describe("plugin registry retirement notifications", () => {
+  it.each(["return", "throw", "resolve", "reject"] as const)(
+    "releases preparation authority and its registry after %s",
+    async (outcome) => {
+      class RetainedService {
+        id = "preparation-retention";
+        start() {}
+      }
+      const failure = new Error("preparation fixture failure");
+      async function prepare() {
+        const registry = createEmptyPluginRegistry();
+        registry.services.push({
+          id: "preparation-retention",
+          pluginId: "preparation-retention",
+          source: "preparation-retention",
+          origin: "config",
+          service: new RetainedService(),
+        });
+        let resource: AsyncResource | undefined;
+        let release = () => {};
+        const pending = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let rejected = false;
+        try {
+          const result = withPluginRegistryPreparationScope(registry, () => {
+            expect(isPluginRegistryPreparing(registry)).toBe(true);
+            resource = new AsyncResource("plugin-preparation-retention");
+            if (outcome === "throw") {
+              throw failure;
+            }
+            if (outcome === "return") {
+              return "prepared";
+            }
+            return pending.then(() => {
+              expect(isPluginRegistryPreparing(registry)).toBe(true);
+              if (outcome === "reject") {
+                throw failure;
+              }
+              return "prepared";
+            });
+          });
+          expect(isPluginRegistryPreparing(registry)).toBe(false);
+          if (outcome === "resolve" || outcome === "reject") {
+            expect(resource!.runInAsyncScope(() => isPluginRegistryPreparing(registry))).toBe(true);
+          }
+          release();
+          expect(await result).toBe("prepared");
+        } catch (error) {
+          expect(error).toBe(failure);
+          rejected = true;
+        } finally {
+          release();
+        }
+        expect(rejected).toBe(outcome === "throw" || outcome === "reject");
+        expect(resource!.runInAsyncScope(() => isPluginRegistryPreparing(registry))).toBe(false);
+        return resource!;
+      }
+      const resource = await prepare();
+      try {
+        await setImmediate();
+        expect(queryObjects(RetainedService)).toBe(0);
+      } finally {
+        resource.emitDestroy();
+      }
+    },
+  );
+
   it.each(["retire", "activate"] as const)(
     "notifies a scoped loader handle on %s without inventing an activation epoch",
     (action) => {

@@ -133,6 +133,17 @@ final class NativeConversationController {
             }
             self.navigating = false
             self.viewModel.setWebConversationMode(.web)
+            if bridge.capabilities.contains("session-actions-v1") {
+                let documentID = bridge.currentDocumentId
+                self.owner.openSessionActions = { [weak self, weak bridge] context in
+                    guard let self, let bridge, self.bridge === bridge,
+                          bridge.currentDocumentId == documentID, self.owner.mode == .web else { return }
+                    AppActivation.shared.makeKeyAndOrderFront(window: bridge.document.webView.window)
+                    AppActivation.shared.activate()
+                    self.present(visible: true, active: true)
+                    self.navigate(context, source: .user, openSessionActions: true)
+                }
+            }
             self.present(visible: self.visible, active: self.active)
             if let context = self.viewModel.webConversationContext, context != self.loadedContext {
                 self.navigate(context, source: .synchronization)
@@ -143,6 +154,10 @@ final class NativeConversationController {
             self.webRoutes.report(state.context)
             self.scheduleWebReconciliation(bridge)
         }
+        bridge.onSessionFacts = { [weak self, weak bridge] facts in
+            guard let self, let bridge, self.bridge === bridge else { return }
+            self.owner.sessionFacts = facts.sessions
+        }
         bridge.onRouteChanged = { [weak self, weak bridge] change in
             guard let self, let bridge, self.bridge === bridge else { return }
             self.webRoutes.report(.init(agentId: change.agentId, sessionKey: change.sessionKey))
@@ -152,6 +167,8 @@ final class NativeConversationController {
         bridge.onDocumentRetired = { [weak self] in
             self?.webRoutes.reset()
             self?.owner.state = nil
+            self?.owner.sessionFacts = nil
+            self?.owner.openSessionActions = nil
         }
         bridge.onUnavailable = { [weak self] availability in
             guard let self else { return }
@@ -225,18 +242,21 @@ final class NativeConversationController {
 
     private func navigate(
         _ context: NativeConversationContext,
-        source: OpenClawWebConversation.NavigationSource)
+        source: OpenClawWebConversation.NavigationSource,
+        openSessionActions: Bool = false)
     {
         guard !self.isClosed, !self.didFallBack else { return }
         self.webRoutes.reset()
         self.navigationGeneration &+= 1
         self.navigating = true
         let generation = self.navigationGeneration
+        let documentID = self.bridge?.currentDocumentId
         // Selection originates in an NSTableView delegate. Defer all presentation
         // and responder work until that callback has returned.
         Task { @MainActor [weak self] in
             guard let self, !self.isClosed, !self.isRetiringDocument,
                   generation == self.navigationGeneration else { return }
+            if openSessionActions, self.bridge?.currentDocumentId != documentID { return }
             if self.bridge == nil {
                 self.startTask?.cancel()
                 self.startTask = nil
@@ -245,7 +265,8 @@ final class NativeConversationController {
                 return
             }
             self.error = nil
-            await self.transition(to: context, source: source, generation: generation)
+            await self.transition(
+                to: context, source: source, generation: generation, openSessionActions: openSessionActions)
         }
     }
 
@@ -302,27 +323,35 @@ final class NativeConversationController {
     private func transition(
         to context: NativeConversationContext,
         source: OpenClawWebConversation.NavigationSource,
-        generation: UInt64) async
+        generation: UInt64,
+        openSessionActions: Bool) async
     {
         guard let bridge, let documentID = bridge.currentDocumentId else { return }
         let window = bridge.document.webView.window
         let initiatingResponder = window?.firstResponder
         self.navigating = true
-        let reserved = await self.reserveCurrentSession()
+        let reserved = await self.reserveSession(context) {
+            self.navigationGeneration == generation && bridge.currentDocumentId == documentID
+        }
         guard !self.isClosed, generation == self.navigationGeneration,
               self.bridge === bridge, bridge.currentDocumentId == documentID else { return }
         guard reserved else {
             self.navigating = false
+            if openSessionActions {
+                self.error = String(localized: "Finish pending native work before opening this session's web actions.")
+                return
+            }
             self.fallBackToNative(reconsiderAfterDrain: true)
             return
         }
         self.viewModel.setWebConversationMode(.web)
-        let result = await bridge.request(.navigate(context))
+        let result = await bridge.request(openSessionActions ? .openSessionActions(context) : .navigate(context))
         guard !self.isClosed, generation == self.navigationGeneration,
               self.bridge === bridge, bridge.currentDocumentId == documentID else { return }
         if !result.ok {
-            self.error = String(localized:
-                "Could not open this conversation. Select another thread or reopen the window.")
+            self.error = openSessionActions
+                ? String(localized: "Could not open session actions. Try again or reopen the window.")
+                : String(localized: "Could not open this conversation. Select another thread or reopen the window.")
             if self.webRoutes.latestContext == nil, let state = bridge.state ?? self.owner.state {
                 self.webRoutes.report(state.context)
             }
@@ -331,10 +360,15 @@ final class NativeConversationController {
         guard !self.isClosed, self.navigationGeneration == generation,
               self.bridge === bridge, bridge.currentDocumentId == documentID else { return }
         self.finishWebReconciliation(outcome)
-        if result.ok, source == .user, self.viewModel.matchesWebConversationContext(context),
+        if result.ok, source == .user, self.owner.mode == .web, !self.navigating, self.visible, self.active,
+           self.viewModel.matchesWebConversationContext(context),
            window?.isKeyWindow == true, window?.firstResponder === initiatingResponder
         {
-            self.focusComposer()
+            if openSessionActions {
+                window?.makeFirstResponder(bridge.document.webView)
+            } else {
+                self.focusComposer()
+            }
         }
     }
 

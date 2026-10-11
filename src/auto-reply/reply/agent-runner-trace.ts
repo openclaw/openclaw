@@ -17,13 +17,17 @@ type TraceUsageView = Pick<
   "input" | "output" | "cacheRead" | "cacheWrite" | "total"
 >;
 
-function formatRawTraceBlock(title: string, value: string | undefined): string {
-  const body = value?.trim() ? escapeTraceFence(value) : "<empty>";
-  return `🔎 ${title}:\n~~~text\n${body}\n~~~`;
-}
+const TRACE_USAGE_FIELDS = [
+  ["input", "⬇️"],
+  ["output", "⬆️"],
+  ["cacheRead", "♻️"],
+  ["cacheWrite", "🆕"],
+  ["total", "🔢"],
+] as const;
 
-function escapeTraceFence(value: string): string {
-  return value.replace(/^~~~/gm, "\\~~~");
+function formatRawTraceBlock(title: string, value: string | undefined): string {
+  const body = value?.trim() ? value.replace(/^~~~/gm, "\\~~~") : "<empty>";
+  return `🔎 ${title}:\n~~~text\n${body}\n~~~`;
 }
 
 function formatTraceUsageLine(label: string, value: number | undefined): string {
@@ -35,21 +39,12 @@ function formatUsageTraceBlock(
   title: string,
   usage: TraceUsageView | undefined,
 ): string | undefined {
-  if (
-    !usage ||
-    [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].every(
-      (value) => asFiniteNumber(value) === undefined,
-    )
-  ) {
+  if (!usage || TRACE_USAGE_FIELDS.every(([key]) => asFiniteNumber(usage[key]) === undefined)) {
     return undefined;
   }
-  return `🔎 ${title}:\n~~~text\n${[
-    formatTraceUsageLine("input", usage?.input),
-    formatTraceUsageLine("output", usage?.output),
-    formatTraceUsageLine("cacheRead", usage?.cacheRead),
-    formatTraceUsageLine("cacheWrite", usage?.cacheWrite),
-    formatTraceUsageLine("total", usage?.total),
-  ].join("\n")}\n~~~`;
+  return `🔎 ${title}:\n~~~text\n${TRACE_USAGE_FIELDS.map(([key]) =>
+    formatTraceUsageLine(key, usage[key]),
+  ).join("\n")}\n~~~`;
 }
 
 function formatTraceScalar(value: string | number | boolean | undefined): string | undefined {
@@ -119,16 +114,12 @@ function formatFallbackChainTraceBlock(
   return `🔎 Fallback Chain:\n~~~text\n${body}\n~~~`;
 }
 
-function toSnakeCase(value: string): string {
-  return value
+function resolveMetadataSegmentKey(label: string): string {
+  const normalized = label
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-}
-
-function resolveMetadataSegmentKey(label: string): string {
-  const normalized = toSnakeCase(label);
   if (normalized === "conversation_info") {
     return "conversation_metadata";
   }
@@ -149,64 +140,43 @@ export function derivePromptSegments(
   const segments = new Map<string, number>();
   let userChars = 0;
   const addChars = (key: string, chars: number) => {
-    if (!chars || chars <= 0) {
-      return;
-    }
     segments.set(key, (segments.get(key) ?? 0) + chars);
   };
   let index = 0;
   while (index < lines.length) {
     const line = lines[index] ?? "";
+    let segmentKey: string | undefined;
+    let end = index + 2;
     if (line === "Context:") {
       const tagLine = lines[index + 1] ?? "";
       const tagMatch = tagLine.trim().match(/^<([a-z0-9_:-]+)>$/i);
       if (tagMatch) {
+        segmentKey = expectDefined(tagMatch[1], "tag match capture group 1");
         const closeTag = `</${tagMatch[1]}>`;
-        let end = index + 2;
         while (end < lines.length && lines[end]?.trim() !== closeTag) {
           end += 1;
         }
-        if (end < lines.length) {
-          addChars(
-            expectDefined(tagMatch[1], "tag match capture group 1"),
-            lines.slice(index, end + 1).join("\n").length,
-          );
-          index = end + 1;
-          while (index < lines.length && lines[index] === "") {
-            index += 1;
-          }
-          continue;
-        }
       }
-    }
-    const metadataHeaderLine = line.trim().endsWith(INBOUND_CONTEXT_MARKER) ? line : null;
-    if (metadataHeaderLine) {
-      const start = index;
+    } else if (line.trim().endsWith(INBOUND_CONTEXT_MARKER)) {
       const fence = lines[index + 1] ?? "";
       // Generated metadata blocks always use ```json fences (inbound-meta.ts,
       // channel-prompt-context.ts); other fence languages are user content and must
       // stay attributed to user_message.
       if (fence.trim() === "```json") {
-        let end = index + 2;
         while (end < lines.length && !(lines[end] ?? "").startsWith("```")) {
           end += 1;
         }
-        if (end < lines.length) {
-          const headerWithoutMarker = metadataHeaderLine
-            .trim()
-            .slice(0, -INBOUND_CONTEXT_MARKER.length)
-            .trim();
-          addChars(
-            resolveMetadataSegmentKey(headerWithoutMarker || "metadata"),
-            lines.slice(start, end + 1).join("\n").length,
-          );
-          index = end + 1;
-          while (index < lines.length && lines[index] === "") {
-            index += 1;
-          }
-          continue;
-        }
+        const headerWithoutMarker = line.trim().slice(0, -INBOUND_CONTEXT_MARKER.length).trim();
+        segmentKey = resolveMetadataSegmentKey(headerWithoutMarker || "metadata");
       }
+    }
+    if (segmentKey && end < lines.length) {
+      addChars(segmentKey, lines.slice(index, end + 1).join("\n").length);
+      index = end + 1;
+      while (index < lines.length && lines[index] === "") {
+        index += 1;
+      }
+      continue;
     }
     if (line.trim()) {
       userChars += line.length + 1;
@@ -233,7 +203,7 @@ function formatPromptSegmentsTraceBlock(
   if (typeof totalPromptText === "string" && totalPromptText.length > 0) {
     lines.push(`totalPromptText=${totalPromptText.length.toLocaleString()} chars`);
   }
-  return lines.length > 0 ? `🔎 Prompt Segments:\n~~~text\n${lines.join("\n")}\n~~~` : undefined;
+  return `🔎 Prompt Segments:\n~~~text\n${lines.join("\n")}\n~~~`;
 }
 
 function formatToolSummaryTraceBlock(
@@ -320,21 +290,12 @@ function formatRequestContextTraceBlock(params: {
   ].join("\n")}\n~~~`;
 }
 
-function formatSummaryPromptValue(params: {
-  contextLimit?: number;
-  promptTokens?: number;
-}): string | undefined {
-  const used = asPositiveFiniteNumber(params.promptTokens);
-  const limit = asPositiveFiniteNumber(params.contextLimit);
-  return used !== undefined && limit !== undefined
-    ? `${formatTokenCount(used)}/${formatTokenCount(limit)}`
-    : undefined;
-}
-
 function formatRawTraceSummaryLine(
   params: Parameters<typeof buildInlineRawTracePayload>[0],
 ): string | undefined {
   const thinking = normalizeOptionalString(params.requestShaping?.thinking);
+  const used = asPositiveFiniteNumber(params.promptTokens);
+  const limit = asPositiveFiniteNumber(params.contextLimit);
   const fields = [
     params.executionTrace?.winnerModel
       ? `winner=${params.executionTrace.winnerModel}${thinking ? ` 🧠 ${thinking}` : ""}`
@@ -346,28 +307,15 @@ function formatRawTraceSummaryLine(
       ? `attempts=${params.executionTrace.attempts.length.toLocaleString()}`
       : undefined,
     params.completion?.stopReason ? `stop=${params.completion.stopReason}` : undefined,
-    (() => {
-      const prompt = formatSummaryPromptValue({
-        contextLimit: params.contextLimit,
-        promptTokens: params.promptTokens,
-      });
-      return prompt ? `prompt=${prompt}` : undefined;
-    })(),
-    typeof params.usage?.input === "number" && params.usage.input > 0
-      ? `⬇️ ${formatTokenCount(params.usage.input)}`
+    used !== undefined && limit !== undefined
+      ? `prompt=${formatTokenCount(used)}/${formatTokenCount(limit)}`
       : undefined,
-    typeof params.usage?.output === "number" && params.usage.output > 0
-      ? `⬆️ ${formatTokenCount(params.usage.output)}`
-      : undefined,
-    typeof params.usage?.cacheRead === "number" && params.usage.cacheRead > 0
-      ? `♻️ ${formatTokenCount(params.usage.cacheRead)}`
-      : undefined,
-    typeof params.usage?.cacheWrite === "number" && params.usage.cacheWrite > 0
-      ? `🆕 ${formatTokenCount(params.usage.cacheWrite)}`
-      : undefined,
-    typeof params.usage?.total === "number" && params.usage.total > 0
-      ? `🔢 ${formatTokenCount(params.usage.total)}`
-      : undefined,
+    ...TRACE_USAGE_FIELDS.map(([key, icon]) => {
+      const value = params.usage?.[key];
+      return typeof value === "number" && value > 0
+        ? `${icon} ${formatTokenCount(value)}`
+        : undefined;
+    }),
     typeof params.toolSummary?.calls === "number" && params.toolSummary.calls > 0
       ? `tools=${params.toolSummary.calls.toLocaleString()}`
       : undefined,

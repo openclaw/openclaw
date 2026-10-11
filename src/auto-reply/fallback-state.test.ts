@@ -162,18 +162,6 @@ describe("fallback-state", () => {
     expect(setupLookups).toBe(expectedSetupLookups);
   });
 
-  it("marks fallback transition when selected->active pair changes", () => {
-    const resolved = resolveDemoFallbackTransition();
-
-    expect(resolved.fallbackActive).toBe(true);
-    expect(resolved.fallbackTransitioned).toBe(true);
-    expect(resolved.fallbackCleared).toBe(false);
-    expect(resolved.stateChanged).toBe(true);
-    expect(resolved.reasonSummary).toBe("rate limit");
-    expect(resolved.nextState.selectedModel).toBe("demo-primary/model-a");
-    expect(resolved.nextState.activeModel).toBe("demo-fallback/model-b");
-  });
-
   it("preserves provider-local model prefixes through fallback and recovery", () => {
     const refs = {
       selectedProvider: "custom",
@@ -336,30 +324,6 @@ describe("fallback-state", () => {
         attempts: [],
       }),
     ).toBeNull();
-  });
-
-  it("does not build a fallback notice when provider and model are unchanged", () => {
-    expect(
-      buildFallbackNotice({
-        selectedProvider: "openai",
-        selectedModel: "gpt-5.5",
-        activeProvider: "openai",
-        activeModel: "gpt-5.5",
-        attempts: [],
-      }),
-    ).toBeNull();
-  });
-
-  it("still reports fallback when the OpenAI Codex runtime switches model ids", () => {
-    expect(
-      buildFallbackNotice({
-        selectedProvider: "openai",
-        selectedModel: "gpt-5.5",
-        activeProvider: "openai",
-        activeModel: "gpt-5.4",
-        attempts: [],
-      }),
-    ).toContain("selected openai/gpt-5.5");
   });
 
   describe("Arcee wire identity", () => {

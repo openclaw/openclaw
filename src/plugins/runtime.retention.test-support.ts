@@ -63,12 +63,12 @@ async function retireSuccessors(withInstance: boolean) {
   return { oldest, successors };
 }
 
-function inspectRetiredSuccessors(
-  withInstance: boolean,
-  inspect: (result: Awaited<ReturnType<typeof retireSuccessors>>) => Promise<void>,
+function inspectAfterFrameRelease<T>(
+  produce: () => Promise<T>,
+  inspect: (result: T) => Promise<void>,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    void retireSuccessors(withInstance).then((result) => {
+    void produce().then((result) => {
       // Inspect inside the next task so no producer or outer resolution frame stays live.
       void setImmediate().then(() => inspect(result).then(resolve, reject), reject);
     }, reject);
@@ -180,26 +180,34 @@ switch (process.argv[2]) {
     assert.ok(kind === "source" || kind === "bundled-cjs" || kind === "bundled-mjs");
     // openclaw-temp-dir: allow -- standalone GC child has no Vitest hooks and joins cleanup below.
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "recovery-retention-")));
-    const result = await recoverOwner(root, kind);
-    try {
-      await collect();
-      assert.equal(result.owner.deref(), undefined, "Live recovery retained its retired instance");
-      assert.equal(
-        result.registry.deref(),
-        undefined,
-        "Live recovery retained its retired registry",
-      );
-      assert.equal(
-        (result.current.loadModule(result.source) as { read(): string }).read(),
-        "recovered source",
-      );
-      // Keep the recovery factory live too: another failed update must still be recoverable.
-      const recovery = result.current.captureModuleLoaderRecovery();
-      recovery.dispose();
-    } finally {
-      await result.current.dispose();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    await inspectAfterFrameRelease(
+      () => recoverOwner(root, kind),
+      async (result) => {
+        try {
+          await collect();
+          assert.equal(
+            result.owner.deref(),
+            undefined,
+            "Live recovery retained its retired instance",
+          );
+          assert.equal(
+            result.registry.deref(),
+            undefined,
+            "Live recovery retained its retired registry",
+          );
+          assert.equal(
+            (result.current.loadModule(result.source) as { read(): string }).read(),
+            "recovered source",
+          );
+          // Keep the recovery factory live too: another failed update must still be recoverable.
+          const recovery = result.current.captureModuleLoaderRecovery();
+          recovery.dispose();
+        } finally {
+          await result.current.dispose();
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
     break;
   }
   case "loader": {
@@ -290,8 +298,8 @@ switch (process.argv[2]) {
   }
   case "registry":
   case "registry-instances": {
-    await inspectRetiredSuccessors(
-      process.argv[2] === "registry-instances",
+    await inspectAfterFrameRelease(
+      () => retireSuccessors(process.argv[2] === "registry-instances"),
       async ({ oldest, successors }) => {
         await collect();
         assert.ok(

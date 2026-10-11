@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   createMigrationItem,
   MIGRATION_REASON_TARGET_EXISTS,
@@ -19,10 +20,7 @@ async function lstatIfExists(filePath: string) {
   try {
     return await fs.lstat(filePath);
   } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : undefined;
+    const code = extractErrorCode(error);
     if (code === "ENOENT" || code === "ENOTDIR") {
       return undefined;
     }

@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";

@@ -4,10 +4,11 @@ import {
 } from "../../gateway/restart-trace.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
+import { formatGatewayDrainCounts } from "../../infra/gateway-drain.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
-import type { GatewayDrainReason } from "../../process/gateway-work-admission.js";
+import { beginGatewayShutdownCleanup } from "../../process/gateway-work-admission.js";
 import type { GatewayRunSignalAction, GatewayRunSignalRequest } from "./run-loop-request.js";
-import { formatDrainCounts, formatShutdownReason } from "./run-loop-shutdown-format.js";
+import { formatShutdownReason } from "./run-loop-shutdown-format.js";
 
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 
@@ -16,7 +17,6 @@ export async function drainGatewayActiveWork({
   runtime,
   drainTimeoutMs,
   restartDrainDeadlineAt,
-  markDraining,
   recordCounts,
   recordWarning,
   logger,
@@ -25,12 +25,12 @@ export async function drainGatewayActiveWork({
   runtime: typeof import("./lifecycle.runtime.js");
   drainTimeoutMs: number | undefined;
   restartDrainDeadlineAt: number | undefined;
-  markDraining: (reason: GatewayDrainReason) => void;
   recordCounts: (counts: string) => void;
   recordWarning: (warning: string) => void;
   logger: Pick<SubsystemLogger, "info" | "warn">;
 }) {
   const { restartIntent } = request;
+  let drainTimedOut = false;
   const reportDrainSnapshot = createGatewayDrainReporter(
     request.action,
     drainTimeoutMs,
@@ -43,7 +43,6 @@ export async function drainGatewayActiveWork({
   if (request.action !== "stop") {
     let activeWorkAtDrainStart = 0;
     let activeRunsAtDrainStart = 0;
-    let drainTimedOut = false;
     await measureGatewayRestartTrace(
       "restart.drain",
       async () => {
@@ -51,7 +50,8 @@ export async function drainGatewayActiveWork({
           runtime;
         // Reject new enqueues immediately during the drain window so
         // sessions get an explicit restart error instead of silent task loss.
-        markDraining(formatShutdownReason(request));
+        const drainReason = formatShutdownReason(request);
+        runtime.markGatewayDraining(drainReason);
         const initialSnapshot = createGatewayActiveWorkSnapshot();
         activeWorkAtDrainStart = initialSnapshot.counts.totalActive;
         activeRunsAtDrainStart = initialSnapshot.counts.embeddedRuns;
@@ -74,7 +74,7 @@ export async function drainGatewayActiveWork({
           return;
         }
         drainTimedOut = true;
-        const warning = `restart drain budget ${drainTimeoutMs}ms exhausted; cutting short ${formatDrainCounts(drain.snapshot)}`;
+        const warning = `restart drain budget ${drainTimeoutMs}ms exhausted; cutting short ${formatGatewayDrainCounts(drain.snapshot)}`;
         recordWarning(warning);
         logger.warn(warning);
         // Connection work can retain cron cleanup; cancel before close joins it.
@@ -98,8 +98,9 @@ export async function drainGatewayActiveWork({
         }),
       );
       if (!activeWorkDrain.drained) {
+        drainTimedOut = true;
         logger.warn(
-          `gateway active-work drain timeout reached; proceeding with shutdown: ${formatDrainCounts(activeWorkDrain.snapshot)}`,
+          `gateway active-work drain timeout reached; proceeding with shutdown: ${formatGatewayDrainCounts(activeWorkDrain.snapshot)}`,
         );
         runtime.abortEmbeddedAgentRun(undefined, { mode: "all" });
         runtime.abortActiveCronTaskRuns("Gateway stopping.");
@@ -111,6 +112,8 @@ export async function drainGatewayActiveWork({
     }
     logger.info("active-work drain settled; beginning server close");
   }
+  beginGatewayShutdownCleanup();
+  return drainTimedOut;
 }
 
 function createGatewayDrainReporter(
@@ -127,13 +130,17 @@ function createGatewayDrainReporter(
     drainTimeoutMs === undefined ? "without a timeout" : `with timeout ${drainTimeoutMs}ms`;
   let lastPendingWarningAt: number | undefined;
   return (snapshot: GatewayActiveWorkSnapshot) => {
-    recordCounts(formatDrainCounts(snapshot) || "no active work");
+    recordCounts(
+      `${formatGatewayDrainCounts(snapshot) || "no active work"}; pending owners: ${
+        snapshot.blockers.map(({ message }) => message).join("; ") || "none"
+      }`,
+    );
     const now = Date.now();
     if (lastPendingWarningAt === undefined) {
       lastPendingWarningAt = now;
       if (!snapshot.idle) {
         logger.info(
-          `draining active work before ${action} ${drainBudget}: ${formatDrainCounts(snapshot)}`,
+          `draining active work before ${action} ${drainBudget}: ${formatGatewayDrainCounts(snapshot)}`,
         );
         const requestTimeoutMs = Math.max(
           0,
@@ -156,7 +163,9 @@ function createGatewayDrainReporter(
       now - lastPendingWarningAt >= RESTART_DRAIN_STILL_PENDING_WARN_MS
     ) {
       lastPendingWarningAt = now;
-      logger.warn(`still draining active work before ${action}: ${formatDrainCounts(snapshot)}`);
+      logger.warn(
+        `still draining active work before ${action}: ${formatGatewayDrainCounts(snapshot)}`,
+      );
     }
   };
 }

@@ -1,17 +1,21 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { lookupSessionGoalOperation } from "../config/sessions/goals-operations.js";
+import { lookupSessionGoalOperation } from "../config/sessions/goals-operations-read.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import { ensureSessionGoalOperationsSchema } from "./openclaw-agent-goal-operations-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+});
 
 function previousSchema(): string {
   const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(
@@ -25,7 +29,7 @@ function previousSchema(): string {
 }
 
 describe("Goal operation additive schema", () => {
-  it("keeps old databases table-free on reads, lazily installs once, and survives older-reader use and candidate reopen", () => {
+  it("keeps old databases table-free on reads, lazily installs once, and survives older-reader use and candidate reopen", async () => {
     const options = {
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-goal-schema-") },
@@ -42,7 +46,7 @@ describe("Goal operation additive schema", () => {
     previous.close();
 
     expect(
-      lookupSessionGoalOperation({
+      await lookupSessionGoalOperation({
         ...options,
         sessionKey: "agent:main:goal",
         expectedSessionId: "session-1",
@@ -66,6 +70,7 @@ describe("Goal operation additive schema", () => {
     candidate.db
       .prepare("INSERT INTO session_goal_operations VALUES (?, ?, ?, ?, ?, ?)")
       .run("agent:main:goal", "op-1", "session-1", "request-1", "{}", Date.now() + 60_000);
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
 
     // The previous version can open and use canonical tables with populated receipt data present.

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -15,7 +16,9 @@ suite.define(() => {
       const setupRelease = new Promise<void>((resolve) => {
         releaseSetup = resolve;
       });
-      const setupModule = /\/model-setup-page(?:\.ts|-[^/]+\.js)(?:\?|$)/;
+      const setupModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/pages/model-setup/model-setup-page.tsx",
+      );
       const setupRequested = page.waitForRequest(setupModule);
       await page.route(setupModule, async (route) => {
         await setupRelease;

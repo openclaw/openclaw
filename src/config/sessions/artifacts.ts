@@ -1,4 +1,3 @@
-// Session artifact paths, filename classifiers, and archive timestamp helpers.
 // Cleanup, disk-budget, and usage accounting use these predicates to avoid deleting live transcripts.
 
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
@@ -16,17 +15,23 @@ const MIGRATION_ARCHIVE_RE = /\.migrated(?:\.\d+)?$/u;
 const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
   /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 
-function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
+function readSessionArchiveTimestamp(
+  fileName: string,
+  reason: SessionArchiveReason,
+): string | undefined {
   // Compressed archives carry a trailing .zst; strip it so every classifier
   // sees one canonical `<id>.jsonl.<reason>.<timestamp>[.<generation>]` shape.
   const marker = `.${reason}.`;
   const normalized = stripSessionArchiveCompressionSuffix(fileName);
   const index = normalized.lastIndexOf(marker);
   if (index < 0) {
-    return false;
+    return undefined;
   }
-  const raw = normalized.slice(index + marker.length);
-  return ARCHIVE_SUFFIX_RE.test(raw);
+  return ARCHIVE_SUFFIX_RE.exec(normalized.slice(index + marker.length))?.[1];
+}
+
+function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
+  return readSessionArchiveTimestamp(fileName, reason) !== undefined;
 }
 
 /** Returns true for archived session artifacts and legacy store backup names. */
@@ -82,12 +87,10 @@ export function isSessionStoreTempArtifactName(fileName: string, storeBasename: 
   return sessionStoreTempPattern(storeBasename).test(fileName);
 }
 
-/** Returns true when a filename is a compaction checkpoint transcript. */
 export function isCompactionCheckpointTranscriptFileName(fileName: string): boolean {
   return COMPACTION_CHECKPOINT_TRANSCRIPT_RE.test(fileName);
 }
 
-/** Returns true for trajectory runtime jsonl artifacts. */
 function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory.jsonl");
 }
@@ -104,7 +107,6 @@ export function resolveTrajectoryPointerPath(transcriptPath: string): string | u
     : undefined;
 }
 
-/** Returns true for any trajectory-related session artifact. */
 export function isTrajectorySessionArtifactName(fileName: string): boolean {
   return isTrajectoryRuntimeArtifactName(fileName) || fileName.endsWith(".trajectory-path.json");
 }
@@ -123,7 +125,6 @@ export function isUsageCountedSessionTranscriptFileName(fileName: string): boole
   return parseUsageCountedSessionIdFromFileName(fileName) !== null;
 }
 
-/** Extracts the session id from a usage-counted transcript filename. */
 export function parseUsageCountedSessionIdFromFileName(fileName: string): string | null {
   if (isPrimarySessionTranscriptFileName(fileName)) {
     return fileName.slice(0, -".jsonl".length);
@@ -140,37 +141,20 @@ export function parseUsageCountedSessionIdFromFileName(fileName: string): string
   return null;
 }
 
-/** Formats an archive timestamp that is safe for filenames. */
 export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
   return timestampMsToIsoFileStamp(nowMs);
-}
-
-function restoreSessionArchiveTimestamp(raw: string): string {
-  const [datePart, timePart] = raw.split("T");
-  if (!datePart || !timePart) {
-    return raw;
-  }
-  return `${datePart}T${timePart.replace(/-/g, ":")}`;
 }
 
 export function parseSessionArchiveTimestamp(
   fileName: string,
   reason: SessionArchiveReason,
 ): number | null {
-  const marker = `.${reason}.`;
-  const normalized = stripSessionArchiveCompressionSuffix(fileName);
-  const index = normalized.lastIndexOf(marker);
-  if (index < 0) {
-    return null;
-  }
-  const raw = normalized.slice(index + marker.length);
-  if (!raw) {
-    return null;
-  }
-  const timestampRaw = ARCHIVE_SUFFIX_RE.exec(raw)?.[1];
+  const timestampRaw = readSessionArchiveTimestamp(fileName, reason);
   if (!timestampRaw) {
     return null;
   }
-  const timestamp = Date.parse(restoreSessionArchiveTimestamp(timestampRaw));
+  const timestamp = Date.parse(
+    timestampRaw.slice(0, 11) + timestampRaw.slice(11).replace(/-/g, ":"),
+  );
   return Number.isNaN(timestamp) ? null : timestamp;
 }

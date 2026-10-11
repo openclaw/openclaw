@@ -56,14 +56,10 @@ type ToolCall = {
   eventIndex: number;
   sessionKey?: string;
 };
-type ToolOutcome = {
-  id: string;
-  name: string;
+type ToolOutcome = Pick<ToolCall, "id" | "name" | "eventIndex" | "sessionKey"> & {
   details: RecordValue;
   content: unknown;
   isError: boolean;
-  eventIndex: number;
-  sessionKey?: string;
 };
 type ToolActivity = {
   name: string;
@@ -82,50 +78,38 @@ const MAX_OUTPUT_BYTES = SHIPPING_CODE_MODE.maxOutputBytes;
 const MAX_MODEL_OUTPUT_TOKENS = 4_000;
 const PERFORMANCE_GRADING_REVISION = "performance-outcome-v4";
 
-export type GatewayMatrixActivationDiagnostic = {
-  runId: string;
-  active: boolean;
-  toolsEnabled: boolean;
-  toolsDisabled: boolean;
-  rawRun: boolean;
-  fallbackActive: boolean;
-  allowlist?: string;
-};
+export type GatewayMatrixActivationDiagnostic = NonNullable<
+  ReturnType<typeof parseGatewayMatrixActivationDiagnostic>
+>;
 
-export function parseGatewayMatrixActivationDiagnostic(
-  line: string,
-): GatewayMatrixActivationDiagnostic | undefined {
+export function parseGatewayMatrixActivationDiagnostic(line: string) {
   const marker = "code-mode diagnostic ";
   const start = line.indexOf(marker);
   if (start < 0) {
     return undefined;
   }
-  try {
-    const value: unknown = JSON.parse(line.slice(start + marker.length, line.lastIndexOf("}") + 1));
-    if (
-      !record(value) ||
-      value.boundary !== "activation" ||
-      typeof value.runId !== "string" ||
-      typeof value.active !== "boolean" ||
-      typeof value.toolsEnabled !== "boolean" ||
-      typeof value.toolsDisabled !== "boolean" ||
-      typeof value.rawRun !== "boolean" ||
-      typeof value.fallbackActive !== "boolean"
-    ) {
-      return undefined;
-    }
-    return {
-      runId: value.runId,
-      active: value.active,
-      toolsEnabled: value.toolsEnabled,
-      toolsDisabled: value.toolsDisabled,
-      rawRun: value.rawRun,
-      fallbackActive: value.fallbackActive,
-      ...(typeof value.allowlist === "string" ? { allowlist: value.allowlist } : {}),
-    };
-  } catch {
+  const value = safeParseJson(line.slice(start + marker.length, line.lastIndexOf("}") + 1));
+  if (
+    !record(value) ||
+    value.boundary !== "activation" ||
+    typeof value.runId !== "string" ||
+    typeof value.active !== "boolean" ||
+    typeof value.toolsEnabled !== "boolean" ||
+    typeof value.toolsDisabled !== "boolean" ||
+    typeof value.rawRun !== "boolean" ||
+    typeof value.fallbackActive !== "boolean"
+  ) {
     return undefined;
   }
+  return {
+    runId: value.runId,
+    active: value.active,
+    toolsEnabled: value.toolsEnabled,
+    toolsDisabled: value.toolsDisabled,
+    rawRun: value.rawRun,
+    fallbackActive: value.fallbackActive,
+    ...(typeof value.allowlist === "string" ? { allowlist: value.allowlist } : {}),
+  };
 }
 
 export function evaluateGatewayMatrixActivation(params: {
@@ -170,38 +154,8 @@ type DeliveredFileEvidence = {
   reason?: string;
 };
 
-export type GatewayMatrixTrace = {
-  calls: ToolCall[];
-  outcomes: ToolOutcome[];
-  activities: ToolActivity[];
-  assistantTurns: number;
-  models: string[];
-  usage?: {
-    input: number;
-    output: number;
-    total?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-  };
-  costUsd?: number;
-};
-
-export type GatewayMatrixWorkload = {
-  promptSha256: string;
-  fixtureSha256: string;
-  performanceGradingRevision?: string;
-  settings: {
-    executor: CodeModeExecutorId;
-    thinking: string;
-    timeoutSeconds: number;
-    execTimeoutMs: number;
-    maxOutputBytes: number;
-    maxModelOutputTokens: number | null;
-    runtime: "openclaw";
-    fast: false;
-    allowedTools: readonly string[];
-  };
-};
+export type GatewayMatrixTrace = ReturnType<typeof collectGatewayMatrixTrace>;
+export type GatewayMatrixWorkload = ReturnType<typeof createGatewayMatrixWorkload>;
 
 export type GatewayMatrixEvidence = GatewayMatrixWorkload & {
   behavior: Record<string, boolean>;
@@ -263,7 +217,7 @@ export function createGatewayMatrixWorkload(
   thinking: string,
   timeoutSeconds: number,
   executor: CodeModeExecutorId = "node",
-): GatewayMatrixWorkload {
+) {
   const fixture = matrixFixture(task, repetition);
   return {
     ...(fixture.performance ? { performanceGradingRevision: PERFORMANCE_GRADING_REVISION } : {}),
@@ -290,8 +244,8 @@ export function createGatewayMatrixWorkload(
       execTimeoutMs: EXEC_TIMEOUT_MS,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       maxModelOutputTokens: fixture.performance ? null : MAX_MODEL_OUTPUT_TOKENS,
-      runtime: "openclaw",
-      fast: false,
+      runtime: "openclaw" as const,
+      fast: false as const,
       allowedTools: gatewayAllowedTools(
         task,
         fixture.requiredTools,
@@ -339,13 +293,9 @@ function outputDetails(message: RecordValue): RecordValue {
     if (!record(item) || typeof item.text !== "string") {
       continue;
     }
-    try {
-      const decoded: unknown = JSON.parse(item.text);
-      if (record(decoded)) {
-        return decoded;
-      }
-    } catch {
-      /* A truncated display is evidence of truncation, not a complete result. */
+    const decoded = safeParseJson(item.text);
+    if (record(decoded)) {
+      return decoded;
     }
   }
   return record(message.details) ? message.details : {};
@@ -357,7 +307,7 @@ function addObservedNumber(total: number | undefined, value: unknown): number | 
 }
 
 /** Only actual assistant calls and persisted terminal activity count as execution. */
-export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMatrixTrace {
+export function collectGatewayMatrixTrace(events: readonly unknown[]) {
   const calls: ToolCall[] = [];
   const outcomes: ToolOutcome[] = [];
   const activities: ToolActivity[] = [];
@@ -487,7 +437,9 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMa
 }
 
 function callOutcomes(trace: GatewayMatrixTrace, call: ToolCall): ToolOutcome[] {
-  let outcome = trace.outcomes.findLast((item) => item.id === call.id);
+  const outcomeFor = (id: string) =>
+    trace.outcomes.findLast((item) => item.id === id && item.sessionKey === call.sessionKey);
+  let outcome = outcomeFor(call.id);
   const outcomes = outcome ? [outcome] : [];
   let cursor = trace.calls.indexOf(call);
   while (outcome && !outcome.isError && outcome.details.status === "waiting") {
@@ -496,14 +448,18 @@ function callOutcomes(trace: GatewayMatrixTrace, call: ToolCall): ToolOutcome[] 
       break;
     }
     const next = trace.calls.findIndex(
-      (item, index) => index > cursor && item.name === "wait" && item.args.runId === runId,
+      (item, index) =>
+        index > cursor &&
+        item.name === "wait" &&
+        item.args.runId === runId &&
+        item.sessionKey === call.sessionKey,
     );
     const wait = trace.calls[next];
     if (!wait) {
       break;
     }
     cursor = next;
-    outcome = trace.outcomes.findLast((item) => item.id === wait.id);
+    outcome = outcomeFor(wait.id);
     if (outcome) {
       outcomes.push(outcome);
     }
@@ -613,10 +569,6 @@ function observedReferences(
   );
 }
 
-function referenceIds(trace: GatewayMatrixTrace): string[] {
-  return [...new Set(observedReferences(trace).map((reference) => reference.id))];
-}
-
 export function evaluateGatewayMatrixTask(params: {
   task: GatewayMatrixContractTask;
   expected: RecordValue;
@@ -718,7 +670,9 @@ export function evaluateGatewayMatrixTask(params: {
       record(fetched.details.value.reference)
         ? fetched
         : undefined;
-    const refs = automatic ? referenceIds({ ...trace, outcomes: [automatic] }) : [];
+    const refs = automatic
+      ? [...new Set(observedReferences({ ...trace, outcomes: [automatic] }).map(({ id }) => id))]
+      : [];
     const load = trace.calls.find(
       (call) =>
         refs.some((id) => source(call).includes(id)) && source(call).includes("results.load"),
@@ -742,7 +696,8 @@ export function evaluateGatewayMatrixTask(params: {
       (name) => receiptCalls.some((row) => row.tool === name),
     );
   } else if (task === "automation-contracts") {
-    const automations = activity.filter((item) => item.name === "automations");
+    const allAutomations = trace.activities.filter((item) => item.name === "automations");
+    const automations = allAutomations.filter((item) => !item.isError);
     const completeInventory = (item: ToolActivity) =>
       item.input.action === "list" &&
       item.input.includeDisabled === true &&
@@ -783,36 +738,30 @@ export function evaluateGatewayMatrixTask(params: {
           item.input.job.enabled === false &&
           (record(item.result.job) ? item.result.job.enabled : item.result.enabled) === false,
       );
-    checks.remainedDisabled = trace.activities
-      .filter((item) => item.name === "automations")
-      .every((item) => {
-        if (["run", "wake"].includes(String(item.input.action))) {
-          return false;
-        }
-        if (item.input.action !== "update") {
-          return true;
-        }
-        if (
-          item.input.enabled === true ||
-          (record(item.input.job) && item.input.job.enabled === true) ||
-          (record(item.input.patch) && item.input.patch.enabled === true)
-        ) {
-          return false;
-        }
-        const job = record(item.result.job) ? item.result.job : item.result;
-        return item.isError || job.enabled === false;
-      });
+    checks.remainedDisabled = allAutomations.every((item) => {
+      if (["run", "wake"].includes(String(item.input.action))) {
+        return false;
+      }
+      if (item.input.action !== "update") {
+        return true;
+      }
+      if (
+        item.input.enabled === true ||
+        (record(item.input.job) && item.input.job.enabled === true) ||
+        (record(item.input.patch) && item.input.patch.enabled === true)
+      ) {
+        return false;
+      }
+      const job = record(item.result.job) ? item.result.job : item.result;
+      return item.isError || job.enabled === false;
+    });
     const createdIds = new Set(created.map(jobId));
-    checks.onlyOwnedMutations = trace.activities
-      .filter(
-        (item) =>
-          item.name === "automations" && ["update", "remove"].includes(String(item.input.action)),
-      )
+    checks.onlyOwnedMutations = allAutomations
+      .filter((item) => ["update", "remove"].includes(String(item.input.action)))
       .every((item) => createdIds.has(item.input.jobId ?? item.input.id));
     checks.createdFacts =
       created.length === 1 &&
-      trace.activities.filter((item) => item.name === "automations" && item.input.action === "add")
-        .length === 1 &&
+      allAutomations.filter((item) => item.input.action === "add").length === 1 &&
       created.every((item) => {
         const job = record(item.result.job) ? item.result.job : item.result;
         const scheduledAt =
@@ -1150,13 +1099,7 @@ async function waitReady(child: ManagedRun, port: number, signal?: AbortSignal):
   throw new Error("Owned benchmark Gateway did not become ready within 90 seconds");
 }
 
-type ResponseResult = {
-  id?: string;
-  status?: string;
-  final: string;
-  error?: string;
-  usage?: unknown;
-};
+type ResponseResult = Awaited<ReturnType<typeof agentRequest>>;
 
 async function agentRequest(
   port: number,
@@ -1167,7 +1110,7 @@ async function agentRequest(
   abortSignal?: AbortSignal,
   sessionKey?: string,
   maxOutputTokens?: number,
-): Promise<ResponseResult> {
+) {
   const url = `http://127.0.0.1:${port}/v1/responses`;
   const timeout = AbortSignal.timeout(timeoutSeconds * 1_000);
   const signal = abortSignal ? AbortSignal.any([timeout, abortSignal]) : timeout;

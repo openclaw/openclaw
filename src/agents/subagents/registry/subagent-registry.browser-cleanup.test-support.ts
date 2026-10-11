@@ -11,8 +11,10 @@ function createRootAdmissionObservation() {
   const admitted = new WeakMap<Promise<unknown>, { entered: boolean }>();
   const admissions = (
     [
+      "runWithGatewayDetachedWorkAdmission",
       "runWithGatewayIndependentRootWorkAdmission",
       "runWithGatewayIndependentRootWorkContinuation",
+      "runWithGatewayDetachedWorkContinuation",
     ] as const
   ).map((name) => {
     const original: typeof gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission =
@@ -149,7 +151,7 @@ export function registerBrowserCleanupBoundaryTests({
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
 
         if (owner === "session reset") {
-          mod.prepareSubagentSessionCleanupRevocation(childSessionKey)();
+          (await mod.prepareSubagentSessionCleanupRevocation(childSessionKey))();
         } else if (owner !== "current owner") {
           mockPendingAgentWait();
           await mod.registerSubagentRun({

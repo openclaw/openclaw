@@ -23,6 +23,17 @@ function toolResult(toolCallId: string, isError = false) {
   };
 }
 
+function completedActivity(toolCallId: string, title: string) {
+  return {
+    itemId: `tool:${toolCallId}`,
+    toolCallId,
+    title,
+    kind: "tool",
+    phase: "end",
+    status: "completed",
+  };
+}
+
 describe("chat transcript feed", () => {
   it("preserves forwarded attribution beside ordinary user and assistant messages", () => {
     const container = mount([
@@ -77,16 +88,7 @@ describe("chat transcript feed", () => {
     const container = mount([
       {
         role: "assistant",
-        activity: [
-          {
-            itemId: "tool:exec-1",
-            toolCallId: "exec-1",
-            title: "Exec",
-            kind: "tool",
-            phase: "end",
-            status: "completed",
-          },
-        ],
+        activity: [completedActivity("exec-1", "Exec")],
         content: [
           toolCall("exec-1", "exec", {
             command: "pnpm tsgo --project tsconfig.gateway.json\npnpm lint:ui:styles --fix",
@@ -96,24 +98,7 @@ describe("chat transcript feed", () => {
       toolResult("exec-1"),
       {
         role: "assistant",
-        activity: [
-          {
-            itemId: "tool:exec-2",
-            toolCallId: "exec-2",
-            title: "Exec",
-            kind: "tool",
-            phase: "end",
-            status: "completed",
-          },
-          {
-            itemId: "tool:read-1",
-            toolCallId: "read-1",
-            title: "Read",
-            kind: "tool",
-            phase: "end",
-            status: "completed",
-          },
-        ],
+        activity: [completedActivity("exec-2", "Exec"), completedActivity("read-1", "Read")],
         content: [
           toolCall("exec-2", "exec", { command: "pnpm lint:ui:styles" }),
           toolCall("read-1", "read", { path: "ui/src/styles/chat/sidebar.css" }),
@@ -279,16 +264,6 @@ describe("chat transcript feed", () => {
     expect(unclocked?.querySelector(".chat-task-feed__time")).toBeNull();
   });
 
-  it.each(["set -e", "export FOO=bar", "unset FOO"])(
-    "keeps setup-only command %s identifiable",
-    (command) => {
-      const container = mount([
-        { role: "assistant", content: [toolCall("setup", "exec", { command })] },
-      ]);
-      expect(container.querySelector(".chat-task-feed__row-label")?.textContent).toBe(command);
-    },
-  );
-
   it("redacts a complete credential-shaped fixture before shortening the command label", () => {
     const syntheticToken = `AKIA${"0".repeat(16)}`;
     const command = `echo ${"a".repeat(140)} ${syntheticToken}`;
@@ -301,21 +276,29 @@ describe("chat transcript feed", () => {
     expect(container.querySelector("code")?.textContent).not.toContain(syntheticToken);
   });
 
-  it.each<[string, Record<string, unknown>]>([
-    ["read", { path: "src/example.ts", offset: 20, limit: 30 }],
-    ["edit", { path: "src/example.ts", oldText: "before", newText: "after" }],
-    ["write", { path: "src/example.ts", content: "complete file content" }],
-    ["codebase_search", { query: "example", path: "src/components" }],
+  it.each<[string, Record<string, unknown>, string | null]>([
+    ["exec", { command: "set -e" }, "set -e"],
+    ["exec", { command: "export FOO=bar" }, "export FOO=bar"],
+    ["exec", { command: "unset FOO" }, "unset FOO"],
+    ["read", { path: "src/example.ts", offset: 20, limit: 30 }, null],
+    ["edit", { path: "src/example.ts", oldText: "before", newText: "after" }, null],
+    ["write", { path: "src/example.ts", content: "complete file content" }, null],
+    ["codebase_search", { query: "example", path: "src/components" }, null],
     [
       "apply_patch",
       {
         input:
           "*** Begin Patch\n*** Add File: one.ts\n+one\n*** Add File: two.ts\n+two\n*** End Patch",
       },
+      null,
     ],
-  ])("preserves the complete structured input of %s", (name, args) => {
+  ])("preserves %s input and setup-only command labels", (name, args, label) => {
     const container = mount([{ role: "assistant", content: [toolCall("input", name, args)] }]);
-    expect(JSON.parse(container.querySelector("code")!.textContent!)).toEqual(args);
+    if (label !== null) {
+      expect(container.querySelector(".chat-task-feed__row-label")?.textContent).toBe(label);
+    } else {
+      expect(JSON.parse(container.querySelector("code")!.textContent!)).toEqual(args);
+    }
   });
 
   it("preserves anonymous command disclosures when earlier rows arrive in the same group", () => {

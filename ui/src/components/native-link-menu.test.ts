@@ -4,18 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { i18n } from "../i18n/index.ts";
 import { de } from "../i18n/locales/de.ts";
-import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.runtime.ts";
-import "./tooltip.ts";
+import type { NativeLinkMenu, NativeLinkMenuAction } from "./native-link-menu.runtime.ts";
+import "./native-link-menu.runtime.ts";
+import { settleTooltip } from "./tooltip.test-support.ts";
 
-const NATIVE_LINK_MENU_ELEMENT_NAME = `test-openclaw-native-link-menu-${crypto.randomUUID()}`;
 const containers: HTMLElement[] = [];
 type DropdownElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
-
-// The non-isolated UI runner resets modules but not customElements. Register
-// the current class graph so instanceof and locale updates share one module.
-class TestNativeLinkMenu extends NativeLinkMenu {}
-
-customElements.define(NATIVE_LINK_MENU_ELEMENT_NAME, TestNativeLinkMenu);
 
 beforeEach(async () => {
   await i18n.setLocale("en");
@@ -36,16 +30,13 @@ async function mountMenu(options: {
   const container = document.createElement("div");
   containers.push(container);
   document.body.append(container);
-  const menu = document.createElement(NATIVE_LINK_MENU_ELEMENT_NAME) as NativeLinkMenu;
+  const menu = document.createElement("openclaw-native-link-menu");
   menu.x = 100;
   menu.y = 100;
   menu.trigger = options.trigger ?? null;
   menu.onAction = options.onAction ?? (() => {});
   menu.onClose = options.onClose ?? (() => {});
   container.append(menu);
-  if (!(menu instanceof NativeLinkMenu)) {
-    throw new Error("Expected native link menu");
-  }
   await menu.updateComplete;
   return menu;
 }
@@ -140,6 +131,7 @@ describe("native link menu", () => {
     menu.append(tooltip);
     await tooltip.updateComplete;
     tooltip.anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    await settleTooltip(tooltip);
     const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     await popup.updateComplete;
     expect(popup.open).toBe(true);

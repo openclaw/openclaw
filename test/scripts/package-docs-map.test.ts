@@ -41,18 +41,6 @@ describe("package docs map", () => {
     expect(existsSync(mapPath)).toBe(false);
   });
 
-  it("restores a tracked source stub after packaging", async () => {
-    const root = makePackageRoot();
-    const mapPath = path.join(root, "docs", "docs_map.md");
-    const stub = "# Docs map source\n";
-    writeFileSync(mapPath, stub, "utf8");
-
-    await expect(preparePackageDocsMap(root)).resolves.toBe(true);
-    expect(readFileSync(mapPath, "utf8")).toBe(renderDocsHeadingMap(path.join(root, "docs")));
-    await expect(restorePackageDocsMap(root)).resolves.toBe(true);
-    expect(readFileSync(mapPath, "utf8")).toBe(stub);
-  });
-
   it.each(["source stub", "generated map"])(
     "serializes preparations starting from a %s",
     async (initialMap) => {

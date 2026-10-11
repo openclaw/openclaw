@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DevicePairingAdmissionFacts } from "./device-pairing-worker-contract.js";
+import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
+import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 const admission = new AsyncLocalStorage<DevicePairingAdmissionFacts[]>();
@@ -15,11 +16,17 @@ export function requestDevicePairingMutationAdmission(facts: DevicePairingAdmiss
   requests.push(captured);
 }
 
-export function withDevicePairingMutationAdmission<T>(operate: () => T): T {
+export function withDevicePairingMutationAdmission<T>(
+  operate: () => { value: T; receipt?: DevicePairingCommitReceipt },
+): T {
   return admission.run([], () => {
     requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: [] });
-    const result = operate();
-    requestSqliteWorkerOperationAdmission({ stage: "commit", facts: admission.getStore() });
-    return result;
+    const { value, receipt } = operate();
+    const facts = admission.getStore()!;
+    if (receipt) {
+      facts.push({ kind: "pairing-publication", receipt });
+    }
+    requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
+    return value;
   });
 }

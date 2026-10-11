@@ -10,9 +10,12 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  getSqliteDatabaseAdmission,
   openNodeSqliteDatabase,
   prepareSqliteQuerySync,
+  publishSqliteDatabaseAdmission,
   runSqliteImmediateTransactionSync,
+  type SqliteDatabaseAdmissionKey,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { pickKeyframeId } from "./analyze.js";
@@ -47,6 +50,11 @@ type Database = import("node:sqlite").DatabaseSync;
 
 const LOGBOOK_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const FRAME_PRUNE_BATCH_SIZE = 64;
+const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
+  name: "logbook.schema",
+  schemaDependent: true,
+  read: (value) => (value === true ? true : undefined),
+};
 class LogbookDatabaseStore {
   private readonly db: Database;
   private readonly query;
@@ -78,17 +86,20 @@ class LogbookDatabaseStore {
         foreignKeys: true,
         synchronous: "NORMAL",
       });
-      const versionRow = db.prepare("PRAGMA user_version").get();
-      const schemaVersion = Number(versionRow?.user_version ?? 0);
-      if (schemaVersion > LOGBOOK_SCHEMA_VERSION) {
-        throw new Error(
-          `Logbook database uses newer schema version ${schemaVersion}; this build supports ${LOGBOOK_SCHEMA_VERSION}`,
-        );
-      }
-      db.exec(SCHEMA);
-      if (schemaVersion < LOGBOOK_SCHEMA_VERSION) {
-        migrateSqliteSchemaToStrict(db, SCHEMA, { databaseLabel: dbPath });
-        db.exec(`PRAGMA user_version = ${LOGBOOK_SCHEMA_VERSION};`);
+      if (!getSqliteDatabaseAdmission(db, schemaAdmission)) {
+        const versionRow = db.prepare("PRAGMA user_version").get();
+        const schemaVersion = Number(versionRow?.user_version ?? 0);
+        if (schemaVersion > LOGBOOK_SCHEMA_VERSION) {
+          throw new Error(
+            `Logbook database uses newer schema version ${schemaVersion}; this build supports ${LOGBOOK_SCHEMA_VERSION}`,
+          );
+        }
+        db.exec(SCHEMA);
+        if (schemaVersion < LOGBOOK_SCHEMA_VERSION) {
+          migrateSqliteSchemaToStrict(db, SCHEMA, { databaseLabel: dbPath });
+          db.exec(`PRAGMA user_version = ${LOGBOOK_SCHEMA_VERSION};`);
+        }
+        publishSqliteDatabaseAdmission(db, schemaAdmission, true);
       }
       this.db = db;
       this.walMaintenance = walMaintenance;
@@ -255,7 +266,8 @@ class LogbookDatabaseStore {
     }
   }
 
-  close(): void {
+  async close(): Promise<void> {
+    await this.walMaintenance.stop();
     try {
       this.walMaintenance.close();
     } finally {
@@ -385,13 +397,6 @@ class LogbookDatabaseStore {
         .limit(1),
     );
     return row ? toBatch(row) : null;
-  }
-
-  batchFrames(batchId: number): LogbookFrame[] {
-    return executeSqliteQuerySync(
-      this.db,
-      this.framesQuery.where("batch_id", "=", batchId),
-    ).rows.map(toFrame);
   }
 
   sampledBatchFrames(batchId: number): LogbookFrame[] {
@@ -665,8 +670,6 @@ export function createSqliteWorkerBackend(
           return store.resetErrorBatches();
         case "nextPendingBatch":
           return store.nextPendingBatch();
-        case "batchFrames":
-          return store.batchFrames(command.input.batchId);
         case "sampledBatchFrames":
           return store.sampledBatchFrames(command.input.batchId);
         case "replaceObservations":

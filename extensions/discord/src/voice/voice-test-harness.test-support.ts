@@ -1,11 +1,10 @@
 import { PassThrough } from "node:stream";
-import { DAVESession } from "@discordjs/voice";
 import { VoiceOpcodes } from "discord-api-types/voice/v8";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
-import { createVoiceCaptureState } from "./capture-state.js";
 import {
   createDefaultVoiceStates,
   createDiscordVoiceTestHelpers,
@@ -16,7 +15,7 @@ import {
   type MockCallSource,
   requireRecord,
 } from "./manager.e2e.test-support.js";
-import { createVoiceReceiveRecoveryState, DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
+import { DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
 import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.js";
 import { createDiscordVoiceTranscriptFixture } from "./transcripts.test-support.js";
 import {
@@ -196,6 +195,7 @@ function buildVoiceTestHarness() {
     botUserId?: string,
   ) => {
     const manager = new managerModule.DiscordVoiceManager({
+      scheduler: createTestPluginServiceScheduler(),
       client: (clientOverride ?? createClient()) as never,
       cfg: cfgOverride,
       discordConfig,
@@ -366,7 +366,7 @@ function buildVoiceTestHarness() {
       undefined,
       { voice: { realtime: { consultPolicy: "auto", requireWakeName: true } } },
       {
-        agents: { list: [{ id: "agent-1", identity: { name: agentName } }] },
+        agents: { entries: { "agent-1": { identity: { name: agentName } } } },
         commands: { ownerAllowFrom: ["user:u-owner"] },
       },
     );
@@ -629,23 +629,18 @@ function buildVoiceTestHarness() {
   return {
     startTranscripts,
     stopTranscripts,
-    PassThrough,
-    DAVESession,
     expectDefined,
     VoiceOpcodes,
     expect,
     it,
     vi,
     ChannelType,
-    createVoiceCaptureState,
-    createVoiceReceiveRecoveryState,
     DECRYPT_FAILURE_WINDOW_MS,
     requireRecord,
     mockCall,
     lastMockCall,
     createDefaultVoiceStates,
     createConnectionMock,
-    getVoiceConnectionMock,
     joinVoiceChannelMock,
     entersStateMock,
     createAudioPlayerMock,
@@ -683,7 +678,6 @@ function buildVoiceTestHarness() {
     createManager,
     makeVoiceConfig,
     makeAgentProxyConfig,
-    makeBidiConfig,
     createAgentProxyManager,
     createFollowManager,
     expectConnectedStatus,
@@ -700,7 +694,6 @@ function buildVoiceTestHarness() {
     realtimeBridgeAt,
     lastRealtimeBridge,
     lastRealtimeBridgeParams,
-    joinManagerFixture,
     createJoinedAgentProxyFixture,
     createJoinedBidiFixture,
     lastAudioResourceInput,

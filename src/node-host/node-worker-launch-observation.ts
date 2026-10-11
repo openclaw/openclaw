@@ -13,7 +13,7 @@ import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import {
   NODE_WORKER_STDERR_MAX_BYTES,
   NODE_WORKER_STDOUT_MAX_BYTES,
-  parseNodeWorkerOutputJson,
+  parseNodeWorkerOutput,
   sanitizeNodeWorkerDiagnostic,
   type NodeWorkerCredentialScrubber,
 } from "./node-worker-output.js";
@@ -121,7 +121,7 @@ async function observeNodeWorkerChildOutput(
               break;
             }
             const frame = parseWorkerProcessMessage(
-              JSON.parse(parseNodeWorkerOutputJson(line.toString("utf8"), active.scrubber.scrub)),
+              parseNodeWorkerOutput(line.toString("utf8"), active.scrubber.scrub),
             );
             if (!frame) {
               throw new Error("worker returned an invalid turn result");

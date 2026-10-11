@@ -13,8 +13,9 @@ import {
   getAgentRunLifecycleGeneration,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { readUserProfileIdentity, prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -272,7 +273,7 @@ it.each(["running", "queued", "capacity-wait"] as const)(
         releaseWait?.();
         releaseAgentRunContext(runId, claim);
         projection.dispose();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         for (const key of [child, grandchild]) {
           subagentRuns.delete(`original:${key}`);
         }
@@ -567,7 +568,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
       expect(socket.send.mock.calls).toHaveLength(0);
     } finally {
       detach();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       projection.dispose();
     }
   });
@@ -579,7 +580,7 @@ it("preserves selected account across role changes but rejects a changed merge i
     const target = ensureProfileForEmail("target@expected-profile.test");
     const client = sharingPolicyClient({ user: source.id }) as GatewayWsClient;
     prepareGatewayRecipientProfile(client);
-    const release = retainUserProfileCatalog();
+    const release = (await prepareUserProfileCatalog()).release;
     try {
       const binding = (await createExpectedProfileBinding(source.id, client))!;
       const targetBinding = (await createExpectedProfileBinding(

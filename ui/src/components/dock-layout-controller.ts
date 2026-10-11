@@ -8,7 +8,11 @@ import {
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
 import "./resizable-divider.ts";
 
-type DockLayoutHost = ReactiveControllerHost & { readonly isConnected: boolean };
+type DockLayoutHost = ReactiveControllerHost & {
+  readonly isConnected: boolean;
+  readonly embedded?: boolean;
+  hasAttribute?(name: string): boolean;
+};
 
 type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   layout: DockPanelLayoutStore<TDock>;
@@ -16,7 +20,6 @@ type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   isAvailable: () => boolean;
   isFullscreen?: () => boolean;
   maxWidth?: () => number;
-  reserveViewport?: boolean;
   onResize?: () => void;
 };
 
@@ -83,17 +86,9 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     this.setOpen(false, false);
   }
 
-  /**
-   * Full-page route takeovers (settings) own the viewport, so docks hide while
-   * one renders. Hiding never persists — the user's open preference must survive
-   * the visit — and suppression also blocks `restoreOpenState()` so a reconnect
-   * mid-takeover cannot pop the panel back over settings. Returns true when the
-   * caller must resume its surface after the takeover ends.
-   *
-   * Only automatic restores are blocked. An explicit open (Ctrl+`, toolbar,
-   * `ui.command`) still wins and shows the dock over the takeover: swallowing a
-   * requested terminal would be a worse papercut than the one this fixes.
-   */
+  /** Hide during route takeovers without losing the persisted open preference.
+   * Suppression blocks automatic restores, but explicit opens still win.
+   * Returns true when the caller must resume its surface after the takeover. */
   setSuppressed(suppressed: boolean): boolean {
     if (this.suppressed === suppressed) {
       return false;
@@ -115,9 +110,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     ) {
       return false;
     }
-    this.open = true;
-    this.syncReservation();
-    this.host.requestUpdate();
+    this.setOpen(true, false);
     return true;
   }
 
@@ -141,13 +134,10 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   syncReservation(): void {
-    if (this.options.reserveViewport === false || this.isFullscreen()) {
+    if (!this.reservesViewport()) {
       return;
     }
-    // Embedded docks live inside a parent layout that already owns their geometry.
-    // Reserving the viewport here would apply the standalone dock a second time.
-    const embedded = this.host instanceof HTMLElement && this.host.hasAttribute("embedded");
-    const visible = !embedded && !this.isFullscreen() && this.options.isAvailable() && this.open;
+    const visible = this.options.isAvailable() && this.open;
     const root = document.documentElement.style;
     root.setProperty(
       `--oc-${this.options.reservationPrefix}-reserve-bottom`,
@@ -159,7 +149,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     );
   }
 
-  private resize(event: CustomEvent<{ splitRatio: number }>): void {
+  resize(event: CustomEvent<{ splitRatio: number }>): void {
     const horizontal = this.dock === "bottom";
     const minimum = horizontal ? this.options.layout.minHeight : this.options.layout.minWidth;
     const maximum = horizontal ? this.options.layout.maxHeight() : this.maxWidth();
@@ -179,35 +169,58 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
-    if (this.isFullscreen() || this.dock === "main") {
+    const resizer = this.resizer;
+    if (!resizer) {
       return nothing;
+    }
+    return html`<resizable-divider
+      class="${classPrefix}-resizer ${classPrefix}-resizer--${this.dock}"
+      .orientation=${resizer.orientation}
+      .label=${label}
+      .splitRatio=${resizer.splitRatio}
+      .minRatio=${resizer.minRatio}
+      .maxRatio=${resizer.maxRatio}
+      .measureRatio=${resizer.measureRatio}
+      .measureSize=${resizer.measureSize}
+      @resize=${(event: CustomEvent<{ splitRatio: number }>) => this.resize(event)}
+      @resize-end=${() => this.persist()}
+    ></resizable-divider>`;
+  }
+
+  get resizer() {
+    if (this.isFullscreen() || this.dock === "main") {
+      return null;
     }
     const horizontal = this.dock === "bottom";
     const size = this.size();
     const minimum = horizontal ? this.options.layout.minHeight : this.options.layout.minWidth;
     const maximum = horizontal ? this.options.layout.maxHeight() : this.maxWidth();
     const current = horizontal ? this.height : this.width;
-    return html`<resizable-divider
-      class="${classPrefix}-resizer ${classPrefix}-resizer--${this.dock}"
-      .orientation=${horizontal ? "horizontal" : "vertical"}
-      .label=${label}
-      .splitRatio=${1 - current / size}
-      .minRatio=${1 - maximum / size}
-      .maxRatio=${1 - minimum / size}
-      .measureRatio=${() => 1 - (horizontal ? this.height : this.width) / this.size()}
-      .measureSize=${() => this.size()}
-      @resize=${(event: CustomEvent<{ splitRatio: number }>) => this.resize(event)}
-      @resize-end=${() => this.persist()}
-    ></resizable-divider>`;
+    return {
+      orientation: horizontal ? ("horizontal" as const) : ("vertical" as const),
+      splitRatio: 1 - current / size,
+      minRatio: 1 - maximum / size,
+      maxRatio: 1 - minimum / size,
+      measureRatio: () => 1 - (horizontal ? this.height : this.width) / this.size(),
+      measureSize: () => this.size(),
+    };
   }
 
   private clearReservation(): void {
-    if (this.options.reserveViewport === false || this.isFullscreen()) {
+    if (!this.reservesViewport()) {
       return;
     }
     const root = document.documentElement.style;
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-bottom`, "0px");
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-right`, "0px");
+  }
+
+  // Only a standalone dock owns its panel's viewport reservation. Embedded, fullscreen,
+  // and inline hosts are laid out by their parent, and the standalone dock of the same
+  // panel can be open at the same time, so they neither reserve nor clear its properties.
+  private reservesViewport(): boolean {
+    const embedded = this.host.embedded ?? this.host.hasAttribute?.("embedded") ?? false;
+    return !this.isFullscreen() && !embedded;
   }
 
   private isFullscreen(): boolean {

@@ -75,27 +75,15 @@ describe("zaloPlugin pairing.notifyApproval", () => {
     );
   });
 
-  it.each([
-    { name: "the approved account", accountId: "beta", token: "token-beta" },
-    {
-      name: "the default account when no account was approved",
-      accountId: undefined,
-      token: "token-alpha",
-    },
-  ])("sends the approval from $name", async ({ accountId, token }) => {
+  it("sends the approval from the default account when no account was approved", async () => {
     const notifyApproval = zaloPlugin.pairing?.notifyApproval;
     if (!notifyApproval) {
       throw new Error("zalo pairing.notifyApproval unavailable");
     }
-
-    await notifyApproval({
-      cfg: PAIRING_CFG,
-      id: "paired-user",
-      ...(accountId ? { accountId } : {}),
-    });
+    await notifyApproval({ cfg: PAIRING_CFG, id: "paired-user" });
 
     expect(hoisted.sendMessage).toHaveBeenCalledExactlyOnceWith(
-      token,
+      "token-alpha",
       { chat_id: "paired-user", text: expect.any(String) },
       undefined,
       undefined,

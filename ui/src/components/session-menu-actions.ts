@@ -1,36 +1,49 @@
 import { ContextConsumer } from "@lit/context";
 import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
-import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { applicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
+import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
-import { handleAppearanceGridKeydown, renderAppearancePicker } from "./session-icon-picker.ts";
+import type { SessionCommunicationMenuAction } from "./session-communication-options.ts";
+import { SessionMenuAppearance } from "./session-icon-picker.ts";
 import {
   renderCompactSessionMenuFrame,
   renderCompactSessionMenuNavigationItem,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
 import {
-  renderSessionEditorOptions,
+  renderSessionCopyOptions,
+  renderSessionOpenOptions,
   renderSessionGroupOptions,
   sessionArchiveShortcut,
 } from "./session-menu-options.ts";
+import { SessionMenuSettings } from "./session-menu-settings.ts";
+import { SessionMenuSnooze, type SessionSnoozeMenuAction } from "./session-menu-snooze.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
 import { SessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
+registerSessionOrganizationEnglish();
+
 export type SessionMenuData = {
   label: string;
+  target?: { key: string; agentId?: string };
   sessionId: string | null;
   isChild?: boolean;
+  hasChildren?: boolean;
   pinnable?: boolean;
   pinned: boolean;
   unread: boolean;
   archived: boolean;
+  snoozedUntil: number | null;
   hiddenFromInvolvingMe?: boolean;
+  communication?: GatewaySessionRow["communication"];
+  effectiveCommunication?: GatewaySessionRow["effectiveCommunication"];
   archiving?: boolean;
   category: string | null;
   icon: string | null;
@@ -38,29 +51,39 @@ export type SessionMenuData = {
   categoryClearReturnsToGroups: boolean;
 };
 
+const SIMPLE_SESSION_ACTIONS = [
+  "copy-session-id",
+  "copy-session-link",
+  "copy-session-preview-link",
+  "copy-markdown",
+  "open-new-tab",
+  "open-new-window",
+  "split-right",
+  "split-below",
+  "reset-appearance",
+  "toggle-pin",
+  "toggle-unread",
+  "toggle-involving-me",
+  "rename",
+  "fork",
+  "new-group",
+  "toggle-archived",
+  "archive-tree",
+  "move-to-top-level",
+  "delete",
+] as const;
+
 export type SessionManagementAction =
+  | {
+      [Kind in (typeof SIMPLE_SESSION_ACTIONS)[number]]: { kind: Kind };
+    }[(typeof SIMPLE_SESSION_ACTIONS)[number]]
   | { kind: "open-in"; editor: EditorId; path: string }
-  | { kind: "copy-session-id" }
-  | { kind: "copy-session-link" }
-  | { kind: "copy-session-preview-link" }
-  | { kind: "copy-markdown" }
-  | { kind: "open-new-tab" }
-  | { kind: "open-new-window" }
-  | { kind: "split-right" }
-  | { kind: "split-below" }
-  | { kind: "reset-appearance" }
-  | { kind: "toggle-pin" }
-  | { kind: "toggle-unread" }
-  | { kind: "toggle-involving-me" }
-  | { kind: "rename" }
+  | SessionCommunicationMenuAction
   | { kind: "set-icon"; icon: string | null }
   | { kind: "set-color"; color: string | null }
   | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
-  | { kind: "fork" }
   | { kind: "move-to-group"; category: string | null }
-  | { kind: "new-group" }
-  | { kind: "toggle-archived" }
-  | { kind: "delete" };
+  | SessionSnoozeMenuAction;
 
 export type SessionManagementActionKind = SessionManagementAction["kind"];
 
@@ -70,6 +93,7 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
   pinned: false,
   unread: false,
   archived: false,
+  snoozedUntil: null,
   category: null,
   icon: null,
   color: null,
@@ -79,7 +103,8 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
 type SessionMenuActionsHost = ReactiveControllerHost &
   HTMLElement & { updateComplete: Promise<unknown> };
 
-type SessionMenuActionsState = {
+export type SessionMenuActionsState = {
+  involvingMeContext?: boolean;
   session: SessionMenuData;
   selectionCount: number;
   compact: boolean;
@@ -88,6 +113,7 @@ type SessionMenuActionsState = {
   forkDisabled: boolean;
   forkFromLastCompleted: boolean;
   archiveAllowed: boolean;
+  snoozeAllowed?: boolean;
   archiveShortcut?: boolean;
   deleteAllowed: boolean;
   groups: readonly string[];
@@ -102,9 +128,18 @@ type SessionMenuActionsState = {
 /** Canonical single-session actions shared by sidebar and chat-header menus. */
 export class SessionMenuActions {
   private readonly context;
-  private readonly ownerMenu: SessionOwnerMenu;
-  private iconPickerMode: "grid" | "custom" = "grid";
-  private customIconValue = "";
+  readonly ownerMenu: SessionOwnerMenu;
+  private readonly appearance;
+  readonly advanced;
+  private readonly snoozeMenu = new SessionMenuSnooze({
+    readWakeTime: () => this.readState().session.snoozedUntil,
+    eligible: () => !this.actionExtraDisabled("snooze"),
+    disabled: (kind) => this.actionDisabled(kind, this.actionExtraDisabled(kind)),
+    disabledReason: (kind) => this.readState().actionDisabledReasons[kind],
+    renderItem: (...args) => this.renderItem(...args),
+    renderSubmenu: (...args) => this.renderSubmenu(...args),
+    runAction: (action) => this.runAction(action),
+  });
 
   constructor(
     private readonly host: SessionMenuActionsHost,
@@ -113,14 +148,27 @@ export class SessionMenuActions {
     private readonly onClose: () => void,
   ) {
     this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
-    new SubscriptionsController(host).watch(
-      () => this.context.value?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    );
+    new SubscriptionsController(host).watchStore(() => this.context.value?.gateway);
     this.ownerMenu = new SessionOwnerMenu(host);
+    this.appearance = new SessionMenuAppearance(
+      host,
+      readState,
+      (kind) => this.actionDisabled(kind),
+      (action) => this.runAction(action),
+    );
+    this.advanced = new SessionMenuSettings(host, {
+      context: () => this.context.value,
+      readState: () => this.readState(),
+      disabled: (kind) => this.actionDisabled(kind),
+      renderSubmenu: (...args) => this.renderSubmenu(...args),
+      renderItem: (...args) => this.renderItem(...args),
+      renderInvolvement: (inline) => this.renderInvolvementAction(inline),
+      renderDelete: (inline) => this.renderDeleteAction(inline),
+      runAction: (action) => this.runAction(action),
+    });
   }
 
-  private get involvementAvailable(): boolean {
+  get involvementAvailable(): boolean {
     return (
       this.context.value?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities ===
       true
@@ -128,17 +176,18 @@ export class SessionMenuActions {
   }
 
   readonly loadOwners = () => {
+    this.advanced.open();
     if (this.readState().selectionCount === 1) {
       this.ownerMenu.load();
     }
   };
 
-  private actionDisabled(kind: SessionManagementActionKind, extra = false): boolean {
+  actionDisabled(kind: SessionManagementActionKind, extra = false): boolean {
     const state = this.readState();
     return state.disabled || extra || Boolean(state.actionDisabledReasons[kind]);
   }
 
-  private actionExtraDisabled(kind: SessionManagementActionKind): boolean {
+  actionExtraDisabled(kind: SessionManagementActionKind): boolean {
     const state = this.readState();
     const { session } = state;
     const batch = state.selectionCount > 1;
@@ -161,6 +210,11 @@ export class SessionMenuActions {
         return batch || !session.sessionId;
       case "toggle-pin":
         return batch || session.pinnable === false || session.isChild === true || session.archived;
+      case "snooze":
+      case "wake":
+        return (
+          !state.snoozeAllowed || this.actionExtraDisabled("toggle-pin") || !state.archiveAllowed
+        );
       case "toggle-involving-me":
         return (
           !this.involvementAvailable ||
@@ -168,6 +222,8 @@ export class SessionMenuActions {
           session.hiddenFromInvolvingMe === undefined ||
           !session.sessionId
         );
+      case "set-communication":
+        return batch || !this.advanced.communicationAvailable;
       case "rename":
       case "set-icon":
       case "set-color":
@@ -177,7 +233,17 @@ export class SessionMenuActions {
         return batch || state.forkDisabled;
       case "move-to-group":
       case "new-group":
-        return session.isChild === true;
+        return false;
+      case "move-to-top-level":
+        return batch || !session.isChild;
+      case "archive-tree":
+        return (
+          batch ||
+          !session.hasChildren ||
+          session.archived ||
+          session.archiving === true ||
+          !state.archiveAllowed
+        );
       case "toggle-archived":
         return session.archiving === true || (!batch && !session.archived && !state.archiveAllowed);
       case "delete":
@@ -189,7 +255,7 @@ export class SessionMenuActions {
     }
   }
 
-  private runAction(action: SessionManagementAction): void {
+  runAction(action: SessionManagementAction): void {
     if (this.actionDisabled(action.kind, this.actionExtraDisabled(action.kind))) {
       return;
     }
@@ -205,30 +271,19 @@ export class SessionMenuActions {
   }
 
   handleSelect(value: string): boolean {
+    if (this.advanced.handleSelect(value)) {
+      return true;
+    }
     if (value === "reload-owners") {
       this.ownerMenu.load();
       return true;
     }
-    if (
-      value === "copy-session-id" ||
-      value === "copy-session-link" ||
-      value === "copy-session-preview-link" ||
-      value === "copy-markdown" ||
-      value === "open-new-tab" ||
-      value === "open-new-window" ||
-      value === "split-right" ||
-      value === "split-below" ||
-      value === "reset-appearance" ||
-      value === "toggle-pin" ||
-      value === "toggle-unread" ||
-      value === "toggle-involving-me" ||
-      value === "rename" ||
-      value === "fork" ||
-      value === "new-group" ||
-      value === "toggle-archived" ||
-      value === "delete"
-    ) {
-      this.runAction({ kind: value });
+    const kind = SIMPLE_SESSION_ACTIONS.find((candidate) => candidate === value);
+    if (kind) {
+      this.runAction({ kind });
+      return true;
+    }
+    if (this.snoozeMenu.handleSelect(value)) {
       return true;
     }
     if (value.startsWith("open-in:")) {
@@ -257,8 +312,7 @@ export class SessionMenuActions {
 
   prepareCompactView(view: CompactSessionMenuView): void {
     if (view === "icon") {
-      this.iconPickerMode = "grid";
-      this.customIconValue = "";
+      this.appearance.prepare();
     }
   }
 
@@ -271,9 +325,54 @@ export class SessionMenuActions {
     });
   }
 
-  handleKeydown(event: KeyboardEvent): boolean {
+  handleKeydown(
+    event: KeyboardEvent,
+    appearancePicker: Pick<SessionMenuAppearance, "showIconGrid"> = this.appearance,
+  ): boolean {
     const target = event.composedPath().find((node) => node instanceof HTMLElement);
-    const appearance = target?.closest<HTMLElement>(".session-menu__appearance");
+    const key = resolveAsciiShortcutKey(event);
+    // Moving these actions into Advanced must not retire their existing menu shortcuts.
+    const kind = key === "f" ? "fork" : key === "d" ? "delete" : undefined;
+    if (
+      kind &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event
+        .composedPath()
+        .some(
+          (node) =>
+            node instanceof Element &&
+            node.matches("input, textarea, select, [contenteditable=true]"),
+        ) &&
+      !this.actionDisabled(kind, this.actionExtraDisabled(kind))
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.runAction({ kind });
+      return true;
+    }
+    const item = event
+      .composedPath()
+      .find(
+        (node): node is HTMLElement =>
+          node instanceof HTMLElement && node.matches("wa-dropdown-item"),
+      );
+    if (event.key === "Tab" && !event.shiftKey && item) {
+      const settings = item.parentElement;
+      const picker = settings?.querySelector<HTMLElement>(":scope > .session-menu__communication");
+      const first = picker?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+      if (first) {
+        // Menu arrows visit rows; Tab enters the embedded controls without dismissing.
+        event.preventDefault();
+        event.stopPropagation();
+        first.focus();
+        return true;
+      }
+    }
+    const appearance = target?.closest<HTMLElement>(
+      ".session-menu__appearance, .session-menu__communication",
+    );
     if (event.key === "Tab" && target && appearance && this.host.contains(appearance)) {
       const controls = Array.from(
         appearance.querySelectorAll<HTMLElement>(
@@ -281,9 +380,28 @@ export class SessionMenuActions {
         ),
       ).filter((control) => !control.closest('[inert], [hidden], [aria-hidden="true"]'));
       const index = controls.indexOf(target);
-      const next = index < 0 ? undefined : controls[index + (event.shiftKey ? -1 : 1)];
+      let next = index < 0 ? undefined : controls[index + (event.shiftKey ? -1 : 1)];
+      if (
+        index === 0 &&
+        event.shiftKey &&
+        appearance.classList.contains("session-menu__communication")
+      ) {
+        for (
+          let previous = appearance.previousElementSibling;
+          previous;
+          previous = previous.previousElementSibling
+        ) {
+          if (
+            previous instanceof HTMLElement &&
+            previous.matches("wa-dropdown-item:not([disabled])")
+          ) {
+            next = previous;
+            break;
+          }
+        }
+      }
       if (next) {
-        // Web Awesome dismisses on Tab. The embedded picker owns internal
+        // Web Awesome dismisses on Tab. Embedded settings own internal
         // traversal; only its outer edges return to the menu's dismissal path.
         event.preventDefault();
         event.stopPropagation();
@@ -309,7 +427,7 @@ export class SessionMenuActions {
     event.stopPropagation();
     if (event.key === "Escape") {
       event.preventDefault();
-      this.showIconGrid();
+      appearancePicker.showIconGrid();
     }
     return true;
   }
@@ -345,24 +463,31 @@ export class SessionMenuActions {
     icon: TemplateResult,
     disabled = false,
     title?: string,
-  ) {
+    inline = true,
+  ): TemplateResult {
     if (this.readState().compact) {
       return renderCompactSessionMenuNavigationItem({
         value: `compact:open-${view}`,
+        shortcut: view === "archive" ? "a" : undefined,
+        details:
+          view === "archive"
+            ? menuShortcutHint("a", sessionArchiveShortcut(this.readState()))
+            : undefined,
         label,
         icon,
         disabled,
         title,
       });
     }
-    const shortcut = view === "icon" ? "i" : view === "copy" ? "c" : undefined;
+    const shortcut = view === "icon" ? "i" : view === "archive" ? "a" : undefined;
     return html`<wa-dropdown-item
-      class=${`session-menu__item${view === "assign-owner" ? " people-menu__submenu" : ""}`}
+      slot=${inline ? nothing : "submenu"}
+      class=${`session-menu__item${view === "assign-owner" ? " people-menu__submenu" : view === "advanced" ? " session-menu__advanced" : ""}`}
       ?disabled=${disabled}
       title=${title ?? nothing}
       data-shortcut=${shortcut ?? nothing}
       aria-keyshortcuts=${shortcut?.toUpperCase() ?? nothing}
-      @submenu-opening=${view === "icon" ? this.focusAppearanceOnOpen : nothing}
+      @submenu-opening=${view === "icon" ? this.appearance.focusOnOpen : nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
       <span class="session-menu__text">${label}</span>
@@ -408,36 +533,32 @@ export class SessionMenuActions {
         { shortcut: "u" },
       )}
       ${
-        this.involvementAvailable && !batch && session.hiddenFromInvolvingMe !== undefined
-          ? this.renderItem(
-              "toggle-involving-me",
-              t(
-                session.hiddenFromInvolvingMe
-                  ? "sessionsView.showInInvolvingMe"
-                  : "sessionsView.hideFromInvolvingMe",
-              ),
-              session.hiddenFromInvolvingMe ? icons.eye : icons.eyeOff,
-            )
+        !batch && this.readState().navigationAllowed
+          ? this.renderItem("copy-session-link", t("sessionsView.copyLink"), icons.link, {
+              shortcut: "c",
+            })
           : nothing
       }
-      ${this.renderItem(
-        "toggle-archived",
-        t(
-          session.archiving
-            ? "sessionsView.archiving"
-            : batch
-              ? session.archived
-                ? "sessionsView.restoreSessionCount"
-                : "sessionsView.archiveSessionCount"
-              : session.archived
-                ? "sessionsView.restoreSession"
-                : "sessionsView.archiveSession",
-          { count },
-        ),
-        session.archived ? icons.archiveRestore : icons.archive,
-        { shortcut: "a" },
-      )}
+      ${batch ? this.renderArchiveAction() : nothing}
     `;
+  }
+
+  private renderInvolvementAction(inline = true) {
+    const { session, selectionCount } = this.readState();
+    return this.involvementAvailable &&
+      selectionCount === 1 &&
+      session.hiddenFromInvolvingMe !== undefined
+      ? this.renderItem(
+          "toggle-involving-me",
+          t(
+            session.hiddenFromInvolvingMe
+              ? "sessionsView.showInInvolvingMe"
+              : "sessionsView.hideFromInvolvingMe",
+          ),
+          session.hiddenFromInvolvingMe ? icons.eye : icons.eyeOff,
+          { inline },
+        )
+      : nothing;
   }
 
   renderOrganizationActions() {
@@ -445,56 +566,66 @@ export class SessionMenuActions {
     const batch = state.selectionCount > 1;
     return html`
       ${
-        batch
-          ? nothing
-          : this.renderSubmenu(
-              "icon",
-              t("sessionsView.setIconColorMenu"),
-              icons.palette,
-              this.actionDisabled("set-icon") && this.actionDisabled("set-color"),
-            )
-      }
-      ${this.renderGroupAction()}
-      ${
         !batch
-          ? this.renderSubmenu(
-              "assign-owner",
-              t("sessionsView.assignTo"),
-              icons.users,
-              this.actionDisabled("assign-owner"),
-              state.actionDisabledReasons["assign-owner"],
-            )
+          ? this.ownerMenu.multipleOwners
+            ? this.renderSubmenu(
+                "assign-owner",
+                t("sessionsView.assignTo"),
+                icons.users,
+                this.actionDisabled("assign-owner"),
+                state.actionDisabledReasons["assign-owner"],
+              )
+            : this.ownerMenu.renderStatus(true)
           : nothing
       }
+      ${this.renderGroupAction()}
+      ${!batch && state.session.isChild ? this.renderItem("move-to-top-level", t("sessionsView.moveToTopLevel"), icons.arrowUpRight) : nothing}
+      ${state.involvingMeContext ? this.renderInvolvementAction() : nothing}
+      ${!batch ? html`${this.snoozeMenu.renderAction()} ${this.renderArchiveAction()}` : nothing}
     `;
   }
 
-  renderTransferActions() {
+  renderAdvancedAction() {
+    return this.advanced.renderAction();
+  }
+
+  private renderArchiveAction(inline = true, choice = false): TemplateResult {
     const state = this.readState();
-    if (state.selectionCount > 1) {
-      return nothing;
+    const { session, selectionCount } = state;
+    if (!choice && selectionCount === 1 && session.hasChildren && !session.archived) {
+      return this.renderSubmenu(
+        "archive",
+        t(session.archiving ? "sessionsView.archiving" : "sessionsView.archiveSession"),
+        icons.archive,
+        this.actionDisabled("toggle-archived", this.actionExtraDisabled("toggle-archived")),
+        state.actionDisabledReasons["toggle-archived"],
+      );
     }
-    return html`
-      ${this.renderItem("fork", t("sessionsView.forkSession"), icons.copy, {
-        shortcut: "f",
-        title: state.forkFromLastCompleted ? t("sessionsView.forkFromLastCompleted") : undefined,
-      })}
-      ${this.renderSubmenu("copy", t("common.copy"), icons.copy)}
-      ${
-        state.navigationAllowed || state.worktreePath || state.renderOpenInExtra
-          ? this.renderSubmenu("open-in", t("sessionsView.openInEditorMenu"), icons.externalLink)
-          : nothing
-      }
-    `;
+    return this.renderItem(
+      "toggle-archived",
+      t(
+        session.archiving
+          ? "sessionsView.archiving"
+          : selectionCount > 1
+            ? session.archived
+              ? "sessionsView.restoreSessionCount"
+              : "sessionsView.archiveSessionCount"
+            : session.archived
+              ? "sessionsView.restoreSession"
+              : !choice
+                ? "sessionsView.archiveSession"
+                : "sessionsView.archiveSessionOnly",
+        { count: String(selectionCount) },
+      ),
+      session.archived ? icons.archiveRestore : icons.archive,
+      { inline, shortcut: "a" },
+    );
   }
 
   private renderGroupAction() {
     const state = this.readState();
     const batch = state.selectionCount > 1;
     const count = String(state.selectionCount);
-    if (state.session.isChild === true) {
-      return nothing;
-    }
     const label = batch
       ? t("sessionsView.moveToGroupMenuCount", { count })
       : t("sessionsView.moveToGroupMenu");
@@ -507,30 +638,55 @@ export class SessionMenuActions {
     );
   }
 
-  renderDeleteAction() {
+  renderDeleteAction(inline = true) {
     const state = this.readState();
     const label =
       state.selectionCount > 1
         ? t("sessionsView.deleteSessionCount", { count: String(state.selectionCount) })
         : t("sessionsView.deleteSessionMenu");
-    return this.renderItem("delete", label, icons.trash, { shortcut: "d" });
+    return this.renderItem("delete", label, icons.trash, { shortcut: "d", inline });
   }
 
   renderCompactView(view: CompactSessionMenuView) {
     return view === "root"
       ? nothing
-      : renderCompactSessionMenuFrame(this.renderSubmenuBody(view, true));
+      : renderCompactSessionMenuFrame(
+          this.renderSubmenuBody(view, true),
+          view === "icon" || view === "copy" || view === "open-in" ? "advanced" : "root",
+        );
   }
 
-  private renderSubmenuBody(view: Exclude<CompactSessionMenuView, "root">, inline = false) {
+  private renderSubmenuBody(
+    view: Exclude<CompactSessionMenuView, "root">,
+    inline = false,
+  ): TemplateResult {
     const state = this.readState();
     switch (view) {
+      case "advanced":
+        return this.advanced.render(inline);
+      case "archive":
+        return html`${this.renderArchiveAction(inline, true)}
+        ${this.renderItem("archive-tree", t("sessionsView.archiveSessionTree"), icons.archive, { inline })}`;
+      case "snooze":
+        return this.snoozeMenu.renderSubmenu(inline);
       case "copy":
-        return this.renderCopySubmenu(inline);
+        return renderSessionCopyOptions({
+          inline,
+          navigationAllowed: state.navigationAllowed,
+          renderItem: (...args) => this.renderItem(...args),
+        });
       case "open-in":
-        return this.renderOpenSubmenu(inline);
+        return renderSessionOpenOptions({
+          inline,
+          navigationAllowed: state.navigationAllowed,
+          splitAllowed: state.splitAllowed,
+          renderOpenInExtra: state.renderOpenInExtra,
+          worktreePath: state.worktreePath,
+          editorDisabled: this.actionDisabled("open-in"),
+          renderItem: (...args) => this.renderItem(...args),
+        });
       case "icon":
-        return this.renderAppearancePicker(inline);
+        return this.appearance.render(inline);
       case "group":
         return this.renderGroupSubmenu(inline);
       case "assign-owner":
@@ -547,63 +703,6 @@ export class SessionMenuActions {
     }
   }
 
-  private renderCopySubmenu(inline = false) {
-    const state = this.readState();
-    return html`
-      ${
-        state.navigationAllowed
-          ? (
-              [
-                ["copy-session-link", "sessionsView.copySessionLink"],
-                ["copy-session-preview-link", "sessionsView.copySessionPreviewLink"],
-              ] as const
-            ).map(([kind, label]) => this.renderItem(kind, t(label), icons.link, { inline }))
-          : nothing
-      }
-      ${this.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {
-        inline,
-      })}
-      ${this.renderItem("copy-session-id", t("sessionsView.copySessionId"), icons.copy, { inline })}
-    `;
-  }
-
-  private renderOpenSubmenu(inline = false) {
-    const state = this.readState();
-    return html`
-      ${
-        state.navigationAllowed
-          ? (
-              [
-                ["open-new-tab", "sessionsView.openNewTab", icons.externalLink],
-                ["open-new-window", "sessionsView.openNewWindow", icons.monitor],
-              ] as const
-            ).map(([kind, label, icon]) => this.renderItem(kind, t(label), icon, { inline }))
-          : nothing
-      }
-      ${
-        state.splitAllowed
-          ? (
-              [
-                ["split-right", "chat.splitView.splitRight", icons.columns2],
-                ["split-below", "sessionsView.splitBelow", icons.panelBottomOpen],
-              ] as const
-            ).map(([kind, label, icon]) => this.renderItem(kind, t(label), icon, { inline }))
-          : nothing
-      }
-      ${state.renderOpenInExtra?.(inline) ?? nothing}
-      ${
-        state.worktreePath
-          ? html`
-              <div slot=${inline ? nothing : "submenu"} class="session-menu__info">
-                ${t("sessionsView.workspaceEditors")}
-              </div>
-              ${renderSessionEditorOptions({ inline, disabled: this.actionDisabled("open-in") })}
-            `
-          : nothing
-      }
-    `;
-  }
-
   private renderGroupSubmenu(inline = false) {
     const state = this.readState();
     return renderSessionGroupOptions({
@@ -615,104 +714,4 @@ export class SessionMenuActions {
       actionTitle: (kind) => state.actionDisabledReasons[kind] ?? nothing,
     });
   }
-
-  private renderAppearancePicker(inline = false) {
-    const state = this.readState();
-    return renderAppearancePicker({
-      inline,
-      allowSvg: true,
-      mode: this.iconPickerMode,
-      currentIcon: state.session.icon,
-      currentColor: state.session.color,
-      colorDisabled: this.actionDisabled("set-color"),
-      colorDisabledReason: state.actionDisabledReasons["set-color"],
-      onSelectColor: (event, color) => {
-        event.stopPropagation();
-        this.runAction({ kind: "set-color", color });
-      },
-      onReset: (event) => {
-        event.stopPropagation();
-        this.runAction({ kind: "reset-appearance" });
-      },
-      customIconValue: this.customIconValue,
-      disabled: this.actionDisabled("set-icon"),
-      disabledReason: state.actionDisabledReasons["set-icon"],
-      onSelect: this.selectIcon,
-      onShowCustom: this.showCustomIconEntry,
-      onBack: this.showIconGrid,
-      onInput: this.updateCustomIconValue,
-      onApply: this.applyCustomIcon,
-      onGridKeydown: handleAppearanceGridKeydown,
-    });
-  }
-
-  private readonly selectIcon = (event: MouseEvent, icon: string | null) => {
-    event.stopPropagation();
-    this.runAction({ kind: "set-icon", icon });
-  };
-
-  private readonly showCustomIconEntry = (event: MouseEvent) => {
-    event.stopPropagation();
-    this.iconPickerMode = "custom";
-    this.customIconValue = "";
-    this.host.requestUpdate();
-    void this.host.updateComplete.then(() => {
-      this.host.querySelector<HTMLTextAreaElement>(".session-menu__icon-custom-input")?.focus();
-    });
-  };
-
-  private readonly showIconGrid = (event?: Event) => {
-    event?.stopPropagation();
-    this.iconPickerMode = "grid";
-    this.customIconValue = "";
-    this.host.requestUpdate();
-    void this.host.updateComplete.then(() => {
-      const custom = this.host.querySelector<HTMLButtonElement>(
-        ".session-menu__icon-choice--custom",
-      );
-      for (const choice of this.host.querySelectorAll<HTMLButtonElement>(
-        ".session-menu__icon-choice",
-      )) {
-        choice.tabIndex = choice === custom ? 0 : -1;
-      }
-      custom?.focus();
-    });
-  };
-
-  private readonly updateCustomIconValue = (event: InputEvent) => {
-    if (event.currentTarget instanceof HTMLTextAreaElement) {
-      this.customIconValue = event.currentTarget.value;
-      this.host.requestUpdate();
-    }
-  };
-
-  private readonly applyCustomIcon = (event?: Event) => {
-    event?.stopPropagation();
-    const icon = normalizeSessionIconValue(this.customIconValue);
-    if (icon) {
-      this.runAction({ kind: "set-icon", icon });
-    }
-  };
-
-  private readonly focusAppearanceOnOpen = (event: CustomEvent<{ item: HTMLElement }>) => {
-    const item = event.currentTarget;
-    if (!(item instanceof HTMLElement) || event.detail.item !== item) {
-      return;
-    }
-    // Web Awesome re-runs submenu setup when grid/custom content replaces the
-    // slot. Only a closed submenu is a user reopen that should reset state.
-    if (item.getAttribute("aria-expanded") === "true") {
-      return;
-    }
-    this.iconPickerMode = "grid";
-    this.customIconValue = "";
-    this.host.requestUpdate();
-    void this.host.updateComplete.then(() =>
-      requestAnimationFrame(() => {
-        item
-          .querySelector<HTMLButtonElement>(".session-menu__appearance button:not(:disabled)")
-          ?.focus();
-      }),
-    );
-  };
 }

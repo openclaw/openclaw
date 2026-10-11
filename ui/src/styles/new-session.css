@@ -203,8 +203,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 .new-session-page__incognito-notice-icon svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.6px;
 }
 
@@ -299,8 +297,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   display: block;
   width: var(--chat-composer-chip-icon, 14px);
   height: var(--chat-composer-chip-icon, 14px);
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.7px;
 }
 
@@ -322,6 +318,12 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 
 .new-session-page__select {
   position: relative;
+}
+
+.new-session-page__hosted-workspace {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 8px;
 }
 
 .new-session-page__select--agent openclaw-agent-select {
@@ -351,7 +353,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__trigger:hover:not(:disabled),
-.new-session-page__trigger[aria-expanded="true"] {
+.new-session-page__trigger[aria-expanded="true"],
+.new-session-page__browser-nav:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
@@ -395,7 +398,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   max-width: 100%;
 }
 
-.new-session-page__trigger-summary {
+.new-session-page__trigger-summary,
+.new-session-page__selected-summary {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
@@ -485,13 +489,15 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 @media (hover: hover) {
-  .session-group-defaults__folder:hover:not(:disabled) {
+  .session-group-defaults__folder:hover:not(:disabled),
+  .session-group-defaults__mode-trigger:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--accent) 35%, var(--input));
     background: color-mix(in srgb, var(--bg-hover) 65%, var(--card));
   }
 }
 
-.session-group-defaults__folder:focus-visible {
+.session-group-defaults__folder:focus-visible,
+.session-group-defaults__mode-trigger:focus-visible {
   outline: none;
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
@@ -548,7 +554,9 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .session-group-defaults__resolved-mode > .new-session-page__target-icon,
-.session-group-defaults__mode-option-icon {
+.session-group-defaults__mode-option-icon,
+.session-group-defaults__mode-trigger .new-session-page__trigger-chevron,
+.new-session-page__target-icon {
   display: inline-flex;
   color: var(--muted);
 }
@@ -580,27 +588,9 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
-@media (hover: hover) {
-  .session-group-defaults__mode-trigger:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--accent) 35%, var(--input));
-    background: color-mix(in srgb, var(--bg-hover) 65%, var(--card));
-  }
-}
-
-.session-group-defaults__mode-trigger:focus-visible {
-  outline: none;
-  border-color: var(--ring);
-  box-shadow: var(--focus-ring);
-}
-
 .session-group-defaults__mode-trigger:disabled {
   cursor: default;
   opacity: 0.6;
-}
-
-.session-group-defaults__mode-trigger .new-session-page__trigger-chevron {
-  display: inline-flex;
-  color: var(--muted);
 }
 
 .session-group-defaults__mode-option {
@@ -624,14 +614,18 @@ wa-popover.new-session-page__select {
   --max-width: min(320px, calc(100vw - 24px));
 }
 
-wa-popover.new-session-page__select::part(body) {
-  min-width: 224px;
-  max-width: min(320px, calc(100vw - 24px));
+wa-popover.new-session-page__select::part(body),
+.new-session-page__branch-popup::part(popup) {
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
+}
+
+wa-popover.new-session-page__select::part(body) {
+  min-width: 224px;
+  max-width: min(320px, calc(100vw - 24px));
 }
 
 .new-session-page__menu-title {
@@ -725,14 +719,6 @@ wa-popover.new-session-page__picker-popover
   width: 100%;
 }
 
-.new-session-page__branch-popup::part(popup) {
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-}
-
 .new-session-page__branch-suggestions {
   display: grid;
   gap: 2px;
@@ -789,8 +775,9 @@ wa-popover.new-session-page__project-popover {
   --max-width: min(420px, calc(100vw - 24px));
 }
 
-wa-popover.new-session-page__project-popover::part(body) {
-  width: min(420px, calc(100vw - 24px));
+wa-popover.new-session-page__project-popover::part(body),
+wa-popover.new-session-page__where-popover::part(body) {
+  width: var(--max-width);
   max-width: none;
   padding: 0;
   overflow: hidden;
@@ -807,13 +794,6 @@ wa-popover.new-session-page__project-popover::part(body) {
 /* Destination search and mode controls stay visible while the flat inventory scrolls. */
 wa-popover.new-session-page__where-popover {
   --max-width: min(360px, calc(100vw - 24px));
-}
-
-wa-popover.new-session-page__where-popover::part(body) {
-  width: min(360px, calc(100vw - 24px));
-  max-width: none;
-  padding: 0;
-  overflow: hidden;
 }
 
 .new-session-page__environment-picker {
@@ -835,11 +815,8 @@ wa-popover.new-session-page__where-popover::part(body) {
   border-radius: var(--menu-item-radius);
 }
 
-.new-session-page__environment-search:focus-within {
-  background: var(--bg-hover);
-}
-
-.new-session-page__environment-search svg {
+.new-session-page__environment-search svg,
+.new-session-page__connect-device svg {
   display: block;
   width: 14px;
   height: 14px;
@@ -880,16 +857,14 @@ wa-popover.new-session-page__where-popover::part(body) {
   width: 20px;
 }
 
-.new-session-page__environment-list--automatic .new-session-page__environment-option {
-  opacity: 0.5;
-}
-
 .new-session-page__device-icon {
   display: inline-flex;
 }
 
 .new-session-page__environment-option .session-menu__icon,
-.new-session-page__environment-option .session-menu__icon svg {
+.new-session-page__environment-option .session-menu__icon svg,
+.new-session-page__card-icon svg,
+.new-session-page__submenu-chevron svg {
   width: 14px;
   height: 14px;
 }
@@ -921,11 +896,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 .new-session-page__menu-chevron svg {
   width: 13px;
   height: 13px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .connect-machine-dialog {
@@ -962,8 +933,8 @@ wa-popover.new-session-page__where-popover::part(body) {
 
 .connect-machine-dialog .login-gate__command code {
   min-width: 0;
-  overflow-x: auto;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   user-select: all;
 }
 
@@ -979,13 +950,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__start-submit.new-session-page__start-submit--busy svg {
-  animation: new-session-start-spin 2.25s linear infinite;
-}
-
-@keyframes new-session-start-spin {
-  to {
-    transform: rotate(1turn);
-  }
+  animation: btn-spinner-spin 2.25s linear infinite;
 }
 
 .new-session-page__start-submit--blocked {
@@ -1044,11 +1009,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   }
 }
 
-.new-session-page__target-icon {
-  display: inline-flex;
-  color: var(--muted);
-}
-
 .new-session-page__browser-nav {
   display: inline-flex;
   align-items: center;
@@ -1060,11 +1020,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
-}
-
-.new-session-page__browser-nav:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
 }
 
 .new-session-page__browser-nav:disabled {
@@ -1129,10 +1084,7 @@ wa-popover.new-session-page__where-popover::part(body) {
   cursor: var(--cursor-action);
 }
 
-.new-session-page__browser-entry:hover {
-  background: var(--bg-hover);
-}
-
+.new-session-page__browser-entry:hover,
 .new-session-page__browser-entry--active {
   background: var(--bg-hover);
 }
@@ -1199,11 +1151,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 .new-session-page__alert-icon svg {
   width: 15px;
   height: 15px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .new-session-page__alert-message {
@@ -1213,36 +1161,31 @@ wa-popover.new-session-page__where-popover::part(body) {
   overflow-wrap: anywhere;
 }
 
-.new-session-page__browser-use {
+.new-session-page__browser-use,
+.new-session-page__browser-register {
   padding: 6px 14px;
-  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: var(--primary);
-  color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 600;
   cursor: var(--cursor-action);
 }
 
-.new-session-page__browser-use:disabled {
+.new-session-page__browser-use {
+  border: 1px solid transparent;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.new-session-page__browser-use:disabled,
+.new-session-page__browser-register:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
 .new-session-page__browser-register {
-  padding: 6px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: var(--cursor-action);
-}
-
-.new-session-page__browser-register:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* Phones (and short landscape): match the chat thread's mobile inset, and
@@ -1487,10 +1430,6 @@ wa-popover.new-session-page__where-popover::part(body) {
     height: 14px;
   }
 
-  .new-session-page__composer.agent-chat__composer-shell {
-    margin-top: 0;
-  }
-
   .new-session-page__incognito-notice {
     align-items: flex-start;
     width: calc(100% - 2 * var(--chat-mobile-edge-inset));
@@ -1539,11 +1478,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   flex: 0 0 14px;
 }
 
-.new-session-page__card-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
 .new-session-page__environment-card code {
   font-family: var(--mono);
   font-size: inherit;
@@ -1581,10 +1515,7 @@ wa-popover.new-session-page__where-popover::part(body) {
   gap: 2px;
 }
 
-.new-session-page__cloud-choice-list .session-menu__text {
-  flex: 0 1 auto;
-}
-
+.new-session-page__cloud-choice-list .session-menu__text,
 .new-session-page__cloud-choice-list .session-menu__sub {
   flex: 0 1 auto;
 }
@@ -1595,14 +1526,9 @@ wa-popover.new-session-page__where-popover::part(body) {
 
 .new-session-page__selected-summary {
   display: block;
-  min-width: 0;
   font-size: 11px;
   margin-left: 8px;
-  color: var(--muted);
   font-weight: 400;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .new-session-page__environment-option .session-menu__text:has(.new-session-page__selected-summary) {
@@ -1625,11 +1551,6 @@ wa-popover.new-session-page__where-popover::part(body) {
   display: flex;
   flex: 0 0 14px;
   color: var(--muted);
-}
-
-.new-session-page__submenu-chevron svg {
-  width: 14px;
-  height: 14px;
 }
 
 .new-session-page__devices-heading {
@@ -1657,12 +1578,6 @@ wa-popover.new-session-page__where-popover::part(body) {
 
 .new-session-page__connect-device:hover {
   background: var(--bg-hover);
-}
-
-.new-session-page__connect-device svg {
-  display: block;
-  width: 14px;
-  height: 14px;
 }
 
 .new-session-page__cloud-choice-list + .new-session-page__environment-heading {

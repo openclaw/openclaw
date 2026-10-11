@@ -10,6 +10,54 @@ import {
 
 type DropdownElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
 const domRoots = ["light", "shadow"] as const;
+type Lifecycle = "show" | "hide" | "after-hide" | "reposition";
+
+function rendered(element: DropdownElement) {
+  return element.updateComplete;
+}
+
+function lifecycleEvent(phase: Lifecycle, cancelable = false) {
+  return new CustomEvent(`wa-${phase}`, { bubbles: true, composed: true, cancelable });
+}
+
+function dispatchLifecycle(element: EventTarget, phase: Lifecycle, cancelable = false) {
+  return element.dispatchEvent(lifecycleEvent(phase, cancelable));
+}
+
+function onLifecycle(
+  element: EventTarget,
+  phase: Lifecycle,
+  listener: EventListener,
+  options?: AddEventListenerOptions,
+) {
+  const type = `wa-${phase}`;
+  element.addEventListener(type, listener, options);
+  return () => element.removeEventListener(type, listener, options);
+}
+
+function menuLabel(element: Element, submenu = false) {
+  return element.shadowRoot
+    ?.querySelector(submenu ? '[part="submenu"]' : '[part="menu"]')
+    ?.getAttribute("aria-label");
+}
+
+function expectMenuInteractive(dropdown: Element, interactive: boolean) {
+  expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.hasAttribute("inert")).toBe(
+    !interactive,
+  );
+}
+
+function announceSubmenuOpening(item: Element) {
+  item.dispatchEvent(
+    new CustomEvent("submenu-opening", { bubbles: true, composed: true, detail: { item } }),
+  );
+}
+
+async function labelsSettled() {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
 
 async function createDropdown(label?: string, domRoot: (typeof domRoots)[number] = "light") {
   const dropdown = document.createElement("wa-dropdown") as DropdownElement;
@@ -27,8 +75,8 @@ async function createDropdown(label?: string, domRoot: (typeof domRoots)[number]
       ? document.body.appendChild(document.createElement("div")).attachShadow({ mode: "open" })
       : document.body;
   root.append(dropdown);
-  await dropdown.updateComplete;
-  dropdown.dispatchEvent(new CustomEvent("wa-show", { bubbles: true, composed: true }));
+  await rendered(dropdown);
+  dispatchLifecycle(dropdown, "show");
   return { dropdown, trigger };
 }
 
@@ -47,19 +95,11 @@ async function createSubmenuDropdown(itemLabel = "Specific owner") {
   item.append(owner);
   dropdown.append(trigger, item);
   document.body.append(dropdown);
-  dropdown.dispatchEvent(new CustomEvent("wa-show", { bubbles: true, composed: true }));
-  await Promise.all([dropdown.updateComplete, item.updateComplete]);
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
-  await item.updateComplete;
-  item.dispatchEvent(
-    new CustomEvent("submenu-opening", {
-      bubbles: true,
-      composed: true,
-      detail: { item },
-    }),
-  );
+  dispatchLifecycle(dropdown, "show");
+  await Promise.all([rendered(dropdown), rendered(item)]);
+  await labelsSettled();
+  await rendered(item);
+  announceSubmenuOpening(item);
   await Promise.resolve();
   return { dropdown, item };
 }
@@ -70,68 +110,39 @@ describe("Web Awesome adapters", () => {
   it.each(domRoots)("syncs an explicit menu label only while open in %s DOM", async (domRoot) => {
     const { dropdown } = await createDropdown("Message actions", domRoot);
 
-    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
-      "Message actions",
-    );
+    expect(menuLabel(dropdown)).toBe("Message actions");
 
     dropdown.setAttribute("aria-label", "Updated actions");
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
-      "Updated actions",
-    );
-    dropdown.dispatchEvent(new Event("wa-after-hide", { bubbles: true, composed: true }));
+    await labelsSettled();
+    expect(menuLabel(dropdown)).toBe("Updated actions");
+    dispatchLifecycle(dropdown, "after-hide");
     dropdown.setAttribute("aria-label", "Closed actions");
     await Promise.resolve();
-    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
-      "Updated actions",
-    );
+    expect(menuLabel(dropdown)).toBe("Updated actions");
   });
 
   it("labels a dropdown menu from its trigger", async () => {
     const { dropdown } = await createDropdown();
 
-    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
-      "Actions",
-    );
+    expect(menuLabel(dropdown)).toBe("Actions");
   });
 
   it("labels a submenu from its parent item", async () => {
     const { item } = await createSubmenuDropdown("Specific owner: Ada");
 
-    expect(item.shadowRoot?.querySelector('[part="submenu"]')?.getAttribute("aria-label")).toBe(
-      "Specific owner: Ada",
-    );
+    expect(menuLabel(item, true)).toBe("Specific owner: Ada");
   });
 
   it.each(domRoots)("makes closing menus inert and restores them in %s DOM", async (domRoot) => {
     const { dropdown } = await createDropdown(undefined, domRoot);
-    const menu = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-    expect(menu?.hasAttribute("inert")).toBe(false);
+    expectMenuInteractive(dropdown, true);
 
-    dropdown.dispatchEvent(
-      new Event("wa-hide", { bubbles: true, cancelable: true, composed: true }),
-    );
+    dispatchLifecycle(dropdown, "hide", true);
 
     await Promise.resolve();
-    expect(menu?.hasAttribute("inert")).toBe(true);
-    dropdown.dispatchEvent(
-      new Event("wa-show", { bubbles: true, cancelable: true, composed: true }),
-    );
-    expect(menu?.hasAttribute("inert")).toBe(false);
-  });
-
-  it("keeps a canceled dropdown hide interactive", async () => {
-    const { dropdown } = await createDropdown();
-    dropdown.addEventListener("wa-hide", (event) => event.preventDefault(), { once: true });
-
-    dropdown.dispatchEvent(
-      new Event("wa-hide", { bubbles: true, cancelable: true, composed: true }),
-    );
-
-    await Promise.resolve();
-    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.hasAttribute("inert")).toBe(false);
+    expectMenuInteractive(dropdown, false);
+    dispatchLifecycle(dropdown, "show", true);
+    expectMenuInteractive(dropdown, true);
   });
 
   it("keeps a dropdown interactive when a later document listener cancels its hide", async () => {
@@ -141,22 +152,15 @@ describe("Web Awesome adapters", () => {
         event.preventDefault();
       }
     };
-    document.addEventListener("wa-hide", cancelHide);
+    const stopCanceling = onLifecycle(document, "hide", cancelHide);
 
     try {
-      const hideEvent = new Event("wa-hide", {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-      });
-      expect(dropdown.dispatchEvent(hideEvent)).toBe(false);
+      expect(dispatchLifecycle(dropdown, "hide", true)).toBe(false);
       await Promise.resolve();
 
-      expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.hasAttribute("inert")).toBe(
-        false,
-      );
+      expectMenuInteractive(dropdown, true);
     } finally {
-      document.removeEventListener("wa-hide", cancelHide);
+      stopCanceling();
     }
   });
 
@@ -164,14 +168,14 @@ describe("Web Awesome adapters", () => {
     const { dropdown } = await createDropdown();
     dropdown.addEventListener("keydown", trackDropdownKeyboardDismissal);
 
-    expect(consumeDropdownKeyboardDismissal(new CustomEvent("wa-after-hide"))).toBe(false);
+    expect(consumeDropdownKeyboardDismissal(lifecycleEvent("after-hide"))).toBe(false);
 
     dropdown.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     let restoreFocus = false;
-    dropdown.addEventListener("wa-after-hide", (event) => {
+    onLifecycle(dropdown, "after-hide", (event) => {
       restoreFocus = consumeDropdownKeyboardDismissal(event);
     });
-    dropdown.dispatchEvent(new CustomEvent("wa-after-hide"));
+    dispatchLifecycle(dropdown, "after-hide");
     expect(restoreFocus).toBe(true);
   });
 
@@ -194,7 +198,7 @@ describe("Web Awesome adapters", () => {
     document.body.append(item);
 
     syncDropdownItemRadio(item, true);
-    await item.updateComplete;
+    await rendered(item);
     await Promise.resolve();
 
     expect(item.getAttribute("role")).toBe("menuitemradio");
@@ -239,22 +243,22 @@ describe("Web Awesome popup lifecycle", () => {
         popup.active = false;
       }
     });
-    popup.addEventListener("wa-reposition", onReposition, { once: true });
+    onLifecycle(popup, "reposition", onReposition, { once: true });
     document.body.append(anchor, replacement, newest, popup);
-    await popup.updateComplete;
+    await rendered(popup);
     await vi.advanceTimersByTimeAsync(16);
 
     if (scenario === "overlapping anchor changes") {
       popup.anchor = replacement;
-      await popup.updateComplete;
+      await rendered(popup);
       popup.anchor = newest;
-      await popup.updateComplete;
+      await rendered(popup);
       await vi.advanceTimersByTimeAsync(16);
     }
 
     expect(onReposition).toHaveBeenCalledOnce();
     popup.remove();
-    await popup.updateComplete;
+    await rendered(popup);
     await vi.advanceTimersByTimeAsync(16);
 
     const added = new Set(
@@ -296,13 +300,13 @@ describe("Web Awesome popup lifecycle", () => {
       popup.anchor = anchor;
       popup.active = true;
       const repositioned = vi.fn();
-      popup.addEventListener("wa-reposition", repositioned);
+      onLifecycle(popup, "reposition", repositioned);
       const positioned = new Promise<void>((resolve) => {
-        popup.addEventListener("wa-reposition", () => resolve(), { once: true });
+        onLifecycle(popup, "reposition", () => resolve(), { once: true });
       });
       try {
         document.body.append(anchor, popup);
-        await popup.updateComplete;
+        await rendered(popup);
         await positioned;
         repositioned.mockClear();
         reposition.mockClear();
@@ -311,12 +315,12 @@ describe("Web Awesome popup lifecycle", () => {
         expect(reposition).toHaveBeenCalled();
 
         if (transition === "reposition event") {
-          popup.addEventListener("wa-reposition", () => popup.remove(), { once: true });
+          onLifecycle(popup, "reposition", () => popup.remove(), { once: true });
         }
         // Reactive changes can coalesce before the next Lit update.
         popup.active = false;
         popup.active = true;
-        await popup.updateComplete;
+        await rendered(popup);
         popup.remove();
         const pending = [...frames.values()];
         frames.clear();

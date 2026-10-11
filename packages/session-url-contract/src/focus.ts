@@ -1,3 +1,4 @@
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeControlUiBasePath } from "./grammar.js";
 
 const FOCUS_SEGMENT = "/focus";
@@ -56,21 +57,14 @@ function normalizePathname(pathname: string): string {
 }
 
 function splitPathSuffix(value: string): { pathname: string; suffix: string } {
-  const queryIndex = value.indexOf("?");
-  const hashIndex = value.indexOf("#");
-  const suffixIndex = [queryIndex, hashIndex]
-    .filter((index) => index >= 0)
-    .reduce((first, index) => Math.min(first, index), value.length);
+  const delimiter = value.search(/[?#]/u);
+  const suffixIndex = delimiter < 0 ? value.length : delimiter;
   return { pathname: value.slice(0, suffixIndex), suffix: value.slice(suffixIndex) };
-}
-
-function nonEmptyValue(value: string | null | undefined): string | null {
-  return value && value.trim() ? value : null;
 }
 
 function decodeFocusValue(segment: string): { ok: true; value: string | null } | { ok: false } {
   try {
-    return { ok: true, value: nonEmptyValue(decodeURIComponent(segment)) };
+    return { ok: true, value: readNonBlankString(decodeURIComponent(segment)) ?? null };
   } catch {
     return { ok: false };
   }
@@ -126,14 +120,7 @@ export function inferControlUiFocusBasePath(pathname: string): string | null {
         (rest[selectorIndex] === "source" || rest[selectorIndex] === "session"))
     );
   };
-  let focusIndex = focusIndexes.at(-1) ?? 0;
-  for (let index = focusIndexes.length - 1; index >= 0; index -= 1) {
-    const candidate = focusIndexes[index];
-    if (candidate !== undefined && supportsSuffix(candidate)) {
-      focusIndex = candidate;
-      break;
-    }
-  }
+  const focusIndex = focusIndexes.findLast(supportsSuffix) ?? focusIndexes.at(-1) ?? 0;
   return normalizeControlUiBasePath(segments.slice(0, focusIndex).join("/"));
 }
 
@@ -176,8 +163,8 @@ export function buildControlUiFocusPath(
   }
   if (target.kind === "desktop") {
     const control = target.control === true ? "/control" : "";
-    const source = nonEmptyValue(target.source);
-    const session = nonEmptyValue(target.session);
+    const source = readNonBlankString(target.source);
+    const session = readNonBlankString(target.session);
     const selector = source
       ? `/source/${encodeURIComponent(source)}`
       : session

@@ -7,6 +7,7 @@ import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts
 import { renderWorkGroupSummary } from "./chat-message-stream.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
 import { renderRawOutputToggle } from "./chat-tool-content.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
@@ -124,9 +125,10 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
         );
       };
       draw();
+      await settleToolBridges(container);
       const button = container.querySelector<HTMLButtonElement>(".chat-inline-disclosure")!;
       const label = (button.querySelector<HTMLElement>(
-        ".chat-activity-group__label, .chat-tool-msg-summary__label",
+        ".chat-activity-group__label, .chat-tool-msg-summary__label, .chat-tool-msg-summary__names",
       ) ?? button.querySelector<HTMLElement>("span"))!;
       expect(button.getAttribute("aria-expanded")).toBe("false");
       // Real pointer events exercise browser word selection before the second click.
@@ -170,6 +172,7 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
       `,
       container,
     );
+    await settleToolBridges(container);
     const prose = container.querySelector<HTMLElement>(".chat-text p")!;
     await userEvent.dblClick(prose);
     expect(window.getSelection()?.toString()).not.toBe("");

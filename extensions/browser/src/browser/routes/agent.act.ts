@@ -32,6 +32,7 @@ import {
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 import { isActKind } from "./agent.act.shared.js";
+import { createTabRouteRegistrar } from "./agent.prepared.js";
 import {
   browserNavigationPolicyForProfile,
   readBody,
@@ -423,30 +424,26 @@ export function registerBrowserAgentActRoutes(
             if (action.kind === "close" || result.aborted?.reason === "closed") {
               clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
             }
-            switch (action.kind) {
-              case "batch":
-                return await jsonOk(
-                  {
-                    results: result.results ?? [],
-                    ...(result.aborted ? { aborted: result.aborted } : {}),
-                    ...(downloads ? { downloads } : {}),
-                  },
-                  {
-                    ...resultTargetOptions,
-                    resolveCurrentTarget: result.aborted?.reason !== "closed",
-                  },
-                );
-              case "evaluate":
-                return await jsonOk(
-                  { result: result.result, ...(downloads ? { downloads } : {}) },
-                  resultTargetOptions,
-                );
-              case "resize":
-              case "close":
-                return await jsonOk(downloads ? { downloads } : undefined);
-              default:
-                return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
+            if (action.kind === "batch") {
+              return await jsonOk(
+                {
+                  results: result.results ?? [],
+                  ...(result.aborted ? { aborted: result.aborted } : {}),
+                  ...(downloads ? { downloads } : {}),
+                },
+                {
+                  ...resultTargetOptions,
+                  resolveCurrentTarget: result.aborted?.reason !== "closed",
+                },
+              );
             }
+            return await jsonOk(
+              {
+                ...(action.kind === "evaluate" ? { result: result.result } : {}),
+                ...(downloads ? { downloads } : {}),
+              },
+              action.kind === "resize" || action.kind === "close" ? undefined : resultTargetOptions,
+            );
           } catch (error) {
             verificationDeadline?.throwIfAborted();
             requestDeadline?.throwIfAborted();
@@ -465,88 +462,66 @@ export function registerBrowserAgentActRoutes(
   registerBrowserAgentActHookRoutes(app, ctx);
   registerBrowserAgentActDownloadRoutes(app, ctx);
 
-  app.post("/response/body", async (req, res) => {
-    const body = readBody(req);
-    const targetId = normalizeOptionalString(body.targetId);
+  const register = createTabRouteRegistrar(app, ctx);
+  register("/response/body", (body, res) => {
     const url = toStringOrEmpty(body.url);
-    let timeoutMs: number | undefined;
-    let maxChars: number | undefined;
-    try {
-      timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
-      maxChars = readRoutePositiveInteger(body.maxChars, "maxChars");
-    } catch (err) {
-      return jsonError(res, 400, formatErrorMessage(err));
-    }
+    const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+    const maxChars = readRoutePositiveInteger(body.maxChars, "maxChars");
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
 
-    await withRouteTabContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      enforceCurrentUrlAllowed: true,
-      run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
-        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
-        }
-        const pw = await requirePwAi(res, "response body");
-        if (!pw) {
-          return;
-        }
-        const result = await pw.responseBodyViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          signal,
-          url,
-          timeoutMs: timeoutMs ?? undefined,
-          maxChars: maxChars ?? undefined,
-        });
-        signal.throwIfAborted();
-        const currentUrl = await resolveTabUrl(tab.url);
-        res.json({
-          ok: true,
-          targetId: tab.targetId,
-          ...(currentUrl ? { url: currentUrl } : {}),
-          response: result,
-        });
-      },
-    });
+    return async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
+      if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+        return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
+      }
+      const pw = await requirePwAi(res, "response body");
+      if (!pw) {
+        return;
+      }
+      const result = await pw.responseBodyViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        signal,
+        url,
+        timeoutMs: timeoutMs ?? undefined,
+        maxChars: maxChars ?? undefined,
+      });
+      signal.throwIfAborted();
+      const currentUrl = await resolveTabUrl(tab.url);
+      res.json({
+        ok: true,
+        targetId: tab.targetId,
+        ...(currentUrl ? { url: currentUrl } : {}),
+        response: result,
+      });
+    };
   });
 
-  app.post("/highlight", async (req, res) => {
-    const body = readBody(req);
-    const targetId = normalizeOptionalString(body.targetId);
+  register("/highlight", (body, res) => {
     const ref = toStringOrEmpty(body.ref);
     if (!ref) {
       return jsonError(res, 400, "ref is required");
     }
 
-    await withRouteTabContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      enforceCurrentUrlAllowed: true,
-      run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
-        const jsonOk = async () => {
-          const currentUrl = await resolveTabUrl(tab.url);
-          return res.json({
-            ok: true,
-            targetId: tab.targetId,
-            ...(currentUrl ? { url: currentUrl } : {}),
-          });
-        };
-        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          await evaluateChromeMcpScript({
-            profileName: profileCtx.profile.name,
-            profile: profileCtx.profile,
-            targetId: tab.targetId,
-            args: [ref],
-            timeoutMs: ctx.state().resolved.actionTimeoutMs,
-            signal,
-            fn: `(el) => {
+    return async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
+      const jsonOk = async () => {
+        const currentUrl = await resolveTabUrl(tab.url);
+        return res.json({
+          ok: true,
+          targetId: tab.targetId,
+          ...(currentUrl ? { url: currentUrl } : {}),
+        });
+      };
+      if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+        await evaluateChromeMcpScript({
+          profileName: profileCtx.profile.name,
+          profile: profileCtx.profile,
+          targetId: tab.targetId,
+          args: [ref],
+          timeoutMs: ctx.state().resolved.actionTimeoutMs,
+          signal,
+          fn: `(el) => {
               if (!(el instanceof Element)) {
                 return false;
               }
@@ -561,20 +536,19 @@ export function registerBrowserAgentActRoutes(
               }, 2000);
               return true;
             }`,
-          });
-          return await jsonOk();
-        }
-        const pw = await requirePwAi(res, "highlight");
-        if (!pw) {
-          return;
-        }
-        await pw.highlightViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          ref,
         });
-        await jsonOk();
-      },
-    });
+        return await jsonOk();
+      }
+      const pw = await requirePwAi(res, "highlight");
+      if (!pw) {
+        return;
+      }
+      await pw.highlightViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        ref,
+      });
+      await jsonOk();
+    };
   });
 }

@@ -1,4 +1,4 @@
-// Formats config validation issues for CLI and diagnostics.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import type { ConfigValidationIssue } from "./types.js";
@@ -20,20 +20,11 @@ type ConfigIssueSummaryOptions = ConfigIssueFormatOptions & {
   maxIssues?: number;
 };
 
-/** Normalize missing or blank config issue paths to the root marker used in CLI output. */
-function normalizeConfigIssuePath(path: string | null | undefined): string {
-  if (typeof path !== "string") {
-    return "<root>";
-  }
-  const trimmed = path.trim();
-  return trimmed ? trimmed : "<root>";
-}
-
 /** Return the public config issue shape with a normalized path and non-empty allowed values. */
 function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
   const hasAllowedValues = Array.isArray(issue.allowedValues) && issue.allowedValues.length > 0;
   const normalized: ConfigValidationIssue = {
-    path: normalizeConfigIssuePath(issue.path),
+    path: normalizeOptionalString(issue.path) ?? "<root>",
     message: issue.message,
     ...(hasAllowedValues ? { allowedValues: issue.allowedValues } : {}),
     ...(hasAllowedValues &&
@@ -63,11 +54,7 @@ function resolveIssueLocationPrefix(
   opts?: ConfigIssueFormatOptions,
 ): string {
   const sourceFile =
-    typeof issue.sourceFile === "string" && issue.sourceFile.trim()
-      ? issue.sourceFile.trim()
-      : typeof opts?.sourceFile === "string" && opts.sourceFile.trim()
-        ? opts.sourceFile.trim()
-        : "";
+    normalizeOptionalString(issue.sourceFile) ?? normalizeOptionalString(opts?.sourceFile);
   if (!sourceFile || typeof issue.line !== "number" || issue.line <= 0) {
     return "";
   }
@@ -90,7 +77,7 @@ export function formatConfigIssueLine(
     : issue.path;
   const path = sanitizeTerminalText(
     opts?.normalizeRoot
-      ? normalizeConfigIssuePath(issuePath)
+      ? (normalizeOptionalString(issuePath) ?? "<root>")
       : typeof issuePath === "string"
         ? issuePath
         : "",

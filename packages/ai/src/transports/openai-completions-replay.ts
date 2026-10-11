@@ -1,9 +1,7 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  isGoogleGemini3FlashModel,
-  isGoogleGemini3ProModel,
-} from "../internal/google-model-family.js";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
+import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
@@ -20,10 +18,6 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
   );
 }
 
-function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
-  return isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id);
-}
-
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_BASE64_RE = /^[A-Za-z0-9+/=]+$/;
 
@@ -35,7 +29,7 @@ function hasGoogleCompatThoughtSignatureTruncationFootprint(value: string): bool
 }
 
 function injectToolCallThoughtSignatures(
-  outgoingMessages: unknown[],
+  outgoingMessages: ChatCompletionMessageParam[],
   context: Context,
   model: OpenAIModeModel,
 ): void {
@@ -43,7 +37,7 @@ function injectToolCallThoughtSignatures(
     return;
   }
   const sigById = new Map<string, string>();
-  const fallbackSig = requiresGoogleCompatToolCallThoughtSignature(model)
+  const fallbackSig = isGoogleGemini3ThinkingLevelModel(model.id)
     ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
     : undefined;
   for (const msg of context.messages ?? []) {
@@ -73,36 +67,22 @@ function injectToolCallThoughtSignatures(
     return;
   }
   for (const message of outgoingMessages) {
-    const toolCalls = (message as { tool_calls?: unknown }).tool_calls;
+    const toolCalls = "tool_calls" in message ? message.tool_calls : undefined;
     if (!Array.isArray(toolCalls)) {
       continue;
     }
-    for (const toolCall of toolCalls as Array<Record<string, unknown>>) {
-      const id = toolCall.id;
-      if (typeof id !== "string") {
-        continue;
-      }
-      let sig: string | undefined = sigById.get(id) ?? fallbackSig;
-      if (typeof sig === "string" && sig.length > 0) {
+    for (const toolCall of toolCalls) {
+      let sig = sigById.get(toolCall.id) ?? fallbackSig;
+      if (sig) {
         const trimmed = sig.trim();
         if (hasGoogleCompatThoughtSignatureTruncationFootprint(trimmed)) {
           sig = fallbackSig;
         }
       }
-      if (typeof sig !== "string" || sig.length === 0) {
+      if (!sig) {
         continue;
       }
-      const extra =
-        toolCall.extra_content && typeof toolCall.extra_content === "object"
-          ? (toolCall.extra_content as Record<string, unknown>)
-          : {};
-      toolCall.extra_content = extra;
-      const google =
-        extra.google && typeof extra.google === "object"
-          ? (extra.google as Record<string, unknown>)
-          : {};
-      extra.google = google;
-      google.thought_signature = sig;
+      Object.assign(toolCall, { extra_content: { google: { thought_signature: sig } } });
     }
   }
 }
@@ -114,13 +94,11 @@ export const COMPLETIONS_REASONING_REPLAY_FIELDS = [
   "reasoning_text",
 ] as const;
 
-function stripCompletionsReasoningReplayFields(record: Record<string, unknown>): void {
-  for (const field of COMPLETIONS_REASONING_REPLAY_FIELDS) {
-    delete record[field];
-  }
-}
+type ReasoningReplayMessage = { role: "assistant" } & Partial<
+  Record<(typeof COMPLETIONS_REASONING_REPLAY_FIELDS)[number], unknown>
+>;
 
-function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>): void {
+function sanitizeOpenRouterReasoningReplayFields(record: ReasoningReplayMessage): void {
   const reasoningDetails = record.reasoning_details;
   if (typeof reasoningDetails === "string") {
     if (reasoningDetails.length > 0 && typeof record.reasoning !== "string") {
@@ -147,15 +125,6 @@ function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>
   ) {
     record.reasoning = reasoningText;
   }
-  delete record.reasoning_text;
-}
-
-function sanitizeReasoningContentReplayFields(record: Record<string, unknown>): void {
-  if ("reasoning_content" in record && typeof record.reasoning_content !== "string") {
-    delete record.reasoning_content;
-  }
-  delete record.reasoning_details;
-  delete record.reasoning;
   delete record.reasoning_text;
 }
 
@@ -260,33 +229,8 @@ function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): bool
 // replay fields, while OpenRouter and DeepSeek-style providers document
 // compatible pass-back contracts. Keep valid provider-owned replay fields, but
 // strip them for stock OpenAI before a follow-up request hits the wire.
-function sanitizeCompletionsReasoningReplayFields(
-  messages: unknown,
-  options: { preserveOpenRouterReasoning: boolean; preserveReasoningContent: boolean },
-): void {
-  if (!Array.isArray(messages)) {
-    return;
-  }
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object") {
-      continue;
-    }
-    const record = msg as Record<string, unknown>;
-    if (record.role !== "assistant") {
-      continue;
-    }
-    if (options.preserveOpenRouterReasoning) {
-      sanitizeOpenRouterReasoningReplayFields(record);
-    } else if (options.preserveReasoningContent) {
-      sanitizeReasoningContentReplayFields(record);
-    } else {
-      stripCompletionsReasoningReplayFields(record);
-    }
-  }
-}
-
 export function applyCompletionsReplay(
-  outgoingMessages: unknown[],
+  outgoingMessages: ChatCompletionMessageParam[],
   context: Context,
   model: OpenAIModeModel,
   compat: {
@@ -295,9 +239,27 @@ export function applyCompletionsReplay(
   },
 ): void {
   injectToolCallThoughtSignatures(outgoingMessages, context, model);
-  sanitizeCompletionsReasoningReplayFields(outgoingMessages, {
-    preserveOpenRouterReasoning:
-      compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model),
-    preserveReasoningContent: shouldPreserveReasoningContentReplay(model, compat),
-  });
+  const preserveOpenRouterReasoning =
+    compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model);
+  const preserveReasoningContent = shouldPreserveReasoningContentReplay(model, compat);
+  for (const message of outgoingMessages) {
+    if (message.role !== "assistant") {
+      continue;
+    }
+    if (preserveOpenRouterReasoning) {
+      sanitizeOpenRouterReasoningReplayFields(message);
+    } else {
+      const record: ReasoningReplayMessage = message;
+      for (const field of COMPLETIONS_REASONING_REPLAY_FIELDS) {
+        if (
+          preserveReasoningContent &&
+          field === "reasoning_content" &&
+          typeof record[field] === "string"
+        ) {
+          continue;
+        }
+        delete record[field];
+      }
+    }
+  }
 }

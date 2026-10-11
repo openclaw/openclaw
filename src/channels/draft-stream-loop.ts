@@ -1,27 +1,14 @@
-/**
- * Throttled draft stream loop.
- *
- * Sends the latest pending draft text with single-flight edit semantics.
- */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 /** Throttled draft-stream sender used by channels that edit in-progress replies. */
-export type DraftStreamLoop<T = string> = {
-  update: (value: T) => void;
-  flush: () => Promise<void>;
-  stop: () => void;
-  resetPending: () => void;
-  resetThrottleWindow: () => void;
-  waitForInFlight: () => Promise<void>;
+export type DraftStreamLoop<T = string> = Omit<
+  ReturnType<typeof createDraftStreamLoop<T>>,
+  "takePending"
+> & {
   /** Removes queued (not in-flight) text atomically and cancels its scheduled flush. */
   takePending?: () => T;
 };
 
-type CreatedDraftStreamLoop<T> = DraftStreamLoop<T> & {
-  takePending: () => T;
-};
-
-/** Creates a single-flight draft stream loop that preserves the newest pending value. */
 export function createDraftStreamLoop<T = string>(params: {
   throttleMs: number;
   /** Keep background updates arriving during a send in the next throttle window. */
@@ -32,7 +19,7 @@ export function createDraftStreamLoop<T = string>(params: {
   emptyValue?: T;
   isEmpty?: (value: T) => boolean;
   onBackgroundFlushError?: (err: unknown) => void;
-}): CreatedDraftStreamLoop<T> {
+}) {
   const throttleMs = resolveTimerTimeoutMs(params.throttleMs, 0, 0);
   const emptyValue = params.emptyValue ?? ("" as T);
   const isEmpty =
@@ -47,10 +34,8 @@ export function createDraftStreamLoop<T = string>(params: {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const clearTimer = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
 
   const retainUnsentValue = (value: T, background: boolean) => {

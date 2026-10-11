@@ -7,7 +7,7 @@ import {
   uniqueStrings,
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 
 export type BundledPluginPathPair = {
   source: string;
@@ -123,68 +123,41 @@ export function resolveBundledPluginScanDir(params: {
   const runtimeDir = path.join(params.packageRoot, "dist-runtime", "extensions");
   const builtDir = path.join(params.packageRoot, "dist", "extensions");
   if (params.runningFromBuiltArtifact) {
-    if (fs.existsSync(builtDir)) {
-      return builtDir;
-    }
-    if (fs.existsSync(runtimeDir)) {
-      return runtimeDir;
-    }
+    return [builtDir, runtimeDir, sourceDir].find((candidate) => fs.existsSync(candidate));
   }
   if (fs.existsSync(sourceDir)) {
     return sourceDir;
   }
-  if (fs.existsSync(runtimeDir) && fs.existsSync(builtDir)) {
-    return runtimeDir;
-  }
-  if (fs.existsSync(builtDir)) {
-    return builtDir;
-  }
-  return undefined;
+  return fs.existsSync(builtDir) ? (fs.existsSync(runtimeDir) ? runtimeDir : builtDir) : undefined;
 }
 
-function listBundledPluginEntryBaseDirs(params: {
+function listBundledPluginEntryDirectories(params: {
   rootDir: string;
   pluginDirName?: string;
   scanDir?: string;
-}): string[] {
-  const scanPluginRoot = params.scanDir
-    ? path.resolve(params.scanDir, params.pluginDirName ?? "")
-    : undefined;
-  const baseDirs = [
-    ...(scanPluginRoot ? [path.resolve(scanPluginRoot, "dist")] : []),
-    ...(scanPluginRoot ? [scanPluginRoot] : []),
-    path.resolve(params.rootDir, "dist", "extensions", params.pluginDirName ?? ""),
-    path.resolve(params.rootDir, "dist-runtime", "extensions", params.pluginDirName ?? ""),
-    path.resolve(params.rootDir, "extensions", params.pluginDirName ?? "", "dist"),
-    path.resolve(params.rootDir, "extensions", params.pluginDirName ?? ""),
-  ];
-  return uniqueStrings(baseDirs);
-}
-
-function listBundledPluginEntryRoots(params: {
-  rootDir: string;
-  pluginDirName?: string;
-  scanDir?: string;
-}): string[] {
-  const roots = [
-    ...(params.scanDir ? [path.resolve(params.scanDir, params.pluginDirName ?? "")] : []),
-    path.resolve(params.rootDir, "extensions", params.pluginDirName ?? ""),
+}) {
+  const scan = params.scanDir ? [path.resolve(params.scanDir, params.pluginDirName ?? "")] : [];
+  const source = path.resolve(params.rootDir, "extensions", params.pluginDirName ?? "");
+  const built = [
     path.resolve(params.rootDir, "dist", "extensions", params.pluginDirName ?? ""),
     path.resolve(params.rootDir, "dist-runtime", "extensions", params.pluginDirName ?? ""),
   ];
-  return uniqueStrings(roots);
+  return {
+    roots: uniqueStrings([...scan, source, ...built]),
+    baseDirs: uniqueStrings([
+      ...scan.flatMap((root) => [path.resolve(root, "dist"), root]),
+      ...built,
+      path.resolve(source, "dist"),
+      source,
+    ]),
+  };
 }
 
 function listBundledPluginEntrySearchPaths(
   entry: BundledPluginPathPair,
-  params: {
-    rootDir: string;
-    pluginDirName?: string;
-    scanDir?: string;
-  },
+  roots: readonly string[],
 ): string[] {
   const paths: string[] = [];
-  const roots = listBundledPluginEntryRoots(params);
   for (const rawEntry of [entry.built, entry.source]) {
     if (typeof rawEntry !== "string" || rawEntry.length === 0) {
       continue;
@@ -219,16 +192,12 @@ export function resolveBundledPluginGeneratedPath(
   if (!entry) {
     return null;
   }
-  const entryOrder = listBundledPluginEntrySearchPaths(entry, {
+  const { roots, baseDirs } = listBundledPluginEntryDirectories({
     rootDir,
     pluginDirName,
-    ...(scanDir ? { scanDir } : {}),
+    scanDir,
   });
-  const baseDirs = listBundledPluginEntryBaseDirs({
-    rootDir,
-    pluginDirName,
-    ...(scanDir ? { scanDir } : {}),
-  });
+  const entryOrder = listBundledPluginEntrySearchPaths(entry, roots);
   for (const baseDir of baseDirs) {
     for (const entryPath of entryOrder) {
       const candidate = resolveBundledPluginEntryCandidate(baseDir, entryPath);

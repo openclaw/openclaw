@@ -1,4 +1,4 @@
-import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
 import { resolveCodexAppServerAuthAccountCacheKey } from "./app-server/auth-bridge.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./app-server/auth-cache-key.js";
@@ -18,6 +18,7 @@ import {
   canMutateCodexHost,
   CODEX_HOST_INSPECTION_AUTH_ERROR,
   CODEX_NATIVE_EXECUTION_AUTH_ERROR,
+  type CodexCommandContext,
 } from "./command-authorization.js";
 import { handleCodexDiagnosticsFeedback } from "./command-diagnostics.js";
 import {
@@ -31,22 +32,18 @@ import {
 } from "./command-formatters.js";
 import {
   CODEX_NATIVE_CONTROL_SUBCOMMANDS,
+  controlConversationTurn,
   handleComputerUseCommand,
   handleNativeGoal,
   isReadOnlyCodexGoalCommand,
   resolveCodexNativeCommandSandboxBlock,
   returnsBeforeNativeCodexExecution,
-  setConversationFastMode,
   setConversationModel,
-  setConversationPermissions,
+  setConversationPreference,
   startThreadAction,
-  steerConversationTurn,
-  stopConversationTurn,
 } from "./command-handler-actions.js";
 import {
-  buildCodexComputerUseMenuReply,
-  buildCodexFastMenuReply,
-  buildCodexPermissionsMenuReply,
+  buildCodexChoiceMenuReply,
   buildCodexSubcommandPickerReply,
   isMenuVerb,
   splitArgs,
@@ -84,11 +81,11 @@ const CODEX_HOST_INSPECTION_SUBCOMMANDS = new Set([
 ]);
 
 export async function handleCodexSubcommand(
-  ctx: PluginCommandContext,
+  inputCtx: CodexCommandContext,
   options: { pluginConfig?: unknown; deps: CodexCommandDepsOverride },
 ): Promise<PluginCommandResult> {
   const deps = resolveCodexCommandDeps(options.deps);
-  const args = splitArgs(ctx.args);
+  const args = splitArgs(inputCtx.args);
   if (args.length === 0) {
     return buildCodexSubcommandPickerReply();
   }
@@ -97,21 +94,29 @@ export async function handleCodexSubcommand(
   if (normalized === "help") {
     return { text: buildHelp() };
   }
-  if (CODEX_HOST_INSPECTION_SUBCOMMANDS.has(normalized) && !canMutateCodexHost(ctx)) {
+  if (CODEX_HOST_INSPECTION_SUBCOMMANDS.has(normalized) && !canMutateCodexHost(inputCtx)) {
     return { text: CODEX_HOST_INSPECTION_AUTH_ERROR };
   }
   if (
     CODEX_NATIVE_CONTROL_SUBCOMMANDS.has(normalized) &&
     !returnsBeforeNativeCodexExecution(normalized, rest) &&
     !isReadOnlyCodexGoalCommand(normalized, rest) &&
-    !canMutateCodexHost(ctx)
+    !canMutateCodexHost(inputCtx)
   ) {
     return { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR };
   }
-  const sandboxBlock = resolveCodexNativeCommandSandboxBlock(ctx, normalized, rest);
-  if (sandboxBlock) {
-    return { text: sandboxBlock };
+  const nativePolicy = await resolveCodexNativeCommandSandboxBlock(inputCtx, normalized, rest);
+  if (nativePolicy.block) {
+    return { text: nativePolicy.block };
   }
+  const previousPolicyCheck = inputCtx.assertNativePolicyCurrent;
+  const ctx = {
+    ...inputCtx,
+    assertNativePolicyCurrent: () => {
+      previousPolicyCheck?.();
+      nativePolicy.assertCurrent();
+    },
+  };
   const usageCommand = normalized === "unbind" ? "detach" : normalized;
   if (
     rest.length > 0 &&
@@ -273,44 +278,27 @@ export async function handleCodexSubcommand(
   if (normalized === "binding") {
     return { text: await describeConversationBinding(deps, ctx) };
   }
-  if (normalized === "stop") {
-    return { text: await stopConversationTurn(deps, ctx) };
-  }
-  if (normalized === "steer") {
-    return {
-      text: await steerConversationTurn(deps, ctx, rest.join(" ")),
-    };
+  if (normalized === "stop" || normalized === "steer") {
+    return { text: await controlConversationTurn(deps, ctx, normalized, rest.join(" ")) };
   }
   if (normalized === "model") {
     return { text: await setConversationModel(deps, ctx, rest) };
   }
-  if (normalized === "fast") {
+  if (normalized === "fast" || normalized === "permissions") {
     if (isMenuVerb(rest)) {
-      return buildCodexFastMenuReply();
+      return buildCodexChoiceMenuReply(normalized);
     }
-    return { text: await setConversationFastMode(deps, ctx, rest) };
-  }
-  if (normalized === "permissions") {
-    if (isMenuVerb(rest)) {
-      return buildCodexPermissionsMenuReply();
-    }
-    return { text: await setConversationPermissions(deps, ctx, rest) };
+    return { text: await setConversationPreference(deps, ctx, rest, normalized) };
   }
   if (normalized === "compact" || normalized === "review") {
     return { text: await startThreadAction(deps, ctx, options.pluginConfig, normalized, rest) };
   }
   if (normalized === "diagnostics") {
-    return await handleCodexDiagnosticsFeedback(
-      deps,
-      ctx,
-      options.pluginConfig,
-      rest.join(" "),
-      "/codex diagnostics",
-    );
+    return await handleCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, rest.join(" "));
   }
   if (normalized === "computer-use" || normalized === "computeruse") {
     if (isMenuVerb(rest)) {
-      return buildCodexComputerUseMenuReply();
+      return buildCodexChoiceMenuReply("computer-use");
     }
     return {
       text: await handleComputerUseCommand(deps, ctx, options.pluginConfig, rest),

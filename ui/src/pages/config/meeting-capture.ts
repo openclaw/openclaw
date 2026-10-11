@@ -70,9 +70,8 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
       this.connectionAuth = hello?.auth;
     },
   });
-  private readonly subscriptions = new SubscriptionsController(this).watch(
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.runtimeConfig,
-    (config, notify) => config.subscribe(notify),
   );
 
   private get client() {
@@ -258,7 +257,7 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
     } else {
       sources[this.editing] = source;
     }
-    this.context.runtimeConfig.patchForm(["transcripts", "autoStart"], [...sources]);
+    this.context.runtimeConfig.patchForm(["transcripts", "autoStart"], sources);
     this.editSource(null);
   }
 
@@ -418,13 +417,7 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
           typeof source?.title === "string"
             ? source.title
             : (normalizeOptionalString(source?.providerId) ?? t("transcripts.unknown")),
-        description: [
-          provider?.name,
-          source?.accountId,
-          source?.guildId,
-          source?.channelId,
-          source?.meetingUrl,
-        ]
+        description: [provider?.name, ...LOCATOR_FIELDS.map((key) => source?.[key])]
           .filter((value) => typeof value === "string" && value)
           .join(" · "),
         control: html`<button
@@ -577,10 +570,7 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
                     renderSettingsRow({
                       title: item.title ?? item.source.providerId,
                       description: [
-                        item.source.accountId,
-                        item.source.guildId,
-                        item.source.channelId,
-                        item.source.meetingUrl,
+                        ...LOCATOR_FIELDS.map((key) => item.source[key]),
                         item.startDiagnostic
                           ? t(`meetingCapture.startDiagnostics.${item.startDiagnostic}`)
                           : undefined,
@@ -625,16 +615,4 @@ class MeetingCaptureSettings extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-meeting-capture-settings")) {
   customElements.define("openclaw-meeting-capture-settings", MeetingCaptureSettings);
-}
-
-export function renderMeetingCapture(props: {
-  mutationDisabled: boolean;
-  advancedExpanded: boolean;
-  editor: TemplateResult | typeof nothing;
-}) {
-  return html`<openclaw-meeting-capture-settings
-    .mutationDisabled=${props.mutationDisabled}
-    .advancedExpanded=${props.advancedExpanded}
-    .editor=${props.editor}
-  ></openclaw-meeting-capture-settings>`;
 }

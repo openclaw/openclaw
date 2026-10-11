@@ -1,4 +1,3 @@
-/** Admission verdict for explicit Doctor maintenance before mutable repair. */
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
@@ -7,8 +6,10 @@ import { hasGatewayServiceStopUnsafeError } from "../daemon/service-inspection-e
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
+import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import { readStateLeaseProcessOwnerStatus } from "../infra/state-lease-process-owner.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
@@ -16,8 +17,41 @@ import {
   type DoctorMaintenanceRefusal,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
+
+/** Observe the selected installation without bootstrapping it or inheriting a discovery view. */
+export async function readDoctorGatewayOwnerLease(
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
+): Promise<GatewayOwnerLeaseIdentity | undefined> {
+  const options = { env: { ...env }, path: resolveOpenClawStateSqlitePath(env) };
+  const reply = await withArtifactPreservingStateReads(() =>
+    executeExistingOpenClawStateRead(
+      options,
+      { type: "gatewayOwnerLease.read", schemaMaintenance: true },
+      { current: true, signal },
+    ),
+  );
+  signal.throwIfAborted();
+  if (!reply) {
+    return undefined;
+  }
+  if (!reply.ok || reply.type !== "gatewayOwnerLease.read") {
+    throw new Error("Unexpected Doctor Gateway owner lease read result");
+  }
+  // The recorded process may have exited while the reader and its private snapshot settled.
+  return reply.lease
+    ? {
+        ...reply.lease,
+        state: readStateLeaseProcessOwnerStatus(reply.lease, reply.lease.heartbeatAt),
+      }
+    : undefined;
+}
 
 /** Admission has not opened repair writers; deferral cannot authorize any later work. */
 export function classifyDoctorMaintenanceRefusal(error: unknown): DoctorMaintenanceRefusal {
@@ -68,7 +102,10 @@ export async function assertDoctorMaintenanceReady(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   log: (message: string) => void,
-): Promise<void> {
+  databaseTargets?: readonly { path: string; realPath?: string }[],
+): Promise<{ schemaPublicationDeferred: boolean }> {
+  let schemaPublicationDeferred = false;
+  let refusedDatabasePaths: string[] = [];
   const { assertSessionStoreMigrationComplete } =
     await import("../config/sessions/startup-migration.js");
   assertSessionStoreMigrationComplete({ cfg, env, operation: "doctor" });
@@ -78,7 +115,13 @@ export async function assertDoctorMaintenanceReady(
     env,
     config: cfg,
     operation: "doctor",
-    onDeferredSchemaPublication: (publication) => log(publication.message),
+    onDeferredSchemaPublication: (publication) => {
+      schemaPublicationDeferred = true;
+      log(publication.message);
+    },
+    onVerified: (schemas) => {
+      refusedDatabasePaths = schemas.agentRefusals?.flatMap((refusal) => refusal.paths) ?? [];
+    },
     configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(cfg, { env }),
   });
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
@@ -86,23 +129,26 @@ export async function assertDoctorMaintenanceReady(
   const { assertNoPendingLegacyExecApprovals } =
     await import("../infra/exec-approvals-migration-gate.js");
   assertNoPendingLegacyExecApprovals({ operation: "doctor", env });
-}
-
-/** Repair may have committed config before a later diagnostic failed. */
-export async function readDoctorMaintenanceRecoveryConfig(
-  resources: Pick<OpenClawDatabaseMaintenanceScope, "run">,
-  env: NodeJS.ProcessEnv,
-  log: (message: string) => void,
-): Promise<OpenClawConfig> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  return resources.run(async () => {
-    const { config } = await readConfigFileSnapshot({
-      skipPluginValidation: true,
-      observe: false,
-    });
-    await assertDoctorMaintenanceReady(config, env, log);
-    return config;
-  });
+  if (!schemaPublicationDeferred && databaseTargets) {
+    const { completeDoctorMigrationBackups } =
+      await import("./doctor-migration-backup-artifacts.js");
+    try {
+      completeDoctorMigrationBackups(
+        env,
+        databaseTargets
+          .filter(
+            (target) =>
+              !refusedDatabasePaths.some(
+                (refused) => refused === target.path || refused === target.realPath,
+              ),
+          )
+          .map((target) => target.path),
+      );
+    } catch (error) {
+      log(`Migration backups remain protected; completion registration failed: ${String(error)}`);
+    }
+  }
+  return { schemaPublicationDeferred };
 }
 
 export function assertDoctorMaintenanceInspection(

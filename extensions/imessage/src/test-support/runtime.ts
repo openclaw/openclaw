@@ -5,13 +5,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as initialStateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -22,8 +16,9 @@ import { setIMessageRuntime } from "../runtime.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 afterAll(async () => {
-  const { closeOpenClawStateDatabaseAsync } =
+  const { closeOpenClawAgentDatabasesAsync, closeOpenClawStateDatabaseAsync } =
     await import("openclaw/plugin-sdk/sqlite-runtime-testing");
+  await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
 });
 
@@ -35,37 +30,42 @@ function createIMessageTestEnv(): NodeJS.ProcessEnv & { OPENCLAW_STATE_DIR: stri
 }
 
 let imessageTestEnv = createIMessageTestEnv();
+let stateRuntime = initialStateRuntime;
 const reusedStoreCleanups = new Map<string, () => Promise<void>>();
 
 export function createIMessagePluginStateSyncStoreForTest<T>(
   options: OpenKeyedStoreOptions,
 ): PluginStateSyncKeyedStore<T> {
-  return createPluginStateSyncKeyedStoreForTests<T>("imessage", {
+  return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("imessage", {
     ...options,
     env: imessageTestEnv,
   });
 }
 
 export function installIMessageStateRuntimeForTest(): void {
-  closeOpenClawStateDatabaseForTest();
   imessageTestEnv = createIMessageTestEnv();
-  resetPluginStateStoreForTests();
+  stateRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
   setIMessageRuntime({
     state: {
       resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
       openChannelIngressQueue: (
-        options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        options?: Omit<
+          Parameters<typeof stateRuntime.createChannelIngressQueueForTests>[0],
+          "channelId"
+        >,
       ) =>
-        createChannelIngressQueueForTests({
+        stateRuntime.createChannelIngressQueueForTests({
           ...options,
           channelId: "imessage",
           stateDir: options?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStore: ((options) =>
-        createPluginStateKeyedStoreForTests("imessage", {
-          ...options,
-          env: imessageTestEnv,
-        })) as PluginRuntime["state"]["openKeyedStore"],
+      openKeyedStoreV2: ((options) =>
+        stateRuntime
+          .createPluginStateKeyedStoreForTests("imessage", {
+            ...options,
+            env: imessageTestEnv,
+          })
+          .withCurrent({ assertCurrent: () => {} })) as PluginRuntime["state"]["openKeyedStoreV2"],
       openSyncKeyedStore: ((options) =>
         createIMessagePluginStateSyncStoreForTest(
           options,
@@ -97,36 +97,43 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
       await import("openclaw/plugin-sdk/sqlite-runtime-testing");
     // Drain worker-only stores before rotating the fixture state directory.
     await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    stateRuntime.closeOpenClawStateDatabaseForTest();
     imessageTestEnv = createIMessageTestEnv();
   }
   if (!options?.preservePersistentState) {
     reusedStoreCleanups.clear();
   }
-  resetPluginStateStoreForTests({ closeDatabase: !options?.reuseDatabase });
+  stateRuntime.resetPluginStateStoreForTests({ closeDatabase: !options?.reuseDatabase });
   vi.resetModules();
+  // Store factories and their lazy worker admissions must share one module generation.
+  stateRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
   const { setIMessageRuntime: setFreshIMessageRuntime } = await import("../runtime.js");
   setFreshIMessageRuntime({
     state: {
       resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
       openChannelIngressQueue: (
-        queueOptions?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        queueOptions?: Omit<
+          Parameters<typeof stateRuntime.createChannelIngressQueueForTests>[0],
+          "channelId"
+        >,
       ) =>
-        createChannelIngressQueueForTests({
+        stateRuntime.createChannelIngressQueueForTests({
           ...queueOptions,
           channelId: "imessage",
           stateDir: queueOptions?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStore: ((storeOptions) => {
-        const store = createPluginStateKeyedStoreForTests("imessage", {
-          ...storeOptions,
-          env: imessageTestEnv,
-        });
+      openKeyedStoreV2: ((storeOptions) => {
+        const store = stateRuntime
+          .createPluginStateKeyedStoreForTests("imessage", {
+            ...storeOptions,
+            env: imessageTestEnv,
+          })
+          .withCurrent({ assertCurrent: () => {} });
         if (options?.reuseDatabase) {
           reusedStoreCleanups.set(storeOptions.namespace, store.clear);
         }
         return store;
-      }) as PluginRuntime["state"]["openKeyedStore"],
+      }) as PluginRuntime["state"]["openKeyedStoreV2"],
       openSyncKeyedStore: ((storeOptions) =>
         createIMessagePluginStateSyncStoreForTest(
           storeOptions,
@@ -146,22 +153,25 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
 }
 
 export function installIMessageFailingStateRuntimeForTest(): void {
-  closeOpenClawStateDatabaseForTest();
+  stateRuntime.closeOpenClawStateDatabaseForTest();
   imessageTestEnv = createIMessageTestEnv();
   setIMessageRuntime({
     state: {
       resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
       openChannelIngressQueue: (
-        options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        options?: Omit<
+          Parameters<typeof stateRuntime.createChannelIngressQueueForTests>[0],
+          "channelId"
+        >,
       ) =>
-        createChannelIngressQueueForTests({
+        stateRuntime.createChannelIngressQueueForTests({
           ...options,
           channelId: "imessage",
           stateDir: options?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStore: (() => {
+      openKeyedStoreV2: (() => {
         throw new Error("test plugin-state failure");
-      }) as PluginRuntime["state"]["openKeyedStore"],
+      }) as PluginRuntime["state"]["openKeyedStoreV2"],
       openSyncKeyedStore: (() => {
         throw new Error("test plugin-state failure");
       }) as PluginRuntime["state"]["openSyncKeyedStore"],

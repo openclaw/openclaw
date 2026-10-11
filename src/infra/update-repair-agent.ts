@@ -1,8 +1,8 @@
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { renderTriagePrompt } from "../commands/triage-prompt.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   updateRepairBudgetSchema,
   updateRepairValidationSchema,
@@ -58,23 +58,13 @@ async function validateRepair(
   signal: AbortSignal,
 ): Promise<UpdateRepairValidation> {
   signal.throwIfAborted();
-  const pending = params.validate(signal);
-  const cancelled = createDeferredCore<never>();
-  const abort = () =>
-    cancelled.reject(
-      signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)),
-    );
-  try {
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) {
-      abort();
-    }
-    const value = await Promise.race([pending, cancelled.promise]);
-    const parsed = updateRepairValidationSchema.parse(value);
-    return { ...parsed, summary: repairSummary(parsed.summary, params.target) };
-  } finally {
-    signal.removeEventListener("abort", abort);
-  }
+  const value = await racePromiseWithAbortSignal(
+    () => params.validate(signal),
+    signal,
+    () => (signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason))),
+  );
+  const parsed = updateRepairValidationSchema.parse(value);
+  return { ...parsed, summary: repairSummary(parsed.summary, params.target) };
 }
 
 // agent exec temporarily binds process-global config/paths. Reject an

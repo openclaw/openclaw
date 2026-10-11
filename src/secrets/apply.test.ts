@@ -8,6 +8,7 @@ import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/mutation-lineage.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { failNextRuntimeAuthSnapshotPublication } from "../agents/auth-profiles/profile-mutations.test-support.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -24,7 +25,6 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store-runtime.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/store.js";
-import { testing as storeTesting } from "../agents/auth-profiles/store.test-support.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -40,11 +40,24 @@ import {
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
+import {
+  createApplyFixture,
+  createOpenAiProviderConfig,
+  mutateAuthStoreBeforeNextPublication,
+  OPENAI_API_KEY_ENV_REF,
+  readAuthStore,
+  seedDefaultApplyFixture,
+  writeJsonFile,
+  type ApplyFixture,
+} from "./apply.test-support.js";
 import type { SecretsApplyPlan } from "./plan.js";
 
 const { clearSecretsRuntimeSnapshotMock, prepareSecretsRuntimeSnapshotMock } = vi.hoisted(() => ({
   clearSecretsRuntimeSnapshotMock: vi.fn(),
-  prepareSecretsRuntimeSnapshotMock: vi.fn(async () => undefined),
+  prepareSecretsRuntimeSnapshotMock: vi.fn(
+    async (_params: Parameters<typeof import("./runtime.js").prepareSecretsRuntimeSnapshot>[0]) =>
+      undefined,
+  ),
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -56,23 +69,6 @@ let runSecretsApply: typeof import("./apply.js").runSecretsApply;
 let applyTesting: typeof import("./apply.js").testing;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-const OPENAI_API_KEY_ENV_REF = {
-  source: "env",
-  provider: "default",
-  id: "OPENAI_API_KEY",
-} as const;
-
-type ApplyFixture = {
-  rootDir: string;
-  stateDir: string;
-  configPath: string;
-  agentDir: string;
-  authStorePath: string;
-  authJsonPath: string;
-  envPath: string;
-  env: NodeJS.ProcessEnv;
-};
 
 function stripVolatileConfigMeta(input: string): Record<string, unknown> {
   const parsed = JSON.parse(input) as Record<string, unknown>;
@@ -87,90 +83,6 @@ function stripVolatileConfigMeta(input: string): Record<string, unknown> {
     parsed.meta = meta;
   }
   return parsed;
-}
-
-async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
-  if (path.basename(filePath) === "openclaw-agent.sqlite") {
-    saveAuthProfileStore(value as AuthProfileStore, path.dirname(filePath), {
-      filterExternalAuthProfiles: false,
-      syncExternalCli: false,
-    });
-    return;
-  }
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-async function readAuthStore(fixture: ApplyFixture): Promise<AuthProfileStore> {
-  const { loadPersistedAuthProfileStore } = await import("../agents/auth-profiles/persisted.js");
-  return loadPersistedAuthProfileStore(fixture.agentDir) ?? { version: 1, profiles: {} };
-}
-
-function createOpenAiProviderConfig(apiKey: unknown = "sk-openai-plaintext") {
-  return {
-    baseUrl: "https://api.openai.com/v1",
-    api: "openai-completions",
-    apiKey,
-    models: [{ id: "gpt-5", name: "gpt-5" }],
-  };
-}
-
-function buildFixturePaths(rootDir: string) {
-  const stateDir = path.join(rootDir, ".openclaw");
-  const agentDir = path.join(stateDir, "agents", "main", "agent");
-  return {
-    rootDir,
-    stateDir,
-    configPath: path.join(stateDir, "openclaw.json"),
-    agentDir,
-    authStorePath: resolveAuthProfileDatabasePath(agentDir),
-    authJsonPath: path.join(agentDir, "auth.json"),
-    envPath: path.join(stateDir, ".env"),
-  };
-}
-
-async function createApplyFixture(): Promise<ApplyFixture> {
-  const paths = buildFixturePaths(tempDirs.make("openclaw-secrets-apply-"));
-  await fs.mkdir(paths.agentDir, { recursive: true });
-  return {
-    ...paths,
-    env: {
-      OPENCLAW_STATE_DIR: paths.stateDir,
-      OPENCLAW_CONFIG_PATH: paths.configPath,
-      OPENAI_API_KEY: "sk-live-env", // pragma: allowlist secret
-    },
-  };
-}
-
-async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
-  await writeJsonFile(fixture.configPath, {
-    models: {
-      providers: {
-        openai: createOpenAiProviderConfig(),
-      },
-    },
-  });
-  await writeJsonFile(
-    fixture.authStorePath,
-    createAuthProfileStoreFixture({
-      "openai:default": {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-ope...text", // pragma: allowlist secret
-        keyRef: OPENAI_API_KEY_ENV_REF,
-      },
-    }),
-  );
-  await writeJsonFile(fixture.authJsonPath, {
-    openai: {
-      type: "api_key",
-      key: "sk-openai-plaintext", // pragma: allowlist secret
-    },
-  });
-  await fs.writeFile(
-    fixture.envPath,
-    "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", // pragma: allowlist secret
-    "utf8",
-  );
 }
 
 async function applyPlanAndReadConfig<T>(
@@ -313,7 +225,7 @@ describe("secrets apply", () => {
   beforeEach(async () => {
     prepareSecretsRuntimeSnapshotMock.mockClear();
     clearSecretsRuntimeSnapshot();
-    fixture = await createApplyFixture();
+    fixture = await createApplyFixture(tempDirs.make("openclaw-secrets-apply-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", fixture.configPath);
     await seedDefaultApplyFixture(fixture);
@@ -321,7 +233,7 @@ describe("secrets apply", () => {
 
   afterEach(async () => {
     clearSecretsRuntimeSnapshot();
-    storeTesting.resetRuntimeSnapshotPublisherForTest();
+    vi.restoreAllMocks();
     clearRuntimeAuthProfileStoreSnapshots();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
@@ -334,16 +246,47 @@ describe("secrets apply", () => {
       fixture.envPath,
       "GH_TOKEN=sk-openai-plaintext\nGITHUB_TOKEN=unmigrated-github-token\n", // pragma: allowlist secret
     );
+    fixture.env.OPENAI_KEY_NEXT = fixture.env.OPENAI_API_KEY;
     const plan = createPlan({
-      targets: [createOpenAiProviderTarget()],
+      targets: [
+        createOpenAiProviderTarget(),
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          ref: { ...OPENAI_API_KEY_ENV_REF, id: "OPENAI_KEY_NEXT" },
+        },
+      ],
       options: createOneWayScrubOptions(),
     });
+    const configBefore = await fs.readFile(fixture.configPath, "utf8");
+    const credentialsBefore = readPersistedAuthProfileStoreRaw(fixture.agentDir);
+    const stateBefore = readPersistedAuthProfileStateRaw(fixture.agentDir);
+    const authJsonBefore = await fs.readFile(fixture.authJsonPath, "utf8");
+    const envBefore = await fs.readFile(fixture.envPath, "utf8");
 
     const dryRun = await runSecretsApply({ plan, env: fixture.env, write: false });
     expect(dryRun.mode).toBe("dry-run");
     expect(dryRun.changed).toBe(true);
     expect(dryRun.skippedExecRefs).toBe(0);
     expect(dryRun.checks.resolvabilityComplete).toBe(true);
+    expect(await fs.readFile(fixture.configPath, "utf8")).toBe(configBefore);
+    expect(readPersistedAuthProfileStoreRaw(fixture.agentDir)).toEqual(credentialsBefore);
+    expect(readPersistedAuthProfileStateRaw(fixture.agentDir)).toEqual(stateBefore);
+    expect(await fs.readFile(fixture.authJsonPath, "utf8")).toBe(authJsonBefore);
+    expect(await fs.readFile(fixture.envPath, "utf8")).toBe(envBefore);
+
+    prepareSecretsRuntimeSnapshotMock.mockImplementationOnce(async ({ loadAuthStore }) => {
+      const store = expectDefined(loadAuthStore, "preflight auth-store loader")(fixture.agentDir);
+      const profile = store.profiles["openai:default"];
+      if (profile?.type !== "api_key" || !profile.keyRef) {
+        throw new Error("expected the projected auth-profile SecretRef");
+      }
+      expect(profile.keyRef.id).toBe("OPENAI_KEY_NEXT");
+      profile.keyRef.id = "PREFLIGHT_ONLY";
+      return undefined;
+    });
 
     const applied = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(applied.mode).toBe("write");
@@ -362,7 +305,7 @@ describe("secrets apply", () => {
     expect(nextAuthStore.profiles["openai:default"].keyRef).toEqual({
       source: "env",
       provider: "default",
-      id: "OPENAI_API_KEY",
+      id: "OPENAI_KEY_NEXT",
     });
 
     const nextAuthJson = JSON.parse(await fs.readFile(fixture.authJsonPath, "utf8")) as Record<
@@ -736,17 +679,19 @@ describe("secrets apply", () => {
         scrubLegacyAuthJson: false,
       },
     });
-    let publicationAttempted = false;
-    storeTesting.setRuntimeSnapshotPublisherForTest(() => {
-      publicationAttempted = true;
-      throw new Error("injected postcommit publication failure");
-    });
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir: fixture.agentDir,
+        store: loadAuthProfileStoreWithoutExternalProfiles(fixture.agentDir),
+      },
+    ]);
+    const publicationFailure = failNextRuntimeAuthSnapshotPublication();
 
     await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
       "auth profile runtime publication failed",
     );
 
-    expect(publicationAttempted).toBe(true);
+    expect(publicationFailure).toHaveBeenCalledOnce();
     expect(readPersistedAuthProfileStoreRaw(fixture.agentDir)).toEqual(credentialsBefore);
     expect(readPersistedAuthProfileStateRaw(fixture.agentDir)).toEqual(stateBefore);
   });
@@ -924,39 +869,7 @@ describe("secrets apply", () => {
         },
       });
 
-      storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-        // Mutate persisted rows after the candidate commit but before its
-        // runtime ownership capture. Rollback must retain this newer writer.
-        storeTesting.resetRuntimeSnapshotPublisherForTest();
-        const concurrentStore = readPersistedAuthProfileStoreRaw(firstAgentDir) as {
-          version: number;
-          profiles: AuthProfileStore["profiles"];
-        };
-        const currentState = readPersistedAuthProfileStateRaw(firstAgentDir) as {
-          order?: Record<string, string[]>;
-        } | null;
-        if (concurrentMutation === "credentials") {
-          concurrentStore.profiles["openai:oauth"] = {
-            type: "oauth",
-            provider: "openai",
-            access: "oauth-concurrent",
-            refresh: "refresh-concurrent",
-            expires: Date.now() + 120_000,
-          };
-        }
-        saveAuthProfileStore(
-          {
-            ...concurrentStore,
-            ...currentState,
-            ...(concurrentMutation === "state"
-              ? { order: { openai: ["openai:oauth", "openai:default"] } }
-              : {}),
-          },
-          firstAgentDir,
-          { syncExternalCli: false },
-        );
-        publish();
-      });
+      mutateAuthStoreBeforeNextPublication(firstAgentDir, concurrentMutation);
 
       await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
         "injected concurrent second auth store failure",
@@ -1003,7 +916,7 @@ describe("secrets apply", () => {
         },
         "anthropic:claude-cli": {
           provider: "claude-cli",
-          mode: "oauth",
+          type: "oauth",
         },
       },
       order: {
@@ -1502,71 +1415,7 @@ describe("secrets apply", () => {
     ).rejects.toThrow(`Cannot apply plugin-managed SecretRef provider "vault" because ${reason}`);
   });
 
-  it("scrubs .env in legacy .clawdbot state directory via automatic fallback", async () => {
-    // Do NOT set OPENCLAW_STATE_DIR — rely on resolveStateDir's automatic
-    // legacy-directory fallback. A controlled HOME that contains only
-    // .clawdbot (no .openclaw) exercises the scrub path so the old
-    // resolveConfigDir call (which always returns $HOME/.openclaw) would
-    // miss the .env inside .clawdbot.
-    const homeDir = tempDirs.make("openclaw-secrets-apply-legacy-");
-    const legacyStateDir = path.join(homeDir, ".clawdbot");
-    const configPath = path.join(legacyStateDir, "openclaw.json");
-    const agentDir = path.join(legacyStateDir, "agents", "main", "agent");
-    const envPath = path.join(legacyStateDir, ".env");
-    const authStorePath = resolveAuthProfileDatabasePath(agentDir);
-
-    await fs.mkdir(agentDir, { recursive: true });
-
-    const env = {
-      HOME: homeDir,
-      OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
-    };
-
-    await writeJsonFile(configPath, {
-      models: {
-        providers: {
-          openai: createOpenAiProviderConfig(),
-        },
-      },
-    });
-    await writeJsonFile(authStorePath, createAuthProfileStoreFixture({}));
-    await fs.writeFile(
-      envPath,
-      "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", // pragma: allowlist secret
-      "utf8",
-    );
-
-    try {
-      const plan = createPlan({
-        targets: [createOpenAiProviderTarget()],
-        options: createOneWayScrubOptions(),
-      });
-
-      const applied = await runSecretsApply({ plan, env, write: true });
-      expect(applied.mode).toBe("write");
-      expect(applied.changed).toBe(true);
-
-      const nextEnv = await fs.readFile(envPath, "utf8");
-      expect(nextEnv).not.toContain("sk-openai-plaintext");
-      expect(nextEnv).toContain("UNRELATED=value");
-    } finally {
-      clearSecretsRuntimeSnapshot();
-      closeOpenClawAgentDatabasesForTest();
-      await fs.rm(homeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("uses the same resolved stateDir for .env scrubbing as for auth stores", async () => {
-    // Regression: projectPlanState resolves stateDir once (line 296) and
-    // must pass it into scrubEnvFiles so the same root is used for auth
-    // stores (auth-profiles.json, auth.json) and .env. If scrubEnvFiles
-    // re-resolves stateDir independently, a legacy/canonical directory
-    // appearing or disappearing during the operation could direct .env
-    // scrubbing at a different file.
-    //
-    // Set up a HOME where both .openclaw and .clawdbot exist.
-    // resolveStateDir returns .openclaw when both exist because it checks
-    // .openclaw first. The apply must use that same root for .env.
+  it("scrubs canonical state without touching an existing legacy directory", async () => {
     const homeDir = tempDirs.make("openclaw-secrets-apply-root-");
     const openclawDir = path.join(homeDir, ".openclaw");
     const clawdbotDir = path.join(homeDir, ".clawdbot");

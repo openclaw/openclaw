@@ -12,6 +12,7 @@ import { persistAuthProfileBatch } from "../auth-profiles/upsert-with-lock.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { createPdfTool } from "./pdf-tool.js";
 import {
   FAKE_PDF_MEDIA,
@@ -99,25 +100,16 @@ describe("PDF model authentication routing", () => {
           text: "The selected page contains the answer.",
           images: [],
         });
-        const complete = vi
-          .spyOn(llmStream, "completeSimple")
-          .mockImplementation(async (model) => ({
-            role: "assistant",
+        const complete = vi.spyOn(llmStream, "completeSimple").mockImplementation(async (model) =>
+          makeAssistantMessageFixture({
             content: [{ type: "text", text: "PDF answer" }],
             stopReason: "stop",
+            errorMessage: undefined,
             api: model.api,
             provider: model.provider,
             model: model.id,
-            timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              totalTokens: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-          }));
+          }),
+        );
         const tool = createPdfTool({ config, agentDir, preparedModelRuntime });
         if (!tool) {
           throw new Error("PDF tool was not registered");

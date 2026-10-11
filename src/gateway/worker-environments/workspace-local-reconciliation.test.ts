@@ -10,7 +10,6 @@ import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
   hasWorkerWorkspaceResultRef,
   preparedWorkerWorkspaceResultRef,
-  readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
@@ -19,7 +18,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 async function prepareUnchangedWorkspace(options?: {
   localContent?: string;
   assertCurrent?: () => void;
-  beforeRemoteFence?: (call: number, root: string) => Promise<void>;
+  beforeRemoteFence?: () => Promise<void>;
+  onRenew?: (root: string) => Promise<void>;
 }) {
   const root = tempDirs.make("openclaw-unchanged-reconciliation-");
   const stagingRoot = tempDirs.make("openclaw-unchanged-reconciliation-staging-");
@@ -29,12 +29,16 @@ async function prepareUnchangedWorkspace(options?: {
     await fs.writeFile(path.join(root, "result.txt"), options.localContent);
   }
   const ref = workerWorkspaceResultRef("unchanged-result");
-  const journal = { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() };
+  const journal = {
+    load: async () => undefined,
+    begin: vi.fn(async () => {}),
+    commit: vi.fn(async () => {}),
+    abort: vi.fn(async () => {}),
+  };
   const record = vi.fn();
   const publishAcceptedManifest = vi.fn();
-  let remoteFences = 0;
   const verifyStable = vi.fn(async () => {
-    await options?.beforeRemoteFence?.(++remoteFences, root);
+    await options?.beforeRemoteFence?.();
   });
   const reconcile = await prepareLocalWorkspaceReconciliation({
     request: {
@@ -60,7 +64,12 @@ async function prepareUnchangedWorkspace(options?: {
     publishAcceptedManifest,
     verifyStable,
   });
-  const quiescence = { assertActive: vi.fn(async () => {}), resume: vi.fn(async () => {}) };
+  const quiescence = {
+    assertActive: vi.fn(async () => {
+      await options?.onRenew?.(root);
+    }),
+    resume: vi.fn(async () => {}),
+  };
   return {
     root,
     base,
@@ -75,110 +84,89 @@ async function prepareUnchangedWorkspace(options?: {
 }
 
 describe("unchanged local workspace reconciliation", () => {
-  it("keeps durable result refs while accepting exact matches with one final renewal", async () => {
-    const fixture = await prepareUnchangedWorkspace();
-    const { root, base, ref, reconciliation, quiescence, journal } = fixture;
-    expect(reconciliation.acceptUnchangedStagedResult).toBeTypeOf("function");
-    expect(fixture.verifyStable).not.toHaveBeenCalled();
-    expect(journal.commit).not.toHaveBeenCalled();
-    await expect(
-      hasWorkerWorkspaceResultRef({ root, stagedResultRef: preparedWorkerWorkspaceResultRef(ref) }),
-    ).resolves.toBe(true);
-    expect(fixture.record).not.toHaveBeenCalled();
-
-    const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
-
-    expect(applied).toMatchObject({ manifestRef: base.manifestRef, conflictPaths: [] });
-    expect(fixture.verifyStable).toHaveBeenCalledTimes(2);
-    expect(quiescence.assertActive).toHaveBeenCalledOnce();
-    expect(journal.begin).not.toHaveBeenCalled();
-    expect(journal.commit).toHaveBeenCalledExactlyOnceWith(base.manifestRef);
-    expect(fixture.publishAcceptedManifest).not.toHaveBeenCalled();
-    expect(fixture.record).toHaveBeenCalledExactlyOnceWith(ref);
-    const staged = await readStagedWorkerWorkspaceResult(root, ref);
-    expect(staged).toMatchObject({
-      baseManifestRef: base.manifestRef,
-      currentManifestRef: base.manifestRef,
-      changed: false,
-    });
-    await expect(
-      hasWorkerWorkspaceResultRef({ root, stagedResultRef: preparedWorkerWorkspaceResultRef(ref) }),
-    ).resolves.toBe(false);
-  });
-
-  it("keeps the full apply path when only the remote workspace is unchanged", async () => {
-    const fixture = await prepareUnchangedWorkspace({ localContent: "local change\n" });
-    expect(fixture.reconciliation.changed).toBe(false);
-    expect(fixture.reconciliation.acceptUnchangedStagedResult).toBeUndefined();
-
-    const applied = await verifyReconciledWorkspaceFinal(
-      fixture.reconciliation,
-      fixture.quiescence,
-    );
-
-    expect(applied?.manifestRef).not.toBe(fixture.base.manifestRef);
-    expect(fixture.verifyStable).toHaveBeenCalledTimes(4);
-    expect(fixture.quiescence.assertActive).toHaveBeenCalledTimes(2);
-    expect(fixture.publishAcceptedManifest).toHaveBeenCalledOnce();
-    expect(fixture.journal.commit).toHaveBeenCalledExactlyOnceWith(applied?.manifestRef);
-    await expect(fs.readFile(path.join(fixture.root, "result.txt"), "utf8")).resolves.toBe(
-      "local change\n",
-    );
-  });
-
-  it.each(["remote", "local"] as const)(
-    "rejects a late %s write after the final renewal without accepting the result",
-    async (side) => {
-      const fixture = await prepareUnchangedWorkspace({
-        beforeRemoteFence: async (call, root) => {
-          if (call !== 2) {
-            return;
-          }
-          if (side === "remote") {
-            throw new Error("late remote write");
-          }
-          await fs.writeFile(path.join(root, "result.txt"), "late local write\n");
-        },
-      });
-
-      await expect(
-        verifyReconciledWorkspaceFinal(fixture.reconciliation, fixture.quiescence),
-      ).rejects.toMatchObject({ reclaimDisposition: "retry" });
-
-      expect(fixture.journal.commit).not.toHaveBeenCalled();
-      expect(fixture.record).not.toHaveBeenCalled();
-      await expect(
-        hasWorkerWorkspaceResultRef({ root: fixture.root, stagedResultRef: fixture.ref }),
-      ).resolves.toBe(false);
-      await expect(
-        hasWorkerWorkspaceResultRef({
-          root: fixture.root,
-          stagedResultRef: preparedWorkerWorkspaceResultRef(fixture.ref),
-        }),
-      ).resolves.toBe(false);
+  it.each([undefined, "local change\n"])(
+    "retains a result ref only when local content %j needs reconciliation",
+    async (localContent) => {
+      const f = await prepareUnchangedWorkspace({ localContent });
+      const { root, base, ref, reconciliation, quiescence, journal } = f;
+      const hasRef = (stagedResultRef: string) =>
+        hasWorkerWorkspaceResultRef({ root, stagedResultRef });
+      const prepared = preparedWorkerWorkspaceResultRef(ref);
+      if (localContent) {
+        expect(reconciliation.changed).toBe(false);
+        expect(reconciliation.acceptUnchangedStagedResult).toBeUndefined();
+      } else {
+        expect(reconciliation.acceptUnchangedStagedResult).toBeTypeOf("function");
+        expect(f.verifyStable).not.toHaveBeenCalled();
+        expect(journal.commit).not.toHaveBeenCalled();
+        await expect(hasRef(prepared)).resolves.toBe(false);
+        expect(f.record).not.toHaveBeenCalled();
+      }
+      const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+      expect(f.verifyStable).toHaveBeenCalledTimes(localContent ? 3 : 1);
+      expect(quiescence.assertActive).toHaveBeenCalledTimes(localContent ? 2 : 1);
+      expect(f.publishAcceptedManifest).toHaveBeenCalledTimes(localContent ? 1 : 0);
+      expect(journal.commit).toHaveBeenCalledExactlyOnceWith(applied?.manifestRef);
+      if (localContent) {
+        expect(f.record).toHaveBeenCalledExactlyOnceWith(ref);
+        await expect(hasRef(ref)).resolves.toBe(true);
+        expect(applied?.manifestRef).not.toBe(base.manifestRef);
+        await expect(fs.readFile(path.join(root, "result.txt"), "utf8")).resolves.toBe(
+          localContent,
+        );
+      } else {
+        expect(applied).toMatchObject({ manifestRef: base.manifestRef, conflictPaths: [] });
+        expect(journal.begin).not.toHaveBeenCalled();
+        expect(f.record).not.toHaveBeenCalled();
+        await expect(hasRef(ref)).resolves.toBe(false);
+        await expect(hasRef(prepared)).resolves.toBe(false);
+        expect(await fs.readdir(root)).toEqual(["result.txt"]);
+      }
     },
   );
 
-  it("revalidates the result owner before committing an unchanged workspace", async () => {
-    let current = true;
-    const fixture = await prepareUnchangedWorkspace({
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("stale result owner");
+  it.each(["remote", "local", "owner"] as const)(
+    "rejects a late %s change after renewal without accepting the result",
+    async (side) => {
+      let current = true;
+      let remoteChanged = false;
+      const f = await prepareUnchangedWorkspace({
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("stale result owner");
+          }
+        },
+        onRenew: async (root) => {
+          if (side === "local") {
+            await fs.writeFile(path.join(root, "result.txt"), "late local write\n");
+          } else if (side === "remote") {
+            remoteChanged = true;
+          }
+        },
+        beforeRemoteFence: async () => {
+          if (side === "owner") {
+            current = false;
+          }
+          if (remoteChanged) {
+            throw new Error("late remote write");
+          }
+        },
+      });
+      const final = verifyReconciledWorkspaceFinal(f.reconciliation, f.quiescence);
+      if (side === "owner") {
+        await expect(final).rejects.toThrow("stale result owner");
+      } else {
+        await expect(final).rejects.toMatchObject({ reclaimDisposition: "retry" });
+      }
+      expect(f.journal.commit).not.toHaveBeenCalled();
+      expect(f.record).not.toHaveBeenCalled();
+      if (side !== "owner") {
+        for (const stagedResultRef of [f.ref, preparedWorkerWorkspaceResultRef(f.ref)]) {
+          await expect(
+            hasWorkerWorkspaceResultRef({ root: f.root, stagedResultRef }),
+          ).resolves.toBe(false);
         }
-      },
-      beforeRemoteFence: async (call) => {
-        if (call === 2) {
-          current = false;
-        }
-      },
-    });
-
-    await expect(
-      verifyReconciledWorkspaceFinal(fixture.reconciliation, fixture.quiescence),
-    ).rejects.toThrow("stale result owner");
-
-    expect(fixture.journal.commit).not.toHaveBeenCalled();
-    expect(fixture.record).not.toHaveBeenCalled();
-  });
+      }
+    },
+  );
 });

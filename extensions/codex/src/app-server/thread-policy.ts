@@ -17,10 +17,8 @@ import {
 } from "./request.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
-import type {
-  CodexStartOrResumeThreadParams,
-  CodexThreadRequestContext,
-} from "./thread-lifecycle-types.js";
+import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
 
 /** A refusal, not a failed native write: the ephemeral conversation must stay alive. */
 export class CodexIncognitoPolicyChangeError extends AgentHarnessPreflightError {
@@ -53,6 +51,7 @@ type CodexThreadHandoffParams = {
   signal?: AbortSignal;
   /** Warm reuse proves ownership before writing; an in-turn restore already holds it. */
   assertCurrent?: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
 };
 
 /** The complete body remains generic configuration for compaction and native child inheritance. */
@@ -70,51 +69,49 @@ export async function refreshCodexThreadPolicy(
 }
 
 /**
- * Refreshes only the skill catalog on a live thread whose generic policy cannot
+ * Refreshes skills, persona, and memory instructions on a live thread whose generic policy cannot
  * change (ephemeral threads have no resume source). The refresh is a client-authored
  * developer message, so it must be re-delivered after every compaction.
  */
-export async function refreshCodexThreadSkillsCatalog(
-  params: CodexThreadHandoffParams & { skillsInstructions: string | undefined },
+export async function refreshCodexThreadInstructions(
+  params: CodexThreadHandoffParams & { refreshableInstructions: string | undefined },
 ): Promise<void> {
   const notice =
-    "The following is the complete current OpenClaw skills catalog. It replaces the earlier OpenClaw skills catalog in this conversation.\n\n";
+    "The following is the complete current OpenClaw refreshable thread instructions. It replaces earlier OpenClaw-supplied skills, persona, and memory instructions in this conversation.\n\n";
   const text =
     notice +
-    (params.skillsInstructions ??
-      "The current OpenClaw skills catalog is empty; the earlier catalog is withdrawn.");
+    (params.refreshableInstructions ??
+      "The current OpenClaw refreshable thread instructions are empty; earlier OpenClaw-supplied skills, persona, and memory instructions are withdrawn.");
   await injectCodexThreadDeveloperHandoff(params, text);
 }
 
 /**
  * Compaction rebuilds initial context from the thread's creation-time developer
- * instructions and drops client-authored developer messages unless
- * `retain_client_developer_messages` is enabled, which is off by default
- * (codex-rs/core/src/compact_remote_v2.rs). A catalog refreshed in place therefore
- * reverts to the creation-time catalog, while the host still records the refreshed
- * value as delivered and skips reinjection on later turns. Re-deliver the current
- * catalog after every compaction, including compaction inside an active turn.
+ * instructions and can drop client-authored developer messages (including local
+ * compaction regardless of `retain_client_developer_messages`). Restore the current
+ * section for subsequent requests. The immediate native continuation can still
+ * precede this handoff and see creation-time instructions.
  */
-export async function restoreCodexThreadSkillsCatalogAfterCompaction(
+export async function restoreCodexThreadInstructionsAfterCompaction(
   params: CodexThreadHandoffParams & { ephemeralPolicy: CodexEphemeralThreadPolicy | undefined },
 ): Promise<CodexEphemeralThreadPolicy | undefined> {
   const policy = params.ephemeralPolicy;
-  if (!policy || policy.skillsInstructions === policy.nativeSkillsInstructions) {
+  if (!policy || policy.refreshableInstructions === policy.nativeRefreshableInstructions) {
     return policy;
   }
   try {
-    await refreshCodexThreadSkillsCatalog({
+    await refreshCodexThreadInstructions({
       ...params,
-      skillsInstructions: policy.skillsInstructions,
+      refreshableInstructions: policy.refreshableInstructions,
     });
     return policy;
   } catch (error) {
-    embeddedAgentLog.warn("failed to restore Codex skill catalog after compaction", {
+    embeddedAgentLog.warn("failed to restore Codex thread instructions after compaction", {
       threadId: params.threadId,
       error: formatErrorMessage(error),
     });
     // Record what compaction restored so the next turn retries the lost handoff.
-    return { ...policy, skillsInstructions: policy.nativeSkillsInstructions };
+    return { ...policy, refreshableInstructions: policy.nativeRefreshableInstructions };
   }
 }
 
@@ -133,7 +130,11 @@ async function injectCodexThreadDeveloperHandoff(
       },
     });
     outcome = "acknowledged";
-    params.assertCurrent?.();
+    if (params.withCurrent) {
+      await params.withCurrent(() => params.assertCurrent?.());
+    } else {
+      params.assertCurrent?.();
+    }
     params.signal?.throwIfAborted();
   } catch (cause) {
     if (
@@ -174,14 +175,17 @@ export function assertCodexSupervisionThreadLineage(
 export async function assertAdoptedCodexThreadResumeAllowed(
   params: CodexStartOrResumeThreadParams,
   threadId: string,
-  context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
+  context: {
+    lifecycleTiming: Pick<CodexThreadLifecycleTimingTracker, "measure">;
+    throwIfAborted: () => void;
+  },
   assertCurrent: () => void,
 ): Promise<CodexThread> {
   const { thread } = await context.lifecycleTiming.measure("thread-read-adoption-status", () =>
     params.client.request(
       "thread/read",
       { threadId, includeTurns: false },
-      { signal: params.signal, assertCurrent },
+      { signal: params.signal, assertCurrent, withCurrent: params.authority?.withCurrent },
     ),
   );
   context.throwIfAborted();

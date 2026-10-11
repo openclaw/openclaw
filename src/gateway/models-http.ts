@@ -1,4 +1,3 @@
-// OpenAI-compatible `/v1/models` HTTP route backed by configured OpenClaw agents.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -21,15 +20,7 @@ import {
 } from "./http-utils.js";
 import { READ_SCOPE } from "./operator-scopes.js";
 
-type OpenAiModelObject = {
-  id: string;
-  object: "model";
-  created: number;
-  owned_by: string;
-  permission: [];
-};
-
-function toOpenAiModel(id: string): OpenAiModelObject {
+function toOpenAiModel(id: string) {
   return {
     id,
     object: "model",

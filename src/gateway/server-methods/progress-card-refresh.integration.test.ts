@@ -12,7 +12,8 @@ import {
   clearAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { ensureGatewayOwnerProfile, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
@@ -22,10 +23,31 @@ import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { createProgressCardHandlers } from "./progress-card.js";
-import type { RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 installGatewayTestHooks();
 const createFixture = useBrowserFollowupFixture();
+
+function refreshCard(
+  f: Awaited<ReturnType<typeof createFixture>>,
+  idempotencyKey: string,
+  respond: RespondFn,
+  options: { id?: string; client?: GatewayClient; extraHandlers?: GatewayRequestHandlers } = {},
+) {
+  return handleGatewayRequest({
+    req: {
+      type: "req",
+      id: options.id ?? "refresh",
+      method: "progressCard.refresh",
+      params: { sessionKey: f.scope.sessionKey, idempotencyKey },
+    },
+    client: options.client ?? f.client,
+    context: f.context,
+    respond,
+    isWebchatConnect: () => true,
+    extraHandlers: options.extraHandlers ?? createProgressCardHandlers(),
+  });
+}
 
 describe("registered progress refresh admission", () => {
   it.each([false, true])(
@@ -57,17 +79,8 @@ describe("registered progress refresh admission", () => {
       let revoked = false;
       let assertCurrentAuthorization: (() => void) | undefined;
       const refresh = async (respond: RespondFn) =>
-        handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "refresh",
-            method: "progressCard.refresh",
-            params: { sessionKey: f.scope.sessionKey, idempotencyKey: "finishing-refresh" },
-          },
+        refreshCard(f, "finishing-refresh", respond, {
           client: caller ?? f.client,
-          context: f.context,
-          respond,
-          isWebchatConnect: () => true,
           extraHandlers: {
             ...handlers,
             "progressCard.refresh": async (invocation) => {
@@ -167,365 +180,288 @@ describe("registered progress refresh admission", () => {
       }
     },
   );
-  it.each([1, 2])(
-    "deduplicates concurrent refresh bursts with %i distinct intents through completion",
-    async (intentCount) => {
-      const f = await createFixture({ active: false, preserveContent: true });
-      const dispatched = createDeferredCore();
-      const dispatch = dispatchInboundMessageMock.getMockImplementation()!;
-      dispatchInboundMessageMock.mockImplementation((...args) => {
-        const result = dispatch(...args);
-        if (dispatchInboundMessageMock.mock.calls.length === intentCount) {
-          dispatched.resolve();
-        }
-        return result;
-      });
-      const refresh = async (idempotencyKey: string) => {
-        const respond = vi.fn<RespondFn>();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "refresh",
-            method: "progressCard.refresh",
-            params: { sessionKey: f.scope.sessionKey, idempotencyKey },
-          },
-          client: f.client,
-          context: f.context,
-          respond,
-          isWebchatConnect: () => true,
-          extraHandlers: createProgressCardHandlers(),
-        });
-        return respond;
-      };
-      const burst = () =>
-        Promise.all(
-          Array.from({ length: 2 * intentCount }, (_, index) =>
-            refresh(`burst-${index % intentCount}`),
-          ),
-        );
-      const expectAccepted = (responses: Awaited<ReturnType<typeof burst>>) => {
-        const runIds = new Set<unknown>();
-        for (const response of responses) {
-          expect(response).toHaveBeenCalledExactlyOnceWith(
-            true,
-            expect.objectContaining({ status: "accepted", revision: 1 }),
-            undefined,
-            expect.anything(),
-          );
-          const payload = response.mock.calls[0]?.[1];
-          expect(payload).toHaveProperty("runId", expect.any(String));
-          runIds.add(isRecord(payload) ? payload.runId : undefined);
-        }
-        expect(runIds.size).toBe(intentCount);
-      };
-      try {
-        await progressCardStore.put(
-          f.scope.sessionKey,
-          { markdown: "Old status" },
-          f.scope.agentId,
-        );
-        expectAccepted(await burst());
-        await dispatched.promise;
-        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(intentCount);
-        for (const [params] of dispatchInboundMessageMock.mock.calls) {
-          const admitted = params as Parameters<typeof dispatchInboundMessage>[0];
-          expect(admitted.toolsAllow).toContain("progress_card");
-          expect(admitted.toolsAllow).not.toContain("exec");
-          await admitted.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
-        }
-        await f.finishDispatch();
-        for (const response of await burst()) {
-          expect(response).toHaveBeenCalledExactlyOnceWith(
-            false,
-            undefined,
-            expect.objectContaining({ details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" } }),
-            expect.anything(),
-          );
-        }
-        await progressCardStore.put(
-          f.scope.sessionKey,
-          { markdown: "Current status" },
-          f.scope.agentId,
-        );
-        expectAccepted(await burst());
-        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(intentCount);
-        const messages = loadTranscriptEventsSync(f.scope).flatMap((row) =>
-          isRecord(row) && isRecord(row.message) ? [row.message] : [],
-        );
-        expect(messages.filter((message) => message.display === false)).toHaveLength(intentCount);
-        expect(projectChatDisplayMessages(messages)).toEqual(
-          projectChatDisplayMessages(
-            f.activeTranscript.flatMap((row) =>
-              isRecord(row) && isRecord(row.message) ? [row.message] : [],
-            ),
-          ),
-        );
-        expect(
-          vi.mocked(f.context.broadcast).mock.calls.filter(([event]) => event === "chat"),
-        ).toHaveLength(0);
-      } finally {
-        await f.cleanup();
+  it("deduplicates concurrent refresh bursts with distinct intents through completion", async () => {
+    const intentCount = 2;
+    const f = await createFixture({ active: false, preserveContent: true });
+    const dispatched = createDeferredCore();
+    const dispatch = dispatchInboundMessageMock.getMockImplementation()!;
+    dispatchInboundMessageMock.mockImplementation((...args) => {
+      const result = dispatch(...args);
+      if (dispatchInboundMessageMock.mock.calls.length === intentCount) {
+        dispatched.resolve();
       }
-    },
-  );
-  it.each([false, true])(
-    "starts a hidden status-only turn when idle or steering is unavailable (active=%s)",
-    async (active) => {
-      const f = await createFixture({ active, preserveContent: true });
-      try {
-        await progressCardStore.put(
-          f.scope.sessionKey,
-          { markdown: "Previous status" },
-          f.scope.agentId,
-        );
-        const respond = vi.fn<RespondFn>();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "refresh",
-            method: "progressCard.refresh",
-            params: { sessionKey: f.scope.sessionKey, idempotencyKey: "refresh-click" },
-          },
-          client: f.client,
-          context: f.context,
-          respond,
-          isWebchatConnect: () => true,
-          extraHandlers: createProgressCardHandlers(),
-        });
-        expect(respond).toHaveBeenCalledWith(
+      return result;
+    });
+    const refresh = async (idempotencyKey: string) => {
+      const respond = vi.fn<RespondFn>();
+      await refreshCard(f, idempotencyKey, respond);
+      return respond;
+    };
+    const burst = () =>
+      Promise.all(
+        Array.from({ length: 2 * intentCount }, (_, index) =>
+          refresh(`burst-${index % intentCount}`),
+        ),
+      );
+    const expectAccepted = (responses: Awaited<ReturnType<typeof burst>>) => {
+      const runIds = new Set<unknown>();
+      for (const response of responses) {
+        expect(response).toHaveBeenCalledExactlyOnceWith(
           true,
           expect.objectContaining({ status: "accepted", revision: 1 }),
           undefined,
           expect.anything(),
         );
-        const payload = respond.mock.calls[0]?.[1];
-        if (!isRecord(payload) || typeof payload.runId !== "string") {
-          throw new Error("Missing refresh run");
-        }
-        const recorder = await f.dispatchedRecorder;
-        expect(await recorder.resolveMessage()).toMatchObject({
-          display: false,
-          provenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
-        });
-        expect(getAgentRunContext(payload.runId)).toMatchObject({
-          isControlUiVisible: false,
-          projectSessionMessages: false,
-          projectSessionActive: false,
-          projectSessionLifecycle: false,
-        });
-        expect(f.context.chatAbortControllers.get(payload.runId)).toMatchObject({
-          controlUiVisible: false,
-          projectSessionActive: false,
-        });
-        const dispatch = dispatchInboundMessageMock.mock.calls[0]?.[0] as Parameters<
-          typeof dispatchInboundMessage
-        >[0];
-        expect(dispatch.ctx.InternalTurnSource).toBe("progress-card-refresh");
-        expect(dispatch.ctx.InputProvenance).toMatchObject({ sourceTool: "progress_card_refresh" });
-        expect(dispatch.toolsAllow).toContain("progress_card");
-        expect(dispatch.toolsAllow).not.toContain("exec");
-        const prepared = dispatch.replyOptions?.onSessionPrepared;
-        if (!prepared) {
-          throw new Error("Missing real admission preparation callback");
-        }
-        prepared({
-          sessionKey: f.scope.sessionKey,
-          sessionId: f.scope.sessionId,
-          storePath: f.scope.storePath,
-        });
-        expect(f.context.chatAbortControllers.get(payload.runId)?.sessionId).toBe(
-          f.scope.sessionId,
-        );
-        await recorder.persistApproved();
-        const rows = loadTranscriptEventsSync(f.scope);
-        const messages = rows.flatMap((row) =>
-          isRecord(row) && isRecord(row.message) ? [row.message] : [],
-        );
-        expect(messages).toContainEqual(expect.objectContaining({ display: false }));
-        expect(JSON.stringify(projectChatDisplayMessages(messages))).not.toContain(
-          "Refresh this session",
-        );
-        await f.finishDispatch();
-        expect(() =>
-          prepared({
-            sessionKey: f.scope.sessionKey,
-            sessionId: "late-refresh",
-            storePath: f.scope.storePath,
-          }),
-        ).toThrow("no longer owns its admission");
-        expect((await progressCardStore.get(f.scope.sessionKey, f.scope.agentId))?.markdown).toBe(
-          "Previous status",
-        );
-        const retry = vi.fn<RespondFn>();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "retry",
-            method: "progressCard.refresh",
-            params: { sessionKey: f.scope.sessionKey, idempotencyKey: "refresh-click" },
-          },
-          client: f.client,
-          context: f.context,
-          respond: retry,
-          isWebchatConnect: () => true,
-          extraHandlers: createProgressCardHandlers(),
-        });
-        expect(retry).toHaveBeenCalledWith(
+        const payload = response.mock.calls[0]?.[1];
+        expect(payload).toHaveProperty("runId", expect.any(String));
+        runIds.add(isRecord(payload) ? payload.runId : undefined);
+      }
+      expect(runIds.size).toBe(intentCount);
+    };
+    try {
+      await progressCardStore.put(f.scope.sessionKey, { markdown: "Old status" }, f.scope.agentId);
+      expectAccepted(await burst());
+      await dispatched.promise;
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(intentCount);
+      for (const [params] of dispatchInboundMessageMock.mock.calls) {
+        const admitted = params as Parameters<typeof dispatchInboundMessage>[0];
+        expect(admitted.toolsAllow).toContain("progress_card");
+        expect(admitted.toolsAllow).not.toContain("exec");
+        await admitted.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+      }
+      await f.finishDispatch();
+      for (const response of await burst()) {
+        expect(response).toHaveBeenCalledExactlyOnceWith(
           false,
           undefined,
           expect.objectContaining({ details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" } }),
           expect.anything(),
         );
-        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-        expect(
-          vi.mocked(f.context.broadcast).mock.calls.filter(([event]) => event === "chat"),
-        ).toHaveLength(0);
-      } finally {
-        await f.cleanup();
       }
-    },
-  );
-  it.each([false, true])(
-    "steers duplicate active refreshes without answering questions or cancelling work (unconfirmed=%s)",
-    async (unconfirmed) => {
-      const f = await createFixture({ active: true, preserveContent: true });
-      const operation = f.activeRun!;
-      const profile = ensureGatewayOwnerProfile("Gateway Owner");
-      f.client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
-      f.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      };
-      const captured = await captureGatewayOperatorRunAuthority({
-        client: { ...f.client, connId: "original-owner-connection" },
-        context: f.context,
-      });
-      const run = createQueueTestRun({ prompt: "Continue the original work" });
-      run.operatorAuthority = captured?.authority;
-      run.run = {
-        ...run.run,
-        config: f.context.getRuntimeConfig(),
-        agentId: f.scope.agentId,
-        sessionId: f.scope.sessionId,
-        sessionKey: f.scope.sessionKey,
-        messageProvider: "webchat",
-        chatType: "direct",
-        gatewayUiCommandTarget: { connId: "original-owner-connection", profileId: profile.id },
-        traceAuthorized: true,
-        senderIsOwner: true,
-      };
-      const cancel = vi.fn();
-      const claim = vi.fn(async () => true);
-      const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
-        async (_text, options, assertCurrent) => {
-          assertCurrent();
-          expect(options?.isInboundUserMessage).toBe(false);
-          expect(options?.debounceMs).toBe(0);
-          expect(await options?.userTurnTranscriptRecorder?.resolveMessage()).toMatchObject({
-            display: false,
-          });
-          await options?.userTurnTranscriptRecorder?.persistApproved();
-          assertCurrent();
-          options?.onQueueAccepted?.(true);
-          if (unconfirmed) {
-            return { transcriptCommit: "unconfirmed", errorMessage: "Receipt still pending" };
-          }
-          return undefined;
-        },
+      await progressCardStore.put(
+        f.scope.sessionKey,
+        { markdown: "Current status" },
+        f.scope.agentId,
       );
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-      const fingerprint = operation.bindToolAuthorityRoute(run.run);
-      operation.setPhase("running");
-      operation.attachBackend({
-        kind: "embedded",
-        runId: "original-work",
-        toolAuthorityFingerprint: fingerprint,
-        cancel,
-        messageInjectionV2: {
-          version: 2,
-          isAvailable: () => true,
-          queueMessage,
-          claimPendingUserInputAnswer: claim,
-        },
-      });
-      registerAgentRunContext("original-work", {
-        sessionKey: f.scope.sessionKey,
-        isControlUiVisible: true,
-        projectSessionMessages: true,
-      });
-      try {
-        expect(captured).toBeDefined();
-        await progressCardStore.put(f.scope.sessionKey, { markdown: "Working" }, f.scope.agentId);
-        const respond = vi.fn<RespondFn>();
-        await Promise.all(
-          Array.from({ length: 2 }, (_, index) =>
-            handleGatewayRequest({
-              req: {
-                type: "req",
-                id: `refresh-${index}`,
-                method: "progressCard.refresh",
-                params: { sessionKey: f.scope.sessionKey, idempotencyKey: "active-refresh" },
-              },
-              client: f.client,
-              context: f.context,
-              respond,
-              isWebchatConnect: () => true,
-              extraHandlers: createProgressCardHandlers(),
-            }),
+      expectAccepted(await burst());
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(intentCount);
+      const messages = loadTranscriptEventsSync(f.scope).flatMap((row) =>
+        isRecord(row) && isRecord(row.message) ? [row.message] : [],
+      );
+      expect(messages.filter((message) => message.display === false)).toHaveLength(intentCount);
+      expect(projectChatDisplayMessages(messages)).toEqual(
+        projectChatDisplayMessages(
+          f.activeTranscript.flatMap((row) =>
+            isRecord(row) && isRecord(row.message) ? [row.message] : [],
           ),
-        );
-        expect(respond).toHaveBeenCalledTimes(2);
-        for (const call of respond.mock.calls) {
-          expect(call).toEqual([
-            true,
-            expect.objectContaining({ status: "accepted", revision: 1 }),
-            undefined,
-            expect.anything(),
-          ]);
-        }
-        expect(queueMessage).toHaveBeenCalledOnce();
-        expect(claim).not.toHaveBeenCalled();
-        expect(cancel).not.toHaveBeenCalled();
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-        expect(getAgentRunContext("original-work")).toMatchObject({
-          isControlUiVisible: true,
-          projectSessionMessages: true,
+        ),
+      );
+      expect(
+        vi.mocked(f.context.broadcast).mock.calls.filter(([event]) => event === "chat"),
+      ).toHaveLength(0);
+    } finally {
+      await f.cleanup();
+    }
+  });
+  it("starts a hidden status-only turn when steering is unavailable", async () => {
+    const f = await createFixture({ active: true, preserveContent: true });
+    try {
+      await progressCardStore.put(
+        f.scope.sessionKey,
+        { markdown: "Previous status" },
+        f.scope.agentId,
+      );
+      const respond = vi.fn<RespondFn>();
+      await refreshCard(f, "refresh-click", respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "accepted", revision: 1 }),
+        undefined,
+        expect.anything(),
+      );
+      const payload = respond.mock.calls[0]?.[1];
+      if (!isRecord(payload) || typeof payload.runId !== "string") {
+        throw new Error("Missing refresh run");
+      }
+      const recorder = await f.dispatchedRecorder;
+      expect(await recorder.resolveMessage()).toMatchObject({
+        display: false,
+        provenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
+      });
+      expect(getAgentRunContext(payload.runId)).toMatchObject({
+        isControlUiVisible: false,
+        projectSessionMessages: false,
+        projectSessionActive: false,
+        projectSessionLifecycle: false,
+      });
+      expect(f.context.chatAbortControllers.get(payload.runId)).toMatchObject({
+        controlUiVisible: false,
+        projectSessionActive: false,
+      });
+      const dispatch = dispatchInboundMessageMock.mock.calls[0]?.[0] as Parameters<
+        typeof dispatchInboundMessage
+      >[0];
+      expect(dispatch.ctx.InternalTurnSource).toBe("progress-card-refresh");
+      expect(dispatch.ctx.InputProvenance).toMatchObject({ sourceTool: "progress_card_refresh" });
+      expect(dispatch.toolsAllow).toContain("progress_card");
+      expect(dispatch.toolsAllow).not.toContain("exec");
+      const prepared = dispatch.replyOptions?.onSessionPrepared;
+      if (!prepared) {
+        throw new Error("Missing real admission preparation callback");
+      }
+      prepared({
+        sessionKey: f.scope.sessionKey,
+        sessionId: f.scope.sessionId,
+        storePath: f.scope.storePath,
+      });
+      expect(f.context.chatAbortControllers.get(payload.runId)?.sessionId).toBe(f.scope.sessionId);
+      await recorder.persistApproved();
+      const rows = loadTranscriptEventsSync(f.scope);
+      const messages = rows.flatMap((row) =>
+        isRecord(row) && isRecord(row.message) ? [row.message] : [],
+      );
+      expect(messages).toContainEqual(expect.objectContaining({ display: false }));
+      expect(JSON.stringify(projectChatDisplayMessages(messages))).not.toContain(
+        "Refresh this session",
+      );
+      await f.finishDispatch();
+      expect(() =>
+        prepared({
+          sessionKey: f.scope.sessionKey,
+          sessionId: "late-refresh",
+          storePath: f.scope.storePath,
+        }),
+      ).toThrow("no longer owns its admission");
+      expect((await progressCardStore.get(f.scope.sessionKey, f.scope.agentId))?.markdown).toBe(
+        "Previous status",
+      );
+      const retry = vi.fn<RespondFn>();
+      await refreshCard(f, "refresh-click", retry, { id: "retry" });
+      expect(retry).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" } }),
+        expect.anything(),
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+      expect(
+        vi.mocked(f.context.broadcast).mock.calls.filter(([event]) => event === "chat"),
+      ).toHaveLength(0);
+    } finally {
+      await f.cleanup();
+    }
+  });
+  it("steers duplicate unconfirmed refreshes without answering questions or cancelling work", async () => {
+    const f = await createFixture({ active: true, preserveContent: true });
+    const operation = f.activeRun!;
+    const profile = ensureGatewayOwnerProfile("Gateway Owner");
+    f.client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
+    f.client.authenticatedUserProfile = {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    };
+    const captured = await captureGatewayOperatorRunAuthority({
+      client: { ...f.client, connId: "original-owner-connection" },
+      context: f.context,
+    });
+    const run = createQueueTestRun({ prompt: "Continue the original work" });
+    run.operatorAuthority = captured?.authority;
+    run.run = {
+      ...run.run,
+      config: f.context.getRuntimeConfig(),
+      agentId: f.scope.agentId,
+      sessionId: f.scope.sessionId,
+      sessionKey: f.scope.sessionKey,
+      messageProvider: "webchat",
+      chatType: "direct",
+      gatewayUiCommandTarget: { connId: "original-owner-connection", profileId: profile.id },
+      traceAuthorized: true,
+      senderIsOwner: true,
+    };
+    const cancel = vi.fn();
+    const claim = vi.fn(async () => true);
+    const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+      async (_text, options, assertCurrent) => {
+        assertCurrent();
+        expect(options?.isInboundUserMessage).toBe(false);
+        expect(options?.debounceMs).toBe(0);
+        expect(await options?.userTurnTranscriptRecorder?.resolveMessage()).toMatchObject({
+          display: false,
         });
-        await f.finishDispatch();
-        const retry = vi.fn<RespondFn>();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "retry-steer",
-            method: "progressCard.refresh",
-            params: { sessionKey: f.scope.sessionKey, idempotencyKey: "active-refresh" },
-          },
-          client: f.client,
-          context: f.context,
-          respond: retry,
-          isWebchatConnect: () => true,
-          extraHandlers: createProgressCardHandlers(),
-        });
-        expect(retry).toHaveBeenCalledWith(
+        await options?.userTurnTranscriptRecorder?.persistApproved();
+        assertCurrent();
+        options?.onQueueAccepted?.(true);
+        return { transcriptCommit: "unconfirmed", errorMessage: "Receipt still pending" };
+      },
+    );
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+    const fingerprint = operation.bindToolAuthorityRoute(run.run);
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "original-work",
+      toolAuthorityFingerprint: fingerprint,
+      cancel,
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage,
+        claimPendingUserInputAnswer: claim,
+      },
+    });
+    registerAgentRunContext("original-work", {
+      sessionKey: f.scope.sessionKey,
+      isControlUiVisible: true,
+      projectSessionMessages: true,
+    });
+    try {
+      expect(captured).toBeDefined();
+      await progressCardStore.put(f.scope.sessionKey, { markdown: "Working" }, f.scope.agentId);
+      const respond = vi.fn<RespondFn>();
+      await Promise.all(
+        Array.from({ length: 2 }, (_, index) =>
+          refreshCard(f, "active-refresh", respond, { id: `refresh-${index}` }),
+        ),
+      );
+      expect(respond).toHaveBeenCalledTimes(2);
+      for (const call of respond.mock.calls) {
+        expect(call).toEqual([
           true,
           expect.objectContaining({ status: "accepted", revision: 1 }),
           undefined,
           expect.anything(),
-        );
-        expect(queueMessage).toHaveBeenCalledOnce();
-        expect(cancel).not.toHaveBeenCalled();
-        expect(
-          vi.mocked(f.context.broadcast).mock.calls.filter(([event]) => event === "chat"),
-        ).toHaveLength(0);
-      } finally {
-        clearAgentRunContext("original-work");
-        await f.cleanup();
-        captured?.release();
+        ]);
       }
-    },
-  );
+      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(claim).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(getAgentRunContext("original-work")).toMatchObject({
+        isControlUiVisible: true,
+        projectSessionMessages: true,
+      });
+      await f.finishDispatch();
+      const retry = vi.fn<RespondFn>();
+      await refreshCard(f, "active-refresh", retry, { id: "retry-steer" });
+      expect(retry).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "accepted", revision: 1 }),
+        undefined,
+        expect.anything(),
+      );
+      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(
+        vi.mocked(f.context.broadcast).mock.calls.filter(([event]) => event === "chat"),
+      ).toHaveLength(0);
+    } finally {
+      clearAgentRunContext("original-work");
+      await f.cleanup();
+      captured?.release();
+    }
+  });
   it("keeps a new human message on its own visible turn while a hidden refresh runs", async () => {
     const f = await createFixture({ active: false, preserveContent: true });
     let hiddenOperation: ReturnType<typeof createReplyOperation> | undefined;
@@ -536,19 +472,7 @@ describe("registered progress refresh admission", () => {
         f.scope.agentId,
       );
       const respond = vi.fn<RespondFn>();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "hidden-start",
-          method: "progressCard.refresh",
-          params: { sessionKey: f.scope.sessionKey, idempotencyKey: "hidden-start" },
-        },
-        client: f.client,
-        context: f.context,
-        respond,
-        isWebchatConnect: () => true,
-        extraHandlers: createProgressCardHandlers(),
-      });
+      await refreshCard(f, "hidden-start", respond, { id: "hidden-start" });
       const accepted = respond.mock.calls[0]?.[1];
       if (!isRecord(accepted) || typeof accepted.runId !== "string") {
         throw new Error("Missing hidden refresh acceptance");
@@ -607,19 +531,7 @@ describe("registered progress refresh admission", () => {
     try {
       f.client.connect.scopes = ["operator.read"];
       const respond = vi.fn<RespondFn>();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "refresh",
-          method: "progressCard.refresh",
-          params: { sessionKey: f.scope.sessionKey, idempotencyKey: "denied" },
-        },
-        client: f.client,
-        context: f.context,
-        respond,
-        isWebchatConnect: () => true,
-        extraHandlers: createProgressCardHandlers(),
-      });
+      await refreshCard(f, "denied", respond);
       expect(respond).toHaveBeenCalledWith(
         false,
         undefined,

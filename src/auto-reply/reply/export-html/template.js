@@ -2,8 +2,6 @@
 (function () {
   "use strict";
 
-  // DATA LOADING
-
   const base64 = document.getElementById("session-data").textContent;
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -21,8 +19,6 @@
     warning,
   } = data;
 
-  // URL PARAMETER HANDLING
-
   // Check for injected params (when loaded in iframe via srcdoc) or use window.location
   const injectedParams = document.querySelector('meta[name="openclaw-url-params"]');
   const searchString = injectedParams
@@ -33,11 +29,8 @@
   const urlTargetId = urlParams.get("targetId");
   const leafId = urlLeafId || defaultLeafId;
 
-  // DATA STRUCTURES
-
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
 
-  // Tool call lookup (toolCallId -> {name, arguments})
   const toolCallMap = new Map();
   for (const entry of entries) {
     if (entry.type === "message" && entry.message.role === "assistant") {
@@ -52,7 +45,6 @@
     }
   }
 
-  // Label lookup (entryId -> label string)
   // Labels are stored in 'label' entries that reference their target via targetId
   const labelMap = new Map();
   for (const entry of entries) {
@@ -61,12 +53,6 @@
     }
   }
 
-  // TREE DATA PREPARATION (no DOM, pure data)
-
-  /**
-   * Build tree structure from flat entries.
-   * Returns array of root nodes, each with { entry, children, label }.
-   */
   function buildTree() {
     const nodeMap = new Map();
     const roots = [];
@@ -81,16 +67,11 @@
 
     for (const entry of entries) {
       const node = nodeMap.get(entry.id);
-      if (entry.parentId === null || entry.parentId === undefined || entry.parentId === entry.id) {
-        roots.push(node);
-      } else {
-        const parent = nodeMap.get(entry.parentId);
-        if (parent) {
-          parent.children.push(node);
-        } else {
-          roots.push(node);
-        }
-      }
+      const parent =
+        entry.parentId != null && entry.parentId !== entry.id
+          ? nodeMap.get(entry.parentId)
+          : undefined;
+      (parent ? parent.children : roots).push(node);
     }
 
     function sortChildren(node) {
@@ -104,15 +85,11 @@
     return roots;
   }
 
-  /**
-   * Get array of entries from root to target (the conversation path).
-   */
   function getPath(targetId) {
     const path = [];
     let current = byId.get(targetId);
     while (current) {
       path.push(current);
-      // Stop if no parent or self-referencing (root)
       if (!current.parentId || current.parentId === current.id) {
         break;
       }
@@ -121,7 +98,6 @@
     return path.reverse();
   }
 
-  // Tree node lookup for finding leaves
   let treeNodeMap = null;
 
   /**
@@ -145,7 +121,6 @@
       return nodeId;
     }
 
-    // Follow the newest (last) child at each level
     let current = node;
     while (current.children.length > 0) {
       current = current.children[current.children.length - 1];
@@ -188,19 +163,9 @@
 
       const children = getChildren(node);
       const multipleChildren = children.length > 1;
-      let childIndent;
-      if (multipleChildren) {
-        // Parent branches: children get +1
-        childIndent = indent + 1;
-      } else if (justBranched && indent > 0) {
-        // First generation after a branch: +1 for visual grouping
-        childIndent = indent + 1;
-      } else {
-        // Single-child chain: stay flat
-        childIndent = indent;
-      }
+      // Indent branches and their first generation; single-child chains stay flat.
+      const childIndent = multipleChildren || (justBranched && indent > 0) ? indent + 1 : indent;
 
-      // Build gutters for children
       const connectorDisplayed = showConnector && !isVirtualRootChild;
       const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
       const connectorPosition = Math.max(0, currentDisplayIndent - 1);
@@ -272,8 +237,6 @@
     return prefix.join("");
   }
 
-  // FILTERING (pure data)
-
   let filterMode = "default";
   let searchQuery = "";
 
@@ -287,14 +250,10 @@
     if (typeof content === "string") {
       return content.trim().length > 0;
     }
-    if (Array.isArray(content)) {
-      for (const c of content) {
-        if (c.type === "text" && c.text && c.text.trim().length > 0) {
-          return true;
-        }
-      }
-    }
-    return false;
+    return (
+      Array.isArray(content) &&
+      content.some((c) => c.type === "text" && c.text && c.text.trim().length > 0)
+    );
   }
 
   function extractContent(content) {
@@ -413,7 +372,7 @@
         case "all":
           passesFilter = true;
           break;
-        default: // 'default'
+        default:
           passesFilter = !isSettingsEntry;
           break;
       }
@@ -465,7 +424,7 @@
     }
 
     const visibleChildren = new Map();
-    visibleChildren.set(null, []); // root-level nodes
+    visibleChildren.set(null, []);
 
     for (const flatNode of filteredNodes) {
       const nodeId = flatNode.node.entry.id;
@@ -488,8 +447,6 @@
       (nodeId) => filteredNodeMap.get(nodeId),
     );
   }
-
-  // TREE DISPLAY TEXT (pure data -> string)
 
   function shortenPath(p) {
     if (typeof p !== "string") {
@@ -647,7 +604,10 @@
               `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`
             );
           }
-          return labelHtml + `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`;
+          return (
+            labelHtml +
+            `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`
+          );
         }
         if (msg.role === "bashExecution") {
           const cmd = truncate(normalize(msg.command || ""));
@@ -677,13 +637,14 @@
       case "model_change":
         return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
       case "thinking_level_change":
-        return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
+        return (
+          labelHtml +
+          `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`
+        );
       default:
         return labelHtml + `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`;
     }
   }
-
-  // TREE RENDERING (DOM manipulation)
 
   let currentLeafId = leafId;
   let currentTargetId = urlTargetId || leafId;
@@ -775,8 +736,6 @@
     renderTree();
   }
 
-  // MESSAGE RENDERING
-
   function formatTokens(count) {
     if (count < 1000) {
       return count.toString();
@@ -853,21 +812,19 @@
   }
 
   function findToolResult(toolCallId) {
-    for (const entry of entries) {
-      if (entry.type === "message" && entry.message.role === "toolResult") {
-        if (entry.message.toolCallId === toolCallId) {
-          return entry.message;
-        }
-      }
-    }
-    return null;
+    return (
+      entries.find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "toolResult" &&
+          entry.message.toolCallId === toolCallId,
+      )?.message ?? null
+    );
   }
 
   function highlightCode(code, lang) {
     try {
-      return lang
-        ? hljs.highlight(code, { language: lang }).value
-        : hljs.highlightAuto(code).value;
+      return lang ? hljs.highlight(code, { language: lang }).value : hljs.highlightAuto(code).value;
     } catch {
       return escapeHtml(code);
     }
@@ -877,7 +834,7 @@
     if (lang) {
       return highlightCode(lines.join("\n"), lang);
     }
-    return lines.map((line) => `<div>${escapeHtml(replaceTabs(line))}</div>`).join("");
+    return lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
   }
 
   function formatExpandableOutput(text, maxLines, lang) {
@@ -956,7 +913,8 @@
         if (filePath !== null && (offset !== undefined || limit !== undefined)) {
           const startLine = offset ?? 1;
           const endLine = limit !== undefined ? startLine + limit - 1 : "";
-          pathHtml += `<span class="line-numbers">:${startLine}${endLine ? "-" + endLine : ""}</span>`;
+          const lineNumbers = `:${startLine}${endLine ? "-" + endLine : ""}`;
+          pathHtml += `<span class="line-numbers">${escapeHtml(lineNumbers)}</span>`;
         }
 
         html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
@@ -1037,10 +995,6 @@
     return html;
   }
 
-  /**
-   * Download the session data as a JSONL file.
-   * Reconstructs the original format: header line + entry lines.
-   */
   window.downloadSessionJson = function () {
     const lines = [];
     if (header) {
@@ -1067,9 +1021,8 @@
    * URL format: base?gistId&leafId=<leafId>&targetId=<entryId>
    */
   function buildShareUrl(entryId) {
-    // Check for injected base URL (used when loaded in iframe via srcdoc)
+    // The iframe's srcdoc location cannot identify the share target.
     const baseUrlMeta = document.querySelector('meta[name="openclaw-share-base-url"]');
-    const baseUrl = baseUrlMeta ? baseUrlMeta.content : window.location.href.split("?")[0];
 
     const url = new URL(window.location.href);
     // Find the gist ID (first query param without value, e.g., ?abc123)
@@ -1079,20 +1032,14 @@
     params.set("leafId", currentLeafId);
     params.set("targetId", entryId);
 
-    // If we have an injected base URL (iframe context), use it directly
     if (baseUrlMeta) {
-      return `${baseUrl}&${params.toString()}`;
+      return `${baseUrlMeta.content}&${params.toString()}`;
     }
 
-    // Otherwise build from current location (direct file access)
     url.search = gistId ? `?${gistId}&${params.toString()}` : `?${params.toString()}`;
     return url.toString();
   }
 
-  /**
-   * Copy text to clipboard with visual feedback.
-   * Uses navigator.clipboard with fallback to execCommand for HTTP contexts.
-   */
   async function copyToClipboard(text, button) {
     let success = false;
     try {
@@ -1246,8 +1193,6 @@
     return "";
   }
 
-  // HEADER / STATS
-
   function computeStats(entryList) {
     let userMessages = 0,
       assistantMessages = 0,
@@ -1272,18 +1217,16 @@
             models.add(msg.provider ? `${msg.provider}/${msg.model}` : msg.model);
           }
           if (msg.usage) {
-            tokens.input += msg.usage.input || 0;
-            tokens.output += msg.usage.output || 0;
-            tokens.cacheRead += msg.usage.cacheRead || 0;
-            tokens.cacheWrite += msg.usage.cacheWrite || 0;
-            if (msg.usage.cost) {
-              cost.input += msg.usage.cost.input || 0;
-              cost.output += msg.usage.cost.output || 0;
-              cost.cacheRead += msg.usage.cost.cacheRead || 0;
-              cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
+            for (const key of Object.keys(tokens)) {
+              tokens[key] += msg.usage[key] || 0;
+              if (msg.usage.cost) {
+                cost[key] += msg.usage.cost[key] || 0;
+              }
             }
           }
-          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter((c) => c.type === "toolCall").length;
+          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter(
+            (c) => c.type === "toolCall",
+          ).length;
         }
         if (msg.role === "toolResult") {
           toolResults++;
@@ -1335,7 +1278,7 @@
       ["customMessages", "custom"],
       ["compactions", "compactions"],
       ["branchSummaries", "branch summaries"],
-    ].flatMap(([key, label]) => globalStats[key] ? [`${globalStats[key]} ${label}`] : []);
+    ].flatMap(([key, label]) => (globalStats[key] ? [`${globalStats[key]} ${label}`] : []));
 
     let html = "";
     if (warning) {
@@ -1358,7 +1301,6 @@
             </div>
           </div>`;
 
-    // Render system prompt (user's base prompt, applies to all providers)
     if (systemPrompt) {
       const lines = systemPrompt.split("\n");
       const previewLines = 10;
@@ -1418,8 +1360,6 @@
 
     return html;
   }
-
-  // NAVIGATION
 
   const entryCache = new Map();
 
@@ -1492,8 +1432,6 @@
       }
     }, 0);
   }
-
-  // INITIALIZATION
 
   // Escape HTML tags in text (but not code blocks)
   function escapeHtmlTags(text) {
@@ -1583,12 +1521,10 @@
     return `${html}>${text}</a>`;
   }
 
-  // Configure marked with syntax highlighting and HTML escaping for text
   marked.use({
     breaks: true,
     gfm: true,
     renderer: {
-      // Code blocks: syntax highlight, no HTML escaping
       code(token) {
         const code = token.text;
         const lang = token.lang;
@@ -1599,7 +1535,6 @@
       text(token) {
         return token.tokens ? false : escapeHtmlTags(escapeHtml(token.text));
       },
-      // Inline code: escape HTML
       codespan(token) {
         return `<code>${escapeHtml(token.text)}</code>`;
       },
@@ -1673,6 +1608,7 @@
     if (e.key === "Escape") {
       searchInput.value = "";
       searchQuery = "";
+      treeRendered = false;
       navigateTo(leafId, "bottom");
     }
     if (e.ctrlKey && e.key === "t") {
@@ -1685,7 +1621,6 @@
     }
   });
 
-  // If URL has targetId, scroll to that specific message; otherwise stay at top
   if (leafId) {
     if (urlTargetId && byId.has(urlTargetId)) {
       navigateTo(leafId, "target", urlTargetId);

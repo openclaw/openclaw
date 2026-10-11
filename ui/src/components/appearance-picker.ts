@@ -7,7 +7,7 @@ import type {
 } from "../../../src/plugin-sdk/control-ui-components.js";
 import { OpenClawLightDomElement, OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { resolveSessionIconGraphic } from "./session-icon-glyph-registry.ts";
-import { handleAppearanceGridKeydown, renderAppearancePicker } from "./session-icon-picker.ts";
+import { renderAppearancePicker } from "./session-icon-picker.ts";
 import "../styles/sidebar-menus.css";
 
 export class AppearancePicker extends OpenClawLightDomElement {
@@ -66,7 +66,6 @@ export class AppearancePicker extends OpenClawLightDomElement {
           this.showGrid();
         }
       },
-      onGridKeydown: handleAppearanceGridKeydown,
     });
   }
 }

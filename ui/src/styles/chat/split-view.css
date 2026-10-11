@@ -111,15 +111,6 @@
   }
 }
 
-.chat-pane__header--centered {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-}
-
-.chat-pane__header--centered .chat-pane__header-trailing {
-  margin-left: 0;
-}
-
 /* These groups become the two mobile identity rows. They stay transparent to
    the desktop flex trail so its existing one-line geometry is unchanged. */
 .chat-pane__project-row,
@@ -180,7 +171,8 @@
 }
 
 .chat-pane__session-title-text,
-.chat-pane__parent-session-text {
+.chat-pane__parent-session-text,
+.chat-pane__sharing-member-label {
   display: block;
   overflow: hidden;
   white-space: nowrap;
@@ -249,7 +241,9 @@
   min-width: 0;
 }
 
-.chat-pane__placement-menu {
+.chat-pane__placement-menu,
+.chat-pane__branches-menu,
+.chat-pane__sharing-menu {
   flex: 0 0 auto;
 }
 
@@ -323,10 +317,6 @@
   line-height: 1.3;
 }
 
-.chat-pane__branches-menu {
-  flex: 0 0 auto;
-}
-
 /* Menu-item check only. The branches trigger is a .chat-icon-btn in the header
    row, so it keeps the shared 18px action glyph from .btn--icon svg. */
 .chat-pane__branch-active svg {
@@ -334,9 +324,56 @@
   height: 14px;
 }
 
+.chat-pane__branches-menu {
+  --versions-icon-column: 28px;
+}
+
+.chat-pane__versions-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-pane__versions-info {
+  margin-inline-start: auto;
+  width: var(--versions-icon-column);
+  min-width: var(--versions-icon-column);
+  height: 28px;
+  padding: 6px;
+}
+
+.chat-pane__versions-info svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-pane__versions-help {
+  --max-width: 280px;
+
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.chat-pane__branches-menu::part(menu) {
+  width: min(360px, calc(100vw - 24px));
+}
+
 .chat-pane__branch-item {
-  min-width: 260px;
-  max-width: 360px;
+  min-width: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* Current is a readable selection, not an unavailable action. */
+.chat-pane__branch-item[data-active="true"] {
+  opacity: 1;
+  cursor: var(--cursor-action);
 }
 
 .chat-pane__branch-copy {
@@ -358,7 +395,9 @@
 
 .chat-pane__branch-active {
   display: inline-flex;
-  margin-left: auto;
+  width: var(--versions-icon-column);
+  align-items: center;
+  justify-content: center;
   color: var(--accent);
 }
 
@@ -420,10 +459,6 @@
   stroke-width: 1.6px;
 }
 
-.chat-pane__sharing-menu {
-  flex: 0 0 auto;
-}
-
 .chat-pane__public-share-indicator {
   display: inline-flex;
   flex: 0 0 auto;
@@ -443,26 +478,6 @@
 .chat-pane__public-share-indicator svg {
   width: 13px;
   height: 13px;
-}
-
-.chat-pane__header-center .chat-pane__sharing-menu,
-.chat-pane__header-center .chat-pane__draft-indicator {
-  position: absolute;
-  inset-block-start: 50%;
-  inset-inline-start: 100%;
-  display: inline-flex;
-  transform: translateY(-50%);
-}
-
-.chat-pane__header-center .chat-pane__sharing-trigger {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
 }
 
 .chat-pane__sharing-menu::part(menu) {
@@ -492,24 +507,12 @@
   padding: 6px 12px;
 }
 
-.chat-pane__sharing-members-title {
-  margin-top: 8px;
-}
-
+.chat-pane__sharing-members-title,
 .chat-pane__sharing-owner-title {
   margin-top: 8px;
 }
 
-.chat-pane__sharing-owner {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  min-height: 36px;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
-  font-size: 12px;
-}
-
+.chat-pane__sharing-owner,
 .chat-pane__sharing-member-skeleton {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
@@ -517,6 +520,10 @@
   align-items: center;
   gap: 10px;
   padding: 6px 12px;
+}
+
+.chat-pane__sharing-owner {
+  font-size: 12px;
 }
 
 .chat-pane__sharing-member-skeleton-icon {
@@ -556,13 +563,6 @@
   justify-content: center;
 }
 
-.chat-pane__sharing-member-label {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chat-pane__sharing-status--error {
   max-width: 260px;
   color: var(--danger);
@@ -578,16 +578,6 @@
   height: 15px;
 }
 
-.chat-pane__header-center .chat-pane__draft-indicator {
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
-}
-
 /* A full split header measures 793px including insets, so secondary controls
    shed through 800px of container content; restoration then has 8px+ slack.
    The close action survives at the 320px pane floor. */
@@ -596,12 +586,12 @@
      styling rule above; a bare class here silently loses that cascade. */
   .chat-pane__actions .chat-pane__split-down,
   .chat-pane__actions .chat-pane__split-right,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__nav-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__palette-open,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__participants,
-  .chat-pane__header:has(.chat-pane__close-pane) openclaw-session-owner-chip {
+  .chat-pane__header.chat-pane__header--closable .chat-side-panel-toggle,
+  .chat-pane__header.chat-pane__header--closable .chat-pane__sharing-menu,
+  .chat-pane__header.chat-pane__header--closable .chat-pane__nav-toggle,
+  .chat-pane__header.chat-pane__header--closable .chat-pane__palette-open,
+  .chat-pane__header.chat-pane__header--closable .chat-pane__participants,
+  .chat-pane__header.chat-pane__header--closable openclaw-session-owner-chip {
     display: none;
   }
 }
@@ -615,18 +605,6 @@
 .chat-header-session-menu--compact .session-menu__item {
   flex: 0 0 34px;
   min-height: 34px;
-}
-
-.chat-header-session-menu--compact .session-menu__back {
-  z-index: 1;
-  position: sticky;
-  top: 0;
-  background: var(--wa-color-surface-raised);
-}
-
-.chat-header-session-menu--compact::part(menu) {
-  max-height: calc(100dvh - 16px);
-  overflow-y: auto;
 }
 
 .chat-header-session-menu--compact-sharing::part(menu) {

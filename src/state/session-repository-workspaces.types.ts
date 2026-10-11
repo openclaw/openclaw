@@ -14,3 +14,27 @@ export type SessionRepositoryWorkspaceRecord = {
   createdAtMs: number;
   updatedAtMs: number;
 };
+
+export type RepositoryWorkspaceOwner = { agentId: string; sessionKey: string };
+export type RepositoryWorkspaceCreate = RepositoryWorkspaceOwner & {
+  url: string;
+  requestedRef?: string;
+  runSetupScript?: boolean;
+  branch?: string;
+};
+export type RepositoryWorkspaceMutation = { workspaceId: string; expectedRevision: number };
+export type RepositoryWorkspaceBase = RepositoryWorkspaceMutation & {
+  baseCommit: string;
+  baseManifestHash?: string;
+};
+export type RepositoryWorkspaceCheckpoint = RepositoryWorkspaceMutation & {
+  checkpointRef: string;
+  manifestHash: string;
+};
+
+export type RepositoryWorkspaceMutationResult = {
+  workspaceId: string;
+  workspace: SessionRepositoryWorkspaceRecord | undefined;
+  owner: RepositoryWorkspaceOwner | undefined;
+  changed: boolean;
+};

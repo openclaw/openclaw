@@ -48,14 +48,14 @@ function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
   return Math.min(GOOGLECHAT_MEDIA_TIMEOUT_GRACE_MS + transferMs, GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS);
 }
 
-async function readGoogleChatErrorResponse(response: Response, label: string): Promise<string> {
+async function readGoogleChatErrorResponse(response: Response): Promise<string> {
   const text =
     (await readResponseTextSnippet(response, {
       maxBytes: GOOGLECHAT_ERROR_BODY_MAX_BYTES,
       maxChars: GOOGLECHAT_ERROR_BODY_MAX_BYTES,
       chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
       onIdleTimeout: ({ chunkTimeoutMs }) =>
-        new Error(`${label} error response stalled after ${chunkTimeoutMs}ms`),
+        new Error(`Google Chat API error response stalled after ${chunkTimeoutMs}ms`),
     })) ?? "";
   // Remote API errors can reflect the request's Authorization header. Force
   // tool-payload redaction before the text enters any surfaced error message.
@@ -68,7 +68,6 @@ async function withGoogleChatResponse<T>(
     url: string;
     init?: Pick<RequestInit, "method" | "body"> & { headers?: Record<string, string> };
     auditContext: string;
-    errorPrefix?: string;
     timeoutMs?: number;
     handleResponse: (response: Response) => Promise<T>;
   },
@@ -78,7 +77,6 @@ async function withGoogleChatResponse<T>(
     url,
     init,
     auditContext,
-    errorPrefix = "Google Chat API",
     timeoutMs = GOOGLECHAT_API_TIMEOUT_MS,
     handleResponse,
     assertDirectAdapterHandoff,
@@ -107,10 +105,10 @@ async function withGoogleChatResponse<T>(
   });
   try {
     if (!response.ok) {
-      const text = await readGoogleChatErrorResponse(response, errorPrefix);
+      const text = await readGoogleChatErrorResponse(response);
       throw new GoogleChatApiError(
         response.status,
-        `${errorPrefix} ${response.status}: ${text || response.statusText}`,
+        `Google Chat API ${response.status}: ${text || response.statusText}`,
       );
     }
     return await handleResponse(response);
@@ -190,15 +188,8 @@ export async function downloadGoogleChatMedia(params: {
   });
 }
 
-/**
- * A Google Chat `thread` must be a `spaces/{space}/threads/{thread}` resource
- * name that belongs to the target space. Reply routing sometimes yields other
- * shapes — a bare id, a `spaces/{space}/messages/{message}` name, or a thread
- * from a different (or wrongly-cased) space — and passing any of those makes the
- * Chat API reject the whole send with `400 INVALID_ARGUMENT`. Accept only a
- * well-formed, same-space thread name; callers drop the rest so the message
- * still delivers to the space (as a new thread) instead of failing outright.
- */
+// Invalid or cross-space thread names make Chat reject the entire send. Drop
+// them so the message still reaches the space as a new thread.
 function isUsableGoogleChatThreadName(thread: string, space: string): boolean {
   return /^spaces\/[^/]+\/threads\/[^/]+$/.test(thread) && thread.startsWith(`${space}/threads/`);
 }
@@ -221,16 +212,6 @@ export async function sendGoogleChatMessage(
   ) {
     return null;
   }
-  const body: Record<string, unknown> = {};
-  if (text) {
-    body.text = text;
-  }
-  if (cardsV2 && cardsV2.length > 0) {
-    body.cardsV2 = cardsV2;
-  }
-  if (usableThread) {
-    body.thread = { name: usableThread };
-  }
   const urlObj = new URL(`${CHAT_API_BASE}/${space}/messages`);
   if (usableThread) {
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
@@ -239,7 +220,14 @@ export async function sendGoogleChatMessage(
   const result = await fetchJson<{ name?: string; thread?: { name?: string } }>(
     account,
     url,
-    { method: "POST", body: JSON.stringify(body) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        text: text || undefined,
+        cardsV2: cardsV2?.length ? cardsV2 : undefined,
+        thread: usableThread ? { name: usableThread } : undefined,
+      }),
+    },
     {
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
@@ -263,16 +251,9 @@ export async function updateGoogleChatMessage(params: {
     throw new Error("Google Chat message update requires text or cardsV2.");
   }
   const url = `${CHAT_API_BASE}/${messageName}?updateMask=${updateMask.join(",")}`;
-  const body: Record<string, unknown> = {};
-  if (text !== undefined) {
-    body.text = text;
-  }
-  if (cardsV2 !== undefined) {
-    body.cardsV2 = cardsV2;
-  }
   const result = await fetchJson<{ name?: string }>(account, url, {
     method: "PATCH",
-    body: JSON.stringify(body),
+    body: JSON.stringify({ text, cardsV2 }),
   });
   return { messageName: result.name };
 }

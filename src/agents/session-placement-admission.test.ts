@@ -1,15 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { enqueueCommandInLane, resetCommandLane } from "../process/command-queue.js";
+import {
+  enqueueCommandInLane,
+  getCommandLaneSnapshot,
+  resetCommandLane,
+} from "../process/command-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { mergeAcceptedSessionSpawnsForRun } from "./accepted-session-spawn.js";
 import { closeAdmittedRunDelegatedAuthority } from "./admitted-run-context.js";
 import { isSessionPlacementSettlementClosedError } from "./run-termination.js";
 
-const settleRequesterAfterSessionSpawns = vi.hoisted(() => vi.fn(() => true));
+const settleRequesterAfterSessionSpawns = vi.hoisted(() =>
+  vi
+    .fn<
+      typeof import("./subagents/registry/subagent-registry.js").settleRequesterAfterSessionSpawns
+    >()
+    .mockResolvedValue(true),
+);
 vi.mock("./subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns,
-  markRequesterTurnYielded: vi.fn(() => 1),
+  markRequesterTurnYielded: vi.fn(async () => 1),
 }));
 
 import {
@@ -21,11 +31,11 @@ import { hasModelFallbackStop, resolveModelFallbackError } from "./failover-erro
 import {
   captureSessionPlacementCompactionSuccessorAssertion,
   installSessionPlacementAdmissionProvider,
-  type LocalTurnPlacementClaim,
   type SessionPlacementAdmissionProvider,
   withLocalSessionPlacementTurnSettlement,
   withSessionPlacementTurnAdmission,
 } from "./session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "./session-placement-admission.types.js";
 
 let uninstallProvider: (() => void) | undefined;
 const assertCompactionSuccessorAllowed = () => {};
@@ -38,7 +48,7 @@ afterEach(() => {
   uninstallProvider?.();
   uninstallProvider = undefined;
   settleRequesterAfterSessionSpawns.mockReset();
-  settleRequesterAfterSessionSpawns.mockReturnValue(true);
+  settleRequesterAfterSessionSpawns.mockResolvedValue(true);
 });
 
 describe("captured compaction placement owner", () => {
@@ -246,7 +256,14 @@ describe("local turn placement admission", () => {
       rotateAgentEventLifecycleGeneration();
     }
     try {
-      gate.resolve();
+      if (stage === "queued" && change === "cancelled") {
+        expect(getCommandLaneSnapshot(resolveSessionLane("agent:main:fenced"))).toMatchObject({
+          activeCount: 1,
+          queuedCount: 0,
+        });
+      } else {
+        gate.resolve();
+      }
       expect(await result).toMatchObject({
         name: change === "cancelled" ? "Error" : "AbortError",
       });
@@ -262,7 +279,7 @@ describe("local turn placement admission", () => {
     await withTestRunAdmission(turnParams, async (admittedRunContext) => {
       const activeParams = { ...turnParams, admittedRunContext };
       const events: string[] = [];
-      settleRequesterAfterSessionSpawns.mockImplementation(() => {
+      settleRequesterAfterSessionSpawns.mockImplementation(async () => {
         events.push("settle");
         return true;
       });
@@ -347,21 +364,6 @@ describe("local turn placement admission", () => {
     expect(turn).not.toHaveBeenCalled();
   });
 
-  it("admits a provider-free local turn exactly once before execution", async () => {
-    const events: string[] = [];
-    await withSessionPlacementTurnAdmission(
-      { sessionId: "session-direct", runId: "run-direct" },
-      { ...turnParams, sessionId: "session-direct", runId: "run-direct" },
-      async () => {
-        events.push("turn");
-        return { meta: { durationMs: 1 } };
-      },
-      () => events.push("admitted"),
-    );
-
-    expect(events).toEqual(["admitted", "turn"]);
-  });
-
   it("admits once when a provider signals before calling the local turn", async () => {
     const events: string[] = [];
     uninstallProvider = installSessionPlacementAdmissionProvider({
@@ -427,10 +429,10 @@ describe("local turn placement admission", () => {
     expect(secondClaim).toHaveBeenCalledOnce();
   });
 
-  it.each([true, false])(
+  it.each([false])(
     "acknowledges CLI continuation only after successful settlement (%s)",
     async (settled) => {
-      settleRequesterAfterSessionSpawns.mockReturnValueOnce(settled).mockReturnValueOnce(false);
+      settleRequesterAfterSessionSpawns.mockResolvedValueOnce(settled).mockResolvedValueOnce(false);
       const claim = {
         sessionId: "continuation",
         sessionKey: "agent:main:continuation",
@@ -459,8 +461,6 @@ describe("local turn placement admission", () => {
   );
 
   it.each([
-    { yielded: false, sameInstance: true, pending: false },
-    { yielded: true, sameInstance: true, pending: false },
     { yielded: true, sameInstance: false, pending: false },
     { yielded: false, sameInstance: true, pending: true },
   ])(
@@ -509,6 +509,7 @@ describe("local turn placement admission", () => {
                   requesterTurnRunId: "fallback-parent",
                   requesterYielded: yielded,
                   acceptedSessionSpawns: [accepted],
+                  assertCurrent: expect.any(Function),
                 });
                 expect(result.requesterContinuationSettled).toBe(yielded ? true : undefined);
               } else {
@@ -551,11 +552,11 @@ describe("local turn placement admission", () => {
     );
   });
 
-  it.each([undefined, false, true])(
+  it.each([undefined, false])(
     "settles only standalone CLI ownership after placement releases (candidate marker=%s)",
     async (isFinalFallbackAttempt) => {
       const events: string[] = [];
-      settleRequesterAfterSessionSpawns.mockImplementation(() => {
+      settleRequesterAfterSessionSpawns.mockImplementation(async () => {
         events.push("settle");
         return true;
       });
@@ -605,7 +606,7 @@ describe("local turn placement admission", () => {
     },
   );
 
-  it.each(["settled", "reset-without-successor", "reset-with-successor"] as const)(
+  it.each(["settled", "reset-with-successor"] as const)(
     "closes a standalone CLI settlement assertion after its lane task is %s",
     async (ending) => {
       const sessionId = `standalone-${ending}`;

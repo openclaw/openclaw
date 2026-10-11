@@ -1,8 +1,9 @@
 ---
-summary: "CLI reference for listing, archiving, deleting, and maintaining stored sessions"
+summary: "CLI reference for listing, importing, archiving, deleting, and maintaining stored sessions"
 read_when:
   - You want to list stored sessions and see recent activity
   - You want to archive or delete sessions from a headless Gateway
+  - You want to preserve native tool transcripts in OpenClaw
 title: "Sessions"
 ---
 
@@ -37,6 +38,13 @@ session keys.
 
 Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
 or `m` labels. JSON output retains exact numeric counts.
+
+The context denominator follows the selected model and runtime, using the local
+Gateway's published catalog, saved metadata, configured limits, or a matching
+verified run budget. Reading a session list does not start model discovery.
+Unknown capacity is `?` in the table and `null` in JSON, with no percentage.
+If Gateway inspection or its catalog read fails, the command warns and still lists
+stored sessions using saved or configured capacity.
 
 Flags:
 
@@ -98,11 +106,65 @@ skipped.
   "hasMore": false,
   "activeMinutes": null,
   "sessions": [
-    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-6-astra" },
+    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.6-sol" },
     { "agentId": "work", "key": "agent:work:main", "model": "anthropic/claude-sonnet-4-6" }
   ]
 }
 ```
+
+## Import transcripts
+
+Preserve native session catalog transcripts in the running Gateway's durable
+session store:
+
+```bash
+openclaw sessions import claude <thread-id>
+openclaw sessions import codex <thread-id> --source-home <home-id>
+openclaw sessions import claude <thread-id> --host <host-id> --agent work
+openclaw sessions import --all --json
+openclaw sessions import --all --catalog claude --limit 20 --dry-run
+openclaw sessions import --all --host <host-id>
+```
+
+The catalog IDs for Claude Code and Codex are `claude` and `codex`. Other
+catalogs with transcript reads use the same command. For one transcript without
+`--host`, the CLI discovers Gateway hosts in that catalog: it prefers
+`gateway:local` when present, otherwise uses the only Gateway host. If no
+unambiguous Gateway host exists, pass `--host <host-id>` explicitly. Use the
+catalog row's host and `sourceHomeId` to select another machine or native tool
+home. `--agent` chooses
+the destination agent. Imports support Gateway-local, paired-node, macOS app,
+and Linux app sources that the caller may read.
+
+Import creates an ordinary OpenClaw session containing untrusted reference
+material. Imported copies start as [drafts](/concepts/multi-user#drafts), visible
+only to their creator and Gateway admins. Publish the copy through the session
+sharing controls to share it; re-importing preserves its current visibility.
+When drafts are disabled, imported copies follow the Gateway's default visibility.
+It preserves the catalog's projected messages independently of native
+tool cleanup; it does not resume the native session or bind the copy to its
+model or machine. Repeating the same import reuses the copy and appends only new
+items. Each import reads up to 50,000 items and 64 MiB, keeping the newest history
+when the bound is reached. Existing per-item text limits still apply. An
+incomplete result warns that older history was omitted. See
+[Session catalogs](/nodes/session-catalogs#import-transcripts).
+
+`--all` pages through visible catalog rows and imports them sequentially.
+New copies use the catalog row name as their title; re-importing preserves an
+existing copy's title. Names are trimmed and limited to 500 UTF-16 code units.
+`--catalog` and `--host` filter sources; `--limit <n>` caps the total number of
+sessions attempted. `--dry-run` lists selected sources without importing them
+and does not predict item counts or run write authorization checks. A failure
+for one source does not stop the remaining sources. The command exits non-zero
+if any import or catalog page fails.
+
+Connection overrides are `--url`, `--token`, `--password`, and `--timeout <ms>`
+(default five minutes per request). Human output reports imported, updated, or
+unchanged sessions with item counts and a final summary. `--json` emits one
+envelope with `ok`, `operation: "import"`, `dryRun`, `results`, and `summary`.
+Successful results include the source locator, `status`, `sessionKey`,
+`importedItems`, `totalItems`, `complete`, and `created`; dry-run results have
+`status: "would_import"`. Failed results include `status: "failed"` and `error`.
 
 ## Archive sessions
 
@@ -192,6 +254,10 @@ Gateway lifecycle checks: `global` previews can still show an archive or delete
 action that the Gateway refuses. Explicitly selected non-default global deletion
 remains supported. The real archive or delete request is authoritative.
 
+Agent-qualified aliases keep their selected owner through lookup and mutation.
+For example, `sessions delete agent:work:main --yes` still targets `work` when
+the Gateway describes that session using the resolved key `global`.
+
 Example mixed-result JSON:
 
 ```json
@@ -222,8 +288,13 @@ openclaw sessions --all-agents tail --follow
 ```
 
 `openclaw sessions tail` renders recent runtime trajectory events as compact
-progress lines. Without `--session-key`, it tails running sessions first, then
-the latest stored session. `--tail <count>` controls how many existing events
+progress lines. Without `--session-key`, it asks the configured Gateway for
+running sessions and tails matching local sessions first, then falls back to
+the most recently active stored session. If the Gateway is unreachable, it prints
+`Gateway unreachable: showing the most recently active session`. An explicit
+`--store` skips the Gateway lookup, orders by activity, and prints
+`explicit store: ordered by activity`. An explicit `--session-key` selects only
+that local session without a Gateway lookup. `--tail <count>` controls how many existing events
 print before follow mode; default `80`, and `0` starts at the current end.
 `--follow` keeps watching the selected SQLite-backed sessions. Session keys use
 fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
@@ -258,9 +329,18 @@ the owner approves the exec request. The output directory is always resolved
 inside `.openclaw/trajectory-exports/` under the selected workspace.
 The file list in text and JSON output reports only artifacts written to the bundle.
 
+For stored keys without an agent prefix, such as `global`, export uses the
+configured default or sole agent. Pass `--agent <id>` when multiple agents are
+configured without a default.
+
 ## Cleanup maintenance
 
-Run maintenance now instead of waiting for the next write cycle:
+Run maintenance now instead of waiting for the next write cycle. Without
+`--store`, cleanup delegates to the reachable Gateway. Destructive local cleanup
+requires exclusive offline maintenance ownership; if a Gateway or another live
+owner holds the state, the command names that owner and refuses. Run cleanup
+without `--store` to use the Gateway, or stop the Gateway and other owners first.
+Dry-run previews remain available while the Gateway is running:
 
 ```bash
 openclaw sessions cleanup --dry-run
@@ -285,10 +365,10 @@ openclaw sessions cleanup --json
   `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
   session rows are preserved. Eligible empty files count as removed artifacts
   in both dry-run and applied summaries, even though they free zero bytes.
-- Cleanup reports short-lived Gateway model-run probe cleanup separately as
+- Cleanup reports short-lived Gateway model-run check cleanup separately as
   `modelRunPruned`. This only matches strict explicit keys shaped like
   `agent:*:explicit:model-run-<uuid>`. Retention is a fixed `24h` and is
-  pressure-gated: it only removes stale probe rows when session-entry
+  pressure-gated: it only removes stale check rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
 - `pruneAfter` archives eligible durable sessions in place, preserving their IDs
@@ -350,7 +430,7 @@ JSON result. Dry runs do not load harness plugins.
 Applied artifact cleanup counts only successful file removals. If a file cannot
 be deleted, it contributes no freed bytes and remains part of disk usage.
 Unreferenced artifact cleanup and legacy disk-budget enforcement continue with
-other eligible files. Canonical SQLite archive pruning stops after a deletion
+other eligible files. SQLite archive pruning stops after a deletion
 error to retain its database recovery copy. If usage stays above the target,
 check filesystem permissions and retry after resolving the deletion failure.
 
@@ -424,14 +504,14 @@ Review the preview, then apply cleanup and compact the copied database:
 )
 ```
 
-Explicit `--store` cleanup stays local. Doctor requires its target inside `OPENCLAW_STATE_DIR`
-and no Gateway using that state directory; the live Gateway can continue using
+Explicit `--store` cleanup stays local. Destructive cleanup and Doctor require their targets inside `OPENCLAW_STATE_DIR`
+and exclusive ownership of that state directory; the live Gateway can continue using
 its separate original state. Set `--session-sqlite-agent` to the copied database's
 owner; an explicit Doctor store selector otherwise defaults to `main`.
 
 `archive-age`, `archive-dashboard`, and `archive-cap` change session metadata
 while retaining transcript rows. Disk-budget cleanup can replace eligible
-history with compressed archives, whose canonical payload remains in SQLite.
+history with compressed archives, whose stored payload remains in SQLite.
 Doctor's `compact` step then reclaims free database pages with `VACUUM` and
 reports before/after database and WAL sizes. It does not choose more history
 to delete. Compare physical sizes and retained history, not only session counts;
@@ -463,6 +543,8 @@ openclaw sessions compact "agent:work:main" --agent work --json
 
 The command exits non-zero when the Gateway reports a failed compaction or is
 unreachable, so crons and scripts never mistake a silent no-op for success.
+A missing session is an error in both modes. An existing session with no history
+or nothing to truncate remains an explicit no-op.
 
 <Note>
 `openclaw agent --message '/compact ...'` is **not** a compaction path. Slash

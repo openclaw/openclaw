@@ -1,6 +1,10 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { jsonFieldBatches } from "./json-field-transfer.js";
+import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
   formatSqliteErrorCodeSuffix,
@@ -15,13 +19,15 @@ import {
 import {
   createOnlineReadOnlyBackup,
   prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSyncInProcess,
+  prepareSqliteReadOnlyCopyInProcess,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
+import { sqliteReadOnlyOperations } from "./sqlite-readonly-operation-registry.js";
 import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   SQLITE_INSPECTION_CONTENTION_PREFIX,
+  SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX,
   isSqliteSnapshotStagingMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
@@ -32,7 +38,10 @@ import {
   reconcileSqliteSnapshotRetirement,
 } from "./sqlite-snapshot-staging.js";
 import type { SqliteStagingToken } from "./sqlite-staging-token.js";
-import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabaseFileIdentity,
+} from "./sqlite-worker-identity.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
 const stagingTokens = new Map<string, SqliteStagingToken>();
@@ -42,7 +51,7 @@ const stagingTokens = new Map<string, SqliteStagingToken>();
 async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   const mode = args[0];
   const pathname = args[1];
-  const stagingRoot = args[2];
+  const stagingRoot = args[2] || undefined;
   if (
     (mode !== "sync" &&
       mode !== "async" &&
@@ -57,6 +66,13 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     };
   }
   try {
+    if (args.length > 4 || (args[3] !== undefined && mode !== "sync")) {
+      throw new Error(
+        "SQLite source identity is supported only for artifact-preserving sync copies",
+      );
+    }
+    const expectedSourceIdentity =
+      args[3] === undefined ? undefined : readDatabaseFileIdentity(JSON.parse(args[3]));
     if (mode === "staging-reconcile") {
       reconcileSqliteSnapshotRetirement(pathname);
       return { ok: true, location: pathname };
@@ -128,16 +144,22 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     } else {
       prepared =
         mode === "sync"
-          ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
+          ? await prepareSqliteReadOnlyCopyInProcess(pathname, stagingRoot, expectedSourceIdentity)
           : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     }
     releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
     return { ok: true, location: prepared.location };
   } catch (error) {
     const contention = error instanceof SqliteSourceChangedError || isSqliteLockError(error);
+    const allocationRefused =
+      (mode === "staging-create" || mode === "staging-create-legacy") &&
+      isPrivateDirectoryCreationRefused(error);
+    const prefix =
+      (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
+      (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
     return {
       ok: false,
-      message: `${contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : ""}${formatSqliteReadOnlyInspectionFailure(error)}`,
+      message: `${prefix}${formatSqliteReadOnlyInspectionFailure(error)}`,
     };
   }
 }
@@ -145,33 +167,80 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
 function runSession(): void {
   let busy = false;
   let closeRequested = false;
+  let stopping = false;
+  let finalExitCode = 0;
+  let retiring = false;
+  let activeWork = Promise.resolve();
   const transfers = createSqliteWorkerTransferOwner();
-  let activeTransfer: { requestId: number; transferId: number } | undefined;
-  const send = (id: number, result: unknown, failed = false) => {
-    process.send?.({ id, result }, (error) => {
-      if (error || failed) {
-        transfers.close();
-        process.exit(1);
+  let activeTransfer: { requestId: number; transferId: number; label: string } | undefined;
+  const stop = (failed = false) => {
+    if (failed) {
+      finalExitCode = 1;
+    }
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    // Pending imports and copies must settle before releasing their native tokens.
+    void activeWork.finally(() => {
+      const cleanup = [() => transfers.close(), ...stagingTokens.values()];
+      for (const close of cleanup) {
+        try {
+          close();
+        } catch (error) {
+          finalExitCode = 1;
+          process.stderr.write(
+            `SQLite read-only worker cleanup failed: ${formatSqliteReadOnlyInspectionFailure(error)}\n`,
+          );
+        }
       }
+      stagingTokens.clear();
+      activeTransfer = undefined;
+      process.stdin.destroy();
+      if (process.connected) {
+        process.disconnect?.();
+      }
+      process.exitCode = finalExitCode;
     });
   };
+  const send = (id: number, result: unknown, failed = false, onSent?: () => void) => {
+    if (stopping) {
+      return;
+    }
+    if (!process.connected || !process.send) {
+      stop(true);
+      return;
+    }
+    // A terminal reply closes admission now, but IPC stays owned until its write drains.
+    retiring ||= failed;
+    try {
+      process.send({ id, result }, (error) => {
+        if (error || failed) {
+          stop(true);
+          return;
+        }
+        onSent?.();
+        if (closeRequested && !busy) {
+          stop();
+        }
+      });
+    } catch {
+      stop(true);
+    }
+  };
   const fail = (id: number, error: unknown) => {
-    transfers.close();
     send(id, { ok: false, message: formatSqliteReadOnlyInspectionFailure(error) }, true);
   };
-  process.once("disconnect", () => {
-    if (busy) {
-      transfers.close();
-      process.exit(1);
-    }
-  });
+  process.once("disconnect", () => stop(busy));
   process.on("message", (message: unknown) => {
+    if (stopping || retiring) {
+      return;
+    }
     if (message === "close") {
       if (busy) {
         closeRequested = true;
       } else {
-        transfers.close();
-        process.disconnect?.();
+        stop();
       }
       return;
     }
@@ -181,10 +250,10 @@ function runSession(): void {
       message.id === activeTransfer.requestId &&
       isRecord(message.transfer)
     ) {
-      const { requestId, transferId } = activeTransfer;
+      const { requestId, transferId, label } = activeTransfer;
       try {
         if (message.transfer.transferId !== transferId) {
-          throw new Error("Auth profile transfer identity changed");
+          throw new Error(`${label} transfer identity changed`);
         }
         if (message.transfer.type === "next") {
           send(requestId, {
@@ -197,7 +266,7 @@ function runSession(): void {
           busy = false;
           send(requestId, { type: "complete" });
         } else {
-          throw new Error("Invalid auth profile transfer command");
+          throw new Error(`Invalid ${label.toLowerCase()} transfer command`);
         }
       } catch (error) {
         fail(requestId, error);
@@ -211,38 +280,83 @@ function runSession(): void {
       Number.isSafeInteger(message.id) &&
       Array.isArray(message.args) &&
       message.args.length === 2 &&
-      message.args[0] === "auth-profile-rows" &&
+      (message.args[0] === "auth-profile-rows" || message.args[0] === "operation") &&
       typeof message.args[1] === "string"
     ) {
       const id = message.id;
       const pathname = message.args[1];
-      const auth = message.auth;
+      const operation = message.args[0] === "operation";
+      const read = operation ? message.operation : message.auth;
       busy = true;
-      void (async () => {
+      const execute = async () => {
         if (
-          !isRecord(auth) ||
-          typeof auth.expectedIdentity !== "string" ||
-          !auth.expectedIdentity.startsWith("file:")
+          !isRecord(read) ||
+          typeof read.expectedIdentity !== "string" ||
+          !read.expectedIdentity.startsWith("file:")
         ) {
-          throw new Error("Auth profile read requires captured physical ownership");
+          throw new Error(
+            operation
+              ? "SQLite read requires captured physical ownership"
+              : "Auth profile read requires captured physical ownership",
+          );
         }
-        const { expectedIdentity } = auth;
+        const { expectedIdentity } = read;
+        if (operation) {
+          if (typeof read.command !== "string") {
+            throw new Error("Invalid SQLite read-only operation encoding");
+          }
+          const command: unknown = deserialize(Buffer.from(read.command, "base64"));
+          if (!isRecord(command) || typeof command.type !== "string" || !("input" in command)) {
+            throw new Error("Invalid SQLite read-only operation");
+          }
+          const request = { type: command.type, input: command.input };
+          await sqliteReadOnlyOperations.prepare(request.type);
+          if (stopping) {
+            return;
+          }
+          if (!sqliteReadOnlyOperations.has(request)) {
+            throw new Error(`Unknown SQLite read-only operation: ${request.type}`);
+          }
+          assertExistingDatabaseIdentity(pathname, expectedIdentity);
+          const value = sqliteReadOnlyOperations.execute(request, {
+            path: pathname,
+            env: process.env,
+          });
+          assertExistingDatabaseIdentity(pathname, expectedIdentity);
+          const handle = transfers.start(
+            [{ kind: "result", value: { operation: request.type, value } }].values(),
+            { kinds: ["result"] },
+          );
+          activeTransfer = { requestId: id, transferId: handle.id, label: "SQLite operation" };
+          send(id, { type: "start", handle });
+          return;
+        }
         // Domain code stays child-only; importing it from the host would reverse storage ownership.
         const { readAuthProfileRowsReadOnly } =
           await import("../agents/auth-profiles/sqlite-json.js");
+        if (stopping) {
+          return;
+        }
         assertExistingDatabaseIdentity(pathname, expectedIdentity);
         const rows = readAuthProfileRowsReadOnly(pathname);
+        if (read.artifactPreserving === true) {
+          rows.cacheable = false;
+        }
         assertExistingDatabaseIdentity(pathname, expectedIdentity);
-        const handle = transfers.start(
-          [
-            { kind: "store", value: rows.store },
-            { kind: "state", value: rows.state },
-          ].values(),
-          { kinds: ["store", "state"] },
-        );
-        activeTransfer = { requestId: id, transferId: handle.id };
-        send(id, { type: "start", handle: { ...handle, cacheable: rows.cacheable } });
-      })().catch((error: unknown) => fail(id, error));
+        function* rowFields() {
+          for (const batch of jsonFieldBatches(rows)) {
+            yield { kind: "fields", value: batch };
+          }
+        }
+        const handle = transfers.start(rowFields(), { kinds: ["fields"] });
+        activeTransfer = { requestId: id, transferId: handle.id, label: "Auth profile" };
+        send(id, { type: "start", handle });
+      };
+      activeWork = (
+        isRecord(read) && read.artifactPreserving === true
+          ? withArtifactPreservingStateReads(execute, { agentDatabases: true })
+          : execute()
+      ).catch((error: unknown) => fail(id, error));
       return;
     }
     if (
@@ -258,28 +372,24 @@ function runSession(): void {
       (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0])) ||
       !message.args.every((arg): arg is string => typeof arg === "string")
     ) {
-      process.exit(1);
+      stop(true);
+      return;
     }
     busy = true;
     const id = message.id;
     const staging = isSqliteSnapshotStagingMode(message.args[0]);
-    void inspect(message.args).then((inspected) => {
-      const result: SqliteReadOnlyWorkerResult =
-        Buffer.byteLength(JSON.stringify(inspected)) > SQLITE_READONLY_WORKER_MAX_BUFFER
-          ? { ok: false, message: "exceeded its output buffer" }
-          : inspected;
-      process.send?.({ id, result }, (error) => {
-        if (error || (!result.ok && !staging)) {
-          // Failed private recovery can retain a native handle until process exit.
-          process.exit(1);
-          return;
-        }
-        busy = false;
-        if (closeRequested) {
-          process.disconnect?.();
-        }
-      });
-    });
+    activeWork = inspect(message.args)
+      .then((inspected) => {
+        const result: SqliteReadOnlyWorkerResult =
+          Buffer.byteLength(JSON.stringify(inspected)) > SQLITE_READONLY_WORKER_MAX_BUFFER
+            ? { ok: false, message: "exceeded its output buffer" }
+            : inspected;
+        // Failed private recovery must retire this process, never admit another read.
+        send(id, result, !result.ok && !staging, () => {
+          busy = false;
+        });
+      })
+      .catch((error: unknown) => fail(id, error));
   });
 }
 

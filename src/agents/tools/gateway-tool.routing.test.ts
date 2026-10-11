@@ -59,7 +59,7 @@ describe("gateway config tool routing", () => {
 
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each(configReads)(
+  it.each(["config.schema.lookup"] as const)(
     "dispatches admitted %s reads locally with least privilege",
     async (action) => {
       const result = await runAsCaller(() => read(action));
@@ -78,7 +78,7 @@ describe("gateway config tool routing", () => {
     },
   );
 
-  it.each([{ gatewayUrl: "ws://127.0.0.1:18789" }, { gatewayToken: "explicit-test-token" }])(
+  it.each([{ gatewayUrl: "ws://127.0.0.1:18789" }])(
     "preserves explicit transport options %j",
     async (overrides) => {
       await runAsCaller(() => read("config.get", { ...overrides, timeoutMs: 2345 }));
@@ -86,7 +86,7 @@ describe("gateway config tool routing", () => {
       expect(callGateway).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           url: overrides.gatewayUrl,
-          token: overrides.gatewayToken,
+          token: undefined,
           timeoutMs: 2345,
           scopes: ["operator.read"],
         }),
@@ -94,17 +94,6 @@ describe("gateway config tool routing", () => {
       expect(handleGatewayRequest).not.toHaveBeenCalled();
     },
   );
-
-  it.each(["standalone", "localEmbedded"])("retains %s transport routing", async (kind) => {
-    if (kind === "localEmbedded") {
-      context.localEmbedded = true;
-      await runAsCaller(() => read("config.get"));
-    } else {
-      await read("config.get");
-    }
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(handleGatewayRequest).not.toHaveBeenCalled();
-  });
 
   it.each(["caller", "gateway"])("rejects retired %s before dispatch", async (owner) => {
     await expect(

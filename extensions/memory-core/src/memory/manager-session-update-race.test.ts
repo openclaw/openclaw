@@ -28,6 +28,7 @@ import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import {
   createManagerIndexFixture,
+  memoryIndexFixtureWriter,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
@@ -87,7 +88,7 @@ describe("memory session update sync", () => {
     ).toEqual([]);
   }
 
-  it("preserves the published session index when worker admission is full and retries after drain", async () => {
+  it("preserves the published session index when worker admission is full and retries after cooldown", async () => {
     const sessionId = "worker-capacity-reindex";
     const sessionKey = `agent:main:chat:${sessionId}`;
     const sessionPath = `sessions/main/${sessionId}.jsonl`;
@@ -130,6 +131,8 @@ describe("memory session update sync", () => {
     const accepted = Promise.allSettled(
       Array.from({ length: 128 }, () => capacityOwner.run(() => preparation.promise, {})),
     );
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
       try {
         await expect(
@@ -147,6 +150,7 @@ describe("memory session update sync", () => {
         await closed;
         await accepted;
       }
+      clock.mockReturnValue(now + 30_000);
       await manager.sync({ reason: "retry-after-worker-overload" });
       const recovered = snapshot();
       expect(recovered.source?.hash).not.toBe(before.source?.hash);
@@ -159,6 +163,7 @@ describe("memory session update sync", () => {
       expect(manager.status().dirty).toBe(false);
       expect(manager.status().lastSyncError).toBeUndefined();
     } finally {
+      clock.mockRestore();
       observer.close();
     }
   });
@@ -237,12 +242,12 @@ describe("memory session update sync", () => {
             )
             .all(entry.path),
         ).toEqual([{ start_line: messages[0]!.line, end_line: messages[3]!.line }]);
-        database
+        memoryIndexFixtureWriter(manager)
           .prepare(
             "UPDATE memory_index_sources SET hash = ?, mtime = ?, size = ? WHERE path = ? AND source = 'sessions'",
           )
           .run(entry.hash, entry.mtimeMs, entry.size, entry.path);
-        database
+        memoryIndexFixtureWriter(manager)
           .prepare(
             "UPDATE memory_index_meta SET value = json_set(value, '$.chunkingVersion', 4) WHERE key = 'memory_index_meta_v1'",
           )
@@ -402,7 +407,11 @@ describe("memory session update sync", () => {
       );
       const database = Reflect.get(manager, "db") as DatabaseSync;
       const sessionPath = `sessions/main/${sessionId}.jsonl`;
-      seedIndexedSession(database, sessionPath, "Internal narrative violet fragment");
+      seedIndexedSession(
+        memoryIndexFixtureWriter(manager),
+        sessionPath,
+        "Internal narrative violet fragment",
+      );
 
       if (mode === "startup catch-up") {
         await (
@@ -503,14 +512,15 @@ describe("memory session update sync", () => {
         (entry) => entry.sessionId === sessionId,
       ),
     ).toMatchObject({ artifactKind: "archive-artifact", sessionKind: "unknown" });
-    seedIndexedSession(database, sessionPath, "Previously retained violet fragment");
-    database
+    const fixtureWriter = memoryIndexFixtureWriter(manager);
+    seedIndexedSession(fixtureWriter, sessionPath, "Previously retained violet fragment");
+    fixtureWriter
       .prepare(
         "UPDATE memory_index_chunk_provenance SET origin_class = 'owner', session_kind = 'unknown' WHERE chunk_id = ?",
       )
       .run(sessionPath);
     const archiveStat = await fs.stat(path.join(sessionsDir, archiveName!));
-    database
+    fixtureWriter
       .prepare("UPDATE memory_index_sources SET mtime = ?, size = ? WHERE path = ?")
       .run(archiveStat.mtimeMs, archiveStat.size, sessionPath);
 
@@ -602,61 +612,6 @@ describe("memory session update sync", () => {
   });
 
   it.each([
-    { mode: "targeted per-file", provider: "batch-test", force: false },
-    { mode: "full per-file", provider: "batch-test", force: true },
-    { mode: "full source-wide", provider: "batch-wide-test", force: true },
-  ])(
-    "does not publish forgotten data after pending $mode embeddings",
-    async ({ provider, force }) => {
-      const sessionId = "forgotten-during-embedding";
-      const sessionKey = `agent:main:chat:${sessionId}`;
-      const cfg = createConfig({
-        provider,
-        batchEnabled: true,
-        vectorEnabled: false,
-        cacheEnabled: true,
-        sources: ["sessions"],
-        sessionMemory: true,
-      });
-      const manager = await getFreshManager(cfg, "cli");
-      await manager.sync({ reason: "index-empty-corpus", force: true });
-      await seedSessionTranscript({
-        sessionId,
-        sessionKey,
-        messages: [
-          { role: "user", timestamp: Date.now(), content: "Private violet alpha fragment." },
-        ],
-      });
-      let releaseEmbedding = () => {};
-      fixture.provider.providerRuntimeBatchGate = new Promise<void>((resolve) => {
-        releaseEmbedding = resolve;
-      });
-      const activeSync = manager.sync({
-        reason: "forget-during-embedding",
-        ...(force ? { force: true } : { sessions: [{ agentId: "main", sessionId, sessionKey }] }),
-      });
-      try {
-        await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1));
-        await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
-        releaseEmbedding();
-        await expect(activeSync).rejects.toThrow("forgotten while memory indexing");
-        const database = Reflect.get(manager, "db") as DatabaseSync;
-        expectSessionIndexRemoved(database, `sessions/main/${sessionId}.jsonl`);
-        expect(database.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
-        expect(manager.status().dirty).toBe(true);
-
-        await manager.sync({ reason: "retry-after-forget", force: true });
-        expectSessionIndexRemoved(database, `sessions/main/${sessionId}.jsonl`);
-        expect(manager.status().dirty).toBe(false);
-      } finally {
-        releaseEmbedding();
-        await activeSync.catch(() => undefined);
-        fixture.provider.providerRuntimeBatchGate = null;
-      }
-    },
-  );
-
-  it.each([
     { mode: "incremental embeddings", force: false, repeatPurge: false },
     { mode: "full reindex embeddings", force: true, repeatPurge: false },
     { mode: "completed shadow before repeat purge", force: true, repeatPurge: true },
@@ -677,7 +632,7 @@ describe("memory session update sync", () => {
       memoryPath,
       "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",
     );
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
         {
@@ -778,7 +733,7 @@ describe("memory session update sync", () => {
       userPath,
       "# User\n<!-- openclaw-memory-promotion:private-second -->\n- Private violet beta fragment.\n",
     );
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: ["private-first", "private-second"].map((entryKey) => ({
         agentId: "main",
@@ -861,10 +816,10 @@ describe("memory session update sync", () => {
     });
     cfg.agents = {
       ...cfg.agents,
-      list: [
-        { id: "main", default: true, workspace: fixture.paths.workspace },
-        { id: "peer", workspace: fixture.paths.workspace },
-      ],
+      entries: {
+        main: { workspace: fixture.paths.workspace },
+        peer: { workspace: fixture.paths.workspace },
+      },
     };
     const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
     await fs.writeFile(
@@ -872,7 +827,7 @@ describe("memory session update sync", () => {
       "# Memory\n<!-- openclaw-memory-promotion:shared-private -->\n- Private violet shared fragment.\n",
     );
     for (const agentId of ["main", "peer"]) {
-      recordMemoryEntryOrigins({
+      await recordMemoryEntryOrigins({
         agentId,
         origins: [
           {

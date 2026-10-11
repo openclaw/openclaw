@@ -1,9 +1,10 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import type {
-  MockOpenAiCodeModeExecSurface,
-  ResponsesInputItem,
-  StreamEvent,
+import {
+  type MockOpenAiCodeModeExecSurface,
+  type ResponsesInputItem,
+  type StreamEvent,
+  parseJsonObjectBody,
 } from "./mock-openai-contracts.js";
 import {
   findNamedToolDefinition,
@@ -11,7 +12,7 @@ import {
   hasDeclaredTool,
   hasToolDefinition,
 } from "./mock-openai-directives.js";
-import { extractPlannedToolArgs, extractPlannedToolName } from "./mock-openai-events.js";
+import { extractPlannedTool } from "./mock-openai-events.js";
 import {
   extractAllRequestTexts,
   extractToolOutput,
@@ -32,9 +33,6 @@ function stringifyScenarioToolOutput(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
-  if (value === undefined) {
-    return "";
-  }
   try {
     return JSON.stringify(value) ?? "";
   } catch {
@@ -54,16 +52,11 @@ function decodeCodeModeTarget(code: string | undefined) {
   if (!marker) {
     return null;
   }
-  try {
-    const encoded = marker.slice(`// ${QA_CODE_MODE_TARGET_MARKER}`.length).trim();
-    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown;
-    if (!isRecord(parsed) || typeof parsed.name !== "string" || !isRecord(parsed.args)) {
-      return null;
-    }
-    return { name: parsed.name, args: parsed.args };
-  } catch {
-    return null;
-  }
+  const encoded = marker.slice(`// ${QA_CODE_MODE_TARGET_MARKER}`.length).trim();
+  const parsed = parseJsonObjectBody(Buffer.from(encoded, "base64url").toString("utf8"));
+  return typeof parsed?.name === "string" && isRecord(parsed.args)
+    ? { name: parsed.name, args: parsed.args }
+    : null;
 }
 
 export function resolveCodeModeExecSurface(
@@ -86,9 +79,7 @@ export function resolveCodeModeExecSurface(
   }
   const properties = schema.properties;
   const required = schema.required;
-  return properties !== null &&
-    typeof properties === "object" &&
-    !Array.isArray(properties) &&
+  return isRecord(properties) &&
     Object.hasOwn(properties, "code") &&
     Array.isArray(required) &&
     required.includes("code")
@@ -120,22 +111,17 @@ export function resolveCurrentToolDeclarationSurface(
 }
 
 function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
-  return input.toReversed().find((item) => {
-    const type = item.type;
-    return (type === "function_call" || type === "custom_tool_call") && item.call_id === callId;
-  });
+  return input.findLast(
+    (item) =>
+      (item.type === "function_call" || item.type === "custom_tool_call") &&
+      item.call_id === callId,
+  );
 }
 
 function parseToolCallArguments(toolCall: ResponsesInputItem) {
-  if (typeof toolCall.arguments !== "string") {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(toolCall.arguments) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  return typeof toolCall.arguments === "string" && toolCall.arguments
+    ? parseJsonObjectBody(toolCall.arguments)
+    : null;
 }
 
 function readGeneratedCodeModeExecSource(toolCall: ResponsesInputItem | undefined) {
@@ -249,21 +235,6 @@ export function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
   };
 }
 
-function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
-  if (!hasCodeModeExecSurface(body)) {
-    return false;
-  }
-  const toolOutputCallId = extractToolOutputCallId(input);
-  if (!toolOutputCallId) {
-    return false;
-  }
-  const toolCall = findToolCallByCallId(input, toolOutputCallId);
-  return (
-    isGeneratedCodeModeExecCall(toolCall) ||
-    Boolean(toolCall && findGeneratedCodeModeWaitTarget(input, toolCall))
-  );
-}
-
 export function canCallScenarioTool(
   body: Record<string, unknown>,
   name: string,
@@ -344,7 +315,13 @@ export function readScenarioToolCompletion(
 ) {
   const rawToolOutput = extractToolOutput(input);
   const codeModeSurface = resolveCodeModeExecSurface(toolDeclarationBody);
-  const hasCodeModeControlOutput = isCodeModeControlToolOutput(toolDeclarationBody, input);
+  const toolOutputCallId = extractToolOutputCallId(input);
+  const completedToolCall = findToolCallByCallId(input, toolOutputCallId);
+  const hasCodeModeControlOutput =
+    codeModeSurface !== null &&
+    Boolean(toolOutputCallId) &&
+    (isGeneratedCodeModeExecCall(completedToolCall) ||
+      Boolean(completedToolCall && findGeneratedCodeModeWaitTarget(input, completedToolCall)));
   const codeModeControlJson = hasCodeModeControlOutput
     ? codeModeSurface === "native"
       ? parseNativeCodeModeOutput(extractToolOutputValue(input))
@@ -356,7 +333,6 @@ export function readScenarioToolCompletion(
       : codeModeSurface === "native" && hasCodeModeControlOutput
         ? ""
         : unwrapScenarioCatalogOutput(input, rawToolOutput);
-  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
   const completedToolName = readScenarioCompletedToolName(completedToolCall, input);
   const scenarioToolOutput =
     toolOutput ||
@@ -385,7 +361,7 @@ export function readScenarioToolCompletion(
   };
 }
 
-function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll = false) {
+function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll: boolean) {
   const text = unwrapScenarioCatalogOutput(input, extractToolOutput(input), "content");
   // Provider wires carry content, not process details; JSON stdout remains data.
   const sessionId = !isPoll
@@ -547,43 +523,32 @@ export function buildScenarioToolCallEvents(
     return buildRawToolCallEventsWithArgs(name, callArgs, namespace);
   }
   const encodedTarget = encodeCodeModeTarget(name, args);
-  if (resolveCodeModeExecSurface(body) === "native") {
-    return buildCustomToolCallEventsWithInput(
-      "exec",
-      [
-        `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
-        `const targetName = ${JSON.stringify(name)};`,
-        `const targetArgs = ${JSON.stringify(args)};`,
-        "const target = ALL_TOOLS.find((entry) => entry.name === targetName);",
-        "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-        "let value = await tools[target.name](targetArgs);",
-        'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
-        "  value = { ...value, content: value.content.slice(0, 2048) };",
-        "}",
-        "text(JSON.stringify(value));",
-      ].join("\n"),
-    );
-  }
-  return buildRawToolCallEventsWithArgs("exec", {
-    title: "Run the QA fixture step",
-    code: [
-      `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
-      `const targetName = ${JSON.stringify(name)};`,
-      `const targetArgs = ${JSON.stringify(args)};`,
-      "const target = (await catalog.search(targetName)).find((entry) => entry.toolName === targetName);",
-      "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-      "const value = await target(targetArgs);",
-      'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
-      "  return { ...value, content: value.content.slice(0, 2048) };",
-      "}",
-      "return value;",
-    ].join("\n"),
-  });
+  const native = resolveCodeModeExecSurface(body) === "native";
+  const code = [
+    `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
+    `const targetName = ${JSON.stringify(name)};`,
+    `const targetArgs = ${JSON.stringify(args)};`,
+    native
+      ? "const target = ALL_TOOLS.find((entry) => entry.name === targetName);"
+      : "const target = (await catalog.search(targetName)).find((entry) => entry.toolName === targetName);",
+    "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
+    native
+      ? "let value = await tools[target.name](targetArgs);"
+      : "const value = await target(targetArgs);",
+    'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
+    native
+      ? "  value = { ...value, content: value.content.slice(0, 2048) };"
+      : "  return { ...value, content: value.content.slice(0, 2048) };",
+    "}",
+    native ? "text(JSON.stringify(value));" : "return value;",
+  ].join("\n");
+  return native
+    ? buildCustomToolCallEventsWithInput("exec", code)
+    : buildRawToolCallEventsWithArgs("exec", { title: "Run the QA fixture step", code });
 }
 
 export function extractScenarioPlannedTool(events: StreamEvent[]) {
-  const wireName = extractPlannedToolName(events);
-  const wireArgs = extractPlannedToolArgs(events);
+  const { name: wireName, args: wireArgs, ...identity } = extractPlannedTool(events);
   const source =
     typeof wireArgs?.input === "string"
       ? wireArgs.input
@@ -591,13 +556,13 @@ export function extractScenarioPlannedTool(events: StreamEvent[]) {
         ? wireArgs.code
         : undefined;
   if (wireName === "tool_call" && typeof wireArgs?.id === "string" && isRecord(wireArgs.args)) {
-    return { name: wireArgs.id, args: wireArgs.args, wireName };
+    return { name: wireArgs.id, args: wireArgs.args, wireName, ...identity };
   }
   if (wireName !== "exec" || !source) {
-    return { name: wireName, args: wireArgs, wireName };
+    return { name: wireName, args: wireArgs, wireName, ...identity };
   }
   const target = decodeCodeModeTarget(source);
   return target
-    ? { name: target.name, args: target.args, wireName }
-    : { name: wireName, args: wireArgs, wireName };
+    ? { name: target.name, args: target.args, wireName, ...identity }
+    : { name: wireName, args: wireArgs, wireName, ...identity };
 }

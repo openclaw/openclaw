@@ -7,6 +7,7 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { boundWebPushSubscriptionsAdmission } from "./push-web-store.cache.js";
 import {
   WebPushSubscriptionBindingError,
   type WebPushMutationGuard,
@@ -17,10 +18,10 @@ import {
   type WebPushSnapshotAction,
 } from "./push-web-store.scope.js";
 import type { WebPushWorkerOperations } from "./push-web-store.worker-contract.js";
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 export {
   WebPushSubscriptionBindingError,
-  createWebPushVapidKeyPair,
   hashWebPushEndpoint,
   isValidWebPushEndpoint,
   isValidWebPushKey,
@@ -39,6 +40,15 @@ function context(stateDir?: string) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
   return captureOpenClawStateWorkerContext({ env });
+}
+
+function executeWebPushCommand<Type extends keyof WebPushWorkerOperations>(
+  type: Type,
+  input: WebPushWorkerOperations[Type]["input"],
+  target: string | OpenClawStateWorkerContext | undefined,
+) {
+  const captured = target && typeof target === "object" ? target : context(target);
+  return executeOpenClawStateWorker(captured, { type, input });
 }
 
 function executeWorkerWebPushMutation<
@@ -96,18 +106,14 @@ export function withBoundWebPushSubscriptionByEndpoint<T>(
   },
   prepare: (
     subscription: WebPushWorkerOperations["webPush.findBoundWebPushSubscriptionByEndpoint"]["output"],
-  ) => WebPushSnapshotAction<T> | undefined,
+  ) => WebPushSnapshotAction<T> | undefined | Promise<WebPushSnapshotAction<T> | undefined>,
 ) {
   const { stateDir, ...input } = params;
   const captured = context(stateDir);
   return useWebPushStoreSnapshot(
     captured,
     input,
-    () =>
-      executeOpenClawStateWorker(captured, {
-        type: "webPush.findBoundWebPushSubscriptionByEndpoint",
-        input,
-      }),
+    () => executeWebPushCommand("webPush.findBoundWebPushSubscriptionByEndpoint", input, captured),
     prepare,
   );
 }
@@ -123,11 +129,7 @@ export function withBoundWebPushSubscriptions<T>(
   return useWebPushStoreSnapshot(
     captured,
     undefined,
-    () =>
-      executeOpenClawStateWorker(captured, {
-        type: "webPush.listBoundWebPushSubscriptions",
-        input: undefined,
-      }),
+    () => executeWebPushCommand("webPush.listBoundWebPushSubscriptions", undefined, captured),
     prepare,
   );
 }
@@ -142,11 +144,7 @@ export function withWebPushSubscriptions<T>(
   return useWebPushStoreSnapshot(
     captured,
     undefined,
-    () =>
-      executeOpenClawStateWorker(captured, {
-        type: "webPush.listWebPushSubscriptions",
-        input: undefined,
-      }),
+    () => executeWebPushCommand("webPush.listWebPushSubscriptions", undefined, captured),
     prepare,
   );
 }
@@ -177,17 +175,20 @@ export async function setWebPushSubscriptionPreferences(
 }
 
 export function listWebPushSubscriptions(stateDir?: string) {
-  return executeOpenClawStateWorker(context(stateDir), {
-    type: "webPush.listWebPushSubscriptions",
-    input: undefined,
-  });
+  return executeWebPushCommand("webPush.listWebPushSubscriptions", undefined, stateDir);
 }
 
 export function hasBoundWebPushSubscriptions(stateDir?: string) {
-  return executeOpenClawStateWorker(context(stateDir), {
-    type: "webPush.hasBoundWebPushSubscriptions",
-    input: undefined,
-  });
+  const captured = context(stateDir);
+  captured.admission.assertCurrent();
+  const admitted = getOrLoadSqliteDatabaseAdmissionForPath(
+    captured.admission.databasePath,
+    boundWebPushSubscriptionsAdmission,
+    () => undefined,
+  );
+  return admitted === undefined
+    ? executeWebPushCommand("webPush.hasBoundWebPushSubscriptions", undefined, captured)
+    : Promise.resolve(admitted);
 }
 
 export function prepareWebPushApprovalDeliveries(
@@ -199,10 +200,7 @@ export function prepareWebPushApprovalDeliveries(
     return Promise.resolve<string[]>([]);
   }
   const { stateDir, ...input } = params;
-  return executeOpenClawStateWorker(context(stateDir), {
-    type: "webPush.prepareWebPushApprovalDeliveries",
-    input,
-  });
+  return executeWebPushCommand("webPush.prepareWebPushApprovalDeliveries", input, stateDir);
 }
 
 export function listWebPushApprovalDeliveryTargets(
@@ -211,10 +209,7 @@ export function listWebPushApprovalDeliveryTargets(
   },
 ) {
   const { stateDir, ...input } = params;
-  return executeOpenClawStateWorker(context(stateDir), {
-    type: "webPush.listWebPushApprovalDeliveryTargets",
-    input,
-  });
+  return executeWebPushCommand("webPush.listWebPushApprovalDeliveryTargets", input, stateDir);
 }
 
 export function deleteWebPushApprovalDeliveryTargets(
@@ -226,10 +221,7 @@ export function deleteWebPushApprovalDeliveryTargets(
     return Promise.resolve();
   }
   const { stateDir, ...input } = params;
-  return executeOpenClawStateWorker(context(stateDir), {
-    type: "webPush.deleteWebPushApprovalDeliveryTargets",
-    input,
-  });
+  return executeWebPushCommand("webPush.deleteWebPushApprovalDeliveryTargets", input, stateDir);
 }
 
 export function listTerminalWebPushApprovalDeliveryIds(
@@ -238,10 +230,7 @@ export function listTerminalWebPushApprovalDeliveryIds(
   },
 ) {
   const { stateDir, ...input } = params;
-  return executeOpenClawStateWorker(context(stateDir), {
-    type: "webPush.listTerminalWebPushApprovalDeliveryIds",
-    input,
-  });
+  return executeWebPushCommand("webPush.listTerminalWebPushApprovalDeliveryIds", input, stateDir);
 }
 
 export async function upsertWebPushSubscription(
@@ -306,10 +295,7 @@ export function deleteWebPushSubscriptionIfCurrent(
   const { stateDir, ...input } = params;
   const captured = context(stateDir);
   return runWebPushStoreMutation(captured, input, () =>
-    executeOpenClawStateWorker(captured, {
-      type: "webPush.deleteWebPushSubscriptionIfCurrent",
-      input,
-    }),
+    executeWebPushCommand("webPush.deleteWebPushSubscriptionIfCurrent", input, captured),
   );
 }
 
@@ -333,8 +319,5 @@ export function insertVapidKeyPairIfAbsent(
   },
 ) {
   const { stateDir, ...input } = params;
-  return executeOpenClawStateWorker(context(stateDir), {
-    type: "webPush.insertVapidKeyPairIfAbsent",
-    input,
-  });
+  return executeWebPushCommand("webPush.insertVapidKeyPairIfAbsent", input, stateDir);
 }

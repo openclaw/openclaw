@@ -24,10 +24,9 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { DEVICE_CODE_PHISHING_WARNING } from "../../wizard/prompts.js";
 import { sanitizeWizardStepForClient, WizardSession } from "../../wizard/session.js";
 import {
-  modelsAccountsClearDefaultCommand,
+  modelsAccountsUpdateDefaultCommand,
   modelsAccountsLoginCommand,
   modelsAccountsListCommand,
-  modelsAccountsUseCommand,
 } from "./accounts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -321,14 +320,20 @@ describe("personal model account CLI over an identified Gateway connection", () 
   it.each([
     {
       run: (port: string, output: ReturnType<typeof runtime>) =>
-        modelsAccountsUseCommand({ port, authProfileId: ACCOUNT_ID }, output),
+        modelsAccountsUpdateDefaultCommand(
+          { port, action: "use", authProfileId: ACCOUNT_ID },
+          output,
+        ),
       method: "users.selectModelAccount",
       params: { profileId: PROFILE_ID, authProfileId: ACCOUNT_ID },
       note: "Existing sessions keep",
     },
     {
       run: (port: string, output: ReturnType<typeof runtime>) =>
-        modelsAccountsClearDefaultCommand({ port, provider: "openai" }, output),
+        modelsAccountsUpdateDefaultCommand(
+          { port, action: "clear-default", provider: "openai" },
+          output,
+        ),
       method: "users.unlinkAuthProfile",
       params: { profileId: PROFILE_ID, provider: "openai" },
       note: "Saved credentials and existing session accounts are unchanged",
@@ -519,17 +524,14 @@ describe("personal model account CLI over an identified Gateway connection", () 
     },
   );
 
-  it.each(["openai", "anthropic"])(
-    "rejects non-TTY %s sign-in without consuming input",
-    async (provider) => {
-      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
-      await expect(modelsAccountsLoginCommand({ provider }, runtime())).rejects.toThrow(
-        "requires an interactive terminal",
-      );
-      expect(mocks.password).not.toHaveBeenCalled();
-      expect(mocks.openUrl).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects non-TTY sign-in without consuming input", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+    await expect(modelsAccountsLoginCommand({ provider: "openai" }, runtime())).rejects.toThrow(
+      "requires an interactive terminal",
+    );
+    expect(mocks.password).not.toHaveBeenCalled();
+    expect(mocks.openUrl).not.toHaveBeenCalled();
+  });
 
   it("renders the latest device progress snapshot and opens each destination once without acknowledging the code", async () => {
     const redirectInput =

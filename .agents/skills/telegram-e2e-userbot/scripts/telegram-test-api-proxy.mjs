@@ -16,6 +16,8 @@ const HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+const TELEGRAM_PROXY_ERROR_CODE =
+  /^(?:ABORT_ERR|EAI_AGAIN|E(?:CONNREFUSED|CONNRESET|HOSTUNREACH|NETUNREACH|NOTFOUND|PIPE|TIMEDOUT)|UND_ERR_(?:ABORTED|BODY_TIMEOUT|CONNECT_TIMEOUT|HEADERS_TIMEOUT|SOCKET))$/u;
 
 export function telegramTestApiPath(pathname) {
   const match = pathname.match(/^((?:\/file)?\/bot[^/]+)(\/.*)$/u);
@@ -26,7 +28,13 @@ export function telegramTestApiPath(pathname) {
 function requestHeaders(headers) {
   const filtered = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (value !== undefined && key !== "host" && !HOP_BY_HOP_HEADERS.has(key)) {
+    // Fetch owns framing after this proxy buffers or streams the incoming body.
+    if (
+      value !== undefined &&
+      key !== "host" &&
+      key !== "content-length" &&
+      !HOP_BY_HOP_HEADERS.has(key)
+    ) {
       filtered[key] = value;
     }
   }
@@ -45,6 +53,32 @@ function responseHeaders(headers) {
 
 function telegramApiMethod(pathname) {
   return pathname.match(/^\/bot[^/]+\/([^/?]+)/u)?.[1];
+}
+
+function reportProxyFailure(error, phase, method) {
+  let current = error;
+  let errorCode;
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth += 1) {
+    if (typeof current.code === "string" && TELEGRAM_PROXY_ERROR_CODE.test(current.code)) {
+      errorCode = current.code;
+      break;
+    }
+    current = current.cause;
+  }
+  // Error messages, URLs, and arbitrary names/codes can contain bot tokens. Emit only
+  // fixed phases and allowlisted atoms so retained QA logs remain safe to publish.
+  const safeMethod =
+    typeof method === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(method) ? method : "unknown";
+  console.error(
+    JSON.stringify({
+      event: "telegram_test_api_proxy_failure",
+      phase,
+      method: safeMethod,
+      errorClass:
+        error instanceof TypeError ? "TypeError" : error instanceof Error ? "Error" : "unknown",
+      errorCode: errorCode ?? "unknown",
+    }),
+  );
 }
 
 async function drainTelegramTestUpdates(apiRoot, token) {
@@ -136,22 +170,40 @@ export async function startTelegramTestApiProxy({
     socket.once("close", () => sockets.delete(socket));
   });
   async function handleRequest(request, response) {
+    let logged;
+    let method;
+    let failurePhase = "request";
+    const recordDoneAt = () => {
+      if (logged) {
+        logged.doneAt ??= Date.now();
+      }
+    };
     const upstreamController = new AbortController();
     upstreamControllers.add(upstreamController);
     const abortUpstream = () => upstreamController.abort();
     request.once("aborted", abortUpstream);
     response.once("close", abortUpstream);
     try {
+      failurePhase = "lease";
       assertLeaseHealthy();
+      failurePhase = "request";
       const incoming = new URL(request.url || "/", `http://${host}`);
       const upstreamUrl = new URL(upstream);
       upstreamUrl.pathname = telegramTestApiPath(incoming.pathname);
       upstreamUrl.search = incoming.search;
-      const method = telegramApiMethod(incoming.pathname);
+      method = telegramApiMethod(incoming.pathname);
+      const loggedMethod =
+        method ?? (incoming.pathname.startsWith("/file/bot") ? "file" : undefined);
       const ordinal = (methodOrdinals.get(method) ?? 0) + 1;
-      // Timing facts only (no bodies or ids): proves when calls reached the proxy.
-      const logged = method && method !== "getUpdates" ? { method, at: Date.now() } : undefined;
-      if (logged) requestLog.push(logged);
+      // File rows are timing facts only; controls still match the Bot API method.
+      logged = loggedMethod ? { method: loggedMethod, at: Date.now() } : undefined;
+      if (logged) {
+        if (method !== "getUpdates") {
+          requestLog.push(logged);
+        }
+        response.once("finish", recordDoneAt);
+        response.once("close", recordDoneAt);
+      }
       methodOrdinals.set(method, ordinal);
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
       let body = hasBody ? request : undefined;
@@ -163,7 +215,11 @@ export async function startTelegramTestApiProxy({
       };
       // Log only the chat kind (private or group), never the chat id, so cross-chat
       // flood proof can tell deliveries apart. JSON bodies are small text calls.
-      if (logged && String(request.headers["content-type"] ?? "").includes("application/json")) {
+      if (
+        logged &&
+        method !== "getUpdates" &&
+        String(request.headers["content-type"] ?? "").includes("application/json")
+      ) {
         await readBody();
         try {
           const chatId = Number(JSON.parse(body.toString("utf8")).chat_id);
@@ -184,6 +240,7 @@ export async function startTelegramTestApiProxy({
         if (matches && rejection.skip > 0) {
           rejection.skip -= 1;
         } else if (matches) {
+          failurePhase = "lease";
           assertLeaseHealthy();
           rejection.times -= 1;
           if (rejection.times <= 0) requestRejection = undefined;
@@ -224,6 +281,7 @@ export async function startTelegramTestApiProxy({
           return;
         }
       }
+      failurePhase = "upstream-fetch";
       const result = await fetchImpl(upstreamUrl, {
         method: request.method,
         headers: requestHeaders(request.headers),
@@ -231,8 +289,21 @@ export async function startTelegramTestApiProxy({
         signal: upstreamController.signal,
       });
       if (logged) logged.status = result.status;
+      failurePhase = "lease";
       assertLeaseHealthy();
+      failurePhase = "response-stream";
       const hold = method ? claimResponseHold(method, ordinal) : undefined;
+      if (method === "getUpdates") {
+        try {
+          const payload = await result.clone().json();
+          if (Array.isArray(payload?.result) && payload.result.length > 0) {
+            logged.updates = payload.result.length;
+            requestLog.push(logged);
+          }
+        } catch {
+          // Preserve malformed responses; only valid update counts are logged.
+        }
+      }
       if (hold) {
         const body = result.body ? Buffer.from(await result.arrayBuffer()) : undefined;
         response.writeHead(result.status, responseHeaders(result.headers));
@@ -249,13 +320,17 @@ export async function startTelegramTestApiProxy({
         } finally {
           clearInterval(heartbeat);
         }
+        failurePhase = "lease";
         assertLeaseHealthy();
+        failurePhase = "response-stream";
         heldResponse.event.releasedAt = Date.now();
         heldResponse = undefined;
         response.end(body);
         return;
       }
+      failurePhase = "lease";
       assertLeaseHealthy();
+      failurePhase = "response-stream";
       response.writeHead(result.status, responseHeaders(result.headers));
       if (!result.body) {
         response.end();
@@ -281,7 +356,10 @@ export async function startTelegramTestApiProxy({
         response.once("close", finished);
         readable.pipe(response);
       });
-    } catch {
+    } catch (error) {
+      recordDoneAt();
+      // Teardown and downstream disconnects cancel polls; they are not upstream failures.
+      if (!upstreamController.signal.aborted) reportProxyFailure(error, failurePhase, method);
       if (!response.headersSent) {
         response.writeHead(502, { "content-type": "application/json" });
       }

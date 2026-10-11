@@ -10,6 +10,7 @@ import {
   consumeUpdatePostInstallDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
 } from "../infra/update-doctor-result.js";
+import { prepareManagedHandoffLeaseDatabase } from "../infra/update-managed-service-handoff-database.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
@@ -239,6 +240,9 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
           const success =
             mode === "valid" || mode === "valid managed v1" || mode === "valid managed pnpm";
           const metaPath = state.path("handoff-meta.json");
+          const handoffDatabase = await prepareManagedHandoffLeaseDatabase(
+            resolveManagedUpdateLeaseDatabasePath(),
+          );
           let managedRow: { owner: string; payload_json: string; updated_at: number } | undefined;
           if (managed) {
             const store = createManagedHandoffLeaseStore();
@@ -252,17 +256,12 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
               payload_json: JSON.stringify({ version: 1, pid, startIdentity }),
               updated_at: 7,
             };
-            const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-            try {
-              db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-                managedRoot,
-                managedRow.owner,
-                managedRow.payload_json,
-                managedRow.updated_at,
-              );
-            } finally {
-              db.close();
-            }
+            const row = managedRow;
+            handoffDatabase(true, (db) => {
+              db.prepare(
+                "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+              ).run(managedRoot, row.owner, row.payload_json, row.updated_at);
+            });
             if (mode !== "managed pnpm missing metadata") {
               fs.writeFileSync(
                 metaPath,
@@ -279,11 +278,11 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
             }
           }
           if (mode === "managed handoff missing") {
-            const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-            db.prepare("DELETE FROM managed_update_handoffs WHERE install_root = ?").run(
-              managedRoot,
-            );
-            db.close();
+            handoffDatabase(true, (db) => {
+              db.prepare("DELETE FROM managed_update_handoffs WHERE install_root = ?").run(
+                managedRoot,
+              );
+            });
           }
           const resume = () =>
             runBuiltRuntime(
@@ -312,9 +311,10 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
           if (mode === "valid managed v1" && resumed.code === 0) {
             const current = new DatabaseSync(agentPath, { readOnly: true });
             try {
-              expect(current.prepare("PRAGMA user_version").get()?.user_version).toBe(
-                OPENCLAW_AGENT_SCHEMA_VERSION,
-              );
+              expect(
+                current.prepare("PRAGMA user_version").get()?.user_version,
+                `${resumed.stdout}\n${resumed.stderr}`,
+              ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
             } finally {
               current.close();
             }
@@ -324,37 +324,38 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
             expect(sameSchema.code, `${sameSchema.stdout}\n${sameSchema.stderr}`).toBe(0);
           }
           if (managedRow) {
-            const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-            try {
-              expect(
-                db
-                  .prepare(
-                    "SELECT owner,payload_json,updated_at FROM managed_update_handoffs WHERE install_root = ?",
-                  )
-                  .get(managedRoot),
-              ).toEqual(mode === "managed handoff missing" ? undefined : managedRow);
-              if (managedRoot !== runtimeRoot) {
+            const row = managedRow;
+            handoffDatabase(true, (db) => {
+              try {
+                expect(
+                  db
+                    .prepare(
+                      "SELECT owner,payload_json,updated_at FROM managed_update_handoffs WHERE install_root = ?",
+                    )
+                    .get(managedRoot),
+                ).toEqual(mode === "managed handoff missing" ? undefined : row);
+                if (managedRoot !== runtimeRoot) {
+                  expect(
+                    db
+                      .prepare(
+                        "SELECT COUNT(*) AS count FROM managed_update_handoffs WHERE instr(install_root, ?) = 1",
+                      )
+                      .get(runtimeRoot)?.count,
+                  ).toBe(0);
+                }
                 expect(
                   db
                     .prepare(
                       "SELECT COUNT(*) AS count FROM managed_update_handoffs WHERE instr(install_root, ?) = 1",
                     )
-                    .get(runtimeRoot)?.count,
+                    .get(`${managedRoot}/.openclaw-update-child-`)?.count,
                 ).toBe(0);
+              } finally {
+                db.prepare(
+                  "DELETE FROM managed_update_handoffs WHERE install_root = ? AND owner = ?",
+                ).run(managedRoot, row.owner);
               }
-              expect(
-                db
-                  .prepare(
-                    "SELECT COUNT(*) AS count FROM managed_update_handoffs WHERE instr(install_root, ?) = 1",
-                  )
-                  .get(`${managedRoot}/.openclaw-update-child-`)?.count,
-              ).toBe(0);
-            } finally {
-              db.prepare(
-                "DELETE FROM managed_update_handoffs WHERE install_root = ? AND owner = ?",
-              ).run(managedRoot, managedRow.owner);
-              db.close();
-            }
+            });
           }
           expect(resumed.code, `${resumed.stdout}\n${resumed.stderr}`).toBe(success ? 0 : 1);
           expect(listUpdateRuns({ limit: 100 }).map((entry) => entry.runId)).toEqual([run.runId]);
@@ -375,9 +376,10 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
           }
           const repaired = new DatabaseSync(agentPath, { readOnly: true });
           try {
-            expect(repaired.prepare("PRAGMA user_version").get()?.user_version).toBe(
-              OPENCLAW_AGENT_SCHEMA_VERSION,
-            );
+            expect(
+              repaired.prepare("PRAGMA user_version").get()?.user_version,
+              `${resumed.stdout}\n${resumed.stderr}`,
+            ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
             expect(
               repaired.prepare("SELECT value_json,updated_at FROM cache_entries").all(),
             ).toEqual([{ value_json: '{"keep":true}', updated_at: 7 }]);

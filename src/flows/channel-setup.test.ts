@@ -145,9 +145,6 @@ describe("setupChannels workspace shadow exclusion", () => {
     }));
     resolveChannelSetupEntries.mockReturnValue(makeChannelSetupEntries());
     collectChannelStatus.mockResolvedValue({
-      installedPlugins: [],
-      catalogEntries: [],
-      installedCatalogEntries: [],
       statusByChannel: new Map(),
       statusLines: [],
     });

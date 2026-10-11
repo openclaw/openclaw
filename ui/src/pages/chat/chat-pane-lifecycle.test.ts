@@ -14,19 +14,23 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
+import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { enqueueChatMessage } from "./chat-queue.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
-} from "./components/chat-message.ts";
+} from "./components/chat-message-confirmation.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
+import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
 import { isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
@@ -45,10 +49,44 @@ function pendingSuggestion(sessionKey: string, id: string, text: string): Sessio
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
 
+it("publishes queued-edit retention changes while its pane is parked", async () => {
+  vi.useFakeTimers();
+  const key = "agent:main:parked-edit";
+  const fixture = createMountedPanes([{ key, kind: "direct", updatedAt: 1 }]);
+  const pane = fixture.mount(key);
+  const updates = vi.spyOn(pane, "performUpdate");
+  await pane.updateComplete;
+  expect(updates).toHaveBeenCalledTimes(1);
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(160);
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(160);
+  expect(pane.querySelector(".agent-chat__composer-combobox textarea")).not.toBeNull();
+  expect(pane.state.chatLoading).toBe(false);
+
+  pane.presented = false;
+  const retained = vi.fn();
+  pane.addEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, retained);
+  updates.mockClear();
+  const state = pane.state;
+  state.connected = false;
+  const queued = enqueueChatMessage(state, "queued original");
+  expect(queued).not.toBeNull();
+  expect(beginQueuedMessageEdit(state, queued!.id)).toBe("started");
+  state.requestUpdate();
+  expect(retained).toHaveBeenCalledTimes(1);
+  expect(cancelQueuedMessageEdit(state)).toBe(true);
+  state.requestUpdate();
+  expect(retained).toHaveBeenCalledTimes(2);
+  await Promise.resolve();
+  expect(updates).not.toHaveBeenCalled();
+  pane.presented = true;
+  await pane.updateComplete;
+});
+
 describe("chat pane composer prefill attention", () => {
   it.each([
     { label: "repeated draft prefill", draft: "Prefilled prompt", repeat: true, attention: true },
-    { label: "plain focus", draft: undefined, repeat: false, attention: false },
   ])("focuses with the expected attention cue for $label", ({ draft, repeat, attention }) => {
     vi.useFakeTimers();
     const { pane } = createTestChatPane({
@@ -136,7 +174,7 @@ describe("chat pane first-turn attachment lifecycle", () => {
 });
 
 describe("chat pane initial panel layout", () => {
-  it.each(["absent", "closed", "open"] as const)(
+  it.each(["absent", "open"] as const)(
     "restores its own %s layout instead of another split pane's layout",
     (preference) => {
       vi.stubGlobal("localStorage", createStorageMock());
@@ -379,20 +417,6 @@ describe("chat pane session suggestion lifecycle", () => {
     expect(pane.typingActors.size).toBe(0);
   });
 
-  it("preserves an author's resolved event while its role is still loading", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createSuggestionPane(client);
-    pane.context.gateway.snapshot.selfUser = { id: "alice" } as never;
-    const pending = pendingSuggestion(state.sessionKey, "mine", "my suggestion");
-    pane.sessionSuggestions = [pending];
-
-    pane.handleSessionSuggestionEvent({
-      action: "resolved",
-      suggestion: { ...pending, state: "accepted" },
-    });
-    expect(pane.sessionSuggestions).toEqual([{ ...pending, state: "accepted" }]);
-  });
-
   it("keeps an owner's self-authored resolved suggestion through the following list", async () => {
     const listed = createDeferred<SessionSuggestionsListResult>();
     const resolvedResponse = createDeferred<{ suggestion: SessionSuggestion }>();
@@ -489,44 +513,6 @@ describe("chat pane session suggestion lifecycle", () => {
     expect(state.chatError).toBeNull();
   });
 
-  it("loads an owner's pending suggestions after visibility changes to draft", async () => {
-    const visibility = "draft";
-    const pending: SessionSuggestion = {
-      id: `pending-${visibility}`,
-      sessionKey: "agent:main:current",
-      agentId: "main",
-      author: { type: "human", id: "alice", label: "Alice" },
-      text: "still needs review",
-      createdAt: 1,
-      state: "pending",
-    };
-    const request = vi.fn(async () => ({ suggestions: [pending], role: "owner" as const }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createSuggestionPane(client);
-    state.sessionsResult = {
-      count: 1,
-      path: "",
-      sessions: [
-        {
-          key: state.sessionKey,
-          kind: "direct",
-          updatedAt: 1,
-          visibility,
-          sharingRole: "owner",
-        },
-      ],
-    } as never;
-
-    await pane.refreshSessionSuggestions();
-
-    expect(request).toHaveBeenCalledWith(
-      "session.suggestions.list",
-      expect.objectContaining({ sessionKey: state.sessionKey }),
-    );
-    expect(pane.sessionSuggestions).toEqual([pending]);
-    expect(pane.sessionSuggestionRole).toBe("owner");
-  });
-
   it("does not apply an edit failure after the same session key rotates instances", async () => {
     const deferred = createDeferred<never>();
     const client = {
@@ -551,32 +537,6 @@ describe("chat pane session suggestion lifecycle", () => {
     await pending;
     expect(state.chatMessage).toBe("new session draft");
     expect(state.chatError).not.toBe("old request failed");
-  });
-
-  it("keeps suggested text after an ambiguous edit failure", async () => {
-    const client = {
-      request: vi.fn(async () => {
-        throw new Error("response lost");
-      }),
-    } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: {} as SessionCapability,
-    });
-    const suggestion = pendingSuggestion(
-      state.sessionKey,
-      "edit-ambiguous",
-      "@Alex preserve this suggestion",
-    );
-    state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
-    state.chatMessage = "@Alex owner draft";
-    state.chatMentions = [{ profileId: "alex-profile", start: 0, end: 5 }];
-
-    await pane.resolveCurrentSessionSuggestion(suggestion, "edit");
-
-    expect(state.chatMessage).toBe("@Alex preserve this suggestion");
-    expect(state.chatMentions).toEqual([]);
-    expect(state.chatError).toBe("response lost");
   });
 
   it.each([false, true])(

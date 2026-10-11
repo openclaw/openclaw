@@ -158,6 +158,22 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
+When Memory Core owns the memory slot, its Gateway service schedules each configured
+agent's memory manager to open at startup and after plugin replacement. This
+background activation waits for that agent's database preparation, including
+after an upgrade or restart, without delaying Gateway readiness. Failed
+preparation reports the database's repair guidance. Watched file changes can
+then update the index without a search or agent turn. Retiring an
+instance closes its managers, including file watchers, timers, and session
+listeners. A session startup scan still in progress stops after its current
+step, so disabling or replacing the plugin does not wait for it. Plugin reload also stops and restarts the retained Memory Core
+service around publication, so its managers use the current embedding providers,
+including providers loaded on demand, without waiting for a search or turn. If
+reload fails after draining managers, recovery restarts their previous services
+and schedules their index activation before reporting the previous runtime restored.
+Service stop joins pending activation before closing its managers. Memory Core running only as
+another memory plugin's consolidation sidecar does not start these indexes automatically.
+
 When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses
 the agent's current embedding settings; status inspection remains read-only.
@@ -165,9 +181,31 @@ the agent's current embedding settings; status inspection remains read-only.
 Search-triggered maintenance applies pending memory and session changes
 incrementally while searches remain available. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
+Growing session transcripts retain unchanged indexed chunks and embed only new
+or changed chunks, even when the embedding cache is disabled. An explicit full
+rebuild still replaces the complete index.
 If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
+
+Automatic full-rebuild retries wait 30 seconds after a failure. Repeated
+failures double that delay up to 30 minutes; a successful rebuild resets it.
+Searches keep reading the published index, and targeted session updates can
+still publish when its identity is valid. Explicit CLI repair bypasses the
+process-local cooldown.
+
+When native file watching is unavailable, Memory Core uses background polling
+with a 30-second default interval, including when polling is explicitly enabled
+with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,
+with a 20 ms minimum. Shorter intervals increase background scanning cost,
+especially for large memory trees. Native events
+still trigger prompt, debounced updates. Automatic fallback logs one warning per
+watcher lifetime. A running memory manager exposes each local observation's
+mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;
+standalone status inspection does not start a watcher. The filesystem
+library does not currently retain the fallback reason or retry native selection;
+the warning says when no reason was reported. Restart the Gateway after resolving
+the native backend problem to try native watching again.
 
 If the host runs out of native file-watch capacity, Memory Core logs one warning
 and disables its watchers. Later searches trigger incremental synchronization
@@ -195,8 +233,9 @@ not total disk usage: embedding cache, FTS/vector tables, SQLite overhead, and
 WAL/free pages are excluded.
 
 Chunk and embedding-cache vectors use little-endian 64-bit floating-point
-BLOBs. The software search fallback reads these full-precision vectors even
-when the optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
+BLOBs. The software search fallback scores these full-precision BLOBs directly
+in a worker, without allocating a numeric array per chunk, even when the
+optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
 separate 32-bit vector index. The keyword index uses each chunk's stable integer
 identity, so edits and deletion update the corresponding FTS rows directly.
 

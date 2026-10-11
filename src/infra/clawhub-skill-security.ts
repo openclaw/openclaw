@@ -78,14 +78,6 @@ function partitionCompatibleBatches(
   return batches.map((batch) => batch.items);
 }
 
-function readOptionalStringField(value: unknown, field: string): string | undefined {
-  return normalizeOptionalString(readObject(value)?.[field]);
-}
-
-function readOptionalNumberField(value: unknown, field: string): number | undefined {
-  return asFiniteNumber(readObject(value)?.[field]);
-}
-
 function normalizeReason(reason: string | null | undefined): string {
   return normalizeOptionalString(reason)?.toLowerCase() ?? "";
 }
@@ -122,13 +114,13 @@ function mapVerificationToVerdict(params: {
   const skill = readObject(params.verification.skill);
   const publisher = readObject(params.verification.publisher);
   const versionRecord = readObject(params.verification.version);
+  const security = readObject(params.verification.security);
   const pageUrl = normalizeOptionalString(params.verification.pageUrl);
   const reasons = params.verification.reasons
     .map((reason) => normalizeOptionalString(reason))
     .filter((reason): reason is string => Boolean(reason));
   const securityStatus = normalizeReason(
-    readOptionalStringField(params.verification.security, "status") ??
-      readOptionalStringField(params.verification.security, "rawStatus"),
+    normalizeOptionalString(security?.status) ?? normalizeOptionalString(security?.rawStatus),
   );
   const cardOnlyCleanFailure =
     !params.verification.ok &&
@@ -136,7 +128,7 @@ function mapVerificationToVerdict(params: {
     hasOnlyNonSecurityVerifyReasons(reasons);
   const verifiedVersion =
     normalizeOptionalString(params.verification.version) ??
-    readOptionalStringField(versionRecord, "version");
+    normalizeOptionalString(versionRecord?.version);
   return {
     ok: cardOnlyCleanFailure ? true : params.verification.ok,
     decision: cardOnlyCleanFailure ? "pass" : params.verification.decision,
@@ -144,21 +136,19 @@ function mapVerificationToVerdict(params: {
     requestedSlug: params.target.slug,
     requestedOwnerHandle: params.target.ownerHandle,
     requestedVersion: params.target.version,
-    slug:
-      normalizeOptionalString(params.verification.slug) ?? readOptionalStringField(skill, "slug"),
+    slug: normalizeOptionalString(params.verification.slug) ?? normalizeOptionalString(skill?.slug),
     version: verifiedVersion ?? (cardOnlyCleanFailure ? params.target.version : null),
     displayName:
       normalizeOptionalString(params.verification.displayName) ??
-      readOptionalStringField(skill, "displayName"),
+      normalizeOptionalString(skill?.displayName),
     publisherHandle:
       normalizeOptionalString(params.verification.publisherHandle) ??
-      readOptionalStringField(publisher, "handle"),
+      normalizeOptionalString(publisher?.handle),
     publisherDisplayName:
       normalizeOptionalString(params.verification.publisherDisplayName) ??
-      readOptionalStringField(publisher, "displayName"),
-    createdAt:
-      params.verification.createdAt ?? readOptionalNumberField(versionRecord, "createdAt") ?? null,
-    checkedAt: readOptionalNumberField(params.verification.security, "checkedAt") ?? null,
+      normalizeOptionalString(publisher?.displayName),
+    createdAt: params.verification.createdAt ?? asFiniteNumber(versionRecord?.createdAt) ?? null,
+    checkedAt: asFiniteNumber(security?.checkedAt) ?? null,
     ...(pageUrl ? { skillUrl: pageUrl } : {}),
     ...(pageUrl
       ? {
@@ -264,6 +254,12 @@ export async function fetchExactClawHubSkillSecurityVerdicts(
   params: FetchExactSkillSecurityParams,
 ): Promise<ClawHubSkillSecurityVerdictItem[]> {
   const targets = params.items.map(normalizeTarget);
+  const fetchOptions = {
+    baseUrl: params.baseUrl,
+    token: params.token,
+    ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
+    timeoutMs: params.timeoutMs,
+  };
   const keys = new Set<string>();
   for (const target of targets) {
     const key = targetKey(target);
@@ -276,11 +272,8 @@ export async function fetchExactClawHubSkillSecurityVerdicts(
   const resolved = new Map<string, ClawHubSkillSecurityVerdictItem>();
   for (const batch of partitionCompatibleBatches(targets)) {
     const response = await fetchClawHubSkillSecurityVerdicts({
+      ...fetchOptions,
       items: batch,
-      baseUrl: params.baseUrl,
-      token: params.token,
-      ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
-      timeoutMs: params.timeoutMs,
     });
     const correlated = correlateBatchItems(batch, response.items);
     const fallbackLimit = pLimit(OWNER_QUALIFIED_FALLBACK_CONCURRENCY);
@@ -297,13 +290,10 @@ export async function fetchExactClawHubSkillSecurityVerdicts(
             ? await fallbackLimit(async () =>
                 mapVerificationToVerdict({
                   verification: await fetchClawHubSkillVerification({
+                    ...fetchOptions,
                     slug: target.slug,
                     ownerHandle,
                     version: target.version,
-                    baseUrl: params.baseUrl,
-                    token: params.token,
-                    ...(params.skipAuth !== undefined ? { skipAuth: params.skipAuth } : {}),
-                    timeoutMs: params.timeoutMs,
                   }),
                   target: { ...target, ownerHandle },
                 }),

@@ -6,6 +6,7 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { formatErrorMessageWithCode, toErrorObject } from "./errors.js";
 import {
@@ -56,7 +57,7 @@ export async function waitForUpdateCandidateReadiness(
     hasExited: () => boolean;
     getExitReason: () => string | undefined;
     startupProgress: UpdateCanaryStartupProgress;
-    onWarning: (message: string) => void;
+    onWarning: (message: string) => void | Promise<void>;
     onEndpoint: (endpoint: "startupz" | "readyz") => void;
     capture: (message: string) => void;
   },
@@ -71,6 +72,8 @@ export async function waitForUpdateCandidateReadiness(
   let lastProgress: { milestone: string; completedAt: number } | undefined;
   let deadlineFailure: Error | undefined;
   let warned = false;
+  // No warning means no async work to fence; each check may snapshot shared state.
+  let warningPending: Promise<void> | undefined;
   const recordProgress = (milestone: string, completedAt: number) => {
     if (milestones.has(milestone)) {
       return;
@@ -90,9 +93,14 @@ export async function waitForUpdateCandidateReadiness(
     }
     if (!warned && Date.now() >= params.workDeadline && Date.now() < workDeadline) {
       warned = true;
-      params.onWarning(
-        `Candidate Gateway startup is still progressing after ${Date.now() - params.started}ms; continuing to wait while startup milestones advance.`,
-      );
+      warningPending = Promise.resolve(
+        params.onWarning(
+          `Candidate Gateway startup is still progressing after ${Date.now() - params.started}ms; continuing to wait while startup milestones advance.`,
+        ),
+      ).catch((error: unknown) => {
+        deadlineFailure = toErrorObject(error, "Candidate startup warning could not be recorded");
+        deadline.abort();
+      });
     }
   };
   let cancelDeadline = () => {};
@@ -107,7 +115,7 @@ export async function waitForUpdateCandidateReadiness(
         cancelDeadline = scheduleAbsoluteDeadline(workDeadline, checkDeadline);
       }
     } catch (error) {
-      deadlineFailure = toErrorObject(error, "Candidate startup wait failed");
+      deadlineFailure ??= toErrorObject(error, "Candidate startup wait failed");
       deadline.abort();
     }
   };
@@ -132,8 +140,10 @@ export async function waitForUpdateCandidateReadiness(
       );
     }
   };
+  let probeFailure: { fact: UpdateFailureFact; message: string } | undefined;
+  let operationFailure: Error | undefined;
   try {
-    for (const endpoint of ["startupz", "readyz"] as const) {
+    endpoints: for (const endpoint of ["startupz", "readyz"] as const) {
       params.onEndpoint(endpoint);
       const url = `http://127.0.0.1:${params.port}/${endpoint}`;
       const releaseBypass = registerManagedProxyGatewayLoopbackBypass(url);
@@ -145,6 +155,10 @@ export async function waitForUpdateCandidateReadiness(
         while (true) {
           assertRunning();
           refreshDeadline();
+          if (warningPending) {
+            await warningPending;
+            assertRunning();
+          }
           if (Date.now() >= workDeadline) {
             if (lastProgress && (candidatePending || !proxy)) {
               throw new Error(
@@ -155,7 +169,8 @@ export async function waitForUpdateCandidateReadiness(
               throw new Error("Update validation deadline exceeded");
             }
             params.capture(failure.message);
-            return failure;
+            probeFailure = failure;
+            break endpoints;
           }
           let outcome = "";
           let ready = false;
@@ -183,6 +198,10 @@ export async function waitForUpdateCandidateReadiness(
           }
           assertRunning();
           refreshDeadline();
+          if (warningPending) {
+            await warningPending;
+            assertRunning();
+          }
           if (ready && Date.now() < workDeadline) {
             params.capture(
               `${endpoint}: ${endpoint === "startupz" ? "started" : "ready"} (${Date.now() - params.started}ms)`,
@@ -197,14 +216,14 @@ export async function waitForUpdateCandidateReadiness(
             const nextStep = "Check Gateway logs and proxy.loopbackMode; rerun openclaw update.";
             failure = {
               message: redactSupportString(
-                `Readiness probe ${url} failed: ${detail}${proxy ? ` (via proxy ${proxy.origin})` : ""}. ${nextStep}`,
+                `Readiness check ${url} failed: ${detail}${proxy ? ` (via proxy ${proxy.origin})` : ""}. ${nextStep}`,
                 params,
               ),
               fact: createUpdateFailureFact(
                 {
                   check: endpoint,
                   code: "candidate-readiness-probe-failed",
-                  message: `Readiness probe ${endpoint} failed: ${detail}. ${nextStep}`,
+                  message: `Readiness check ${endpoint} failed: ${detail}. ${nextStep}`,
                 },
                 params.env,
               ),
@@ -221,8 +240,24 @@ export async function waitForUpdateCandidateReadiness(
         releaseBypass?.();
       }
     }
-    return undefined;
+  } catch (error) {
+    operationFailure = toErrorObject(error, "Candidate startup wait failed");
   } finally {
     cancelDeadline();
+    await warningPending;
   }
+  if (deadlineFailure && hasCommandProcessCleanupError(deadlineFailure)) {
+    if (operationFailure && operationFailure !== deadlineFailure) {
+      throw new AggregateError(
+        [operationFailure, deadlineFailure],
+        "Candidate readiness and warning recording failed",
+        { cause: operationFailure },
+      );
+    }
+    throw deadlineFailure;
+  }
+  if (operationFailure) {
+    throw operationFailure;
+  }
+  return probeFailure;
 }

@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
 } from "../../components/terminal/terminal-panel.test-support.ts";
-import type { OpenClawTerminalPanel } from "../../components/terminal/terminal-panel.ts";
 import {
   createDraftFixture,
   registerTextPayload,
@@ -36,7 +36,7 @@ function mountNativeTerminal(context: ApplicationContext) {
     },
     forceReconnect: vi.fn(),
   });
-  const panel = document.createElement(nativeTerminalElement) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(nativeTerminalElement);
   panel.client = client;
   panel.available = true;
   panel.page = true;
@@ -69,7 +69,6 @@ function createNativeFixture(options: Parameters<typeof createDraftFixture>[0] =
       requestedAgentId: "main",
       catalogId: "codex",
       catalogLabel: "Codex",
-      model: "",
       startTerminal: true,
       terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
     },
@@ -93,7 +92,6 @@ describe("DraftSubmissionFlow native terminal", () => {
           agentId: "main",
           requestedAgentId: "main",
           catalogId,
-          model: "openai/test",
           catalogLabel: catalogId,
           startTerminal: true,
           terminalHosts: [{ hostId: "gateway:local", label: "Local CLI" }],
@@ -165,7 +163,6 @@ describe("DraftSubmissionFlow native terminal", () => {
         requestedAgentId: "main",
         catalogId: "synthetic-cli",
         catalogLabel: "Synthetic CLI",
-        model: "",
         startTerminal: true,
         terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
       },
@@ -308,7 +305,6 @@ describe("DraftSubmissionFlow native terminal", () => {
       agentId: "main",
       requestedAgentId: "main",
       catalogId,
-      model: "",
       catalogLabel: catalogId,
       startTerminal: true,
       terminalHosts: [{ hostId: "node:chosen", label: "Chosen" }],
@@ -382,7 +378,6 @@ describe("DraftSubmissionFlow native terminal", () => {
           agentId: "main",
           requestedAgentId: "main",
           catalogId: "codex",
-          model: "",
           catalogLabel: "Codex",
           startTerminal: true,
           terminalHosts: [{ hostId: "gateway:local", label: "Local" }],

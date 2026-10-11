@@ -15,12 +15,14 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
 } from "../../tool-search-types.js";
 import { createToolSearchTools } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
+import { createInstalledSkillTools } from "../../tools/installed-skill-tools.js";
 import {
   beginPromptCacheObservation,
   collectPromptCacheTools,
@@ -37,6 +39,10 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 
 const reviewRunEmbeddedAgent = vi.hoisted(() => vi.fn());
 vi.mock("../../embedded-agent.js", () => ({ runEmbeddedAgent: reviewRunEmbeddedAgent }));
+vi.mock("../../../skills/workshop/library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../skills/workshop/library.js")>()),
+  listWorkshopChanges: async () => [],
+}));
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
 const skillsPrompt = [
@@ -97,6 +103,7 @@ function toolDigest(
   session = { sessionId: "embedded-session", sessionKey: "agent:main:main" },
 ) {
   return beginPromptCacheObservation({
+    messages: [],
     ...session,
     provider: "openai",
     modelId: "gpt-test",
@@ -120,6 +127,59 @@ function run(
 }
 
 describe("runEmbeddedAttempt skill policy projections", () => {
+  it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {
+    const sandboxWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
+    tempPaths.push(sandboxWorkspace);
+    hoisted.resolveSandboxContextMock.mockResolvedValue({
+      enabled: true,
+      workspaceAccess: "ro",
+      workspaceDir: sandboxWorkspace,
+    });
+
+    await run({
+      sessionKey: "agent:main:guildchat:channel:test-ctx-engine",
+      attemptOverrides: {
+        skillsSnapshot: {
+          prompt:
+            "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
+          skills: [{ name: "smaug" }],
+          resolvedSkills: [
+            {
+              name: "smaug",
+              description: "Host copy",
+              disableModelInvocation: false,
+              filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
+              baseDir: "/Users/alice/.openclaw/skills/smaug",
+              source: "openclaw-workspace",
+              sourceInfo: {
+                path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
+                source: "openclaw-workspace",
+                scope: "project",
+                origin: "top-level",
+                baseDir: "/Users/alice/.openclaw/skills/smaug",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(hoisted.resolveEmbeddedRunSkillEntriesMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ workspaceDir: sandboxWorkspace, skillsSnapshot: undefined }),
+    );
+    expect(hoisted.resolveSkillsPromptForRunMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        workspaceDir: sandboxWorkspace,
+        skillsSnapshot: expect.objectContaining({
+          prompt: "",
+          skills: [],
+          resolvedSkills: [],
+          discoverySkills: [],
+        }),
+      }),
+    );
+  });
+
   it("preserves local operator tool schemas in the detached experience review", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
     tempPaths.push(workspaceDir);
@@ -159,7 +219,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       { workspaceDir, modelId: "gpt-test" },
     );
     candidate.ctx.foregroundPromptContext = foregroundPromptContext;
-    candidate.config = { skills: { workshop: { autonomous: { mode: "propose" } } } };
+    candidate.config = { skills: { workshop: { autonomous: { mode: "auto" } } } };
     await runSkillExperienceReview(candidate);
     expect(foreground.toolNames).toContain("transcripts");
     expect(review).toEqual(foreground);
@@ -202,6 +262,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         },
         attemptOverrides: {
           disableTools: false,
+          disableToolSearch: true,
           disableMessageTool: false,
           reasoningLevel: "on",
           sessionId: session.sessionId,
@@ -213,7 +274,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
             ? {
                 sessionPersistence: "detached" as const,
                 toolExecutionAllow: ["skill_workshop"],
-                skillWorkshopProposalOnly: true,
+                skillWorkshopReviewOf: "agent:main:main",
                 disableTrajectory: true,
                 verboseLevel: "off" as const,
                 trigger: "user" as const,
@@ -229,10 +290,9 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     }
     expect(reviewReadOutcomes).toMatchObject([
       {
-        status: "rejected",
-        reason: {
-          message:
-            "Unavailable in this run. Continue with the tools permitted by the run's instructions.",
+        status: "fulfilled",
+        value: {
+          content: [{ text: formatToolExecutionGatedMessage("read", ["skill_workshop"]) }],
         },
       },
     ]);
@@ -242,7 +302,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(await fs.readFile(storeFile, "utf8")).toBe(store);
   });
 
-  it("exposes Code Mode skills only when read is available and executable", async () => {
+  it("keeps admitted Code Mode skill descriptions while enforcing execution restrictions", async () => {
     const cases: Array<{
       label: string;
       toolsAllow?: string[];
@@ -252,10 +312,17 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     }> = [
       { label: "unrestricted", skillsPrompt, available: true },
       { label: "wildcard", toolsAllow: ["*"], skillsPrompt, available: true },
+      { label: "mixed wildcard", toolsAllow: ["message", "*"], skillsPrompt, available: true },
       { label: "finite", toolsAllow: ["message"], available: false },
       {
         label: "read executable",
-        toolExecutionAllow: ["skill_workshop", "read"],
+        toolExecutionAllow: ["skill_workshop", "read", "skills_read", "skills_search"],
+        skillsPrompt,
+        available: true,
+      },
+      {
+        label: "skill read denied",
+        toolExecutionAllow: ["read"],
         skillsPrompt,
         available: true,
       },
@@ -265,12 +332,26 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         skillsPrompt: "",
         available: false,
       },
+      { label: "execution denied", toolExecutionAllow: [], skillsPrompt: "", available: false },
     ];
+    let foregroundDescription: string | undefined;
+    let restrictedListResult: unknown;
     for (const testCase of cases) {
       resetEmbeddedAttemptHarness();
       enableSkills();
+      hoisted.createOpenClawCodingToolsMock.mockImplementation((options) =>
+        createInstalledSkillTools(options?.installedSkills ?? []),
+      );
       await run({
         sessionKey: `agent:main:${testCase.label.replace(" ", "-")}`,
+        sessionPrompt: async () => {
+          if (testCase.label === "skill read denied") {
+            restrictedListResult = await sessionTool("exec").execute("denied-skills", {
+              title: "Check installed skill access",
+              code: "return await skills.list();",
+            });
+          }
+        },
         attemptOverrides: {
           disableTools: false,
           toolsAllow: testCase.toolsAllow,
@@ -281,10 +362,20 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       expect(hoisted.embeddedSystemPromptInputs.at(-1)).toMatchObject({
         skillsPrompt: testCase.skillsPrompt,
       });
-      expect(sessionTool("exec").description.includes("await skills.list()")).toBe(
-        testCase.available,
-      );
+      const description = sessionTool("exec").description;
+      expect(description.includes("await skills.list()")).toBe(testCase.available);
+      if (testCase.label === "unrestricted") {
+        foregroundDescription = description;
+      } else if (testCase.label === "skill read denied") {
+        expect(description).toBe(foregroundDescription);
+      }
     }
+    expect(restrictedListResult).toMatchObject({
+      details: {
+        status: "failed",
+        error: expect.stringContaining(formatToolExecutionGatedMessage("skills_search", ["read"])),
+      },
+    });
   });
 
   it("gates catalog-hidden tools during review while skill_workshop stays callable", async () => {
@@ -330,11 +421,11 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       },
     });
     expect(executed).toEqual(["skill_workshop"]);
-    expect(outcomes.map((outcome) => outcome.status)).toEqual(["rejected", "fulfilled"]);
-    expect(outcomes[0]).toMatchObject({
-      status: "rejected",
-      reason: { message: expect.stringContaining("Unavailable in this run") },
-    });
+    const denial = formatToolExecutionGatedMessage("read", ["skill_workshop"]);
+    expect(outcomes).toMatchObject([
+      { status: "fulfilled", value: { content: [{ text: expect.stringContaining(denial) }] } },
+      { status: "fulfilled" },
+    ]);
     const activities = sessionManager.getEntries().flatMap((entry) => {
       const activity = entry.type === "message" && readNestedToolActivity(entry.message);
       return activity ? [activity.details] : [];
@@ -342,10 +433,8 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(activities).toHaveLength(2);
     expect(activities.find((activity) => activity.toolName === "read")).toMatchObject({
       parentToolCallId: "call-read",
-      isError: true,
-      result: {
-        details: { status: "error", error: expect.stringContaining("Unavailable in this run") },
-      },
+      isError: false,
+      result: { content: [{ type: "text", text: denial }] },
     });
     expect(activities.find((activity) => activity.toolName === "skill_workshop")).toMatchObject({
       parentToolCallId: "call-workshop",

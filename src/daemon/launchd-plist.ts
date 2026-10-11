@@ -1,10 +1,10 @@
-/** Reads and renders macOS LaunchAgent plists for gateway service installs. */
 import fs from "node:fs/promises";
 import { asOptionalRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../infra/gateway-shutdown-budget.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExec } from "../process/exec.js";
+import { escapeXml } from "../shared/xml.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnvironmentValueSource,
@@ -27,14 +27,6 @@ export const LAUNCH_AGENT_POLICY = {
   StandardInPath: "/dev/null",
 } as const;
 export const LAUNCH_AGENT_ENV_WRAPPER_SHELL = "/bin/sh";
-
-const plistEscape = (value: string): string =>
-  value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
 
 type ReadLaunchAgentProgramArgumentsOptions = GatewayServiceReadOptions & {
   expectedEnvironmentWrapperPath?: string;
@@ -111,17 +103,14 @@ export function resolveGeneratedEnvWrapperLayout(
   programArguments: string[],
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): { envFilePath: string; commandStartIndex: number } | null {
-  if (programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL) {
-    const wrapperPath = programArguments[1];
-    const envFilePath = programArguments[2];
+  for (const wrapperIndex of programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL
+    ? [1, 0]
+    : [0]) {
+    const wrapperPath = programArguments[wrapperIndex];
+    const envFilePath = programArguments[wrapperIndex + 1];
     if (isExpectedGeneratedEnvWrapperPair(wrapperPath, envFilePath, options) && envFilePath) {
-      return { envFilePath, commandStartIndex: 3 };
+      return { envFilePath, commandStartIndex: wrapperIndex + 2 };
     }
-  }
-  const wrapperPath = programArguments[0];
-  const envFilePath = programArguments[1];
-  if (isExpectedGeneratedEnvWrapperPair(wrapperPath, envFilePath, options) && envFilePath) {
-    return { envFilePath, commandStartIndex: 2 };
   }
   return null;
 }
@@ -215,7 +204,7 @@ const renderEnvDict = (env: Record<string, string | undefined> | undefined): str
   const items = entries
     .map(
       ([key, value]) =>
-        `\n    <key>${plistEscape(key)}</key>\n    <string>${plistEscape(value?.trim() ?? "")}</string>`,
+        `\n    <key>${escapeXml(key)}</key>\n    <string>${escapeXml(value?.trim() ?? "")}</string>`,
     )
     .join("");
   return `\n    <key>EnvironmentVariables</key>\n    <dict>${items}\n    </dict>`;
@@ -349,13 +338,13 @@ export function buildLaunchAgentPlist({
   environment?: Record<string, string | undefined>;
 }): string {
   const argsXml = programArguments
-    .map((arg) => `\n      <string>${plistEscape(arg)}</string>`)
+    .map((arg) => `\n      <string>${escapeXml(arg)}</string>`)
     .join("");
   const workingDirXml = workingDirectory
-    ? `\n    <key>WorkingDirectory</key>\n    <string>${plistEscape(workingDirectory)}</string>`
+    ? `\n    <key>WorkingDirectory</key>\n    <string>${escapeXml(workingDirectory)}</string>`
     : "";
   const commentXml = comment?.trim()
-    ? `\n    <key>Comment</key>\n    <string>${plistEscape(comment.trim())}</string>`
+    ? `\n    <key>Comment</key>\n    <string>${escapeXml(comment.trim())}</string>`
     : "";
   const envXml = renderEnvDict(environment);
   const policyXml = Object.entries(LAUNCH_AGENT_POLICY)
@@ -364,9 +353,9 @@ export function buildLaunchAgentPlist({
       const xml =
         typeof value === "boolean"
           ? `<${value}/>`
-          : `<${type}>${plistEscape(String(value))}</${type}>`;
+          : `<${type}>${escapeXml(String(value))}</${type}>`;
       return `    <key>${key}</key>\n    ${xml}`;
     })
     .join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${plistEscape(label)}</string>\n    ${commentXml}\n${policyXml}\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${plistEscape(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${plistEscape(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${escapeXml(label)}</string>\n    ${commentXml}\n${policyXml}\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${escapeXml(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${escapeXml(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
 }

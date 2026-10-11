@@ -134,11 +134,6 @@ export function signalProcessTree(
   const attachedLinuxTree =
     opts?.detached === false && !useGroupKill && process.platform === "linux";
   const processTree = attachedLinuxTree ? collectUnixProcessTree(pid) : undefined;
-  if (attachedLinuxTree && !processTree) {
-    signalProcessTreeUnix(pid, signal, false);
-    opts?.onComplete?.();
-    return;
-  }
   signalProcessTreeUnix(pid, signal, useGroupKill, processTree);
   opts?.onComplete?.();
 }

@@ -1,11 +1,11 @@
-import { nothing, type PropertyValues } from "lit";
-import { property } from "lit/decorators.js";
+import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
 import { focusWithoutTooltip } from "../../../components/tooltip.ts";
 import type { ChatAttachment, ChatSelectionAnnotation } from "../../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
-import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
+import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { currentAttachments } from "./chat-attachment-draft.ts";
 import { stagedAttachmentBytes } from "./chat-attachments.ts";
 import { resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
@@ -22,294 +22,306 @@ export function currentChatComments(attachments: readonly ChatAttachment[], sess
   );
 }
 
+type ChatCommentControllerProps = {
+  props: ChatAttachmentControlsProps;
+  disabled: boolean;
+  sessionKey: string;
+  paneId: string;
+  presented: boolean;
+};
+
 /** Owns comment mutations even when plugins or history errors replace the transcript. */
-class ChatCommentController extends OpenClawLightDomContentsElement {
-  @property({ attribute: false }) props!: ChatAttachmentControlsProps;
-  @property() sessionKey = "";
-  @property() paneId = "";
-  @property({ type: Boolean }) presented = true;
-  private root: HTMLElement | null = null;
-  private editorOwner?: AbortController;
-  private editingId?: string;
-  private editorAnchor?: HTMLElement;
-  private editorObserver?: MutationObserver;
-  private positionEditor?: () => void;
-  private focusFrame?: number;
+defineSolidBridge<ChatCommentControllerProps>(
+  "openclaw-chat-comment-controller",
+  (view, host) => {
+    let root: HTMLElement | null = null;
+    let editorOwner: AbortController | undefined;
+    let editingId: string | undefined;
+    let editorAnchor: HTMLElement | undefined;
+    let editorObserver: MutationObserver | undefined;
+    let positionEditor: (() => void) | undefined;
+    let focusFrame: number | undefined;
+    host.style.display = "contents";
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.requestUpdate("props");
-  }
+    const retireEditor = () => {
+      editorOwner?.abort();
+      editorOwner = undefined;
+      editingId = undefined;
+      editorAnchor = undefined;
+      positionEditor = undefined;
+      editorObserver?.disconnect();
+      if (focusFrame !== undefined) {
+        cancelAnimationFrame(focusFrame);
+        focusFrame = undefined;
+      }
+    };
 
-  private currentAttachments() {
-    return this.props.getAttachments?.() ?? this.props.attachments ?? [];
-  }
-
-  private readonly retireEditor = () => {
-    this.editorOwner?.abort();
-    this.editorOwner = undefined;
-    this.editingId = undefined;
-    this.editorAnchor = undefined;
-    this.positionEditor = undefined;
-    this.editorObserver?.disconnect();
-    if (this.focusFrame !== undefined) {
-      cancelAnimationFrame(this.focusFrame);
-      this.focusFrame = undefined;
+    function canChange(signal: AbortSignal | undefined) {
+      return (
+        host.isConnected &&
+        view.presented &&
+        !view.disabled &&
+        !signal?.aborted &&
+        view.props.readSignal === signal &&
+        Boolean(view.props.onAttachmentsChange)
+      );
     }
-  };
 
-  protected override willUpdate(changed: PropertyValues<this>) {
-    const previous = changed.get("props");
-    if (changed.has("props") && previous?.readSignal !== this.props.readSignal) {
-      previous?.readSignal?.removeEventListener("abort", this.retireEditor);
-      this.props.readSignal?.addEventListener("abort", this.retireEditor, { once: true });
-      this.retireEditor();
+    function changeAttachments(current: ChatAttachment[], next: ChatAttachment[]) {
+      if (view.props.onAttachmentsChange?.(next) === false) {
+        releaseDisplacedChatAttachmentPayloads(next, [current]);
+        return false;
+      }
+      releaseDisplacedChatAttachmentPayloads(current, [next]);
+      view.props.onRequestUpdate?.();
+      return true;
     }
-    if (
-      changed.has("sessionKey") ||
-      !this.presented ||
-      this.props.disabled ||
-      (this.editingId &&
-        !currentChatComments(this.currentAttachments(), this.sessionKey).some(
-          (item) => item.id === this.editingId,
-        ))
-    ) {
-      this.retireEditor();
-    }
-  }
 
-  protected override updated() {
-    if (!this.root) {
-      this.root = this.closest(".chat-session-rail") ?? this.closest(".chat");
-      this.root?.addEventListener("openclaw-comment-action", this.handleCommentAction);
+    function visiblePin(id: string) {
+      return Array.from(root?.querySelectorAll<HTMLElement>(".chat-comment-pin") ?? []).find(
+        (pin) => {
+          if (pin.dataset.attachmentId !== id || pin.hidden) {
+            return false;
+          }
+          const bounds = pin.getBoundingClientRect();
+          const thread = pin.closest(".chat-thread")?.getBoundingClientRect();
+          return (
+            bounds.width > 0 &&
+            bounds.height > 0 &&
+            thread &&
+            bounds.top >= Math.max(thread.top, 0) &&
+            bounds.bottom <= Math.min(thread.bottom, window.innerHeight) &&
+            bounds.left >= Math.max(thread.left, 0) &&
+            bounds.right <= Math.min(thread.right, window.innerWidth)
+          );
+        },
+      );
     }
-  }
 
-  override disconnectedCallback() {
-    this.root?.removeEventListener("openclaw-comment-action", this.handleCommentAction);
-    this.root = null;
-    this.retireEditor();
-    this.props.readSignal?.removeEventListener("abort", this.retireEditor);
-    super.disconnectedCallback();
-  }
-
-  private canChange(signal: AbortSignal | undefined) {
-    return (
-      this.isConnected &&
-      this.presented &&
-      !this.props.disabled &&
-      !signal?.aborted &&
-      this.props.readSignal === signal &&
-      Boolean(this.props.onAttachmentsChange)
-    );
-  }
-
-  private changeAttachments(current: ChatAttachment[], next: ChatAttachment[]) {
-    if (this.props.onAttachmentsChange?.(next) === false) {
-      releaseDisplacedChatAttachmentPayloads(next, [current]);
-      return false;
-    }
-    releaseDisplacedChatAttachmentPayloads(current, [next]);
-    this.props.onRequestUpdate?.();
-    return true;
-  }
-
-  private visiblePin(id: string) {
-    return Array.from(this.root?.querySelectorAll<HTMLElement>(".chat-comment-pin") ?? []).find(
-      (pin) => {
-        if (pin.dataset.attachmentId !== id || pin.hidden) {
-          return false;
-        }
-        const bounds = pin.getBoundingClientRect();
-        const thread = pin.closest(".chat-thread")?.getBoundingClientRect();
-        return (
-          bounds.width > 0 &&
-          bounds.height > 0 &&
-          thread &&
-          bounds.top >= Math.max(thread.top, 0) &&
-          bounds.bottom <= Math.min(thread.bottom, window.innerHeight) &&
-          bounds.left >= Math.max(thread.left, 0) &&
-          bounds.right <= Math.min(thread.right, window.innerWidth)
-        );
-      },
-    );
-  }
-
-  private readonly handleCommentAction = (event: Event) => {
-    if (!(event instanceof CustomEvent) || !this.canChange(this.props.readSignal)) {
-      return;
-    }
-    if (event.detail?.action === "delete-all") {
-      event.stopPropagation();
-      this.clearComments();
-      return;
-    }
-    const attachment = currentChatComments(this.currentAttachments(), this.sessionKey).find(
-      (item) => item.id === event.detail?.id,
-    );
-    if (!attachment) {
-      return;
-    }
-    event.stopPropagation();
-    if (event.detail.action === "delete") {
-      const preview =
-        event.target instanceof HTMLElement
-          ? event.target.closest<HTMLElement>(".chat-comment-preview--editable")
-          : null;
-      this.deleteComment(attachment.id, preview);
-    } else if (event.detail.action === "edit" && event.target instanceof HTMLElement) {
-      // Opening must not queue a transcript scroll that would dismiss the editor.
-      const trigger = event.target
-        .closest("openclaw-tooltip")
-        ?.querySelector<HTMLElement>(".chat-selection-annotations__trigger");
-      this.editComment(attachment, this.visiblePin(attachment.id) ?? trigger ?? event.target);
-    }
-  };
-
-  private focusComposer() {
-    this.root
-      ?.querySelector<HTMLElement>(
-        "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
-      )
-      ?.focus({ preventScroll: true });
-  }
-
-  private clearComments() {
-    this.retireEditor();
-    const removed = currentChatComments(this.currentAttachments(), this.sessionKey);
-    if (removed.length === 0) {
-      return;
-    }
-    const ids = new Set(removed.map((item) => item.id));
-    const current = this.currentAttachments();
-    this.changeAttachments(
-      current,
-      current.filter((item) => !ids.has(item.id)),
-    );
-    this.focusComposer();
-  }
-
-  private deleteComment(id: string, preview: HTMLElement | null = null) {
-    this.retireEditor();
-    const signal = this.props.readSignal;
-    const sessionKey = this.sessionKey;
-    const comments = currentChatComments(this.currentAttachments(), sessionKey);
-    const index = comments.findIndex((item) => item.id === id);
-    const next = comments[index + 1] ?? comments[index - 1];
-    const current = this.currentAttachments();
-    this.changeAttachments(
-      current,
-      current.filter((item) => item.id !== id),
-    );
-    if (!preview || !next) {
-      this.focusComposer();
-      return;
-    }
-    // Wait for the attachment owner to render the renumbered list before moving focus.
-    this.focusFrame = requestAnimationFrame(() => {
-      this.focusFrame = undefined;
-      if (
-        !this.canChange(signal) ||
-        this.sessionKey !== sessionKey ||
-        !preview.isConnected ||
-        !preview.hasAttribute("open")
-      ) {
+    const handleCommentAction = (event: Event) => {
+      if (!(event instanceof CustomEvent) || !canChange(view.props.readSignal)) {
         return;
       }
-      preview
-        .querySelector<HTMLElement>(`[data-comment-delete="${CSS.escape(next.id)}"]`)
+      if (event.detail?.action === "delete-all") {
+        event.stopPropagation();
+        clearComments();
+        return;
+      }
+      const attachment = currentChatComments(currentAttachments(view.props), view.sessionKey).find(
+        (item) => item.id === event.detail?.id,
+      );
+      if (!attachment) {
+        return;
+      }
+      event.stopPropagation();
+      if (event.detail.action === "delete") {
+        const preview =
+          event.target instanceof HTMLElement
+            ? event.target.closest<HTMLElement>(".chat-comment-preview--editable")
+            : null;
+        deleteComment(attachment.id, preview);
+      } else if (event.detail.action === "edit" && event.target instanceof HTMLElement) {
+        // Opening must not queue a transcript scroll that would dismiss the editor.
+        const trigger = event.target
+          .closest("openclaw-tooltip")
+          ?.querySelector<HTMLElement>(".chat-selection-annotations__trigger");
+        editComment(attachment, visiblePin(attachment.id) ?? trigger ?? event.target);
+      }
+    };
+
+    function focusComposer() {
+      root
+        ?.querySelector<HTMLElement>(
+          "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
+        )
         ?.focus({ preventScroll: true });
-    });
-  }
-
-  private readonly syncEditorAnchor = () => {
-    if (!this.editorAnchor?.isConnected || this.editorAnchor.hidden) {
-      this.retireEditor();
-    } else {
-      this.positionEditor?.();
     }
-  };
 
-  private editComment(attachment: CommentAttachment, anchor: HTMLElement) {
-    const signal = this.props.readSignal;
-    if (!this.canChange(signal)) {
-      return;
+    function clearComments() {
+      retireEditor();
+      const removed = currentChatComments(currentAttachments(view.props), view.sessionKey);
+      if (removed.length === 0) {
+        return;
+      }
+      const ids = new Set(removed.map((item) => item.id));
+      const current = currentAttachments(view.props);
+      changeAttachments(
+        current,
+        current.filter((item) => !ids.has(item.id)),
+      );
+      focusComposer();
     }
-    this.retireEditor();
-    this.editorOwner = new AbortController();
-    this.editingId = attachment.id;
-    this.editorAnchor = anchor;
-    this.positionEditor = showChatAnnotationEditor({
-      paneId: this.paneId,
-      anchorRect: anchor.getBoundingClientRect(),
-      anchorElement: anchor,
-      sourceRange: this.root
-        ? resolveChatCommentAnchor(this.root, attachment.selectionAnnotation)?.range
-        : undefined,
-      comment: attachment.selectionAnnotation.comment,
-      expanded: true,
-      readSignal: this.editorOwner.signal,
-      onSave: (comment) => {
-        if (!this.canChange(signal)) {
-          return true;
-        }
-        const current = this.currentAttachments();
-        const selected = current.find((item) => item.id === attachment.id);
-        if (!selected?.selectionAnnotation) {
-          return true;
-        }
-        const replacement = createChatSelectionAttachment(
-          { ...selected.selectionAnnotation, comment },
-          this.props,
-          stagedAttachmentBytes(
-            this.props,
-            current.filter((item) => item.id !== attachment.id),
-          ),
-        );
-        if (!replacement) {
-          return false;
-        }
+
+    function deleteComment(id: string, preview: HTMLElement | null = null) {
+      retireEditor();
+      const signal = view.props.readSignal;
+      const sessionKey = view.sessionKey;
+      const comments = currentChatComments(currentAttachments(view.props), sessionKey);
+      const index = comments.findIndex((item) => item.id === id);
+      const next = comments[index + 1] ?? comments[index - 1];
+      const current = currentAttachments(view.props);
+      changeAttachments(
+        current,
+        current.filter((item) => item.id !== id),
+      );
+      if (!preview || !next) {
+        focusComposer();
+        return;
+      }
+      // Wait for the attachment owner to render the renumbered list before moving focus.
+      focusFrame = requestAnimationFrame(() => {
+        focusFrame = undefined;
         if (
-          !this.changeAttachments(
-            current,
-            current.map((item) => (item.id === attachment.id ? replacement : item)),
-          )
+          !canChange(signal) ||
+          view.sessionKey !== sessionKey ||
+          !preview.isConnected ||
+          !preview.hasAttribute("open")
         ) {
-          return false;
+          return;
         }
-        this.retireEditor();
-        this.focusFrame = requestAnimationFrame(() => {
-          this.focusFrame = undefined;
-          if (this.canChange(signal)) {
-            const target = this.visiblePin(replacement.id) ?? (anchor.isConnected ? anchor : null);
-            if (target) {
-              focusWithoutTooltip(target);
-            } else {
-              this.focusComposer();
-            }
-          }
-        });
-        return true;
-      },
-      onDelete: () => {
-        if (this.canChange(signal)) {
-          this.deleteComment(attachment.id);
-        }
-      },
-      onCancel: () => {
-        this.retireEditor();
-        focusWithoutTooltip(anchor);
-      },
-    });
-    if (this.root) {
-      this.editorObserver ??= new MutationObserver(this.syncEditorAnchor);
-      this.editorObserver.observe(this.root, { childList: true, subtree: true, attributes: true });
+        preview
+          .querySelector<HTMLElement>(`[data-comment-delete="${CSS.escape(next.id)}"]`)
+          ?.focus({ preventScroll: true });
+      });
     }
-  }
 
-  protected override render() {
-    return nothing;
-  }
-}
+    const syncEditorAnchor = () => {
+      if (!editorAnchor?.isConnected || editorAnchor.hidden) {
+        retireEditor();
+      } else {
+        positionEditor?.();
+      }
+    };
 
-customElements.define("openclaw-chat-comment-controller", ChatCommentController);
+    function editComment(attachment: CommentAttachment, anchor: HTMLElement) {
+      const signal = view.props.readSignal;
+      if (!canChange(signal)) {
+        return;
+      }
+      retireEditor();
+      editorOwner = new AbortController();
+      editingId = attachment.id;
+      editorAnchor = anchor;
+      positionEditor = showChatAnnotationEditor({
+        paneId: view.paneId,
+        anchorRect: anchor.getBoundingClientRect(),
+        anchorElement: anchor,
+        sourceRange: root
+          ? resolveChatCommentAnchor(root, attachment.selectionAnnotation)?.range
+          : undefined,
+        comment: attachment.selectionAnnotation.comment,
+        expanded: true,
+        readSignal: editorOwner.signal,
+        onSave: (comment) => {
+          if (!canChange(signal)) {
+            return true;
+          }
+          const current = currentAttachments(view.props);
+          const selected = current.find((item) => item.id === attachment.id);
+          if (!selected?.selectionAnnotation) {
+            return true;
+          }
+          const replacement = createChatSelectionAttachment(
+            { ...selected.selectionAnnotation, comment },
+            view.props,
+            stagedAttachmentBytes(
+              view.props,
+              current.filter((item) => item.id !== attachment.id),
+            ),
+          );
+          if (!replacement) {
+            return false;
+          }
+          if (
+            !changeAttachments(
+              current,
+              current.map((item) => (item.id === attachment.id ? replacement : item)),
+            )
+          ) {
+            return false;
+          }
+          retireEditor();
+          focusFrame = requestAnimationFrame(() => {
+            focusFrame = undefined;
+            if (canChange(signal)) {
+              const target = visiblePin(replacement.id) ?? (anchor.isConnected ? anchor : null);
+              if (target) {
+                focusWithoutTooltip(target);
+              } else {
+                focusComposer();
+              }
+            }
+          });
+          return true;
+        },
+        onDelete: () => {
+          if (canChange(signal)) {
+            deleteComment(attachment.id);
+          }
+        },
+        onCancel: () => {
+          retireEditor();
+          focusWithoutTooltip(anchor);
+        },
+      });
+      if (root) {
+        editorObserver ??= new MutationObserver(syncEditorAnchor);
+        editorObserver.observe(root, { childList: true, subtree: true, attributes: true });
+      }
+    }
+
+    // Only the admitted comment set and read scope affect the editor lifetime.
+    const readScope = createMemo(() => [view.props.readSignal, view.sessionKey] as const, {
+      equals: (previous, next) => previous[0] === next[0] && previous[1] === next[1],
+    });
+    createEffect(readScope, ([signal]) => {
+      retireEditor();
+      signal?.addEventListener("abort", retireEditor, { once: true });
+      return () => signal?.removeEventListener("abort", retireEditor);
+    });
+    const editingScope = createMemo(
+      () => ({
+        attachments: view.props.attachments,
+        presented: view.presented,
+        disabled: view.disabled,
+      }),
+      {
+        equals: (previous, next) =>
+          previous.attachments === next.attachments &&
+          previous.presented === next.presented &&
+          previous.disabled === next.disabled,
+      },
+    );
+    createEffect(editingScope, () => {
+      if (
+        !view.presented ||
+        view.disabled ||
+        (editingId &&
+          !currentChatComments(currentAttachments(view.props), view.sessionKey).some(
+            (item) => item.id === editingId,
+          ))
+      ) {
+        retireEditor();
+      }
+    });
+    onSettled(() => {
+      root = host.closest(".chat-session-rail") ?? host.closest(".chat");
+      root?.addEventListener("openclaw-comment-action", handleCommentAction);
+    });
+    onCleanup(() => {
+      root?.removeEventListener("openclaw-comment-action", handleCommentAction);
+      root = null;
+      retireEditor();
+    });
+    return null;
+  },
+  {
+    properties: {
+      props: { default: {}, attribute: false },
+      disabled: { default: false, type: Boolean },
+      sessionKey: { default: "" },
+      paneId: { default: "" },
+      presented: { default: true, type: Boolean },
+    },
+  },
+);

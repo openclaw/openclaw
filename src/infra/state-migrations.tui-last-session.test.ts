@@ -3,12 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { readTuiLastSessionKey } from "../tui/tui-last-session.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
@@ -121,10 +121,6 @@ describe("legacy TUI last-session migration", () => {
     ["non-object top level", []],
     ["non-object record", { terminal: "agent:main:tui-123" }],
     ["missing timestamp", { terminal: { sessionKey: "agent:main:tui-123" } }],
-    [
-      "unknown field",
-      { terminal: { sessionKey: "agent:main:tui-123", updatedAt: 100, extra: true } },
-    ],
   ])("retains malformed source: %s", async (_label, value) => {
     const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, value);

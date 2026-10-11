@@ -5,11 +5,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-export type QaRuntimeToolBucket = (typeof QA_RUNTIME_TOOL_BUCKETS)[number];
+type QaRuntimeToolBucket = (typeof QA_RUNTIME_TOOL_BUCKETS)[number];
 
-export type QaRuntimeToolExpectedLayer = (typeof QA_RUNTIME_TOOL_EXPECTED_LAYERS)[number];
+type QaRuntimeToolExpectedLayer = (typeof QA_RUNTIME_TOOL_EXPECTED_LAYERS)[number];
 
-export type QaRuntimeCapabilityLayer = (typeof QA_RUNTIME_CAPABILITY_LAYERS)[number];
+type QaRuntimeCapabilityLayer = (typeof QA_RUNTIME_CAPABILITY_LAYERS)[number];
 
 export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
 

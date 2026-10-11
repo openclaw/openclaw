@@ -1,4 +1,3 @@
-// Local notification command for paired nodes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { type Command, Option } from "commander";
 import { defaultRuntime } from "../../runtime.js";
@@ -12,7 +11,6 @@ import {
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-/** Register node notification command. */
 export function registerNodesNotifyCommand(nodes: Command) {
   nodesCallOpts(
     nodes
@@ -43,7 +41,7 @@ export function registerNodesNotifyCommand(nodes: Command) {
             throw new Error("missing --title or --body");
           }
           const invokeTimeout = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
-          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
           const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "system.notify",

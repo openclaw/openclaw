@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import { toggleTranscriptSearch } from "./chat-thread-interactions.ts";
@@ -39,7 +40,9 @@ function setupEntryTranscript(messages: unknown[] = []) {
   let container = document.body.appendChild(document.createElement("div"));
   const update = () => {
     render(renderChatThread(props, transcript), container);
+    flush();
     transcript.hostUpdated();
+    flush();
   };
   update();
   transcript.hostConnected();
@@ -71,15 +74,24 @@ describe("chat transcript entry lifecycle", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it.each(["animationend", "animationcancel"])(
-    "retires a prompt after its own %s without replaying on acknowledgement or remount",
+  it.each(["animationend", "animationcancel", "disconnect"])(
+    "retires a new prompt on %s without disturbing existing bubbles",
     (eventType) => {
-      const view = setupEntryTranscript();
+      const view = setupEntryTranscript([
+        { role: "user", content: "existing prompt", timestamp: 1_000 },
+      ]);
+      const existing = bubbles(view.container)[0];
       view.props.queue = [pendingSend("new-prompt")];
       view.update();
-      const submitted = expectDefined(bubbles(view.container)[0], "submitted prompt");
+      const submitted = expectDefined(bubbles(view.container)[1], "submitted prompt");
+      expect(bubbles(view.container)[0]).toBe(existing);
       expect(entering(view.container)).toEqual([submitted]);
 
+      if (eventType === "disconnect") {
+        view.transcript.hostDisconnected();
+        expect(entering(view.container)).toHaveLength(0);
+        return;
+      }
       const finish = (target: Element, animationName: string) =>
         target.dispatchEvent(
           Object.assign(new Event(eventType, { bubbles: true }), { animationName }),
@@ -91,6 +103,7 @@ describe("chat transcript entry lifecycle", () => {
       expect(entering(view.container)).toHaveLength(0);
 
       view.props.messages = [
+        ...view.props.messages,
         {
           role: "user",
           content: "new-prompt",
@@ -100,10 +113,10 @@ describe("chat transcript entry lifecycle", () => {
       ];
       view.props.queue = [];
       view.update();
-      expect(bubbles(view.container)[0]).toBe(submitted);
+      expect(bubbles(view.container)[1]).toBe(submitted);
       expect(entering(view.container)).toHaveLength(0);
       view.remount();
-      expect(bubbles(view.container)).toHaveLength(1);
+      expect(bubbles(view.container)).toHaveLength(2);
       expect(entering(view.container)).toHaveLength(0);
       view.transcript.hostDisconnected();
     },
@@ -143,22 +156,18 @@ describe("chat transcript entry lifecycle", () => {
     }
   });
 
-  it("retires an unfinished prompt animation when the transcript disconnects", () => {
-    const view = setupEntryTranscript();
-    view.props.queue = [pendingSend("pending-disconnect")];
-    view.update();
-    expect(entering(view.container)).toHaveLength(1);
-    view.transcript.hostDisconnected();
-    expect(entering(view.container)).toHaveLength(0);
-  });
-
   it("does not leave a dormant arrival when reduced motion disables animation", () => {
-    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    const media = (matches: boolean) => () => ({
+      matches,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
+    vi.stubGlobal("matchMedia", media(true));
     const view = setupEntryTranscript();
     view.props.queue = [pendingSend("reduced-motion-prompt")];
     view.update();
     expect(entering(view.container)).toHaveLength(0);
-    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    vi.stubGlobal("matchMedia", media(false));
     view.props.queue = [...view.props.queue, pendingSend("later-prompt")];
     view.update();
     expect(entering(view.container).map((bubble) => bubble.dataset.messageText)).toEqual([
@@ -367,18 +376,6 @@ describe("chat transcript entry lifecycle", () => {
     expect(entering(view.container)).toHaveLength(0);
     // The retired pending-only animation must not bypass session initialization.
     expect(view.container.querySelector(".chat-bubble--user-turn-enter")).toBeNull();
-    view.transcript.hostDisconnected();
-  });
-
-  it("animates appended same-role bubbles without replaying existing ones", () => {
-    const view = setupEntryTranscript([
-      { role: "user", content: "existing prompt", timestamp: 1_000 },
-    ]);
-    const existing = bubbles(view.container)[0];
-    view.props.queue = [pendingSend("second-prompt")];
-    view.update();
-    expect(bubbles(view.container)[0]).toBe(existing);
-    expect(entering(view.container)).toEqual([bubbles(view.container)[1]]);
     view.transcript.hostDisconnected();
   });
 });

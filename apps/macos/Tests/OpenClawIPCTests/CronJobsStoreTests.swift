@@ -5,7 +5,7 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct CronJobsStoreTests {
     @Test func `count-only refreshes notify observers without changing preview rows`() async throws {
@@ -45,8 +45,7 @@ struct CronJobsStoreTests {
         let store = CronJobsStore(gateway: fixture.gateway)
         let refresh = Task { await store.refreshJobs() }
         do {
-            try await self.waitUntil { fixture.requests.value.contains { $0.method == "cron.list" } }
-            let pending = try #require(fixture.requests.value.first { $0.method == "cron.list" })
+            let pending = try await fixture.firstRequest("cron.list")
             if owner == "menu" {
                 store.stop()
             } else {
@@ -75,7 +74,7 @@ struct CronJobsStoreTests {
         let store = CronJobsStore(gateway: fixture.gateway)
         do {
             store.start()
-            try await self.waitUntil { store.summary.jobs.count == 1 }
+            try await TestWait.observed("one Cron job") { store.summary.jobs.count == 1 }
             #expect(store.summary.jobs.first?.name == "Gateway A")
             if lateHello {
                 let count = fixture.requests.value.count { $0.method == "cron.list" }
@@ -98,7 +97,7 @@ struct CronJobsStoreTests {
         await fixture.gateway.shutdown()
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: ["event", "manual"])
+    @Test(arguments: ["event", "manual"])
     func `replacement refresh waits for its canceled predecessor to drain`(replacement: String) async throws {
         let (lookups, entered) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let (releases, release) = AsyncStream<Void>.makeStream()
@@ -130,20 +129,16 @@ struct CronJobsStoreTests {
         }
         do {
             store.start()
-            try await self.waitForJobCount(1, in: store)
+            try await TestWait.observed("one Cron job") { store.summary.jobs.count == 1 }
             fixture.catalogTotal.setValue(0)
             holdNextLookup.setValue(true)
             try self.sendCronEvent(fixture, sequence: 1)
-            let reachedGate = try await AsyncTimeout.withTimeout(
-                seconds: 2,
-                onTimeout: { URLError(.timedOut) },
-                operation: {
-                    for await _ in lookups {
-                        return true
-                    }
-                    return false
-                })
-            try #require(reachedGate)
+            var reachedGate = false
+            for await _ in lookups {
+                reachedGate = true
+                break
+            }
+            try #require(reachedGate, "held endpoint lookup")
             let count = fixture.requests.value.count { $0.method == "cron.list" }
             if replacement == "event" {
                 try self.sendCronEvent(fixture, sequence: 2)
@@ -154,15 +149,14 @@ struct CronJobsStoreTests {
                     await store.refreshJobs()
                 }
                 await admitted.wait()
+                try Task.checkCancellation()
             }
-            try await AsyncTimeout.withTimeout(
-                seconds: 2,
-                onTimeout: { URLError(.timedOut) },
-                operation: { await cancelled.wait() })
+            await cancelled.wait()
+            try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(350))
             #expect(fixture.requests.value.count { $0.method == "cron.list" } == count)
             release.finish()
-            try await self.waitForJobCount(0, in: store)
+            try await TestWait.observed("no Cron jobs") { store.summary.jobs.count == 0 }
             #expect(fixture.requests.value.count { $0.method == "cron.list" } > count)
         } catch {
             await cleanup()
@@ -177,27 +171,5 @@ struct CronJobsStoreTests {
         {"type":"event","event":"cron","seq":\#(sequence),"payload":{"jobId":"shared-job","action":"finished"}}
         """#
         request.socket.emitReceiveSuccess(.string(event))
-    }
-
-    private func waitForJobCount(_ count: Int, in store: CronJobsStore) async throws {
-        while true {
-            try Task.checkCancellation()
-            let changed = AsyncTestGate()
-            let ready = withObservationTracking {
-                store.summary.jobs.count == count
-            } onChange: {
-                changed.open()
-            }
-            if ready { return }
-            await changed.wait()
-        }
-    }
-
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while !condition(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(2))
-        }
-        try #require(condition())
     }
 }

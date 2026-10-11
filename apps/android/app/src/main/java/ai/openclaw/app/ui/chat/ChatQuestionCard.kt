@@ -75,14 +75,12 @@ internal fun ChatQuestionCard(
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
       prompt.record.questions.forEach { question ->
-        if (question.secretStore != null) {
-          SecretStoreConsent(
-            prompt = prompt,
-            question = question,
-            enabled = pending,
-            onDraftChanged = { update -> onDraftChanged(prompt, update) },
-          )
-        }
+        SecretStoreConsent(
+          prompt = prompt,
+          question = question,
+          enabled = pending,
+          onDraftChanged = { update -> onDraftChanged(prompt, update) },
+        )
         QuestionSection(
           question = question,
           draft = draft,
@@ -92,7 +90,6 @@ internal fun ChatQuestionCard(
       }
       QuestionFooter(
         prompt = prompt,
-        draft = draft,
         status = status,
         nowMs = nowMs,
         onSubmit = onSubmit,
@@ -208,9 +205,9 @@ private fun QuestionSection(
     )
     Text(text = question.question, style = ClawTheme.type.body, color = ClawTheme.colors.text)
     question.options.forEach { option ->
-      val selected = option.label in draft.selectedOptions[question.questionId].orEmpty()
+      val selected = (option.value ?: option.label) in draft.selectedOptions[question.questionId].orEmpty()
       Surface(
-        onClick = { onDraftChanged { it.toggle(question, option.label) } },
+        onClick = { onDraftChanged { it.toggle(question, option.value ?: option.label) } },
         enabled = enabled,
         shape = RoundedCornerShape(ClawTheme.radii.row),
         color = if (selected) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface,
@@ -255,13 +252,12 @@ private fun QuestionSection(
 @Composable
 private fun QuestionFooter(
   prompt: ChatQuestionPrompt,
-  draft: ChatQuestionDraft,
   status: ChatQuestionStatus,
   nowMs: Long,
   onSubmit: (ChatQuestionPrompt, Map<String, List<String>>) -> Unit,
   onSkip: (ChatQuestionPrompt) -> Unit,
 ) {
-  val answers = draft.answers(prompt.record.questions)
+  val answers = prompt.draft.answers(prompt.record.questions)
   Row(verticalAlignment = Alignment.CenterVertically) {
     Text(
       text = questionCountdown(prompt.record.expiresAtMs, nowMs),
@@ -302,7 +298,7 @@ internal fun terminalQuestionAnswer(
   // Secret terminal summaries never echo submitted answer text.
   if (question.isSecret != true) {
     prompt.record.answers?.answers?.get(question.questionId)?.takeIf { it.isNotEmpty() }?.let {
-      return it.joinToString(", ")
+      return it.joinToString(", ") { value -> question.options.firstOrNull { option -> (option.value ?: option.label) == value }?.label ?: value }
     }
   }
   return if (status == ChatQuestionStatus.AnsweredElsewhere) nativeString("Answered elsewhere") else nativeString("Answered")

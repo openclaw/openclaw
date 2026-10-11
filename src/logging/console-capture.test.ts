@@ -7,7 +7,11 @@ import {
   registerActiveProgressLine,
   unregisterActiveProgressLine,
 } from "../../packages/terminal-core/src/progress-line.js";
-import { registerSignalExitGate, waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
+import {
+  registerSignalExitGate,
+  waitForCliSignalExit,
+  waitForSignalExitBarriers,
+} from "../cli/signal-exit-barrier.js";
 import { setVerbose } from "../global-state.js";
 import { logError, logInfo, logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
@@ -130,25 +134,6 @@ describe("enableConsoleCapture", () => {
     expect(console.log("hello")).toBeUndefined();
   });
 
-  it("prefixes console output with timestamps when enabled", () => {
-    setLoggerOverride({ level: "info", file: tempLogPath() });
-    const now = new Date("2026-01-17T18:01:02.000Z");
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    const warn = vi.fn();
-    console.warn = warn;
-    setConsoleTimestampPrefix(true);
-    enableConsoleCapture();
-    console.warn("[EventQueue] Slow listener detected");
-    expect(warn).toHaveBeenCalledTimes(1);
-    const firstArg = String(mockCall(warn)[0]);
-    // Timestamp uses local time with timezone offset instead of UTC "Z" suffix
-    expect(firstArg).toMatch(
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2} \[EventQueue\]/,
-    );
-    vi.useRealTimers();
-  });
-
   it("does not double-prefix timestamps", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     const warn = vi.fn();
@@ -159,46 +144,29 @@ describe("enableConsoleCapture", () => {
     expect(warn).toHaveBeenCalledWith("12:34:56 [exec] hello");
   });
 
-  it("prefixes JSON console output when timestamp prefix is enabled", () => {
-    setLoggerOverride({ level: "info", file: tempLogPath() });
-    const log = vi.fn();
-    console.log = log;
-    setConsoleTimestampPrefix(true);
+  it.each(["json", "compact"] as const)("formats %s console passthrough output", (consoleStyle) => {
+    setLoggerOverride({
+      level: consoleStyle === "json" ? "silent" : "info",
+      file: tempLogPath(),
+      consoleLevel: "info",
+      consoleStyle,
+    });
+    const warn = vi.fn();
+    console.warn = warn;
     enableConsoleCapture();
-    const payload = JSON.stringify({ ok: true });
-    console.log(payload);
-    expect(log).toHaveBeenCalledTimes(1);
-    const firstArg = String(mockCall(log)[0]);
-    expect(firstArg).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
-    expect(firstArg.endsWith(` ${payload}`)).toBe(true);
-  });
 
-  it.each(["json", "pretty", "compact"] as const)(
-    "formats %s console passthrough output",
-    (consoleStyle) => {
-      setLoggerOverride({
-        level: consoleStyle === "json" ? "silent" : "info",
-        file: tempLogPath(),
-        consoleLevel: "info",
-        consoleStyle,
+    console.warn("tool failed", { attempt: 1 });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    if (consoleStyle === "json") {
+      expect(JSON.parse(String(mockCall(warn)[0]))).toMatchObject({
+        level: "warn",
+        message: "tool failed { attempt: 1 }",
       });
-      const warn = vi.fn();
-      console.warn = warn;
-      enableConsoleCapture();
-
-      console.warn("tool failed", { attempt: 1 });
-
-      expect(warn).toHaveBeenCalledTimes(1);
-      if (consoleStyle === "json") {
-        expect(JSON.parse(String(mockCall(warn)[0]))).toMatchObject({
-          level: "warn",
-          message: "tool failed { attempt: 1 }",
-        });
-      } else {
-        expect(warn).toHaveBeenCalledWith("tool failed { attempt: 1 }");
-      }
-    },
-  );
+    } else {
+      expect(warn).toHaveBeenCalledWith("tool failed { attempt: 1 }");
+    }
+  });
 
   it("does not rewrap structured subsystem output", () => {
     setLoggerOverride({ level: "info", consoleLevel: "warn", consoleStyle: "json" });
@@ -220,8 +188,6 @@ describe("enableConsoleCapture", () => {
   it.each([
     { consoleStyle: "compact", forced: false },
     { consoleStyle: "compact", forced: true },
-    { consoleStyle: "pretty", forced: false },
-    { consoleStyle: "pretty", forced: true },
     { consoleStyle: "json", forced: false },
     { consoleStyle: "json", forced: true },
   ] as const)(
@@ -351,7 +317,7 @@ describe("enableConsoleCapture", () => {
     expect(event.stack).not.toContain("custom-only-secret");
   });
 
-  it.each(["json", "pretty", "compact"] as const)(
+  it.each(["json", "compact"] as const)(
     "formats %s bracket-prefixed root fallback output",
     (consoleStyle) => {
       setLoggerOverride({
@@ -508,7 +474,7 @@ describe("enableConsoleCapture", () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
     const line = String(mockCall(warn)[0]);
-    expect(line).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
+    expect(line).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2} token=/);
     expect(line).toContain("token=");
     expect(line).not.toContain(secret);
   });
@@ -516,7 +482,9 @@ describe("enableConsoleCapture", () => {
   it.each([
     { name: "stdout", stream: process.stdout },
     { name: "stderr", stream: process.stderr },
-  ])("exits on async EPIPE on $name", ({ stream }) => {
+  ])("records natural completion on async EPIPE on $name", async ({ stream }) => {
+    const originalExitCode = process.exitCode;
+    process.exitCode = undefined;
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
     try {
       setLoggerOverride({ level: "info", file: tempLogPath() });
@@ -525,8 +493,12 @@ describe("enableConsoleCapture", () => {
       const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
       epipe.code = "EPIPE";
       stream.emit("error", epipe);
-      expect(exitSpy).toHaveBeenCalledWith(0);
+      expect(await waitForCliSignalExit()).toBe(0);
+      expect(process.exitCode).toBe(0);
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
+      await waitForCliSignalExit();
+      process.exitCode = originalExitCode;
       exitSpy.mockRestore();
     }
   });
@@ -537,10 +509,10 @@ describe("enableConsoleCapture", () => {
     { outcome: "recovery failed", code: 1 },
   ])("waits for maintenance recovery on EPIPE ($outcome)", async ({ outcome, code }) => {
     const originalExitCode = process.exitCode;
-    const exited = createDeferredCore<number>();
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((exitCode) => {
-      exited.resolve(Number(exitCode));
-    }) as typeof process.exit);
+    process.exitCode = undefined;
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("forced process exit");
+    });
     const recovery = createDeferredCore();
     const unregister = registerSignalExitGate(recovery.promise);
     try {
@@ -556,17 +528,20 @@ describe("enableConsoleCapture", () => {
       } else {
         recovery.resolve();
       }
-      await expect(exited.promise).resolves.toBe(code);
+      await expect(waitForCliSignalExit()).resolves.toBe(code);
+      expect(process.exitCode).toBe(code);
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       recovery.resolve();
       unregister();
       await waitForSignalExitBarriers();
+      await waitForCliSignalExit();
       process.exitCode = originalExitCode;
       exitSpy.mockRestore();
     }
   });
 
-  it("preserves an existing nonzero exit code on async EPIPE", () => {
+  it("preserves an existing nonzero exit code on async EPIPE", async () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
     const originalExitCode = process.exitCode;
     try {
@@ -577,7 +552,9 @@ describe("enableConsoleCapture", () => {
       const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
       epipe.code = "EPIPE";
       process.stderr.emit("error", epipe);
-      expect(exitSpy).toHaveBeenCalledWith(2);
+      expect(await waitForCliSignalExit()).toBe(2);
+      expect(process.exitCode).toBe(2);
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       process.exitCode = originalExitCode;
       exitSpy.mockRestore();

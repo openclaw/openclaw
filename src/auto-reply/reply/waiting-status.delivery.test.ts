@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { SubagentRegistryWriteError } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import type * as SubagentRegistry from "../../agents/subagents/registry/subagent-registry.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -9,22 +10,15 @@ import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js"
 import { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
-import {
-  createMockFollowupRun,
-  createMockReplyOperation,
-  createMockTypingController,
-} from "./test-helpers.js";
+import { createReplyOperation, retainReplyOperationUntilComplete } from "./reply-run-registry.js";
+import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof SubagentRegistry>()),
   settleRequesterAfterSessionSpawns: settleRequester,
 }));
-vi.mock("../../agents/live-model-switch.js", () => ({
-  consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
-}));
-
 const settleRequester = vi.hoisted(() =>
-  vi.fn<typeof SubagentRegistry.settleRequesterAfterSessionSpawns>(() => true),
+  vi.fn<typeof SubagentRegistry.settleRequesterAfterSessionSpawns>(async () => true),
 );
 
 const runId = "waiting-progress-run";
@@ -35,6 +29,13 @@ function createContext(): FinalizeReplyAgentRunInput {
     originatingChannel: "discord",
     run: { sessionKey, messageProvider: "discord", terminalReplyExpectation: "required" },
   });
+  const replyOperation = createReplyOperation({
+    sessionKey,
+    sessionId: followupRun.run.sessionId,
+    resetTriggered: false,
+  });
+  retainReplyOperationUntilComplete(replyOperation);
+  onTestFinished(() => replyOperation.complete());
   return {
     activeIsNewSession: false,
     activeSessionEntry: undefined,
@@ -50,7 +51,7 @@ function createContext(): FinalizeReplyAgentRunInput {
     preflightCompactionApplied: false,
     queueKey: sessionKey,
     replyMediaContext: { normalizePayload: async (payload) => payload },
-    replyOperation: createMockReplyOperation().replyOperation,
+    replyOperation,
     replyRouteThreadId: undefined,
     replyToChannel: "discord",
     replyToMode: "off",
@@ -66,7 +67,11 @@ function createContext(): FinalizeReplyAgentRunInput {
         payloads: [],
         meta: { durationMs: 0, yielded: true },
         acceptedSessionSpawns: [
-          { runId: "index-worker-run", childSessionKey: "agent:main:subagent:index-worker" },
+          {
+            runId: "index-worker-run",
+            childSessionKey: "agent:main:subagent:index-worker",
+            expectsCompletionMessage: true,
+          },
         ],
       },
       resolved: { provider: followupRun.run.provider, model: followupRun.run.model },
@@ -122,7 +127,12 @@ async function prepare(lane: "ordinary" | "queued", context: FinalizeReplyAgentR
 }
 
 beforeEach(() => {
-  settleRequester.mockReset().mockReturnValue(true);
+  settleRequester.mockReset().mockImplementation(async (params) => {
+    params.assertCurrent?.();
+    await Promise.resolve();
+    params.assertCurrent?.();
+    return true;
+  });
 });
 
 it("delivers an ordinary terminal failure", async () => {
@@ -140,14 +150,20 @@ it("delivers an ordinary terminal failure", async () => {
 });
 
 describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (lane) => {
-  it.each(["explicit acknowledgment", "visible final"])(
-    "preserves %s precedence",
-    async (precedence) => {
+  it.each(["explicit acknowledgment", "visible final", "optional turn", "delivered message"])(
+    "selects waiting status for %s",
+    async (selection) => {
       const context = createContext();
       const onPendingContinuation = vi.fn<(settlement?: PendingContinuationSettlement) => void>();
-      context.opts = { onPendingContinuation };
-      const selected = { text: `${precedence} selected` };
-      if (precedence === "explicit acknowledgment") {
+      if (selection === "explicit acknowledgment" || selection === "visible final") {
+        context.opts = { onPendingContinuation };
+      }
+      const selected = { text: `${selection} selected` };
+      if (selection === "optional turn") {
+        context.followupRun.run.terminalReplyExpectation = "optional";
+      } else if (selection === "delivered message") {
+        context.execution.result.didDeliverSourceReplyViaMessageTool = true;
+      } else if (selection === "explicit acknowledgment") {
         context.execution.result.meta.yieldAcknowledgment = ` ${selected.text} `;
         context.execution.result.payloads = [{ text: "Private plan", isReasoning: true }];
         if (lane === "queued") {
@@ -160,8 +176,12 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
         context.execution.result.payloads = [selected];
       }
       const payloads = await prepare(lane, context);
+      if (selection === "optional turn" || selection === "delivered message") {
+        expect(payloads).toEqual([]);
+        return;
+      }
       expect(payloads.map((payload) => payload.text)).toEqual([selected.text]);
-      if (precedence === "explicit acknowledgment") {
+      if (selection === "explicit acknowledgment") {
         expect(getReplyPayloadMetadata(payloads[0] ?? {})).toMatchObject({
           continuationStatus: true,
           deliverDespiteSourceReplySuppression: true,
@@ -170,19 +190,6 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
           expect(onPendingContinuation.mock.calls).toEqual([[]]);
         }
       }
-    },
-  );
-
-  it.each(["optional turn", "delivered message"])(
-    "does not deliver a waiting status for a %s",
-    async (suppression) => {
-      const context = createContext();
-      if (suppression === "optional turn") {
-        context.followupRun.run.terminalReplyExpectation = "optional";
-      } else {
-        context.execution.result.didDeliverSourceReplyViaMessageTool = true;
-      }
-      expect(await prepare(lane, context)).toEqual([]);
     },
   );
 });
@@ -235,7 +242,7 @@ it.each(["refusal", "persistence failure"] as const)(
       onPendingContinuation.mock.calls[0]?.[0],
       "implicit continuation settlement",
     );
-    settleRequester.mockImplementationOnce(() => {
+    settleRequester.mockImplementationOnce(async () => {
       if (failure === "persistence failure") {
         throw new Error("native settlement persistence failed");
       }
@@ -256,5 +263,65 @@ it.each(["refusal", "persistence failure"] as const)(
     ]);
     await settlement.settle(true);
     expect(settleRequester).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each(["committed", "unknown"] as const)(
+  "retains the %s settlement outcome when finalization requests non-yielded compensation",
+  async (outcome) => {
+    const context = createContext();
+    context.execution.result.meta = { durationMs: 0, continuationPending: true };
+    const pending = vi.fn<(settlement?: PendingContinuationSettlement) => void>();
+    context.opts = { onPendingContinuation: pending };
+    await prepare("ordinary", context);
+    const settlement = expectDefined(pending.mock.calls[0]?.[0], "outbox handoff");
+    const failure = new SubagentRegistryWriteError(
+      outcome,
+      new Error("native outcome retained"),
+      outcome === "committed" ? "published" : undefined,
+    );
+    settleRequester.mockRejectedValueOnce(failure);
+    const first = settlement.settle(true);
+    await expect(first).rejects.toBe(failure);
+    const compensation = settlement.settle(false);
+    expect(compensation).toBe(first);
+    await expect(compensation).rejects.toBe(failure);
+    expect(settleRequester).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["replacement", "rebound key", "rebound session", "retained abort"] as const)(
+  "settles the captured outbox after %s only while its original reply owner remains current",
+  async (change) => {
+    const context = createContext();
+    context.execution.result.meta = { durationMs: 0, continuationPending: true };
+    const pending = vi.fn<(settlement?: PendingContinuationSettlement) => void>();
+    context.opts = { onPendingContinuation: pending };
+    await prepare("ordinary", context);
+    const settlement = expectDefined(pending.mock.calls[0]?.[0], "outbox handoff");
+    const operation = context.replyOperation;
+    if (change === "replacement") {
+      operation.complete();
+      const replacement = createReplyOperation({
+        sessionKey: operation.key,
+        sessionId: operation.sessionId,
+        resetTriggered: false,
+      });
+      onTestFinished(() => replacement.complete());
+    } else if (change === "rebound key") {
+      operation.updateSessionKey("agent:main:rebound-outbox");
+    } else if (change === "rebound session") {
+      operation.updateSessionId("rebound-outbox-session");
+    } else {
+      expect(operation.abortByUser()).toBe(true);
+    }
+    if (change === "retained abort") {
+      await settlement.settle(false);
+      expect(settleRequester).toHaveBeenCalledOnce();
+      expect(settleRequester.mock.calls[0]?.[0].requesterYielded).toBe(false);
+    } else {
+      await expect(settlement.settle(false)).rejects.toThrow("original reply operation");
+      expect(settleRequester).not.toHaveBeenCalled();
+    }
   },
 );

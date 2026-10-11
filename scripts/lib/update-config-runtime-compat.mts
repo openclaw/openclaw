@@ -1,10 +1,7 @@
+import { createHash } from "node:crypto";
 import * as ts from "typescript/unstable/ast";
 
-/** The stable config entrypoint is consumed by shipped updaters after replacing their own tree. */
-export function buildUpdateConfigRuntimeAlias(
-  targetFileName: string,
-  source: ts.SourceFile,
-): string {
+function configRuntimeAliasBindings(source: ts.SourceFile): string {
   const names = new Set<string>();
   for (const statement of source.statements) {
     if (ts.isExportDeclaration(statement) && statement.exportClause) {
@@ -38,6 +35,45 @@ export function buildUpdateConfigRuntimeAlias(
   if (!names.has("createConfigIO") || !names.has("readConfigFileSnapshot")) {
     throw new Error("Config runtime lacks the published updater read contract");
   }
+  return [...names]
+    .toSorted()
+    .map(
+      (name, index) =>
+        `const binding${index} = select(${JSON.stringify(name)}); export { binding${index} as ${name} };\n`,
+    )
+    .join("");
+}
+
+export function isUpdateConfigRuntimeAlias(
+  contents: string,
+  targetFileName: string,
+  source: ts.SourceFile,
+): boolean {
+  if (contents === buildUpdateConfigRuntimeAlias(targetFileName, source)) {
+    return true;
+  }
+  const bindings = configRuntimeAliasBindings(source);
+  const target = `const target = new URL(${JSON.stringify(`./${targetFileName}`)}, import.meta.url).href;`;
+  if (!contents.includes(target) || !contents.endsWith(bindings)) {
+    return false;
+  }
+  // 2026.9.5-9.8 shipped the older diagnostic templates. Retain only those
+  // exact bodies for that upgrade window; the target and generated bindings vary.
+  const body = contents
+    .slice(0, -bindings.length)
+    .replace(target, 'const target = new URL("./", import.meta.url).href;');
+  return [
+    "f1e325b58b57ccc6f958a025bcb068bdcdc773fde0c61dc7913179c1540f2607",
+    "dc8d98455b7518b7eb4f4777dee6c089d2524a7e8f9dba4b5866ec551ec03931",
+  ].includes(createHash("sha256").update(body).digest("hex"));
+}
+
+/** The stable config entrypoint is consumed by shipped updaters after replacing their own tree. */
+export function buildUpdateConfigRuntimeAlias(
+  targetFileName: string,
+  source: ts.SourceFile,
+): string {
+  const bindings = configRuntimeAliasBindings(source);
   const target = JSON.stringify(`./${targetFileName}`);
   const worker = String.raw`
 const fs = require("node:fs");
@@ -84,7 +120,7 @@ function childEnv(operation, args, options) {
   if (process.env.OPENCLAW_CONFIG_READ_CHILD === "1") {
     const error = new Error("A config reader child cannot launch another reader.");
     error.code = "candidate-config-read-recursion";
-    console.error("[update:warning:" + error.code + "] " + error.message);
+    console.warn("[update:warning:" + error.code + "] " + error.message);
     throw error;
   }
   const selected = options?.env ?? (operation === "readCurrentConfigForPolicyCheck" ? args[0]?.env : undefined) ?? process.env;
@@ -102,7 +138,7 @@ function finish(code, output, logger) {
   if (code === 0 && result?.ok === true) return result.value;
   const error = new Error("Candidate config read failed; the existing service definition was left unchanged. Retry with the updated CLI.");
   error.code = "candidate-config-read-failed";
-  console.error("[update:warning:" + error.code + "] " + error.message);
+  console.warn("[update:warning:" + error.code + "] " + error.message);
   throw error;
 }
 function readSync(operation, args = [], options, factory = false) {
@@ -148,12 +184,5 @@ function select(name) {
   if (readers[name]) return readers[name];
   return () => { throw new Error("Run config operation " + name + " in the updated CLI after this update finishes."); };
 }
-${[...names]
-  .toSorted()
-  .map(
-    (name, index) =>
-      `const binding${index} = select(${JSON.stringify(name)}); export { binding${index} as ${name} };`,
-  )
-  .join("\n")}
-`;
+${bindings}`;
 }

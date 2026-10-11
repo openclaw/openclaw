@@ -26,30 +26,6 @@ export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
-function stripLeadingHtmlCommentScaffolding(
-  line: string,
-  state: { inHtmlComment: boolean },
-): string {
-  let remaining = line;
-  while (state.inHtmlComment || remaining.trimStart().startsWith("<!--")) {
-    const searchText = state.inHtmlComment ? remaining : remaining.trimStart();
-    const commentEnd = searchText.indexOf("-->");
-    if (commentEnd === -1) {
-      state.inHtmlComment = true;
-      return "";
-    }
-
-    state.inHtmlComment = false;
-    if (searchText === remaining) {
-      remaining = remaining.slice(commentEnd + 3);
-    } else {
-      const leadingWidth = remaining.length - searchText.length;
-      remaining = remaining.slice(0, leadingWidth) + searchText.slice(commentEnd + 3);
-    }
-  }
-  return remaining;
-}
-
 /**
  * Check if heartbeat scratch is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
@@ -69,9 +45,19 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     return false;
   }
 
-  const state = { inHtmlComment: false };
-  for (const line of content.split("\n")) {
-    const trimmed = stripLeadingHtmlCommentScaffolding(line, state).trim();
+  let inHtmlComment = false;
+  for (let line of content.split("\n")) {
+    while (inHtmlComment || line.trimStart().startsWith("<!--")) {
+      const searchText: string = inHtmlComment ? line : line.trimStart();
+      const commentEnd = searchText.indexOf("-->");
+      inHtmlComment = commentEnd === -1;
+      if (inHtmlComment) {
+        line = "";
+        break;
+      }
+      line = searchText.slice(commentEnd + 3);
+    }
+    const trimmed = line.trim();
     if (
       !trimmed ||
       /^#+(\s|$)/.test(trimmed) ||
@@ -137,12 +123,8 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
     if (HEARTBEAT_TRAILING_TOKEN_RE.test(next)) {
       const idx = next.lastIndexOf(token);
       const before = next.slice(0, idx).trimEnd();
-      if (!before) {
-        text = "";
-      } else {
-        const after = next.slice(idx + token.length).trimStart();
-        text = `${before}${after}`.trimEnd();
-      }
+      const after = next.slice(idx + token.length).trimStart();
+      text = `${before}${after}`.trimEnd();
       didStrip = true;
     } else {
       break;
@@ -158,10 +140,7 @@ export function stripHeartbeatToken(
   raw?: string,
   opts: { mode?: StripHeartbeatMode; maxAckChars?: number } = {},
 ) {
-  if (!raw) {
-    return { shouldSkip: true, text: "", didStrip: false };
-  }
-  const trimmed = raw.trim();
+  const trimmed = raw?.trim();
   if (!trimmed) {
     return { shouldSkip: true, text: "", didStrip: false };
   }
@@ -185,11 +164,8 @@ export function stripHeartbeatToken(
   // (e.g., <b>HEARTBEAT_OK</b> or **HEARTBEAT_OK**) still strips.
   const stripMarkup = (text: string) =>
     text
-      // Drop HTML tags.
       .replace(/<[^>]*>/g, " ")
-      // Decode common nbsp variant.
       .replace(/&nbsp;/gi, " ")
-      // Remove markdown-ish wrappers at the edges.
       .replace(/^[*`~_]+/, "")
       .replace(/[*`~_]+$/, "");
 
@@ -203,16 +179,9 @@ export function stripHeartbeatToken(
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }
 
-  if (!picked.text) {
-    return { shouldSkip: true, text: "", didStrip: true };
-  }
-
   const rest = picked.text.trim();
-  if (mode === "heartbeat" && rest.length <= maxAckChars) {
-    return { shouldSkip: true, text: "", didStrip: true };
-  }
-
-  return { shouldSkip: false, text: rest, didStrip: true };
+  const shouldSkip = !picked.text || (mode === "heartbeat" && rest.length <= maxAckChars);
+  return { shouldSkip, text: shouldSkip ? "" : rest, didStrip: true };
 }
 
 /** Recognizes canonical silent replies and backwards-compatible heartbeat acknowledgements. */

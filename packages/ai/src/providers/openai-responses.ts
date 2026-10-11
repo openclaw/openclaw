@@ -9,7 +9,7 @@ import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../typ
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import { resolveCacheRetention } from "./cache-retention.js";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { buildCopilotDynamicHeaders } from "./github-copilot-headers.js";
 import {
   clampOpenAIPromptCacheKey,
   resolveOpenAIPromptCacheParams,
@@ -50,9 +50,9 @@ type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
 };
 
 export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
-  model: Model<"openai-responses">,
-  context: Context,
-  options?: OpenAIResponsesOptions,
+  model,
+  context,
+  options,
 ) => {
   const stream = new AssistantMessageEventStream();
   const output = createResponsesAssistantOutput(model);
@@ -88,7 +88,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 export const streamSimpleOpenAIResponses: StreamFunction<
   "openai-responses",
   SimpleStreamOptions
-> = (model: Model<"openai-responses">, context: Context, options?: SimpleStreamOptions) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
@@ -116,12 +116,7 @@ function createClient(
   const compat = getCompat(model);
   const headers = { ...model.headers };
   if (model.provider === "github-copilot") {
-    const hasImages = hasCopilotVisionInput(context.messages);
-    const copilotHeaders = buildCopilotDynamicHeaders({
-      messages: context.messages,
-      hasImages,
-    });
-    Object.assign(headers, copilotHeaders);
+    Object.assign(headers, buildCopilotDynamicHeaders(context.messages));
   }
 
   if (sessionId) {

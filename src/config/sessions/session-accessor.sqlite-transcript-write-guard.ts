@@ -1,4 +1,5 @@
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -21,12 +22,9 @@ import {
 import type { InternalSessionEntry } from "./types.js";
 
 export function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return;
-  }
   // Message records require parent-link, idempotency, and redaction handling
   // from appendTranscriptMessage; raw event writes would bypass those invariants.
-  if ("type" in event && event.type === "message") {
+  if (isRecord(event) && "type" in event && event.type === "message") {
     throw new Error(
       "appendTranscriptEvent cannot write message transcript records; use appendTranscriptMessage instead.",
     );
@@ -106,7 +104,8 @@ export function assertLockedTranscriptWriteAllowed(
   assertOwnedTranscriptWriteCommit(fencedScope);
   if (
     fencedScope.expectedLifecycleRevision === undefined &&
-    fencedScope.expectedWriterRunId === undefined
+    fencedScope.expectedWriterRunId === undefined &&
+    fencedScope.expectedOwner === undefined
   ) {
     return undefined;
   }

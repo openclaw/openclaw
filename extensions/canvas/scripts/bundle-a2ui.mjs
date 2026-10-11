@@ -64,6 +64,8 @@ export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
   return [
     path.join(repoRoot, "package.json"),
     path.join(repoRoot, "pnpm-lock.yaml"),
+    path.join(repoRoot, "extensions", "canvas", "package.json"),
+    path.join(repoRoot, "extensions", "canvas", "scripts", "bundle-a2ui.mjs"),
     path.join(repoRoot, "extensions", "canvas", "src", "host", "a2ui-app"),
   ];
 }
@@ -165,13 +167,17 @@ async function main() {
   const hasV09OutputFile = await pathExists(outputV09File);
   let hasA2uiPackage = true;
   try {
-    require.resolve("@a2ui/lit");
+    require.resolve("@solidjs/compiler");
+    require.resolve("@solidjs/web");
+    require.resolve("solid-js");
+    require.resolve("signal-utils/map");
+    require.resolve("@a2ui/web_core/v0_9");
     require.resolve("@a2ui/lit/ui");
   } catch {
     hasA2uiPackage = false;
   }
   if (!hasA2uiPackage || !hasAppDir) {
-    if (hasOutputFile) {
+    if (hasOutputFile && hasV09OutputFile) {
       console.log("A2UI package missing; keeping prebuilt bundle.");
       return;
     }
@@ -181,7 +187,9 @@ async function main() {
       );
       return;
     }
-    fail(`A2UI package missing and no prebuilt bundle found at: ${outputFile}`);
+    fail(
+      `A2UI package missing and no complete prebuilt bundle found at: ${outputFile}, ${outputV09File}`,
+    );
   }
 
   const currentHash = await computeHash();

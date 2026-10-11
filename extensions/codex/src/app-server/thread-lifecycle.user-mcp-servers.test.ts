@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -14,7 +15,7 @@ import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
   createParams,
-  startOrResumeThread,
+  startOrResumeThreadWithoutSkills as startOrResumeThread,
   threadResumeResult,
   threadStartResult,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -25,22 +26,27 @@ import {
   writePolicyProbeServer,
 } from "./thread-lifecycle.user-mcp-servers.test-support.js";
 
-function createRequest(
-  startThreadId: string,
-  options: { readRequirements?: boolean; resumeThreadId?: string } = {},
-) {
-  return vi.fn(async (method: string, _params: unknown) => {
+function createRequest(startThreadId: string) {
+  let startCount = 0;
+  return vi.fn(async (method: string, params: unknown) => {
     if (method === "config/read") {
       return { config: {}, origins: {}, layers: [] };
     }
-    if (method === "configRequirements/read" && options.readRequirements !== false) {
+    if (method === "configRequirements/read") {
       return { requirements: null };
     }
     if (method === "thread/start") {
-      return threadStartResult(startThreadId);
+      startCount += 1;
+      return threadStartResult(startCount === 1 ? startThreadId : `${startThreadId}-${startCount}`);
     }
-    if (method === "thread/resume" && options.resumeThreadId) {
-      return threadResumeResult(options.resumeThreadId);
+    if (method === "thread/resume") {
+      assert(
+        params !== null &&
+          typeof params === "object" &&
+          "threadId" in params &&
+          typeof params.threadId === "string",
+      );
+      return threadResumeResult(params.threadId);
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -80,7 +86,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         },
       },
     };
-    const request = createRequest("thread-policy", { resumeThreadId: "thread-policy" });
+    const request = createRequest("thread-policy");
     let wire = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
       respond: request,
@@ -214,142 +220,135 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
   });
 
-  it.each(["raw", "doctor-hashed"] as const)(
-    "restarts a beta5 MCP binding stored as a %s fingerprint before converging",
-    async (legacyForm) => {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const authorization = "Bearer beta5-access-token";
-      const url = await startPolicyHttpServer();
-      const config = {
-        mcp: {
-          servers: {
-            ducktape: {
-              transport: "streamable-http",
-              url,
-              headers: {
-                Authorization: authorization,
-                "x-tenant": "keep",
-              },
-            },
-          },
-        },
-      } as unknown as EmbeddedRunAttemptParams["config"];
-      const request = createRequest("thread-beta5", { resumeThreadId: "thread-beta5" });
-      let wire = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
-        respond: request,
-      });
-      const run = () =>
-        startOrResumeThread({
-          client: wire.client,
-          ...lifecycleOptions(sessionFile, workspaceDir, config),
-        });
-
-      await run();
-      const currentBinding = await readCodexAppServerBinding(sessionFile);
-      expect(currentBinding).toBeDefined();
-
-      const legacyFingerprint = JSON.stringify({
-        mcp_servers: {
+  it("restarts a beta5 MCP binding stored as a raw fingerprint before converging", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const authorization = "Bearer beta5-access-token";
+    const url = await startPolicyHttpServer();
+    const config = {
+      mcp: {
+        servers: {
           ducktape: {
-            http_headers: {
+            transport: "streamable-http",
+            url,
+            headers: {
               Authorization: authorization,
               "x-tenant": "keep",
             },
-            url,
           },
         },
-      });
-      seedCodexTestBinding(sessionFile, {
-        ...currentBinding!,
-        userMcpServersFingerprint:
-          legacyForm === "raw"
-            ? legacyFingerprint
-            : hashCodexAppServerBindingFingerprint(legacyFingerprint),
+      },
+    } as unknown as EmbeddedRunAttemptParams["config"];
+    const request = createRequest("thread-beta5");
+    let wire = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: request,
+    });
+    const run = () =>
+      startOrResumeThread({
+        client: wire.client,
+        ...lifecycleOptions(sessionFile, workspaceDir, config),
       });
 
-      request.mockClear();
-      await run();
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "config/read",
-        "configRequirements/read",
-        "thread/start",
-      ]);
-      const convergedBinding = await readCodexAppServerBinding(sessionFile);
-      expect(convergedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
-      expect(convergedBinding?.userMcpServersFingerprint).not.toContain("beta5-access-token");
-      expect(convergedBinding?.userMcpServersFingerprint).not.toBe(legacyFingerprint);
-      expect(convergedBinding?.userMcpServersFingerprint).not.toBe(
-        hashCodexAppServerBindingFingerprint(legacyFingerprint),
-      );
+    await run();
+    const currentBinding = await readCodexAppServerBinding(sessionFile);
+    expect(currentBinding).toBeDefined();
+    expect(currentBinding?.threadId).toBe("thread-beta5");
 
-      await wire.client.closeAndWait();
-      wire = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
-        respond: request,
-        persistedThreads: ["thread-beta5"],
-      });
-      request.mockClear();
-      await run();
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "config/read",
-        "configRequirements/read",
-        "thread/resume",
-      ]);
-      expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
-        "config/read",
-        "configRequirements/read",
-        "thread/read",
-        "thread/resume",
-        "thread/inject_items",
-      ]);
-    },
-  );
+    const legacyFingerprint = JSON.stringify({
+      mcp_servers: {
+        ducktape: {
+          http_headers: {
+            Authorization: authorization,
+            "x-tenant": "keep",
+          },
+          url,
+        },
+      },
+    });
+    seedCodexTestBinding(sessionFile, {
+      ...currentBinding!,
+      userMcpServersFingerprint: legacyFingerprint,
+    });
 
-  it.each(["native-tools-disabled", "unknown-search-support"] as const)(
-    "preserves MCP-mismatched bindings for transient %s turns",
-    async (restriction) => {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const nativeDisabled = restriction === "native-tools-disabled";
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-native",
-        cwd: workspaceDir,
-        model: "gpt-5.4-codex",
-        modelProvider: "openai",
-        dynamicToolsFingerprint: "[]",
-        mcpServersFingerprint: "mcp-v1",
-        ...(nativeDisabled ? {} : { webSearchThreadConfigFingerprint: "web-search-v1" }),
-      });
-      const request = createRequest("thread-transient", { readRequirements: !nativeDisabled });
-      await startOrResumeThread({
-        client: { request } as never,
-        ...lifecycleOptions(sessionFile, workspaceDir),
-        mcpServersFingerprint: undefined,
-        mcpServersFingerprintEvaluated: true,
-        userMcpServersEnabled: false,
-        ...(nativeDisabled
-          ? { nativeCodeModeEnabled: false }
-          : { nativeProviderWebSearchSupport: "unknown" }),
-      });
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "config/read",
-        ...(nativeDisabled ? [] : ["configRequirements/read"]),
-        "thread/start",
-      ]);
-      if (nativeDisabled) {
-        const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1];
-        expect(startParams).toMatchObject({ config: { "features.code_mode": false } });
-        expect(startParams).not.toHaveProperty("config.mcp_servers");
-      }
-      expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
-        threadId: "thread-native",
-        mcpServersFingerprint: "mcp-v1",
-      });
-    },
-  );
+    request.mockClear();
+    await run();
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+    ]);
+    const convergedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(convergedBinding?.threadId).toBe("thread-beta5-2");
+    expect(convergedBinding?.threadId).not.toBe(currentBinding?.threadId);
+    expect(convergedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(convergedBinding?.userMcpServersFingerprint).not.toContain("beta5-access-token");
+    expect(convergedBinding?.userMcpServersFingerprint).not.toBe(legacyFingerprint);
+    expect(convergedBinding?.userMcpServersFingerprint).not.toBe(
+      hashCodexAppServerBindingFingerprint(legacyFingerprint),
+    );
+
+    await wire.client.closeAndWait();
+    wire = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: request,
+      persistedThreads: ["thread-beta5-2"],
+    });
+    request.mockClear();
+    await run();
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/resume",
+    ]);
+    expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/read",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
+    expect(request).toHaveBeenCalledWith(
+      "thread/resume",
+      expect.objectContaining({ threadId: convergedBinding?.threadId }),
+    );
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(
+      convergedBinding?.threadId,
+    );
+  });
+
+  it("preserves MCP-mismatched bindings for transient unknown-search-support turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-native",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      mcpServersFingerprint: "mcp-v1",
+      webSearchThreadConfigFingerprint: "web-search-v1",
+    });
+    const request = createRequest("thread-transient");
+    await startOrResumeThread({
+      client: { request } as never,
+      ...lifecycleOptions(sessionFile, workspaceDir),
+      mcpServersFingerprint: undefined,
+      mcpServersFingerprintEvaluated: true,
+      userMcpServersEnabled: false,
+      nativeProviderWebSearchSupport: "unknown",
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+    ]);
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-native",
+      mcpServersFingerprint: "mcp-v1",
+    });
+  });
 
   it("starts a new thread when a user MCP Authorization bearer changes without storing the bearer", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -371,15 +370,14 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
           },
         },
       }) as unknown as EmbeddedRunAttemptParams["config"];
-    const request = createRequest("thread-with-current-bearer", {
-      resumeThreadId: "thread-with-stale-bearer",
-    });
+    const request = createRequest("thread-with-current-bearer");
 
     await startOrResumeThread({
       client: { request } as never,
       ...lifecycleOptions(sessionFile, workspaceDir, createConfig("Bearer access-token-one")),
     });
     const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect(firstBinding?.threadId).toBe("thread-with-current-bearer");
     expect(firstBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(firstBinding?.userMcpServersFingerprint).not.toContain("access-token-one");
 
@@ -402,6 +400,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       "Bearer access-token-two",
     );
     const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.threadId).toBe("thread-with-current-bearer-2");
+    expect(secondBinding?.threadId).not.toBe(firstBinding?.threadId);
     expect(secondBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(secondBinding?.userMcpServersFingerprint).not.toContain("access-token-two");
     expect(secondBinding?.userMcpServersFingerprint).not.toBe(

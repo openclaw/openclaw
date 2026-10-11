@@ -1,4 +1,3 @@
-// Resolves recent Gateway sessions and attaches the existing TUI to the selected key.
 import { cancel } from "@clack/prompts";
 import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
 import { SessionsResolveResultSchema } from "../../packages/gateway-protocol/src/schema/sessions-resolve.js";
@@ -40,7 +39,7 @@ async function formatResumeConnectionError(error: unknown): Promise<Error> {
     [
       state.connectionStatus,
       state.remediation ??
-        "Ensure the Gateway is running and your --url/--token/--password are correct.",
+        "Check that the Gateway is running and your --url/--token/--password are correct.",
     ].join("\n"),
     { cause: error },
   );
@@ -172,7 +171,6 @@ function resolveExplicitGlobalSessionKey(
     : undefined;
 }
 
-/** Resolve or select one session and run the existing Gateway-backed TUI. */
 export async function runResumeCommand(query: string | undefined, opts: ResumeCliOptions) {
   const { handoff: encodedHandoff, ...connectionOptions } = opts;
   if (encodedHandoff !== undefined && (query !== undefined || opts.url !== undefined)) {
@@ -231,6 +229,5 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
     },
     session: sessionKey,
-    forceProcessExitOnReturn: true,
   });
 }

@@ -1,6 +1,7 @@
 import type { GetPromptResult } from "@modelcontextprotocol/sdk/types.js";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createMcpStructuredContentMirrorMatcher } from "./mcp-structured-mirror.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { toToolSearchJsonSafe } from "./tool-search-json.js";
@@ -105,30 +106,52 @@ function mcpContentBlockToAgentContent(block: unknown): McpAgentContentBlock {
 function projectMcpCallToolResultContent(result: {
   content?: unknown;
   structuredContent?: unknown;
-}): AgentToolResult<unknown>["content"] {
+}): { content: AgentToolResult<unknown>["content"]; unprojectable?: true } {
   const sourceContent = Array.isArray(result.content) ? result.content : [];
   if (isRecord(result.structuredContent)) {
-    let mirroredText: string | undefined;
-    const structuredJson = JSON.stringify(
-      JSON.parse(stableStringify(result.structuredContent)),
-      null,
-      2,
-    );
-    const structuredText = `structuredContent:\n${structuredJson}`;
-    return [
-      { type: "text", text: structuredText },
-      ...sourceContent
-        // Only the SDK's full pretty-JSON mirror is redundant; overlapping text can carry recovery guidance.
-        .filter(
-          (block) =>
-            !isRecord(block) ||
-            block.type !== "text" ||
-            block.text !== (mirroredText ??= JSON.stringify(result.structuredContent, null, 2)),
-        )
-        .map(mcpContentBlockToAgentContent),
-    ];
+    try {
+      const isStructuredMirror = createMcpStructuredContentMirrorMatcher(result.structuredContent);
+      const structuredJson = JSON.stringify(
+        JSON.parse(stableStringify(result.structuredContent)),
+        null,
+        2,
+      );
+      const structuredText = `structuredContent:\n${structuredJson}`;
+      return {
+        content: [
+          { type: "text", text: structuredText },
+          ...sourceContent
+            // Only a full JSON mirror of structuredContent is redundant; overlapping text can carry recovery guidance.
+            .filter(
+              (block) =>
+                !isRecord(block) ||
+                block.type !== "text" ||
+                typeof block.text !== "string" ||
+                !isStructuredMirror(block.text),
+            )
+            .map(mcpContentBlockToAgentContent),
+        ],
+      };
+    } catch (error) {
+      // A remote MCP server controls this value. Serializing it recurses per field,
+      // so a deeply nested result would otherwise surface as an uncaught RangeError
+      // on the model boundary; degrade to a handled failure instead.
+      if (!(error instanceof RangeError)) {
+        throw error;
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: "structuredContent was too deeply nested to project. Ask the MCP server for a flatter result or query a specific field.",
+          },
+          ...sourceContent.map(mcpContentBlockToAgentContent),
+        ],
+        unprojectable: true,
+      };
+    }
   }
-  return sourceContent.map(mcpContentBlockToAgentContent);
+  return { content: sourceContent.map(mcpContentBlockToAgentContent) };
 }
 
 /** Projects a raw MCP CallToolResult exactly once at the model boundary. */
@@ -136,8 +159,10 @@ export function projectMcpCallToolResult(
   result: { content?: unknown; structuredContent?: unknown; isError?: unknown },
   details: Record<string, unknown> = {},
 ): AgentToolResult<unknown> {
-  const isError = result.isError === true;
-  const content = projectMcpCallToolResultContent(result);
+  const projectedContent = projectMcpCallToolResultContent(result);
+  const unprojectable = projectedContent.unprojectable === true;
+  const isError = result.isError === true || unprojectable;
+  const content = projectedContent.content;
   const projected: AgentToolResult<unknown> = {
     content:
       content.length > 0
@@ -152,18 +177,26 @@ export function projectMcpCallToolResult(
           ],
     details: {
       ...details,
-      ...(result.structuredContent !== undefined
+      // A value too deep to project is also too deep for downstream recursive
+      // digests (loop detection reads these details), so it is not retained.
+      ...(result.structuredContent !== undefined && !unprojectable
         ? { structuredContent: result.structuredContent }
         : {}),
       ...(isError ? { status: "error" } : {}),
     },
   };
   return setMcpCodeModeGuestResult(projected, {
-    content: Array.isArray(result.content) ? result.content : [],
-    ...(result.structuredContent !== undefined
+    // Guest callers read this snapshot instead of the model-facing result, so an
+    // unprojectable value is a failure for them too and carries the same notice.
+    content: unprojectable
+      ? projected.content
+      : Array.isArray(result.content)
+        ? result.content
+        : [],
+    ...(result.structuredContent !== undefined && !unprojectable
       ? { structuredContent: result.structuredContent }
       : {}),
-    ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
+    ...(typeof result.isError === "boolean" || unprojectable ? { isError } : {}),
   });
 }
 

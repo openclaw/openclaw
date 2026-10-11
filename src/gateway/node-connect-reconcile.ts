@@ -1,5 +1,3 @@
-// Gateway node connect reconciliation.
-// Computes approved runtime surfaces and pending pairing upgrades on reconnect.
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -56,48 +54,6 @@ function normalizePermissionMap(
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function intersectApprovalSurfaceList(params: {
-  approved: readonly string[] | undefined;
-  declared: readonly string[];
-}): string[] {
-  const approved = new Set(normalizeNodeApprovalSurfaceList(params.approved));
-  return normalizeNodeApprovalSurfaceList(params.declared).filter((entry) => approved.has(entry));
-}
-
-function hasPermissionUpgrade(params: {
-  approved: Record<string, boolean> | undefined;
-  declared: Record<string, boolean> | undefined;
-}): boolean {
-  return Object.entries(params.declared ?? {}).some(
-    ([key, declaredValue]) => declaredValue && params.approved?.[key] !== true,
-  );
-}
-
-function buildNodePairingRequestInput(params: {
-  nodeId: string;
-  connectParams: ConnectParams;
-  caps: string[];
-  commands: string[];
-  permissions?: Record<string, boolean>;
-  remoteIp?: string;
-  silent?: boolean;
-}): NodePairingRequestInput {
-  return {
-    nodeId: params.nodeId,
-    displayName: params.connectParams.client.displayName,
-    platform: params.connectParams.client.platform,
-    version: params.connectParams.client.version,
-    deviceFamily: params.connectParams.client.deviceFamily,
-    modelIdentifier: params.connectParams.client.modelIdentifier,
-    caps: params.caps,
-    commands: params.commands,
-    permissions: params.permissions,
-    remoteIp: params.remoteIp,
-    ...(params.silent ? { silent: true } : {}),
-  };
-}
-
-/** Reconciles a connecting node against stored approval and requests pairing when needed. */
 export async function reconcileNodePairingOnConnect(params: {
   cfg: OpenClawConfig;
   connectParams: ConnectParams;
@@ -141,103 +97,76 @@ export async function reconcileNodePairingOnConnect(params: {
     params.connectParams.computerUse === undefined
       ? undefined
       : parseComputerUseCapabilityDescriptor(params.connectParams.computerUse);
-
-  if (!params.pairedNode) {
-    const pendingPairing = await params.requestPairing(
-      buildNodePairingRequestInput({
-        nodeId,
-        connectParams: params.connectParams,
-        caps: declaredCaps,
-        commands: declared,
-        permissions: declaredPermissions,
-        remoteIp: params.reportedClientIp,
-        silent: params.initialSurfaceSilent,
-      }),
-    );
-    if (!pendingPairing) {
-      throw new Error("node pairing request required");
-    }
-    return {
-      nodeId,
-      declaredCaps,
-      effectiveCaps: [],
-      declaredCommands: declared,
-      effectiveCommands: [],
-      withheldCommands,
-      ...(declaredComputerUse ? { declaredComputerUse } : {}),
-      declaredPermissions,
-      effectivePermissions: undefined,
-      pendingPairing,
-    };
-  }
+  const declaration = {
+    nodeId,
+    declaredCaps,
+    declaredCommands: declared,
+    withheldCommands,
+    ...(declaredComputerUse ? { declaredComputerUse } : {}),
+    declaredPermissions,
+  };
 
   // Approved commands reconcile against the pairing allowlist. Dangerous
   // surfaces awaiting persistent enablement must not read as a pairing upgrade
   // on every reconnect; invoke-time policy still applies the runtime allowlist.
-  const approvedCommands = normalizeDeclaredNodeCommands({
-    declaredCommands: params.pairedNode.commands,
-    allowlist: pairingAllowlist,
-  });
-  const approvedCaps = normalizeNodeApprovalSurfaceList(params.pairedNode.caps);
-  const approvedPermissions = normalizePermissionMap(params.pairedNode.permissions);
-  const hasCommandUpgrade = declared.some((command) => !approvedCommands.includes(command));
-  const hasCapabilityUpgrade = declaredCaps.some(
-    (capability) => !approvedCaps.includes(capability),
+  const { pairedNode } = params;
+  const approvedCommands = new Set(
+    normalizeDeclaredNodeCommands({
+      declaredCommands: pairedNode?.commands,
+      allowlist: pairingAllowlist,
+    }),
   );
-  const permissionUpgrade = hasPermissionUpgrade({
-    approved: approvedPermissions,
-    declared: declaredPermissions,
-  });
-  const effectiveApprovedDeclaredCaps = intersectApprovalSurfaceList({
-    approved: approvedCaps,
-    declared: declaredCaps,
-  });
-  const effectiveApprovedDeclaredCommands = intersectApprovalSurfaceList({
-    approved: approvedCommands,
-    declared,
-  });
-  const effectiveApprovedDeclaredPermissions = intersectNodePermissionSurface({
-    approved: approvedPermissions,
-    declared: declaredPermissions,
-  });
-
+  const approvedCaps = new Set(normalizeNodeApprovalSurfaceList(pairedNode?.caps));
+  const approvedPermissions = normalizePermissionMap(pairedNode?.permissions);
   // Availability and permission loss only narrow the live surface. Reapproval
   // is required when a reconnect widens authority beyond the durable approval.
-  if (hasCommandUpgrade || hasCapabilityUpgrade || permissionUpgrade) {
-    const pendingPairing = await params.requestPairing(
-      buildNodePairingRequestInput({
-        nodeId,
-        connectParams: params.connectParams,
-        caps: declaredCaps,
-        commands: declared,
-        permissions: declaredPermissions ?? (permissionUpgrade ? {} : undefined),
-        remoteIp: params.reportedClientIp,
-      }),
-    );
+  if (
+    pairedNode &&
+    declared.every((command) => approvedCommands.has(command)) &&
+    declaredCaps.every((capability) => approvedCaps.has(capability)) &&
+    !Object.entries(declaredPermissions ?? {}).some(
+      ([key, granted]) => granted && approvedPermissions?.[key] !== true,
+    )
+  ) {
     return {
-      nodeId,
-      declaredCaps,
-      effectiveCaps: effectiveApprovedDeclaredCaps,
-      declaredCommands: declared,
-      effectiveCommands: effectiveApprovedDeclaredCommands,
-      withheldCommands,
-      ...(declaredComputerUse ? { declaredComputerUse } : {}),
-      declaredPermissions,
-      effectivePermissions: effectiveApprovedDeclaredPermissions,
-      ...(pendingPairing ? { pendingPairing } : {}),
+      ...declaration,
+      effectiveCaps: declaredCaps,
+      effectiveCommands: declared,
+      effectivePermissions: declaredPermissions,
+      shouldClearPendingPairings: true,
     };
   }
 
-  return {
+  const effectiveCaps = declaredCaps.filter((cap) => approvedCaps.has(cap));
+  const effectiveCommands = declared.filter((command) => approvedCommands.has(command));
+  const effectivePermissions = pairedNode
+    ? intersectNodePermissionSurface({
+        approved: approvedPermissions,
+        declared: declaredPermissions,
+      })
+    : undefined;
+  const { client } = params.connectParams;
+  const pendingPairing = await params.requestPairing({
     nodeId,
-    declaredCaps,
-    effectiveCaps: declaredCaps,
-    declaredCommands: declared,
-    effectiveCommands: declared,
-    withheldCommands,
-    ...(declaredComputerUse ? { declaredComputerUse } : {}),
-    declaredPermissions,
-    effectivePermissions: declaredPermissions,
-    shouldClearPendingPairings: true,
+    displayName: client.displayName,
+    platform: client.platform,
+    version: client.version,
+    deviceFamily: client.deviceFamily,
+    modelIdentifier: client.modelIdentifier,
+    caps: declaredCaps,
+    commands: declared,
+    permissions: declaredPermissions,
+    remoteIp: params.reportedClientIp,
+    ...(!pairedNode && params.initialSurfaceSilent ? { silent: true } : {}),
+  });
+  if (!pairedNode && !pendingPairing) {
+    throw new Error("node pairing request required");
+  }
+  return {
+    ...declaration,
+    effectiveCaps,
+    effectiveCommands,
+    effectivePermissions,
+    ...(pendingPairing ? { pendingPairing } : {}),
   };
 }

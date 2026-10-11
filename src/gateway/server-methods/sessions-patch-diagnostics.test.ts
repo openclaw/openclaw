@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   areDiagnosticsEnabledForProcess,
@@ -9,32 +9,39 @@ import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { sessionLog } from "./sessions-shared.js";
 
 let previousDiagnostics: boolean;
+let clock: number;
 beforeEach(() => {
   previousDiagnostics = areDiagnosticsEnabledForProcess();
+  setDiagnosticsEnabledForProcess(false);
+  clock = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
 });
 afterEach(() => {
   setDiagnosticsEnabledForProcess(previousDiagnostics);
   vi.restoreAllMocks();
 });
 
-test("disabled patch diagnostics do not start clocks or record work", () => {
-  setDiagnosticsEnabledForProcess(false);
-  const clock = vi.spyOn(performance, "now");
-  const log = vi.spyOn(sessionLog, "info");
-  expect(startSessionPatchDiagnostics("sessions.patch")).toBeUndefined();
-  expect(clock).not.toHaveBeenCalled();
-  expect(log).not.toHaveBeenCalled();
-});
+test.each([999.9, 1_000])(
+  "disabled process diagnostics still report patches at the 1s threshold (%sms)",
+  (elapsedMs) => {
+    const log = vi.spyOn(sessionLog, "info").mockImplementation(() => {});
+    const diagnostics = startSessionPatchDiagnostics("sessions.patch");
+    diagnostics.scope("preflight");
+    clock = elapsedMs;
+    diagnostics.finish();
+    if (elapsedMs < 1_000) {
+      expect(log).not.toHaveBeenCalled();
+    } else {
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        "slow session patch 1000ms method=sessions.patch preflight=1000ms",
+      );
+    }
+  },
+);
 
 test("parallel and repeated phases retain separate elapsed contributions and bounded fields", () => {
-  setDiagnosticsEnabledForProcess(true);
-  let clock = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => clock);
   const log = vi.spyOn(sessionLog, "info").mockImplementation(() => {});
-  const diagnostics = expectDefined(
-    startSessionPatchDiagnostics("sessions.patchMany"),
-    "enabled bulk patch diagnostics",
-  );
+  const diagnostics = startSessionPatchDiagnostics("sessions.patchMany");
   const first = expectDefined(diagnostics.scope("catalog"), "active catalog phase");
   const second = expectDefined(diagnostics.scope("catalog"), "active catalog phase");
   clock = 600;
@@ -49,23 +56,14 @@ test("parallel and repeated phases retain separate elapsed contributions and bou
   clock = 1_800;
   group.finish();
   diagnostics.finish();
-  expect(log).toHaveBeenCalledExactlyOnceWith("slow session patch", {
-    method: "sessions.patchMany",
-    elapsedMs: 1_800,
-    phaseDurationsMs: { snapshot: 300, projection: 100, catalog: 2_000 },
-    phaseCounts: { snapshot: 2, projection: 1, catalog: 2 },
-  });
+  expect(log).toHaveBeenCalledExactlyOnceWith(
+    "slow session patch 1800ms method=sessions.patchMany snapshot=300ms projection=100ms catalog=2000ms",
+  );
 });
 
 test("request settlement closes unfinished phases and retires retained markers", () => {
-  setDiagnosticsEnabledForProcess(true);
-  let clock = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => clock);
   const log = vi.spyOn(sessionLog, "info").mockImplementation(() => {});
-  const diagnostics = expectDefined(
-    startSessionPatchDiagnostics("sessions.patch"),
-    "enabled patch diagnostics",
-  );
+  const diagnostics = startSessionPatchDiagnostics("sessions.patch");
   const scope = expectDefined(diagnostics.scope("preflight"), "active preflight phase");
   clock = 1_500;
   diagnostics.finish();
@@ -74,27 +72,18 @@ test("request settlement closes unfinished phases and retires retained markers",
   scope.finish();
   expect(diagnostics.scope("effects")).toBeUndefined();
   diagnostics.finish();
-  expect(log).toHaveBeenCalledExactlyOnceWith("slow session patch", {
-    method: "sessions.patch",
-    elapsedMs: 1_500,
-    phaseDurationsMs: { preflight: 1_500 },
-    phaseCounts: { preflight: 1 },
-  });
+  expect(log).toHaveBeenCalledExactlyOnceWith(
+    "slow session patch 1500ms method=sessions.patch preflight=1500ms",
+  );
 });
 
 test("a failed diagnostic sink cannot replace the operation error", () => {
-  setDiagnosticsEnabledForProcess(true);
-  let clock = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => clock);
   vi.spyOn(sessionLog, "info").mockImplementation(() => {
     throw new Error("synthetic diagnostic sink failure");
   });
   const originalError = new Error("synthetic operation failure");
   const operation = () => {
-    const diagnostics = expectDefined(
-      startSessionPatchDiagnostics("sessions.patch"),
-      "enabled patch diagnostics",
-    );
+    const diagnostics = startSessionPatchDiagnostics("sessions.patch");
     diagnostics.scope("preflight");
     try {
       clock = 1_500;
@@ -104,23 +93,4 @@ test("a failed diagnostic sink cannot replace the operation error", () => {
     }
   };
   expect(operation).toThrow(originalError);
-});
-
-test("disabling diagnostics retires an in-flight observation without publishing it later", () => {
-  setDiagnosticsEnabledForProcess(true);
-  let clock = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => clock);
-  const log = vi.spyOn(sessionLog, "info").mockImplementation(() => {});
-  const diagnostics = expectDefined(
-    startSessionPatchDiagnostics("sessions.patch"),
-    "enabled patch diagnostics",
-  );
-  const scope = expectDefined(diagnostics.scope("catalog"), "active catalog phase");
-  clock = 2_000;
-  setDiagnosticsEnabledForProcess(false);
-  diagnostics.finish();
-  setDiagnosticsEnabledForProcess(true);
-  scope.finish();
-  diagnostics.finish();
-  expect(log).not.toHaveBeenCalled();
 });

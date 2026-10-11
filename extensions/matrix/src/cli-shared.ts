@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -14,29 +15,14 @@ import {
 } from "./matrix/account-config.js";
 import { resolveMatrixRoomKeyBackupIssue } from "./matrix/backup-health.js";
 import { resolveMatrixAuthContext } from "./matrix/client.js";
-import { setMatrixSdkConsoleLogging, setMatrixSdkLogMode } from "./matrix/client/logging.js";
+import { setMatrixSdkLogMode } from "./matrix/client/logging.js";
 import type { MatrixOwnDeviceVerificationStatus, MatrixRoomKeyBackupStatus } from "./matrix/sdk.js";
+import { setMatrixConsoleLogging } from "./matrix/sdk/logger.js";
 import type { MatrixVerificationSummary } from "./matrix/sdk/verification-manager.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
-let matrixCliExitScheduled = false;
 const MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES = 1024 * 1024;
-
-function scheduleMatrixCliExit(): void {
-  if (matrixCliExitScheduled || process.env.VITEST) {
-    return;
-  }
-  matrixCliExitScheduled = true;
-  // matrix-js-sdk rust crypto can leave background async work alive after command completion.
-  setTimeout(() => {
-    process.stdout.write("", () => {
-      process.stderr.write("", () => {
-        process.exit(process.exitCode ?? 0);
-      });
-    });
-  }, 0);
-}
 
 async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
   const bytes = await readByteStreamWithLimit(process.stdin, {
@@ -232,7 +218,44 @@ type MatrixCliCommandConfig<TResult> = {
   errorPrefix: string;
   onJsonError?: (message: string) => unknown;
   onTextError?: (message: string) => void;
+  gateway?: {
+    method: string;
+    params: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+    onAccount?: (accountId: string) => void;
+  };
 };
+
+export async function runMatrixCliAccountCommand<TResult>(
+  options: MatrixCliOptions,
+  config: Omit<MatrixCliCommandConfig<TResult>, "run" | "onText"> & {
+    run: (context: ReturnType<typeof resolveMatrixCliAccountContext>) => Promise<TResult>;
+    onText: (result: TResult, verbose: boolean, accountId: string) => void;
+  },
+): Promise<void> {
+  let accountId = normalizeAccountId(options.account);
+  await runMatrixCliCommand(options, {
+    ...config,
+    ...(config.gateway
+      ? {
+          gateway: {
+            ...config.gateway,
+            onAccount: (id: string) => {
+              accountId = id;
+            },
+          },
+        }
+      : {}),
+    run: () => {
+      const context = resolveMatrixCliAccountContext(options.account);
+      accountId = context.accountId;
+      return config.run(context);
+    },
+    onText: (result, verbose) => {
+      printAccountLabel(accountId);
+      config.onText(result, verbose, accountId);
+    },
+  });
+}
 
 export async function runMatrixCliCommand<TResult>(
   options: Pick<MatrixCliOptions, "verbose" | "json">,
@@ -241,9 +264,20 @@ export async function runMatrixCliCommand<TResult>(
   const verbose = options.verbose === true;
   const json = options.json === true;
   setMatrixSdkLogMode(verbose ? "default" : "quiet");
-  setMatrixSdkConsoleLogging(verbose);
+  setMatrixConsoleLogging(verbose);
   try {
-    const result = await config.run();
+    const outcome = await runWithLocalStateOwner<{ result: TResult; accountId?: string }>({
+      method: config.gateway?.method ?? "matrix.cli",
+      params: (await config.gateway?.params()) ?? {},
+      target: "Matrix account state",
+      // Even diagnostics can initialize crypto and persist its final snapshot.
+      ...(config.gateway ? {} : { onForeignOwner: "refuse" as const }),
+      runLocal: async () => ({ result: await config.run() }),
+    });
+    if (outcome.accountId) {
+      config.gateway?.onAccount?.(outcome.accountId);
+    }
+    const result = outcome.result;
     if (json) {
       printJson(config.onJson ? config.onJson(result) : result);
     } else {
@@ -261,8 +295,6 @@ export async function runMatrixCliCommand<TResult>(
       config.onTextError?.(message);
     }
     process.exitCode = 1;
-  } finally {
-    scheduleMatrixCliExit();
   }
 }
 
@@ -270,18 +302,20 @@ export function sanitizeMatrixCliText(value: string): string {
   let withoutAnsi = "";
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index);
-    if (code === 0x9b) {
-      index++;
+    const marker = code === 0x1b ? value[index + 1] : undefined;
+    if (code === 0x9b || marker === "[") {
+      index += code === 0x9b ? 1 : 2;
       while (index < value.length && !isAnsiFinalByte(value.charCodeAt(index))) {
         index++;
       }
       continue;
     }
-    if (code === 0x90 || code === 0x9d || code === 0x9e || code === 0x9f) {
-      index++;
+    const isC1String = code === 0x90 || code === 0x9d || code === 0x9e || code === 0x9f;
+    if (isC1String || marker === "]") {
+      index += isC1String ? 1 : 2;
       while (index < value.length) {
         const current = value.charCodeAt(index);
-        if (current === 0x07 || current === 0x9c) {
+        if (current === 0x07 || (isC1String && current === 0x9c)) {
           break;
         }
         if (current === 0x1b && value[index + 1] === "\\") {
@@ -292,35 +326,11 @@ export function sanitizeMatrixCliText(value: string): string {
       }
       continue;
     }
-    if (code !== 0x1b) {
+    if (code === 0x1b) {
+      index++;
+    } else {
       withoutAnsi += value[index];
-      continue;
     }
-
-    const marker = value[index + 1];
-    if (marker === "[") {
-      index += 2;
-      while (index < value.length && !isAnsiFinalByte(value.charCodeAt(index))) {
-        index++;
-      }
-      continue;
-    }
-    if (marker === "]") {
-      index += 2;
-      while (index < value.length) {
-        const current = value.charCodeAt(index);
-        if (current === 0x07) {
-          break;
-        }
-        if (current === 0x1b && value[index + 1] === "\\") {
-          index++;
-          break;
-        }
-        index++;
-      }
-      continue;
-    }
-    index++;
   }
 
   // Strip terminal controls and directional overrides after removing escape sequences.
@@ -352,29 +362,8 @@ export type MatrixCliSelfVerificationCommandOptions = {
 
 type MatrixCliVerificationSas = NonNullable<MatrixVerificationSummary["sas"]>;
 
-export function resolveBackupStatus(status: {
-  backupVersion: string | null;
-  backup?: MatrixRoomKeyBackupStatus;
-}): MatrixRoomKeyBackupStatus {
-  return {
-    serverVersion: status.backup?.serverVersion ?? status.backupVersion ?? null,
-    activeVersion: status.backup?.activeVersion ?? null,
-    trusted: status.backup?.trusted ?? null,
-    matchesDecryptionKey: status.backup?.matchesDecryptionKey ?? null,
-    decryptionKeyCached: status.backup?.decryptionKeyCached ?? null,
-    keyLoadAttempted: status.backup?.keyLoadAttempted ?? false,
-    keyLoadError: status.backup?.keyLoadError ?? null,
-  };
-}
-
 function yesNoUnknown(value: boolean | null): string {
-  if (value === true) {
-    return "yes";
-  }
-  if (value === false) {
-    return "no";
-  }
-  return "unknown";
+  return value === true ? "yes" : value === false ? "no" : "unknown";
 }
 
 export function printBackupStatus(backup: MatrixRoomKeyBackupStatus): void {
@@ -395,20 +384,6 @@ export function printVerificationIdentity(status: {
 }): void {
   console.log(`User: ${formatMatrixCliText(status.userId)}`);
   console.log(`Device: ${formatMatrixCliText(status.deviceId)}`);
-}
-
-export function printVerificationBackupSummary(status: {
-  backupVersion: string | null;
-  backup?: MatrixRoomKeyBackupStatus;
-}): void {
-  printBackupSummary(resolveBackupStatus(status));
-}
-
-export function printVerificationBackupStatus(status: {
-  backupVersion: string | null;
-  backup?: MatrixRoomKeyBackupStatus;
-}): void {
-  printBackupStatus(resolveBackupStatus(status));
 }
 
 export function printVerificationTrustDiagnostics(status: {
@@ -511,7 +486,7 @@ function buildVerificationGuidance(
   status: MatrixCliVerificationStatus,
   accountId?: string,
 ): string[] {
-  const backup = resolveBackupStatus(status);
+  const backup = status.backup;
   const nextSteps = new Set<string>();
   if (!status.verified) {
     if (status.recoveryKeyAccepted === true && status.backupUsable === true) {
@@ -614,7 +589,7 @@ export function printVerificationStatus(
   if (status.serverDeviceKnown === false) {
     console.log("Device issue: current Matrix device is missing from the homeserver device list");
   }
-  const backup = resolveBackupStatus(status);
+  const backup = status.backup;
   const backupIssue = resolveMatrixRoomKeyBackupIssue(backup);
   printBackupSummary(backup);
   if (backupIssue.message) {

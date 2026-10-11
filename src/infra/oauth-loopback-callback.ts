@@ -2,6 +2,7 @@ import type { LookupAddress } from "node:dns";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createDeferredCore } from "../shared/deferred.js";
 import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { OAUTH_PAGE_CSP } from "./oauth-page-csp.js";
 
 type OAuthLoopbackCallbackResult =
@@ -84,20 +85,6 @@ function resolveBindAddresses(
   return Promise.all([redirectAddresses, requestedAddresses]).then(([redirect, requested]) => [
     ...new Set([...requested, ...redirect]),
   ]);
-}
-
-async function waitForAbortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return await promise;
-  }
-  return await new Promise<T>((resolve, reject) => {
-    const abort = () => reject(new Error("OAuth callback cancelled"));
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-    if (signal.aborted) {
-      abort();
-    }
-  });
 }
 
 function resolveOAuthLoopbackPort(redirectUrl: URL): number {
@@ -199,7 +186,11 @@ export async function startOAuthLoopbackCallbackServer(params: {
   );
   const addresses = Array.isArray(resolvedAddresses)
     ? resolvedAddresses
-    : await waitForAbortable(resolvedAddresses, params.signal);
+    : await racePromiseWithAbortSignal(
+        resolvedAddresses,
+        params.signal,
+        () => new Error("OAuth callback cancelled"),
+      );
   const port = resolveOAuthLoopbackPort(redirectUrl);
   const callbackPath = redirectUrl.pathname || "/";
   const createServer = params.createServer ?? (await import("node:http")).createServer;
@@ -208,14 +199,14 @@ export async function startOAuthLoopbackCallbackServer(params: {
   let settled = false;
   let pendingResponse: ServerResponse | undefined;
   let binding = true;
-  const timeoutRef: { current?: NodeJS.Timeout } = {};
+  let timeout: NodeJS.Timeout | undefined;
   let closePromise: Promise<void> | undefined;
   const callback = createDeferredCore<OAuthLoopbackCallbackResult>();
   void callback.promise.catch(() => undefined);
   const close = () => (binding ? Promise.resolve() : (closePromise ??= closeServers(servers)));
   const cleanup = () => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
+    if (timeout) {
+      clearTimeout(timeout);
     }
     params.signal?.removeEventListener("abort", onAbort);
   };
@@ -389,10 +380,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
   }
   binding = false;
   if (params.timeoutMs !== undefined) {
-    timeoutRef.current = setTimeout(
-      () => settleError(new Error("OAuth callback timeout")),
-      params.timeoutMs,
-    );
+    timeout = setTimeout(() => settleError(new Error("OAuth callback timeout")), params.timeoutMs);
   }
   return {
     waitForCallback: () => callback.promise,

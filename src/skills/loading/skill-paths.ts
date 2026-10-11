@@ -27,7 +27,6 @@ export function shouldSyncSkillPath(filePath: string): boolean {
   return name !== ".git" && name !== "node_modules";
 }
 
-/** Resolve the effective user home used by skill discovery. */
 export function resolveSkillsUserHomeDir(): string | undefined {
   return resolveOsHomeDir(process.env, os.homedir);
 }
@@ -142,7 +141,6 @@ function compactHomePrefixesForHome(home: string): string[] {
   return prefixes;
 }
 
-/** Compact a skill path for console diagnostics. */
 export function compactSkillPath(filePath: string): string {
   return compactHomePath(filePath, resolveCompactHomePrefixes());
 }

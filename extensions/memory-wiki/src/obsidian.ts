@@ -4,18 +4,6 @@ import path from "node:path";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 
-type ObsidianCliProbe = {
-  available: boolean;
-  command: string | null;
-};
-
-type ObsidianCliResult = {
-  command: string;
-  argv: string[];
-  stdout: string;
-  stderr: string;
-};
-
 // User-triggered CLI helpers must not pin the gateway when Obsidian stops responding.
 const OBSIDIAN_CLI_TIMEOUT_MS = 10_000;
 
@@ -58,9 +46,7 @@ async function resolveCommandOnPath(command: string): Promise<string | null> {
   return null;
 }
 
-export async function probeObsidianCli(
-  deps?: Pick<ObsidianCliDeps, "resolveCommand">,
-): Promise<ObsidianCliProbe> {
+export async function probeObsidianCli(deps?: Pick<ObsidianCliDeps, "resolveCommand">) {
   const resolveCommand = deps?.resolveCommand ?? resolveCommandOnPath;
   const command = await resolveCommand("obsidian");
   return {
@@ -107,7 +93,7 @@ export async function runObsidianAction(params: {
   action: (typeof OBSIDIAN_ACTIONS)[number];
   value?: string;
   deps?: ObsidianCliDeps;
-}): Promise<ObsidianCliResult> {
+}) {
   const probe = await probeObsidianCli(params.deps);
   if (!probe.command) {
     throw new Error("Obsidian CLI is not available on PATH.");

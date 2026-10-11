@@ -5,13 +5,9 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  loadMemoryWikiCompiledDashboards,
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
-  type MemoryWikiImportInsightCluster,
   type MemoryWikiImportInsightItem,
-  type MemoryWikiImportInsightsStatus,
 } from "./compiled-cache.js";
-import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type { WikiPageSummary } from "./markdown.js";
 
 function normalizeStringArray(value: unknown): string[] {
@@ -69,11 +65,7 @@ function extractDigestField(lines: string[], prefix: string): string | undefined
 }
 
 function extractIntegerField(lines: string[], prefix: string): number {
-  const raw = extractDigestField(lines, prefix);
-  if (!raw) {
-    return 0;
-  }
-  const match = raw.match(/\d+/);
+  const match = extractDigestField(lines, prefix)?.match(/\d+/);
   return match ? resolveNonNegativeIntegerOption(Number(match[0]), 0) : 0;
 }
 
@@ -105,44 +97,18 @@ type TranscriptTurn = {
 };
 
 function parseTranscriptTurns(body: string): TranscriptTurn[] {
-  const transcriptLines = extractHeadingSection(body, "Active Branch Transcript");
-  if (transcriptLines.length === 0) {
-    return [];
-  }
-  const turns: TranscriptTurn[] = [];
-  let currentRole: TranscriptTurn["role"] | null = null;
-  let currentLines: string[] = [];
-
-  const flush = () => {
-    if (!currentRole) {
-      currentLines = [];
-      return;
-    }
-    const text = currentLines.join("\n").trim();
-    if (text) {
-      turns.push({ role: currentRole, text });
-    }
-    currentLines = [];
-  };
-
-  for (const rawLine of transcriptLines) {
-    const line = rawLine.trimEnd();
-    if (line.trim() === "### User") {
-      flush();
-      currentRole = "user";
-      continue;
-    }
-    if (line.trim() === "### Assistant") {
-      flush();
-      currentRole = "assistant";
-      continue;
-    }
-    if (currentRole) {
-      currentLines.push(line);
+  const blocks: Array<{ role: TranscriptTurn["role"]; lines: string[] }> = [];
+  for (const line of extractHeadingSection(body, "Active Branch Transcript")) {
+    const heading = line.trim();
+    if (heading === "### User" || heading === "### Assistant") {
+      blocks.push({ role: heading === "### User" ? "user" : "assistant", lines: [] });
+    } else {
+      blocks.at(-1)?.lines.push(line);
     }
   }
-  flush();
-  return turns;
+  return blocks
+    .map(({ role, lines }) => ({ role, text: lines.join("\n").trim() }))
+    .filter((turn) => turn.text.length > 0);
 }
 
 function firstParagraph(text: string): string | undefined {
@@ -186,18 +152,6 @@ function extractCorrectionSignals(turns: TranscriptTurn[]): string[] {
     .slice(0, 2);
 }
 
-function deriveCandidateSignals(params: {
-  preferenceSignals: string[];
-  correctionSignals: string[];
-}): string[] {
-  return [
-    ...new Set([
-      ...params.preferenceSignals,
-      ...params.correctionSignals.map((correction) => `Correction detected: ${correction}`),
-    ]),
-  ].slice(0, 4);
-}
-
 function deriveSummary(params: {
   title: string;
   digestStatus: "available" | "withheld";
@@ -212,16 +166,11 @@ function deriveSummary(params: {
     }
     return `Sensitive ${params.topicLabel.toLowerCase()} chat withheld from durable-memory extraction pending review.`;
   }
-  if (params.assistantOpener) {
-    return shortenSentence(params.assistantOpener, 180);
-  }
-  if (params.firstUserLine) {
-    return shortenSentence(params.firstUserLine, 180);
-  }
-  return params.title;
+  const content = params.assistantOpener || params.firstUserLine;
+  return content ? shortenSentence(content) : params.title;
 }
 
-function normalizeRiskLevel(value: unknown): MemoryWikiImportInsightItem["riskLevel"] {
+function normalizeRiskLevel(value: unknown): "low" | "medium" | "high" | "unknown" {
   if (value === "low" || value === "medium" || value === "high") {
     return value;
   }
@@ -266,16 +215,10 @@ function capImportInsightItem(item: MemoryWikiImportInsightItem): MemoryWikiImpo
   };
 }
 
-export async function listMemoryWikiImportInsights(
-  config: ResolvedMemoryWikiConfig,
-): Promise<MemoryWikiImportInsightsStatus> {
-  return (await loadMemoryWikiCompiledDashboards(config)).importInsights;
-}
-
 export function projectMemoryWikiImportInsight(
   page: WikiPageSummary,
   parsed: { frontmatter: Record<string, unknown>; body: string },
-): MemoryWikiImportInsightItem | null {
+) {
   if (page.pageType !== "source" || parsed.frontmatter.sourceType !== "chatgpt-export") {
     return null;
   }
@@ -284,7 +227,7 @@ export function projectMemoryWikiImportInsight(
   const triageLines = extractHeadingSection(parsed.body, "Auto Triage");
   const digestLines = extractHeadingSection(parsed.body, "Auto Digest");
   const transcriptTurns = parseTranscriptTurns(parsed.body);
-  const digestStatus = digestLines.some((line) =>
+  const digestStatus: "withheld" | "available" = digestLines.some((line) =>
     line.toLowerCase().includes("withheld from durable-candidate generation"),
   )
     ? "withheld"
@@ -298,7 +241,12 @@ export function projectMemoryWikiImportInsight(
   const correctionSignals = exposeImportContent ? extractCorrectionSignals(transcriptTurns) : [];
   const preferenceSignals = exposeImportContent ? extractPreferenceSignals(digestLines) : [];
   const candidateSignals = exposeImportContent
-    ? deriveCandidateSignals({ preferenceSignals, correctionSignals })
+    ? [
+        ...new Set([
+          ...preferenceSignals,
+          ...correctionSignals.map((correction) => `Correction detected: ${correction}`),
+        ]),
+      ].slice(0, 4)
     : [];
   const firstUserLine = exposeImportContent
     ? extractDigestField(digestLines, "First user line")
@@ -331,8 +279,8 @@ export function projectMemoryWikiImportInsight(
     summary: deriveSummary({
       title,
       digestStatus,
-      ...(assistantOpener ? { assistantOpener } : {}),
-      ...(firstUserLine ? { firstUserLine } : {}),
+      assistantOpener,
+      firstUserLine,
       riskReasons,
       topicLabel: topic.label,
     }),
@@ -344,9 +292,7 @@ export function projectMemoryWikiImportInsight(
   };
 }
 
-export function buildMemoryWikiImportInsights(
-  input: MemoryWikiImportInsightItem[],
-): MemoryWikiImportInsightsStatus {
+export function buildMemoryWikiImportInsights(input: MemoryWikiImportInsightItem[]) {
   const allItems = input.map(capImportInsightItem).toSorted(compareItemsByUpdated);
   const items = allItems.slice(0, MEMORY_WIKI_DASHBOARD_ITEM_LIMIT);
 
@@ -376,7 +322,7 @@ export function buildMemoryWikiImportInsights(
         },
         updatedAt ? { updatedAt } : {},
         { items: clusterItems },
-      ) satisfies MemoryWikiImportInsightCluster;
+      );
     })
     .toSorted((left, right) => {
       const leftKey = left.updatedAt ?? "";
@@ -391,7 +337,7 @@ export function buildMemoryWikiImportInsights(
     });
 
   return {
-    sourceType: "chatgpt",
+    sourceType: "chatgpt" as const,
     totalItems: allItems.length,
     totalClusters: new Set(allItems.map((item) => item.topicKey)).size,
     clusters,

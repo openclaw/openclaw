@@ -37,10 +37,6 @@ type PendingMemoryImport = {
   attempted: boolean;
 };
 
-function toErrorMessage(error: unknown): string {
-  return formatUiError(error, "request failed");
-}
-
 export class MemoryImportPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -69,18 +65,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     plan: MigrationsMemoryPlanResult;
   } | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
-    );
+    .watchStore(() => this.context?.gateway)
+    .watchStore(() => this.context?.agents)
+    .watchStore(() => this.context?.agentSelection);
 
   private readonly planTask = new Task(this, {
     args: () => {
@@ -186,7 +173,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private get error(): string | null {
-    return this.planTask.status === TaskStatus.ERROR ? toErrorMessage(this.planTask.error) : null;
+    return this.planTask.status === TaskStatus.ERROR
+      ? formatUiError(this.planTask.error, "request failed")
+      : null;
   }
 
   private get canAdmin(): boolean {
@@ -210,17 +199,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     return this.currentAgentId()
       ? this.planTask.run()
       : this.context.agents.ensureList().then(() => undefined);
-  }
-
-  private selectAgent(agentId: string) {
-    this.context.agentSelection.set(agentId);
-    this.resetMutationState();
-    this.resetBackfillState();
-  }
-
-  private setReplaceExisting(enabled: boolean) {
-    this.replaceExisting = enabled;
-    this.resetMutationState();
   }
 
   private toggleCollection(providerId: string, itemIds: readonly string[], selected: boolean) {
@@ -318,7 +296,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       await this.refresh();
     } catch (error) {
       if (applyEpoch === this.applyEpoch) {
-        this.applyError = toErrorMessage(error);
+        this.applyError = formatUiError(error, "request failed");
       }
     } finally {
       if (applyEpoch === this.applyEpoch) {
@@ -333,32 +311,20 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     this.backfillTo = "";
     this.backfillBusy = null;
     this.backfillError = null;
-    this.backfillPreview = null;
-    this.backfillProgress = null;
-    this.backfillRollbackResult = null;
+    this.clearBackfillResults();
     this.backfillRollbackPending = false;
   }
 
-  private backfillRequest(agentId: string) {
-    return {
-      agentId,
-      ...(this.backfillFrom ? { from: this.backfillFrom } : {}),
-      ...(this.backfillTo ? { to: this.backfillTo } : {}),
-      limitDays: SESSION_BACKFILL_BATCH_DAYS,
-    };
+  private clearBackfillResults() {
+    this.backfillPreview = null;
+    this.backfillProgress = null;
+    this.backfillRollbackResult = null;
   }
 
-  private isCurrentBackfillRequest(
-    epoch: number,
-    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>,
-    agentId: string,
-  ): boolean {
-    return (
-      epoch === this.backfillEpoch &&
-      this.context.gateway.snapshot.phase === "connected" &&
-      this.context.gateway.snapshot.client === client &&
-      this.currentAgentId() === agentId
-    );
+  private setBackfillDate(field: "backfillFrom" | "backfillTo", value: string) {
+    this[field] = value;
+    this.clearBackfillResults();
+    this.backfillError = null;
   }
 
   private async runBackfill(operation: "preview" | "apply" | "rollback") {
@@ -375,14 +341,23 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       return;
     }
     const epoch = ++this.backfillEpoch;
-    const isCurrent = () => this.isCurrentBackfillRequest(epoch, client, agentId);
+    const isCurrent = () =>
+      epoch === this.backfillEpoch &&
+      this.context.gateway.snapshot.phase === "connected" &&
+      this.context.gateway.snapshot.client === client &&
+      this.currentAgentId() === agentId;
     this.backfillBusy = operation;
     this.backfillError = null;
     if (operation !== "rollback") {
-      this.backfillPreview = null;
-      this.backfillProgress = null;
-      this.backfillRollbackResult = null;
+      this.clearBackfillResults();
     }
+    const requestBackfill = (method: "preview" | "apply") =>
+      client.request<SessionBackfillGatewayResult>(`memory.sessionBackfill.${method}`, {
+        agentId,
+        ...(this.backfillFrom ? { from: this.backfillFrom } : {}),
+        ...(this.backfillTo ? { to: this.backfillTo } : {}),
+        limitDays: SESSION_BACKFILL_BATCH_DAYS,
+      });
     try {
       if (operation === "rollback") {
         const result = await client.request<SessionBackfillRollbackResult>(
@@ -396,10 +371,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
           this.backfillRollbackPending = false;
         }
       } else if (operation === "preview") {
-        const result = await client.request<SessionBackfillGatewayResult>(
-          "memory.sessionBackfill.preview",
-          this.backfillRequest(agentId),
-        );
+        const result = await requestBackfill("preview");
         if (isCurrent()) {
           this.backfillPreview = result;
         }
@@ -413,10 +385,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
         this.backfillProgress = progress;
         const processedDays = new Set<string>();
         while (true) {
-          const chunk = await client.request<SessionBackfillGatewayResult>(
-            "memory.sessionBackfill.apply",
-            this.backfillRequest(agentId),
-          );
+          const chunk = await requestBackfill("apply");
           if (!isCurrent()) {
             return;
           }
@@ -447,7 +416,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (isCurrent()) {
-        this.backfillError = toErrorMessage(error);
+        this.backfillError = formatUiError(error, "request failed");
       }
     } finally {
       if (isCurrent()) {
@@ -485,8 +454,15 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       backfillProgress: this.backfillProgress,
       backfillRollbackResult: this.backfillRollbackResult,
       backfillRollbackPending: this.backfillRollbackPending,
-      onSelectAgent: (nextAgentId) => this.selectAgent(nextAgentId),
-      onReplaceExisting: (enabled) => this.setReplaceExisting(enabled),
+      onSelectAgent: (nextAgentId) => {
+        this.context.agentSelection.set(nextAgentId);
+        this.resetMutationState();
+        this.resetBackfillState();
+      },
+      onReplaceExisting: (enabled) => {
+        this.replaceExisting = enabled;
+        this.resetMutationState();
+      },
       onRefresh: () => void this.refresh(),
       onToggleCollection: (providerId, itemIds, selected) =>
         this.toggleCollection(providerId, itemIds, selected),
@@ -498,20 +474,8 @@ export class MemoryImportPage extends OpenClawLightDomElement {
           this.applyError = null;
         }
       },
-      onBackfillFromChange: (value) => {
-        this.backfillFrom = value;
-        this.backfillPreview = null;
-        this.backfillProgress = null;
-        this.backfillRollbackResult = null;
-        this.backfillError = null;
-      },
-      onBackfillToChange: (value) => {
-        this.backfillTo = value;
-        this.backfillPreview = null;
-        this.backfillProgress = null;
-        this.backfillRollbackResult = null;
-        this.backfillError = null;
-      },
+      onBackfillFromChange: (value) => this.setBackfillDate("backfillFrom", value),
+      onBackfillToChange: (value) => this.setBackfillDate("backfillTo", value),
       onBackfillPreview: () => void this.runBackfill("preview"),
       onBackfillApply: () => void this.runBackfill("apply"),
       onBackfillRollbackRequest: () => {

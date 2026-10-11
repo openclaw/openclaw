@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
-import type { CodexThreadListParams } from "./app-server/protocol.js";
+import type { CodexThread, CodexThreadListParams } from "./app-server/protocol.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import {
   codexCatalogResidentHomeKey,
@@ -29,12 +29,37 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+function catalogState(namespace: string) {
+  return createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
+    namespace,
+    maxEntries: 20_001,
+  });
+}
+
+function createSnapshotFixture(namespace: string, rows: CodexThread[], homeId = namespace) {
+  const native = { rows };
+  const openState = () => catalogState(namespace);
+  const readNative = vi.fn(async () =>
+    projectCodexCatalogPage({ data: native.rows }, { sanitize: sanitizeTerminalText }),
+  );
+  const createIndex = (state = openState()) =>
+    new CodexCatalogIndex({ homeId, state, readNative, assertCurrent: () => {} });
+  return { native, openState, readNative, createIndex };
+}
+
+function localStartOptions(prefix: string): CodexAppServerStartOptions {
+  return {
+    transport: "stdio",
+    command: "codex",
+    args: ["app-server"],
+    env: { CODEX_HOME: tempDirs.make(prefix) },
+    headers: {},
+  };
+}
+
 describe("resident Codex catalog SQLite durability", () => {
   it("prunes obsolete cached rows in background before native hydration without deleting fresh replacements", async () => {
-    const state = createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
-      namespace: "resident-obsolete-authority-test",
-      maxEntries: 20_001,
-    });
+    const state = catalogState("resident-obsolete-authority-test");
     const native = idleThread({ id: "fresh", source: "cli", preview: "Current native request" });
     const projected = await projectCodexCatalogPage(
       { data: [native] },
@@ -106,11 +131,7 @@ describe("resident Codex catalog SQLite durability", () => {
       turns: [],
     });
     current.path = await writeCatalogRollout(root, current);
-    const openState = () =>
-      createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
-        namespace: "selected-rollout-test",
-        maxEntries: 20_001,
-      });
+    const openState = () => catalogState("selected-rollout-test");
     const createFactory = () =>
       createCodexSessionCatalogControlFactory({
         env: { CODEX_HOME: home },
@@ -242,11 +263,7 @@ describe("resident Codex catalog SQLite durability", () => {
     for (const thread of native) {
       thread.path = await writeCatalogRollout(root, thread);
     }
-    const openState = () =>
-      createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
-        namespace: "resident-restart-test",
-        maxEntries: 20_001,
-      });
+    const openState = () => catalogState("resident-restart-test");
     const nativeAllowed = createDeferred<void>();
     let paused = false;
     const readNative = vi.fn(async () => {
@@ -345,11 +362,7 @@ describe("resident Codex catalog SQLite durability", () => {
     native.path = rollout;
     const originalBytes = await fs.readFile(rollout);
     const originalStat = await fs.stat(rollout);
-    const openState = () =>
-      createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
-        namespace: "resident-offline-title-test",
-        maxEntries: 20_001,
-      });
+    const openState = () => catalogState("resident-offline-title-test");
     const metadata = createDeferred<void>();
     let offline = false;
     const readNative = vi.fn(async (_params: CodexThreadListParams) => {
@@ -431,11 +444,7 @@ describe("resident Codex catalog SQLite durability", () => {
       }),
       idleThread({ id: "archived", name: "Archived title", source: "cli" }),
     ];
-    const openState = () =>
-      createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
-        namespace: "resident-mutations-test",
-        maxEntries: 20_001,
-      });
+    const openState = () => catalogState("resident-mutations-test");
     const readNative = vi.fn(async () =>
       projectCodexCatalogPage(
         { data: structuredClone(native) },
@@ -518,4 +527,173 @@ describe("resident Codex catalog SQLite durability", () => {
       await restarted.close();
     }
   });
+});
+
+it("does not restore offline-deleted rows after repeated failed snapshot enumerations", async () => {
+  const deleted = idleThread({ id: "deleted-while-offline", source: "cli" });
+  const current = idleThread({ id: "still-current", source: "cli" });
+  const { native, openState, createIndex } = createSnapshotFixture("snapshot-read-recovery", [
+    deleted,
+    current,
+  ]);
+  const original = createIndex();
+  try {
+    await original.initialize();
+    expect((await original.list({})).sessions).toHaveLength(2);
+  } finally {
+    await original.close();
+  }
+  await closeOpenClawStateDatabaseAsync();
+  native.rows = [current];
+
+  for (let restart = 0; restart < 3; restart++) {
+    const state = openState();
+    vi.spyOn(state, "entries").mockRejectedValue(new Error("snapshot enumeration unavailable"));
+    const recovering = createIndex(state);
+    try {
+      // A snapshot outage must not prevent native hydration or memory serving.
+      expect((await recovering.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
+      await recovering.initialize();
+      await recovering.upsertThread({ ...current, name: `Changed during outage ${restart}` });
+    } finally {
+      await recovering.close();
+    }
+    await closeOpenClawStateDatabaseAsync();
+  }
+
+  const recovered = createIndex();
+  try {
+    // Check the first list before a saved snapshot's background refresh could repair it.
+    expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    await recovered.initialize();
+    const saved = await openState().entries();
+    expect(
+      saved.flatMap((entry) => (entry.value.kind === "row" ? [entry.value.row.threadId] : [])),
+    ).toEqual([current.id]);
+    expect(saved.some((entry) => entry.key === "complete")).toBe(true);
+  } finally {
+    await recovered.close();
+  }
+});
+
+it("invalidates saved completeness when an admitted deletion fails during shutdown", async () => {
+  const startOptions = localStartOptions("codex-catalog-shutdown-failure-");
+  const homeId = await codexCatalogResidentHomeKey({ startOptions });
+  const deleted = idleThread({ id: "deleted-before-shutdown", source: "cli" });
+  const current = idleThread({ id: "still-current", source: "cli" });
+  const { native, openState, createIndex } = createSnapshotFixture(
+    "snapshot-shutdown-failure",
+    [deleted, current],
+    homeId,
+  );
+  const state = openState();
+  const index = createIndex(state);
+  const harness = createClientHarness();
+  const deletionStarted = createDeferred<void>();
+  const deletionAllowed = createDeferred<void>();
+  let closing: Promise<void> | undefined;
+  try {
+    await index.initialize();
+    expect((await index.list({})).sessions).toHaveLength(2);
+    await observeCodexCatalogClient(harness.client, { startOptions });
+    const realDelete = state.delete;
+    vi.spyOn(state, "delete").mockImplementation(async (key) => {
+      if (key !== "complete") {
+        deletionStarted.resolve();
+        await deletionAllowed.promise;
+        throw new Error("admitted deletion failed during shutdown");
+      }
+      return realDelete(key);
+    });
+    native.rows = [current];
+    harness.send({ method: "thread/deleted", params: { threadId: deleted.id } });
+    await deletionStarted.promise;
+    expect((await index.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    closing = index.close();
+    deletionAllowed.resolve();
+    await closing;
+  } finally {
+    deletionAllowed.resolve();
+    await (closing ?? index.close());
+    await harness.client.closeAndWait();
+  }
+  const savedAfterShutdown = await openState().entries();
+  await closeOpenClawStateDatabaseAsync();
+
+  const recovered = createIndex();
+  try {
+    expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    expect(savedAfterShutdown.some((entry) => entry.key === "complete")).toBe(false);
+    await recovered.initialize();
+    const saved = await openState().entries();
+    expect(
+      saved.flatMap((entry) => (entry.value.kind === "row" ? [entry.value.row.threadId] : [])),
+    ).toEqual([current.id]);
+    expect(saved.some((entry) => entry.key === "complete")).toBe(true);
+  } finally {
+    await recovered.close();
+  }
+});
+
+it("persists archives received before saved snapshot restoration", async () => {
+  const startOptions = localStartOptions("codex-catalog-archive-before-restore-");
+  const homeId = await codexCatalogResidentHomeKey({ startOptions });
+  const archived = idleThread({ id: "archived-during-restore", source: "cli" });
+  const current = idleThread({ id: "still-current", source: "cli" });
+  const { native, openState, readNative, createIndex } = createSnapshotFixture(
+    "archive-before-snapshot-restore",
+    [archived, current],
+    homeId,
+  );
+  const original = createIndex();
+  try {
+    await original.initialize();
+    expect((await original.list({})).sessions).toHaveLength(2);
+  } finally {
+    await original.close();
+  }
+  await closeOpenClawStateDatabaseAsync();
+
+  const captured = createDeferred<void>();
+  const release = createDeferred<void>();
+  const state = openState();
+  const realEntries = state.entries;
+  vi.spyOn(state, "entries").mockImplementation(async () => {
+    const entries = await realEntries();
+    captured.resolve();
+    await release.promise;
+    return entries;
+  });
+  const restoring = createIndex(state);
+  const harness = createClientHarness();
+  let listed: ReturnType<CodexCatalogIndex["list"]> | undefined;
+  try {
+    await observeCodexCatalogClient(harness.client, { startOptions });
+    const archive = () => {
+      native.rows = [current];
+      harness.send({ method: "thread/archived", params: { threadId: archived.id } });
+    };
+    archive();
+    listed = restoring.list({});
+    void listed.catch(() => undefined);
+    await captured.promise;
+    release.resolve();
+    expect((await listed).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    await restoring.initialize();
+  } finally {
+    release.resolve();
+    await listed?.catch(() => undefined);
+    await restoring.close();
+    await harness.client.closeAndWait();
+  }
+  await closeOpenClawStateDatabaseAsync();
+
+  readNative.mockClear();
+  const recovered = createIndex();
+  try {
+    expect((await recovered.list({})).sessions.map((row) => row.threadId)).toEqual([current.id]);
+    expect(readNative).not.toHaveBeenCalled();
+  } finally {
+    await recovered.close();
+  }
 });

@@ -5,7 +5,7 @@ import type {
   DiscordGatewayAdapterCreator,
   DiscordGatewayAdapterImplementerMethods,
 } from "@discordjs/voice";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { toErrorObject, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -123,7 +123,7 @@ export class DiscordAudioTransport extends EventEmitter<{
     try {
       this.worker.postMessage(command, transferList);
     } catch (error) {
-      this.finish(error instanceof Error ? error : new Error(String(error)));
+      this.finish(toStringifiedError(error));
     }
   }
 
@@ -149,20 +149,15 @@ export class DiscordAudioTransport extends EventEmitter<{
     this.send({ type: "passthrough", reason, expirySeconds });
   }
 
-  stopPlayback(): void {
-    this.send({ type: "player-stop" });
-  }
-
   async play(input: string | Readable): Promise<void> {
     if (this.stopping || this.terminal) {
       throw new Error("Discord voice session stopped before playback.");
     }
     const id = this.allocateId();
     const abort = new AbortController();
-    const complete = new Promise<void>((resolve, reject) => {
-      this.files.set(id, { resolve, reject, abort });
-    });
-    void complete.catch(() => {});
+    const complete = createDeferred<void>();
+    this.files.set(id, { ...complete, abort });
+    void complete.promise.catch(() => {});
     this.send(
       typeof input === "string"
         ? { type: "file-play", id, path: input }
@@ -208,9 +203,9 @@ export class DiscordAudioTransport extends EventEmitter<{
             }
           })();
     try {
-      await Promise.all([pump, complete]);
+      await Promise.all([pump, complete.promise]);
     } catch (error) {
-      this.stopPlayback();
+      this.send({ type: "player-stop" });
       throw error;
     } finally {
       abort.abort();

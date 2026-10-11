@@ -1,11 +1,22 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import type {
   RemoteProject,
   ProjectsSearchRemoteResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { parseProjectGitUrl } from "../projects/project-git-url.js";
+import {
+  resolveConfiguredGitHubApiBaseUrl,
+  resolveConfiguredGitHubHost,
+} from "../agents/github-host.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
+import { logWarn } from "../logger.js";
+import { parseConfiguredProjectGitUrl } from "../projects/project-git-url.runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 
 const SEARCH_CACHE_MS = 60_000;
@@ -16,16 +27,14 @@ const AFFILIATED_RESULT_LIMIT = 10;
 // on search ranking (search tokenizes the slash and matches thousands of repos).
 const EXACT_REPO_QUERY = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
 
-type SearchCacheEntry = {
-  expiresAt: number;
-  promise: Promise<ProjectsSearchRemoteResult>;
-};
+const searchCache = createStaleWhileRevalidateCache<ProjectsSearchRemoteResult>({
+  maxEntries: SEARCH_CACHE_LIMIT,
+  ttlMs: SEARCH_CACHE_MS,
+  onBackgroundError: () => logWarn("projects: GitHub repository search refresh failed"),
+});
 
-const searchCache = new Map<string, SearchCacheEntry>();
-
-function boundedString(value: string | undefined, maxLength: number): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed.slice(0, maxLength) : undefined;
+function boundedString(value: unknown, maxLength: number): string | undefined {
+  return normalizeOptionalString(value)?.slice(0, maxLength);
 }
 
 function parseRepository(value: unknown): RemoteProject | null {
@@ -37,12 +46,13 @@ function parseRepository(value: unknown): RemoteProject | null {
   if (!fullName || !name) {
     return null;
   }
-  const clone = parseProjectGitUrl(readNonBlankString(value.clone_url) ?? "");
-  const webUrl = boundedString(readNonBlankString(value.html_url), 2048);
+  const clone = parseConfiguredProjectGitUrl(readNonBlankString(value.clone_url) ?? "");
+  const webUrl = boundedString(value.html_url, 2048);
   if (!clone || !webUrl) {
     return null;
   }
-  const description = boundedString(readNonBlankString(value.description), 500);
+  const description = boundedString(value.description, 500);
+  const defaultBranch = boundedString(value.default_branch, 255);
   return {
     name: name.slice(0, 100),
     fullName: fullName.slice(0, 200),
@@ -50,6 +60,7 @@ function parseRepository(value: unknown): RemoteProject | null {
     webUrl,
     private: value.private === true,
     ...(description ? { description } : {}),
+    ...(defaultBranch ? { defaultBranch } : {}),
   };
 }
 
@@ -73,26 +84,24 @@ function matchesAffiliatedQuery(project: RemoteProject, query: string): boolean 
     .includes(needle);
 }
 
+type GitHubSearchRequest = (url: string, optionalAuth?: boolean) => Promise<unknown>;
+
 async function loadExactRepository(
   query: string,
-  fetchImpl: typeof fetch,
-  token: string | undefined,
+  request: GitHubSearchRequest,
 ): Promise<RemoteProject | null> {
-  const url = new URL(`/repos/${query}`, gitHubPublicApi.GITHUB_API_ORIGIN);
+  const url = new URL(`repos/${query}`, `${gitHubPublicApi.GITHUB_API_BASE_URL}/`);
   // Optional enrichment lane: a miss, API error, or transport rejection must
   // degrade to search-only results, never sink the whole picker query.
   try {
-    return parseRepository(await gitHubPublicApi.fetchGitHubJson(url.href, fetchImpl, token));
+    return parseRepository(await request(url.href));
   } catch {
     return null;
   }
 }
 
-async function loadAffiliatedRepositories(
-  fetchImpl: typeof fetch,
-  token: string,
-): Promise<RemoteProject[]> {
-  const url = new URL("/user/repos", gitHubPublicApi.GITHUB_API_ORIGIN);
+async function loadAffiliatedRepositories(request: GitHubSearchRequest): Promise<RemoteProject[]> {
+  const url = new URL("user/repos", `${gitHubPublicApi.GITHUB_API_BASE_URL}/`);
   url.searchParams.set("affiliation", "owner,collaborator,organization_member");
   url.searchParams.set("sort", "updated");
   url.searchParams.set("direction", "desc");
@@ -100,8 +109,7 @@ async function loadAffiliatedRepositories(
   // Optional enrichment lane: see loadExactRepository — failures degrade to
   // global-search-only results instead of failing the picker query.
   try {
-    const response = await gitHubPublicApi.fetchGitHubApi(url.href, fetchImpl, token);
-    return repositoryArray(await gitHubPublicApi.readGitHubJsonResponse(response));
+    return repositoryArray(await request(url.href, false));
   } catch {
     return [];
   }
@@ -109,26 +117,23 @@ async function loadAffiliatedRepositories(
 
 async function loadRepositorySearch(
   query: string,
-  fetchImpl: typeof fetch,
-  token: string | undefined,
+  request: GitHubSearchRequest,
 ): Promise<RemoteProject[]> {
-  const url = new URL("/search/repositories", gitHubPublicApi.GITHUB_API_ORIGIN);
+  const url = new URL("search/repositories", `${gitHubPublicApi.GITHUB_API_BASE_URL}/`);
   url.searchParams.set("q", `${query} in:name,description`);
   url.searchParams.set("per_page", String(SEARCH_RESULT_LIMIT));
-  return repositoryArray(await gitHubPublicApi.fetchGitHubJson(url.href, fetchImpl, token));
+  return repositoryArray(await request(url.href));
 }
 
 async function searchProjectsUncached(params: {
   query: string;
-  fetchImpl: typeof fetch;
+  request: GitHubSearchRequest;
   token?: string;
 }): Promise<ProjectsSearchRemoteResult> {
   const [exact, affiliated, global] = await Promise.all([
-    EXACT_REPO_QUERY.test(params.query)
-      ? loadExactRepository(params.query, params.fetchImpl, params.token)
-      : null,
-    params.token ? loadAffiliatedRepositories(params.fetchImpl, params.token) : [],
-    loadRepositorySearch(params.query, params.fetchImpl, params.token),
+    EXACT_REPO_QUERY.test(params.query) ? loadExactRepository(params.query, params.request) : null,
+    params.token ? loadAffiliatedRepositories(params.request) : [],
+    loadRepositorySearch(params.query, params.request),
   ]);
   // Order is the ranking: exact owner/name hit, then affiliated repositories
   // (API-sorted by recency), then global search in GitHub best-match order.
@@ -151,32 +156,99 @@ async function searchProjectsUncached(params: {
 }
 
 /** Searches affiliated and public GitHub repositories for the project picker. */
-export function searchRemoteProjects(
+export async function searchRemoteProjects(
   query: string,
-  options: { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch; now?: number } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+    token?: string;
+    host?: string;
+    apiBaseUrl?: string;
+    assertCurrent?: () => void;
+    trackExecution?: <T>(run: () => Promise<T>) => Promise<T>;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<ProjectsSearchRemoteResult> {
-  const normalizedQuery = query.trim().toLowerCase();
-  const { token, cacheScope } = gitHubPublicApi.resolveGitHubApiCredentialScope(options.env);
-  // Gateway reloads run in-process, so cache results must stay credential-scoped.
-  const cacheKey = `${normalizedQuery}\0${cacheScope}`;
-  const now = options.now ?? Date.now();
-  const cached = searchCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    searchCache.delete(cacheKey);
-    searchCache.set(cacheKey, cached);
-    return cached.promise;
-  }
-  const promise = searchProjectsUncached({
-    query: query.trim(),
-    fetchImpl: options.fetchImpl ?? fetch,
-    token,
-  }).catch((error: unknown) => {
-    if (searchCache.get(cacheKey)?.promise === promise) {
-      searchCache.delete(cacheKey);
+  const config = getRuntimeConfigSnapshot();
+  const host = options.host ?? resolveConfiguredGitHubHost(config);
+  const apiBaseUrl = options.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl(config);
+  const assertCurrent = () => {
+    options.assertCurrent?.();
+    const current = getRuntimeConfigSnapshot();
+    if (
+      resolveConfiguredGitHubHost(current) !== host ||
+      resolveConfiguredGitHubApiBaseUrl(current) !== apiBaseUrl ||
+      gitHubPublicApi.GITHUB_API_BASE_URL !== apiBaseUrl
+    ) {
+      throw new gitHubPublicApi.ControlUiGitHubError(
+        502,
+        "GitHub host changed during project search",
+      );
     }
-    throw error;
-  });
-  searchCache.set(cacheKey, { expiresAt: now + SEARCH_CACHE_MS, promise });
-  pruneMapToMaxSize(searchCache, SEARCH_CACHE_LIMIT);
-  return promise;
+  };
+  const assertSelected = () => {
+    options.signal?.throwIfAborted();
+    assertCurrent();
+  };
+  assertSelected();
+  const normalizedQuery = query.trim().toLowerCase();
+  const { token, cacheScope } =
+    options.token === undefined
+      ? gitHubPublicApi.resolveGitHubApiCredentialScope(options.env)
+      : {
+          token: options.token,
+          cacheScope: gitHubPublicApi.githubApiCredentialCacheScope(options.token),
+        };
+  // Gateway reloads run in-process, so cache results must stay credential-scoped.
+  const cacheKey = `${normalizedQuery}\0${host}\0${apiBaseUrl}\0${cacheScope}`;
+  const assertTransportCurrent = () => {
+    assertCurrent();
+    if (
+      options.token === undefined &&
+      gitHubPublicApi.resolveGitHubApiCredentialScope(options.env).cacheScope !== cacheScope
+    ) {
+      throw new gitHubPublicApi.ControlUiGitHubError(409, "GitHub identity changed during search");
+    }
+  };
+  const load = async () => {
+    assertTransportCurrent();
+    const fetchImpl = options.fetchImpl ?? fetch;
+    const identity = {
+      assertSelected: assertTransportCurrent,
+      revalidate: async () => assertTransportCurrent(),
+    };
+    const request: GitHubSearchRequest = (url, optionalAuth = true) => {
+      const readJson = async (requestToken: string | undefined) =>
+        gitHubPublicApi.readGitHubJsonResponse(
+          await gitHubPublicApi.fetchGitHubApi(
+            url,
+            fetchImpl,
+            requestToken,
+            undefined,
+            identity,
+            undefined,
+            getAsyncWorkSignal(),
+            undefined,
+            apiBaseUrl,
+          ),
+        );
+      return optionalAuth
+        ? gitHubPublicApi.withOptionalGitHubAuth(token, readJson)
+        : readJson(token);
+    };
+    const result = await searchProjectsUncached({ query: query.trim(), request, token });
+    assertTransportCurrent();
+    return result;
+  };
+  try {
+    // The Gateway owns refresh work; each dispatch still requires its initiating authority.
+    const result = await racePromiseWithAbortSignal(
+      searchCache.read(cacheKey, () => options.trackExecution?.(load) ?? load()),
+      options.signal,
+    );
+    assertTransportCurrent();
+    return result.stale ? { ...result.value, stale: true } : result.value;
+  } finally {
+    assertSelected();
+  }
 }

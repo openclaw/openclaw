@@ -1,5 +1,4 @@
 // Unit-fast test discovery and classification helpers for fast local routing.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isAgentsCoreIsolatedTestFile } from "./vitest.agents-paths.mjs";
@@ -12,6 +11,7 @@ import {
 } from "./vitest.gateway-server-paths.mjs";
 import { pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
 import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
+import { getRepositoryFileInventory } from "./vitest.ui-paths.mjs";
 import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
@@ -75,34 +75,20 @@ export const forcedUnitFastTestFiles = [
   "packages/memory-host-sdk/src/host/embeddings-remote-fetch.test.ts",
   "packages/memory-host-sdk/src/host/internal.test.ts",
   "packages/memory-host-sdk/src/host/post-json.test.ts",
-  "packages/memory-host-sdk/src/host/session-files.test.ts",
   "src/acp/client.test.ts",
-  "src/acp/control-plane/manager.failover.test.ts",
   "src/acp/control-plane/manager.runtime-config.test.ts",
   "src/acp/control-plane/manager.runtime-handles.test.ts",
   "src/acp/control-plane/manager.turn-results.test.ts",
   "src/acp/persistent-bindings.lifecycle.test.ts",
   "src/acp/translator.prompt-prefix.test.ts",
-  "src/acp/translator.stop-reason.test.ts",
   "src/acp/persistent-bindings.test.ts",
   "src/acp/server.startup.test.ts",
-  "src/acp/translator.final-snapshots.test.ts",
-  "src/acp/translator.prompt-size.test.ts",
-  "src/acp/translator.session-config.test.ts",
-  "src/acp/translator.session-rate-limit.test.ts",
-  "src/acp/translator.session-setup.test.ts",
-  "src/acp/translator.session-snapshot.test.ts",
-  "src/acp/translator.tool-streaming.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
-  "src/system-agent/audit.test.ts",
   "src/system-agent/assistant.configured.test.ts",
   "src/system-agent/system-agent.test.ts",
-  "src/system-agent/operations.test.ts",
-  "src/system-agent/rescue-message.test.ts",
   "src/system-agent/tui-backend.test.ts",
   "src/flows/channel-setup.status.test.ts",
   "src/flows/provider-flow.test.ts",
-  "src/context-engine/context-engine.test.ts",
   "src/entry.compile-cache.test.ts",
   "src/entry.respawn.test.ts",
   "src/entry.version-fast-path.test.ts",
@@ -120,7 +106,6 @@ export const forcedUnitFastTestFiles = [
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",
   "src/proxy-capture/store.sqlite.test.ts",
-  "src/talk/agent-consult-runtime.test.ts",
   "src/security/audit-config-basics.test.ts",
   "src/security/audit-exec-surface.test.ts",
   "src/security/audit-extra.sync.test.ts",
@@ -136,7 +121,6 @@ export const forcedUnitFastTestFiles = [
   "src/realtime-transcription/websocket-session.test.ts",
   "src/routing/resolve-route.test.ts",
   "src/status/status-message.test.ts",
-  "src/trajectory/cleanup.test.ts",
   "src/trajectory/export.test.ts",
   "src/trajectory/metadata.test.ts",
   "src/tts/openai-compatible-speech-provider.test.ts",
@@ -205,7 +189,6 @@ const ownerRoutedUnitTestPatterns = [
   "src/agents/openai-transport-stream.*.test.ts",
   // Split transport suites install module mocks through their shared harness.
   "src/agents/provider-transport-fetch.*.test.ts",
-  "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
   "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
@@ -291,7 +274,8 @@ const disqualifyingPatterns = [
   },
   {
     code: "runtime-singleton-state",
-    pattern: /\b(?:setActivePluginRegistry|resetPluginRuntimeStateForTest|reset.*ForTest)\s*\(/u,
+    pattern:
+      /\b(?:drainGlobalSingletonLifecycleState|setActivePluginRegistry|resetPluginRuntimeStateForTest|reset.*ForTest)\s*\(/u,
   },
 ];
 
@@ -378,44 +362,20 @@ function walkFiles(directory, files = []) {
 
 const walkedTestFilesByCwd = new Map();
 
-function collectRepoTestFilesFromGit(cwd) {
-  // Planning, fast-lane includes, and scoped exclusions share this inventory.
-  // New working-tree tests must be present so explicit targets cannot become empty lanes.
-  const result = spawnSync(
-    "git",
-    [
-      "ls-files",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-      "--",
-      "src",
-      "packages",
-      "test",
-    ],
-    { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] },
-  );
-  if (result.error || result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\0")
-    .map(normalizeRepoPath)
-    .filter((file) => file.endsWith(".test.ts"));
-}
-
 function collectRepoTestFiles(cwd) {
   const normalizedCwd = normalizeRepoPath(cwd);
   const cached = walkedTestFilesByCwd.get(normalizedCwd);
   if (cached) {
     return cached;
   }
-  const files =
-    collectRepoTestFilesFromGit(cwd) ??
-    ["src", "packages", "test"]
-      .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-      .map((file) => normalizeRepoPath(path.relative(cwd, file)));
+  const inventory = getRepositoryFileInventory(cwd);
+  const files = inventory
+    ? [...inventory]
+        .map(normalizeRepoPath)
+        .filter((file) => /^(?:src|packages|test)\//u.test(file) && file.endsWith(".test.ts"))
+    : ["src", "packages", "test"]
+        .flatMap((directory) => walkFiles(path.join(cwd, directory)))
+        .map((file) => normalizeRepoPath(path.relative(cwd, file)));
   walkedTestFilesByCwd.set(normalizedCwd, files);
   return files;
 }

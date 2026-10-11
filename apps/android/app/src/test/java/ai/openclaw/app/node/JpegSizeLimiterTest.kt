@@ -49,14 +49,11 @@ class JpegSizeLimiterTest {
   fun triesFinalScaledImageBeforeFailing() {
     val result =
       JpegSizeLimiter.compressToLimit(
-        initialWidth = 1000,
-        initialHeight = 800,
+        initialWidth = 1326,
+        initialHeight = 1061,
         startQuality = 90,
         maxBytes = 100,
         minSize = 1,
-        scaleStep = 0.5,
-        maxScaleAttempts = 1,
-        maxQualityAttempts = 1,
         encode = { width, _, _ ->
           if (width == 500) ByteArray(80) else ByteArray(120)
         },

@@ -33,11 +33,9 @@ export abstract class OpenAIRealtimeProtocol {
 
   readonly supportsToolResultSuppression = true;
 
-  protected nextMarkSequence = 1;
+  protected latestMarkSequence = 0;
 
   protected oldestOutstandingMarkSequence: number | null = null;
-
-  protected latestOutstandingMarkSequence: number | null = null;
 
   protected responseActive = false;
 
@@ -73,8 +71,6 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected standaloneSpeechQueue: string[] = [];
 
-  protected standaloneSpeechActive = false;
-
   protected standaloneSpeechEventId: string | null = null;
 
   private readonly audioFormat: RealtimeVoiceAudioFormat;
@@ -92,8 +88,8 @@ export abstract class OpenAIRealtimeProtocol {
 
   acknowledgeMark(markName?: string): void {
     const oldest = this.oldestOutstandingMarkSequence;
-    const latest = this.latestOutstandingMarkSequence;
-    if (oldest === null || latest === null) {
+    const latest = this.latestMarkSequence;
+    if (oldest === null) {
       return;
     }
     const acknowledgedSequence =
@@ -109,7 +105,6 @@ export abstract class OpenAIRealtimeProtocol {
     // earlier mark, while late acknowledgements from that prefix remain harmless.
     if (acknowledgedSequence === latest) {
       this.oldestOutstandingMarkSequence = null;
-      this.latestOutstandingMarkSequence = null;
       return;
     }
     this.oldestOutstandingMarkSequence = acknowledgedSequence + 1;
@@ -121,12 +116,8 @@ export abstract class OpenAIRealtimeProtocol {
       return;
     }
 
-    this.sendEvent(this.buildGaSessionUpdate());
-  }
-
-  protected buildGaSessionUpdate() {
     const cfg = this.config;
-    return {
+    this.sendEvent({
       type: "session.update" as const,
       session:
         cfg.gaSessionPolicy ??
@@ -145,7 +136,7 @@ export abstract class OpenAIRealtimeProtocol {
           vadThreshold: cfg.vadThreshold,
           voice: cfg.voice ?? "alloy",
         }),
-    };
+    });
   }
 
   protected usesAzureDeploymentRealtimeApi(): boolean {
@@ -207,10 +198,7 @@ export abstract class OpenAIRealtimeProtocol {
     this.manualResponseCreateEventId = null;
     this.responseCancelInFlight = false;
     this.manualResponseCancelEventId = null;
-    if (this.standaloneSpeechActive) {
-      this.standaloneSpeechActive = false;
-      this.standaloneSpeechEventId = null;
-    }
+    this.standaloneSpeechEventId = null;
     if (options.drain !== false) {
       this.drainResponseQueue();
     }
@@ -357,7 +345,7 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   protected flushStandaloneSpeech(): void {
-    if (this.responseBusy || this.standaloneSpeechActive) {
+    if (this.responseBusy || this.standaloneSpeechEventId !== null) {
       return;
     }
     const text = this.standaloneSpeechQueue.shift();
@@ -365,7 +353,6 @@ export abstract class OpenAIRealtimeProtocol {
       return;
     }
     const eventId = `openclaw-standalone-speech-${randomUUID()}`;
-    this.standaloneSpeechActive = true;
     this.standaloneSpeechEventId = eventId;
     this.responseCreateState = "in-flight";
     this.sendEvent({
@@ -415,34 +402,26 @@ export abstract class OpenAIRealtimeProtocol {
     this.outputAudioGeneration += 1;
     this.clearOutstandingMarks();
     this.assistantAudioItem = null;
-    this.responseActive = false;
-    this.responseCreateState = "idle";
-    this.manualResponseCreateEventId = null;
-    this.responseCancelInFlight = false;
-    this.manualResponseCancelEventId = null;
+    this.releaseResponseState({ drain: false });
     this.responseCreatePending = false;
     this.autoRespondSuppressedForManualResponse = false;
     this.continuingToolCallIds.clear();
     this.pendingToolCallIds.clear();
     this.completedToolCallIds.clear();
     this.standaloneSpeechQueue = [];
-    this.standaloneSpeechActive = false;
-    this.standaloneSpeechEventId = null;
   }
 
   protected createPlaybackMark(): string {
-    const sequence = this.nextMarkSequence;
-    this.nextMarkSequence += 1;
+    this.latestMarkSequence += 1;
+    const sequence = this.latestMarkSequence;
     if (this.oldestOutstandingMarkSequence === null) {
       this.oldestOutstandingMarkSequence = sequence;
     }
-    this.latestOutstandingMarkSequence = sequence;
     return `audio-${sequence}`;
   }
 
   protected clearOutstandingMarks(): void {
     this.oldestOutstandingMarkSequence = null;
-    this.latestOutstandingMarkSequence = null;
   }
 
   abstract submitToolResult(
@@ -451,5 +430,8 @@ export abstract class OpenAIRealtimeProtocol {
     options?: RealtimeVoiceToolResultOptions,
   ): void;
 
-  protected abstract sendEvent(event: unknown, detail?: string): void;
+  protected abstract sendEvent(
+    event: { type: string; [key: string]: unknown },
+    detail?: string,
+  ): void;
 }

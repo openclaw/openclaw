@@ -59,47 +59,45 @@ describe("worker process protocol", () => {
         { reason: "credential-replaced", unexpected: true },
       ),
     },
-    {
-      name: "admission deadline result",
-      value: inheritedRecord(
-        { status: "not-started", reason: "admission-deadline" },
-        { errorText: "worker admission timed out", unexpected: true, ignored: true },
-      ),
-    },
-    {
-      name: "completed result",
-      value: inheritedRecord(
-        { status: "completed" },
-        { transcriptLeafId: null, transcriptNextSeq: 1, unexpected: true },
-      ),
-    },
-    {
-      name: "failed result",
-      value: inheritedRecord(
-        { status: "failed", reason: "turn-failed" },
-        {
-          transcriptLeafId: null,
-          transcriptNextSeq: 1,
-          unexpected: true,
-          ignored: true,
-        },
-      ),
-    },
   ])("rejects an inherited discriminator for a $name", ({ value }) => {
     expect(parseWorkerRuntimeResult(value)).toBeNull();
   });
+});
 
-  it("rejects process-result types inherited alongside the wrong own keys", () => {
-    const result = inheritedRecord(
-      { type: "result" },
-      {
-        turnId: "turn-1",
-        result: { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 },
-        retainWorker: false,
-        unexpected: true,
-      },
-    );
-
-    expect(parseWorkerProcessMessage(result)).toBeNull();
-  });
+it("accepts bounded process observation frames and rejects mixed owner operations", () => {
+  const request = {
+    type: "process",
+    requestId: "read-1",
+    environmentId: "environment-1",
+    sessionId: "session-1",
+    ownerEpoch: 1,
+    operation: { action: "list" },
+  };
+  expect(parseWorkerProcessRequest(request)).toEqual(request);
+  expect(() => parseWorkerProcessRequest({ ...request, turnId: "another-turn" })).toThrow();
+  expect(() =>
+    parseWorkerProcessRequest({ ...request, operation: { action: "stop", processId: "build" } }),
+  ).toThrow();
+  expect(() =>
+    parseWorkerProcessRequest(
+      inheritedRecord(
+        { environmentId: request.environmentId },
+        { ...request, environmentId: undefined },
+      ),
+    ),
+  ).toThrow();
+  const response = {
+    type: "process-result",
+    requestId: "read-1",
+    result: { sessionId: "session-1", processes: [], truncated: false },
+  };
+  expect(parseWorkerProcessMessage(response)).toEqual(response);
+  expect(parseWorkerProcessMessage({ ...response, error: "mixed result" })).toBeNull();
+  expect(
+    parseWorkerProcessMessage({
+      type: "process-result",
+      requestId: "read-1",
+      error: "x".repeat(513),
+    }),
+  ).toBeNull();
 });

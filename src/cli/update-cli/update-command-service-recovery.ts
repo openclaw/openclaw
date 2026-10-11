@@ -1,9 +1,14 @@
-import { Writable } from "node:stream";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import {
+  readUpdateStateSchemaVersions,
+  resolveUpdateStateContentVersion,
+} from "../../infra/update-candidate-state.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   getUpdateRun,
@@ -13,6 +18,8 @@ import {
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createNullWriter } from "../../shared/null-writer.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   renderRestartDiagnostics,
@@ -39,6 +46,7 @@ import {
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
 import type { OriginalManagedServiceRuntime } from "./update-command-service-context-types.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   revalidateManagedGatewayServiceAfterUpdate,
   type PreManagedServiceStop,
@@ -48,11 +56,7 @@ import {
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
 
-const QUIET_SERVICE_STDOUT = new Writable({
-  write(_chunk, _encoding, callback) {
-    callback();
-  },
-});
+const QUIET_SERVICE_STDOUT = createNullWriter();
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   onGatewayStartAttempted?: () => void;
@@ -65,7 +69,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   timeoutMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
-  requirePluginHealth?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<{
   health: GatewayRestartSnapshot;
@@ -130,7 +133,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     timeoutMs: params.timeoutMs,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
-    requirePluginHealth: params.requirePluginHealth,
+    requirePluginHealth: false,
     env: params.env,
     supervisorKeepsAlive: true,
     settle: { probes: 12 },
@@ -161,31 +164,71 @@ export function formatPostUpdateGatewayRecoveryInstructions(
   const beforeVersion = normalizeOptionalString(result.before?.version);
   if (isPackageManagerUpdateMode(result.mode) && beforeVersion) {
     lines.push(
-      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${formatCliCommand("openclaw gateway install --force")}\`.`,
+      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${installCommand}\`.`,
     );
   }
   return lines;
 }
 
-export async function admitMigratedGatewayRecovery(
+export function refuseUnsettledDoctorRecovery(
+  result: UpdateRunResult,
+  root: string,
+  assertCurrent: () => void,
+): boolean {
+  // A failed or foreign receipt cannot inherit an earlier settlement or rollback refusal.
+  const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
+  if (
+    settlement &&
+    (settlement.exitCode !== 0 ||
+      settlement.command !== "settle doctor process groups" ||
+      settlement.cwd !== root)
+  ) {
+    assertCurrent();
+    result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    return true;
+  }
+  return false;
+}
+
+export async function admitInstalledGatewayRecovery(
   params: Pick<
     FinishUpdateParams,
     | "root"
     | "opts"
     | "shouldRestart"
+    | "coreAlreadyCurrent"
     | "preManagedServiceStop"
     | "packageTransaction"
     | "originalManagedServiceRuntime"
+    | "candidateSchemaVersions"
+    | "configSnapshot"
+    | "ownedManagedUpdateEnv"
+    | "packageUpdateNodeRunner"
+    | "updateStepTimeoutMs"
   >,
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<boolean> {
+  const root = result.root ?? params.root;
+  if (refuseUnsettledDoctorRecovery(result, root, assertCurrent)) {
+    return false;
+  }
+  const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
+  const databaseRollback = result.steps.findLast((step) => step.name === "database rollback");
+  // Current-core maintenance has no package rollback, but still owns its Doctor park.
+  const currentCore =
+    params.coreAlreadyCurrent === true &&
+    !params.packageTransaction &&
+    result.status === "error" &&
+    settlement !== undefined;
   if (
-    result.reason !== "state-migrated-no-rollback" ||
+    (!currentCore && result.reason !== "state-migrated-no-rollback") ||
+    (params.coreAlreadyCurrent && result.recovery?.serviceRestartSafe === false) ||
     params.originalManagedServiceRuntime ||
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
-    !result.steps.some((step) => step.name === "database rollback" && step.exitCode !== 0) ||
+    databaseRollback?.exitCode === 0 ||
+    (!settlement && !databaseRollback) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {
@@ -193,7 +236,6 @@ export async function admitMigratedGatewayRecovery(
   }
   assertCurrent();
   await params.packageTransaction?.assertRollbackSafe?.();
-  const root = result.root ?? params.root;
   const version = await readPackageVersion(root);
   const buildId = await readBuiltGatewayBuildId(root);
   assertCurrent();
@@ -201,6 +243,95 @@ export async function admitMigratedGatewayRecovery(
     throw new UpdateCommandRecoveryPendingError(
       "Migrated Gateway runtime identity is unavailable.",
     );
+  }
+  const candidate = params.candidateSchemaVersions;
+  if (candidate) {
+    const env =
+      params.ownedManagedUpdateEnv ??
+      params.preManagedServiceStop.serviceEnv ??
+      params.opts.run?.env ??
+      process.env;
+    const sharedPath = resolveOpenClawStateSqlitePath(env);
+    const inspect = async () => {
+      const databases = await readUpdateStateSchemaVersions({
+        stateDir: resolveStateDir(env),
+        config: params.configSnapshot.config,
+        env,
+        root,
+        nodeRunner: params.packageUpdateNodeRunner,
+        timeoutMs: params.updateStepTimeoutMs,
+      });
+      assertCurrent();
+      return databases.flatMap((database) => {
+        const observed = resolveUpdateStateContentVersion(database);
+        const expected = database.path === sharedPath ? candidate.state : candidate.agent;
+        return observed !== null && observed !== expected
+          ? [{ ...database, observed, expected }]
+          : [];
+      });
+    };
+    const startedAt = Date.now();
+    const recordMigrationRecovery = (exitCode: 0 | 1, message: string) => {
+      result.steps.push({
+        name: "gateway migration recovery",
+        command: "openclaw doctor --fix",
+        cwd: root,
+        durationMs: Date.now() - startedAt,
+        exitCode,
+        ...(exitCode === 0 ? { stdoutTail: message } : { stderrTail: message }),
+      });
+    };
+    try {
+      let pending = await inspect();
+      if (pending.length && pending.every((database) => database.observed < database.expected)) {
+        // Settlement proves the old Doctor stopped, not that its migrations finished.
+        // Doctor retains exclusive maintenance and verified backups for this forward repair.
+        const { runUpdateFinalizationDoctorInFreshProcess } =
+          await import("./update-command-fresh-doctor.js");
+        assertCurrent();
+        await withOwnedManagedUpdateEnv(env, () =>
+          runUpdateFinalizationDoctorInFreshProcess({
+            phase: "pre-plugin",
+            root,
+            opts: params.opts,
+            yes: params.opts.yes === true,
+            json: params.opts.json === true,
+            nodeRunner: params.packageUpdateNodeRunner,
+            timeoutMs: params.updateStepTimeoutMs,
+            assertCurrent,
+            onDoctorStep: (step) => result.steps.push(step),
+          }),
+        );
+        assertCurrent();
+        pending = await inspect();
+        if (!pending.length) {
+          recordMigrationRecovery(
+            0,
+            "Required database migrations completed before Gateway recovery.",
+          );
+        }
+      }
+      if (pending.length) {
+        throw new Error(
+          pending
+            .map(
+              (database) =>
+                `${database.path}: expected schema ${database.expected}, found ${database.observed}`,
+            )
+            .join("; "),
+        );
+      }
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      assertCurrent();
+      const message = `Run \`${formatCliCommand("openclaw doctor --fix", env)}\`, then \`${formatCliCommand("openclaw gateway start", env)}\`. Gateway migration recovery did not finish: ${formatErrorMessage(error)}.`;
+      result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+      recordMigrationRecovery(1, message);
+      defaultRuntime.error(message);
+      return false;
+    }
   }
   // Preserve later writes; the installed candidate's native startup still owns state admission.
   result.recovery = { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) };
@@ -284,10 +415,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     }
     await checkOriginal();
     const service = resolveGatewayService();
-    let expectedService: Pick<
-      PreManagedServiceStop,
-      "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-    > = original?.service ?? before;
+    let expectedService: OriginalManagedServiceRuntime["service"] = original?.service ?? before;
     const readCurrentService = async () => {
       assertCurrent();
       const state = await readGatewayServiceStateForUpdate(service, serviceEnv, params.timeoutMs, {
@@ -448,31 +576,23 @@ export async function compensateOriginalManagedService(
     throw new Error("Original service observation is missing.");
   }
   const { result, opts, preManagedServiceStop: before } = params;
-  const run = opts.run;
   // A is unchanged service code, not B's previous generation. Never reverse B
   // or its current state merely to compensate the stop of compatible A.
-  const service =
-    params.allowGatewayRestart === false
-      ? undefined
-      : await maybeRestartServiceAfterFailedMutableUpdate({
-          onGatewayStartAttempted: params.onGatewayStartAttempted,
-          updateRun: run,
-          preManagedServiceStop: before,
-          originalManagedServiceRuntime: original,
-          jsonMode: Boolean(opts.json),
-          timeoutMs: params.timeoutMs,
-          invocationCwd: params.invocationCwd,
-        });
+  const healthy =
+    params.allowGatewayRestart !== false &&
+    (await maybeRestartServiceAfterFailedMutableUpdate({
+      onGatewayStartAttempted: params.onGatewayStartAttempted,
+      updateRun: opts.run,
+      preManagedServiceStop: before,
+      originalManagedServiceRuntime: original,
+      jsonMode: Boolean(opts.json),
+      timeoutMs: params.timeoutMs,
+      invocationCwd: params.invocationCwd,
+    })) === "healthy";
   assertCurrent();
-  const healthy = service === "healthy";
-  const summary = [
-    healthy
-      ? `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`
-      : "Original managed service compensation was not verified; package and current state were retained.",
-    original.packageFingerprintWarning,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const summary = healthy
+    ? `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`
+    : "Original managed service compensation was not verified; package and current state were retained.";
   return {
     result: {
       ...result,

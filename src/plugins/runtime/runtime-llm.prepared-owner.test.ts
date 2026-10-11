@@ -147,6 +147,11 @@ it.each([
       }
       return;
     }
+    if (mode === "cancel-drain" && index === 0 && !finishing) {
+      // EOF can close the source before cancellation reaches its accepted work.
+      response.flushHeaders();
+      return;
+    }
     response.end(
       `data: ${JSON.stringify({
         id: "completion-lease-response",

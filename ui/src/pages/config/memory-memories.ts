@@ -14,8 +14,7 @@ registerSettingsEnglish();
 
 type SearchResult = MemorySearchResponse["results"][number];
 type SearchState =
-  | { kind: "idle" }
-  | { kind: "loading"; query: string }
+  | { kind: "idle" | "loading" }
   | ({ kind: "ready"; query: string } & MemorySearchResponse)
   | { kind: "error"; query: string; message: string };
 type DetailState =
@@ -64,8 +63,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
   @state() private openResultKey: string | null = null;
   @state() private details = new Map<string, DetailState>();
 
-  private searchRequest: object | null = null;
-
   protected override updated(changed: PropertyValues<this>) {
     if (
       changed.has("agentId") ||
@@ -78,7 +75,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
   }
 
   private resetSearch() {
-    this.searchRequest = null;
     this.query = "";
     this.searchState = { kind: "idle" };
     this.openResultKey = null;
@@ -92,10 +88,9 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
     if (!normalizedQuery || !client || !agentId || !this.methodAdvertised) {
       return;
     }
-    const request = { client, agentId, query: normalizedQuery };
-    this.searchRequest = request;
+    const request: SearchState = { kind: "loading" };
     this.query = normalizedQuery;
-    this.searchState = { kind: "loading", query: normalizedQuery };
+    this.searchState = request;
     this.openResultKey = null;
     this.details = new Map();
     try {
@@ -103,12 +98,12 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
         query: normalizedQuery,
         agentId,
       });
-      if (this.searchRequest !== request || this.agentId !== agentId || this.client !== client) {
+      if (this.searchState !== request || this.agentId !== agentId || this.client !== client) {
         return;
       }
       this.searchState = { kind: "ready", query: normalizedQuery, ...result };
     } catch (error) {
-      if (this.searchRequest !== request || this.agentId !== agentId || this.client !== client) {
+      if (this.searchState !== request || this.agentId !== agentId || this.client !== client) {
         return;
       }
       this.searchState = {

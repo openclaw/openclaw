@@ -1,4 +1,3 @@
-// Screen-recording payload helpers for node media commands.
 import * as path from "node:path";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,18 +9,8 @@ export {
   writeBase64ToFile as writeScreenSnapshotToFile,
 } from "./nodes-camera.js";
 
-/** Validated payload returned by `nodes screen record` RPC calls. */
-type ScreenRecordPayload = {
-  format: string;
-  base64: string;
-  durationMs?: number;
-  fps?: number;
-  screenIndex?: number;
-  hasAudio?: boolean;
-};
-
 /** Validate and normalize an unknown screen-record payload. */
-export function parseScreenRecordPayload(value: unknown): ScreenRecordPayload {
+export function parseScreenRecordPayload(value: unknown) {
   const obj = asRecord(value);
   const format = readStringValue(obj.format);
   const base64 = readStringValue(obj.base64);

@@ -1,4 +1,3 @@
-// ClawHub lifecycle facade: public API plus install/update coordination.
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { downloadClawHubSkillArchive } from "../../infra/clawhub-artifacts.js";
@@ -76,33 +75,21 @@ type UpdateClawHubSkillResult =
       warning?: string;
     };
 
-async function installRequestedSkillFromClawHub(
+async function installClawHubSkillReference(
   params: ClawHubInstallParams,
+  referenceKind: "requested" | "tracked",
 ): Promise<InstallClawHubSkillResult> {
   try {
-    const ref = parseRequestedClawHubSkillRef(params.slug);
+    const ref: ReturnType<typeof parseRequestedClawHubSkillRef> =
+      referenceKind === "tracked"
+        ? { slug: normalizeTrackedSkillSlug(params.slug) }
+        : parseRequestedClawHubSkillRef(params.slug);
     if (ref.requestedReference && params.version) {
       throw new Error("--version is not supported for skills-sh references.");
     }
     return await performClawHubSkillInstall({
       ...params,
-      slug: ref.slug,
-      ...(ref.ownerHandle ? { ownerHandle: ref.ownerHandle } : {}),
-      ...(ref.requestedReference ? { requestedReference: ref.requestedReference } : {}),
-      ...(ref.trustState ? { trustState: ref.trustState } : {}),
-    });
-  } catch (err) {
-    return { ok: false, error: formatErrorMessage(err) };
-  }
-}
-
-async function installTrackedSkillFromClawHub(
-  params: ClawHubInstallParams,
-): Promise<InstallClawHubSkillResult> {
-  try {
-    return await performClawHubSkillInstall({
-      ...params,
-      slug: normalizeTrackedSkillSlug(params.slug),
+      ...ref,
     });
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
@@ -199,11 +186,11 @@ export async function installSkillFromClawHub(
   >,
 ): Promise<InstallClawHubSkillResult> {
   if (params.clawManaged) {
-    return await installRequestedSkillFromClawHub(params);
+    return await installClawHubSkillReference(params, "requested");
   }
   return await withClawPackageLifecycleLease(
     { kind: "skill", source: "clawhub", ref: params.slug, workspace: params.workspaceDir },
-    () => installRequestedSkillFromClawHub(params),
+    () => installClawHubSkillReference(params, "requested"),
   );
 }
 
@@ -265,20 +252,25 @@ export async function updateSkillsFromClawHub(params: {
           }
           localPlan = local.plan;
         }
-        const installed = await installTrackedSkillFromClawHub({
-          workspaceDir: params.workspaceDir,
-          slug: tracked.slug,
-          ...(tracked.ownerHandle ? { ownerHandle: tracked.ownerHandle } : {}),
-          ...(tracked.requestedReference ? { requestedReference: tracked.requestedReference } : {}),
-          ...(tracked.trustState ? { trustState: tracked.trustState } : {}),
-          baseUrl: tracked.baseUrl,
-          force: true,
-          forceInstall: params.forceInstall,
-          logger: params.logger,
-          config: params.config,
-          onInstallPolicyWarning: params.onInstallPolicyWarning,
-          ...(params.force ? {} : { expectedClawHubState: localPlan ?? null }),
-        });
+        const installed = await installClawHubSkillReference(
+          {
+            workspaceDir: params.workspaceDir,
+            slug: tracked.slug,
+            ...(tracked.ownerHandle ? { ownerHandle: tracked.ownerHandle } : {}),
+            ...(tracked.requestedReference
+              ? { requestedReference: tracked.requestedReference }
+              : {}),
+            ...(tracked.trustState ? { trustState: tracked.trustState } : {}),
+            baseUrl: tracked.baseUrl,
+            force: true,
+            forceInstall: params.forceInstall,
+            logger: params.logger,
+            config: params.config,
+            onInstallPolicyWarning: params.onInstallPolicyWarning,
+            ...(params.force ? {} : { expectedClawHubState: localPlan ?? null }),
+          },
+          "tracked",
+        );
         if (!installed.ok && installed.replacementBlocked) {
           return {
             ok: false as const,
@@ -288,7 +280,6 @@ export async function updateSkillsFromClawHub(params: {
         }
         return installed;
       },
-      { required: true },
     );
     results.push(
       install.ok

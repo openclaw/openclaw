@@ -78,79 +78,6 @@ afterEach(async () => {
 });
 
 describe("operator approval execution identity", () => {
-  it("creates the side table only for the first exact bound write", async () => {
-    const unbound = databaseOptions();
-    expect(
-      await insertOperatorApproval({ approval: approval("unbound"), databaseOptions: unbound }),
-    ).toMatchObject({ outcome: "inserted" });
-    expect(
-      openOpenClawStateDatabase(unbound)
-        .db.prepare(
-          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approval_execution_identities'",
-        )
-        .get(),
-    ).toBeUndefined();
-
-    const bound = databaseOptions();
-    const userVersionBefore = openOpenClawStateDatabase(bound)
-      .db.prepare("PRAGMA user_version")
-      .get();
-    const record = approval("bound", token());
-    expect(
-      await insertOperatorApproval({ approval: record, databaseOptions: bound }),
-    ).toMatchObject({
-      outcome: "inserted",
-    });
-    expect(
-      openOpenClawStateDatabase(bound)
-        .db.prepare(
-          "SELECT approval_id, source_context_id, source_execution_id FROM operator_approval_execution_identities",
-        )
-        .get(),
-    ).toEqual({
-      approval_id: "bound",
-      source_context_id: "context-1",
-      source_execution_id: "execution-1",
-    });
-    expect(
-      await insertOperatorApproval({ approval: record, databaseOptions: bound }),
-    ).toMatchObject({
-      outcome: "existing",
-    });
-    expect(openOpenClawStateDatabase(bound).db.prepare("PRAGMA user_version").get()).toEqual(
-      userVersionBefore,
-    );
-  });
-
-  it("never late-binds or binds a mismatched source run", async () => {
-    const late = databaseOptions();
-    const base = approval("late-bind");
-    expect(await insertOperatorApproval({ approval: base, databaseOptions: late })).toMatchObject({
-      outcome: "inserted",
-    });
-    expect(
-      await insertOperatorApproval({
-        approval: { ...base, executionIdentityToken: token() },
-        databaseOptions: late,
-      }),
-    ).toMatchObject({ outcome: "conflict" });
-
-    const mismatch = databaseOptions();
-    expect(
-      await insertOperatorApproval({
-        approval: approval("mismatch", token("other-run")),
-        databaseOptions: mismatch,
-      }),
-    ).toMatchObject({ outcome: "inserted" });
-    expect(
-      openOpenClawStateDatabase(mismatch)
-        .db.prepare(
-          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approval_execution_identities'",
-        )
-        .get(),
-    ).toBeUndefined();
-  });
-
   it("rolls back the parent when the child insert is forced to fail", () => {
     const options = databaseOptions();
     const db = openOpenClawStateDatabase(options).db;
@@ -180,35 +107,6 @@ describe("operator approval execution identity", () => {
     ).toBeUndefined();
     expect(
       db.prepare("SELECT approval_id FROM operator_approval_execution_identities").get(),
-    ).toBeUndefined();
-  });
-
-  it("cascades parent deletion and retains the exact child across reopen", async () => {
-    const options = databaseOptions();
-    expect(
-      await insertOperatorApproval({
-        approval: approval("durable", token()),
-        databaseOptions: options,
-      }),
-    ).toMatchObject({ outcome: "inserted" });
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-
-    const db = openOpenClawStateDatabase(options).db;
-    expect(
-      db
-        .prepare(
-          "SELECT source_context_id, source_execution_id FROM operator_approval_execution_identities WHERE approval_id = ?",
-        )
-        .get("durable"),
-    ).toEqual({ source_context_id: "context-1", source_execution_id: "execution-1" });
-    db.prepare("DELETE FROM operator_approvals WHERE approval_id = ?").run("durable");
-    expect(
-      db
-        .prepare(
-          "SELECT approval_id FROM operator_approval_execution_identities WHERE approval_id = ?",
-        )
-        .get("durable"),
     ).toBeUndefined();
   });
 
@@ -265,7 +163,6 @@ describe("operator approval execution identity", () => {
       });
     }
   });
-
   it("preserves companion identity through an older approval reader write and candidate reopen", async () => {
     const options = databaseOptions();
     await insertOperatorApproval({

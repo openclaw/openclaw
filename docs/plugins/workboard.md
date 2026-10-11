@@ -1,15 +1,19 @@
 ---
-summary: "Optional dashboard workboard for agent-owned cards and session handoff"
+summary: "Optional Workboard boards for agent-owned cards and rule-based session views"
 read_when:
   - You want a Kanban-style workboard in the Control UI
   - You are enabling or disabling the bundled Workboard plugin
   - You want to track planned agent work without an external project manager
+  - You want sessions grouped by session status, observer health, and pull-request state
 title: "Workboard plugin"
+doc-schema-version: 1
 ---
 
 The Workboard plugin adds an optional Kanban-style board to the
 [Control UI](/web/control-ui): agent-sized work cards, assignment to agents,
-and a link back to the card's task, run, and Control UI session.
+and a link back to the card's task, run, and Control UI session. A separate
+**Sessions board** groups existing sessions into editable columns using rules over
+Gateway-owned facts.
 
 Workboard is intentionally small: it tracks local operating work for one
 OpenClaw Gateway. It is not a replacement for GitHub Issues, Linear, Jira, or
@@ -67,8 +71,30 @@ openclaw plugins disable workboard
 
 ## Board appearance
 
+While Workboard is open, its sidebar entry expands to show both Cards and
+Sessions boards, with the open board highlighted. Select a nested board to open it.
+Sidebar labels use the board name; boards with the same name include their kind
+in parentheses, such as **Planning (cards)** and **Planning (sessions)**.
+Boards you create in the Control UI are pinned in the sidebar immediately.
+Right-click a board, or focus its link and press **Shift+F10** or the context-menu
+key, to **Pin to sidebar**, **Unpin from sidebar**, or **Delete board…**.
+Deleting asks for confirmation naming the board and requires write access.
+The default board and boards that still contain cards cannot be deleted.
+Deleting the open board returns to the Workboard root page. You can also use
+**Customize** to manage pins; removed pins stay removed.
+Pinned boards remain available as top-level entries when you leave Workboard,
+and you can drag them to reorder them.
+
+Choose **New board**, then **Cards** (the default) or **Sessions**. A Sessions
+board starts with the columns described below. A board's kind is permanent;
+create another board to use the other kind. Existing boards remain Cards boards.
+
 Use **Edit board** to change a board's name, icon, and color. **Reset to default**
 clears the icon and color when you save; canceling leaves the saved board unchanged.
+For Sessions boards, the same dialog also edits column labels, colors,
+descriptions, column order, and the fallback column. Ask the Board agent to edit
+column rules. Saving only the name, icon, or color leaves the saved columns unchanged,
+including column edits made by another operator while the dialog was open.
 
 For `workboard.boards.upsert`, omitting `icon` or `color`, passing `null`, or passing
 an empty string preserves the existing value, including for older clients. To clear
@@ -78,6 +104,163 @@ a replacement value for them. Other fields retain their ordinary update behavior
 `clearAppearance` must be an array containing only `"icon"` and `"color"`; an empty
 array changes nothing. Clients using this argument need a Gateway version that
 supports explicit appearance clearing; older Gateways do not implement this reset.
+
+Card lists share one prepared, claim-token-redacted snapshot per board scope and
+card revision. `workboard.cards.list` returns `revision`; repeat the same query
+with `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+The revision includes the store epoch and, for scoped queries, the normalized
+`boardId`. Reconnects request a full snapshot. `plugin.workboard.changed` includes
+an event `revision` and a separate `cardsRevision`: session-fact notifications
+advance the event sequence without invalidating unchanged cards.
+
+## Sessions board
+
+Use a Sessions board to see where your conversations stand without creating
+cards. By default, it includes sessions from all configured agents with activity
+in the last 72 hours and excludes archived sessions, automation (cron) sessions,
+system sessions, dock conversations, and each agent's home session. Subagent sessions remain included.
+Set `scope.includeAutomation: true` to include automation and system sessions, or
+`scope.includeHome: true` to include home sessions. The Board agent can set these
+options. Existing boards use the same defaults without a migration. Each session appears in
+exactly one column. Open a tile to continue its conversation; the tile also shows
+its agent, run state, observer headline when available, pull requests, and recent
+activity. Message previews are plain text: Markdown formatting and HTML are removed,
+link labels are retained, and whitespace is collapsed before the 400-character limit.
+Tiles link up to four pull requests, ordered by open, draft, merged,
+then closed state, with a count for any additional pull requests. The agent filter
+narrows the displayed sessions without changing the
+saved board scope.
+
+Dock conversations stay excluded even when automation is included.
+
+**People filter:** Choose **Everyone** (the default), **Involving me**, or a person
+beside the agent filter. Involving me shows sessions you own or previously prompted;
+a person selects their profile associations. The choice is remembered per viewer,
+device, Gateway, and board. It does not change the shared board, rules, or
+the Board agent. API clients can pass `view: { involvingMe?: boolean,
+involvingProfileId?: string, includePeople?: boolean }` to
+`workboard.sessionsBoard.read`; `includePeople` returns the people facet for the picker.
+
+Columns are rules over Gateway-owned run state, observer health, and
+pull-request state. Run state comes from the live run registry and queued inputs;
+a saved `running` status without an active run is idle. Health comes from the Gateway session observer: live digests
+for sessions someone is watching in the Control UI, and a terminal digest when an
+observed run ends. Sessions nobody watches have no health, so they match only run
+and pull-request rules. Reads follow the current caller's session visibility; board specs and
+pins follow the Gateway's trusted-operator model. Interactive edits are admitted
+under the caller's live authority immediately before the write. Draft and
+incognito sessions never enter a Sessions board or its facts reads.
+
+New Sessions boards use these columns, in this order:
+
+| Column      | Rule                                                              |
+| ----------- | ----------------------------------------------------------------- |
+| Needs input | Observer health is `waiting-on-user`.                             |
+| Stuck       | Observer health is `stuck` or `failed`, or run state is `failed`. |
+| Working     | Run is active.                                                    |
+| In review   | A pull request is open or draft.                                  |
+| Merged      | A pull request is merged.                                         |
+| Done        | Observer health is `done`. This is also the fallback column.      |
+
+Placement uses an operator pin when its column still exists, then the first
+matching column in saved order, then the fallback column. `match` accepts one
+rule or an any-of array such as Stuck's
+`[{health:["stuck","failed"]},{run:["failed"]}]`, with every field within a rule
+required to match. Values within a field are alternatives. Column names
+and descriptions help people understand the board; `match` rules decide placement.
+
+Drag a session into another column, or ask the Board agent to move it, to pin
+its placement. Pins remain in effect when session facts change. If a pinned
+column is removed, the board applies its rules again. Tile tooltips distinguish
+**by rule** and **pinned**.
+
+Facts update live from session changes, with automatic board rereads at most once
+every five seconds. Category-only session updates and card-only changes do not
+reload Sessions boards. The Gateway selects the authorized roster once and reuses
+immutable facts for unchanged sessions. The board keeps one frozen snapshot per
+board and people view, replacing only rows whose facts changed. Live run state,
+background previews, and time-dependent subagent state remain current; profile,
+configuration, topology, and access changes refresh authorization. Age-window and
+unavailable-PR retry deadlines still refresh the snapshot. Tool callers obtain
+their own caller-scoped roster; sharing never expands session visibility.
+`workboard.sessionsBoard.read` returns a `revision`; repeat the same query with
+`{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
+Reconnects and view changes request a full snapshot. The Workboard change event's
+`sessionsRevision` advances for board edits, operator pins, and session fact
+invalidations independently of `cardsRevision`.
+
+Pull-request facts come from the Gateway's shared PR owner, independently of
+which sessions appear in a Control UI sidebar. Reads use prepared Gateway facts
+without waiting for Git or pull-request requests. Missing snapshots load through
+that owner's bounded background loader and announce a board change when ready.
+If PR facts become unavailable or GitHub rate limits requests, the Gateway's
+selected-facts owner retains the last ready PR list for board cards and column
+rules while updating run state and health. Unavailable PR reads retry per session, starting after one minute
+and doubling to a 15-minute maximum; a successful read resets the delay.
+Redaction changes omit retained PR titles until fresh source text is available,
+without changing known PR states or their retry schedule.
+An inline warning distinguishes stale PR facts from facts not loaded yet and
+identifies GitHub rate limiting. A failed facts read keeps the last known facts
+and placement; sessions with no known facts use the fallback column with reason
+`facts-unavailable`. A session whose available facts match no rule also uses that
+reason while its pull-request facts are unknown. Opening a board starts any needed
+background refresh. Shared snapshots reuse prepared facts until a publication,
+redaction change, board age-window expiry, or a pull-request retry becomes due; failure fallback
+retains the last known facts. If redaction rules change during a facts outage,
+the board discards retained text while keeping known run, health, and PR states.
+
+When the Control UI host supports a session dock, **Board agent** opens a
+conversation beside the board. Its first use creates and saves a dedicated
+conversation named **Sessions board · &lt;board name&gt;**. This is a dock conversation:
+it stays out of session lists, Involving me views, and people counts. Open it from
+the **Board agent** button. Its human creator, sharing, and sandbox rules are the
+same as an ordinary conversation.
+
+For boards with an older Board agent conversation, the next **Board agent** use
+creates a new dock conversation and saves its reference. The old conversation
+keeps its history and remains an ordinary session that you can archive; its
+creation surface and provenance are not rewritten.
+
+The Board agent is the only model used by the board, invoked on demand to change
+columns, rules, scope, or pins using these tools:
+
+| Tool                              | Arguments and behavior                                                                                                        |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `workboard_sessions_board_read`   | Optional `boardId`; returns board, columns, sessions, and any warning.                                                        |
+| `workboard_sessions_board_update` | Optional `boardId`, plus `columns` or `scope`. `columns` replaces the complete ordered list; retain ids when renaming labels. |
+| `workboard_sessions_board_move`   | Optional `boardId`, required `sessionKey` and `columnId`; pins that session's placement.                                      |
+
+These three tools are available to every agent once the plugin is enabled; unlike
+the card tools they need no `tools.allow` entry, so the Board agent works out of
+the box. Omit `boardId` only when exactly one Sessions board exists. The dock attaches page
+context to the conversation, but plugin tools do not receive that context as a
+structured argument. With several Sessions boards, the agent must pass the board
+id from that context or from `workboard_boards`.
+
+Specs allow 2–12 columns with unique lowercase slug ids (1–48 characters), labels
+(1–60), and descriptions (1–400). Exactly one column must have `fallback: true`.
+Optional colors use the board palette. `scope` accepts `agentIds`,
+`includeArchived`, `includeAutomation`, `includeHome`, and a positive `maxAgeHours`.
+The include options default to false. Rules can match `health`, `run`
+(`active`, `idle`, `failed`), `pullRequest` (`none`, `open`, `draft`, `merged`,
+`closed`), and `archived`. Unknown pull-request state does not count as `none`.
+
+The Gateway methods are `workboard.sessionsBoard.read` (`operator.read`) and
+`workboard.sessionsBoard.update` and `.move` (`operator.write`). All require
+`boardId`. Update takes a `patch` object with the spec fields, including the
+dock's `agentSessionKey`; move additionally requires `sessionKey` and `columnId`.
+Create with `workboard.boards.upsert` and `kind: "sessions"`, or with
+`workboard_board_create`. Changing an existing board's kind is rejected.
+
+Workboard stores board specs and operator pins in SQLite. Session status,
+observer digests, and pull-request state remain owned by the Gateway. On plugin
+startup, older automatic placements are removed; operator pins are preserved.
+Boards whose rules still match the previous defaults receive the new run-based
+rules; only the old default column order is reordered. Customized rules, labels,
+descriptions, and custom column order are preserved.
+Sessions boards never hold cards: card creation, capture, and dispatch reject a
+Sessions board destination. Deleting one removes its pins without deleting any
+sessions or its Board agent conversation.
 
 ## Card fields
 
@@ -109,17 +292,25 @@ notification kinds are ignored until both surfaces support them. They are never
 rewritten into another valid state.
 
 The open Workboard tab updates from `plugin.workboard.changed` invalidations. Each
-event contains only a store epoch and revision. The UI then rereads canonical
+event contains only a store epoch and revision. The UI then rereads stored
 cards through the normal `operator.read` RPC. Multiple revisions coalesce into
 one follow-up read. Workboard defers that read while a card is being dragged,
 edited, or written, then resumes after the local interaction finishes. A
-reconnect always performs a canonical reload. There is no routine full-card
+reconnect always performs a reload from the store. There is no routine full-card
 poll, and **Refresh** remains available as manual recovery.
+
+The Gateway shares one immutable `workboard.cards.list` payload per normalized
+board filter at each store revision, including concurrent reads. Card and board
+writes invalidate it before the next read; the existing change service also
+invalidates it when it observes a commit from another SQLite connection.
+Each response still includes all board summaries, so a change to another board
+invalidates the payload too. Claim tokens remain redacted, and the RPC response
+shape is unchanged.
 
 When more than one board exists, the toolbar includes a **Board** filter backed
 by persisted board metadata rather than only the currently visible cards. Empty
 and archived boards therefore remain selectable. Cards without an explicit
-board id belong to the canonical `default` board. Each board has a canonical
+board id belong to the primary `default` board. Each board has a primary
 `/workboard/<boardId>` page that can be bookmarked, shared, or pinned in the
 sidebar. The previously shipped `/workboard?board=<boardId>` form remains a
 compatibility alias and redirects to that page while preserving other query
@@ -130,8 +321,10 @@ owns its AI-categorization prompt, model, schedule, and run history. The board
 page shows an **Automation** link when that reference is present. Matching
 session events nudge the attached automation through the active Workboard service's
 scheduler authority, including after the worker's tool authority closes, with events
-for the same board coalesced for 60 seconds. The automation's schedule remains
-the backstop. Disabled and auto-disabled automations are never nudged. Deleting
+for the same board coalesced for 60 seconds. If an attempt ends while its run is
+still active, the lifecycle sweep nudges the automation when it records the terminal
+outcome. The automation's schedule remains the backstop. Disabled and auto-disabled
+automations are never nudged. Deleting
 the board does not delete or otherwise mutate the
 operator-owned automation job.
 
@@ -162,6 +355,29 @@ plugin using the linked run and session lifecycle (see
 
 ## Agent tools
 
+The card tools below are optional plugin tools. Enabling Workboard exposes only
+the three Sessions board tools to agents; an agent that should create, claim, or
+complete cards needs the card tools allowed for it. Add the plugin id to the
+agent's tool policy to allow every Workboard tool, or list individual tool names
+or a pattern such as `workboard_*`:
+
+```json5
+{
+  agents: {
+    entries: {
+      main: {
+        tools: { alsoAllow: ["workboard"] },
+      },
+    },
+  },
+}
+```
+
+Without that entry the agent sees only `workboard_sessions_board_*` and cannot
+manage cards. Workers that Workboard starts from a card (**Start** or dispatch)
+do not need it: each worker run is granted `workboard_heartbeat`,
+`workboard_complete`, and `workboard_block` for its card.
+
 | Tool                                                                                                                                             | Purpose                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `workboard_list`                                                                                                                                 | List compact cards with claim/diagnostic state; optional board filter.                                                                                                                    |
@@ -175,6 +391,7 @@ plugin using the linked run and session lifecycle (see
 | `workboard_attachment_add` / `workboard_attachment_read` / `workboard_attachment_delete`                                                         | Store small card attachments in plugin SQLite state, index on the card, expose in worker context.                                                                                         |
 | `workboard_worker_log` / `workboard_protocol_violation`                                                                                          | Record worker log lines and block a card when an automated worker stops without calling `workboard_complete`/`workboard_block`.                                                           |
 | `workboard_board_create` / `workboard_board_archive` / `workboard_board_delete`                                                                  | Manage persisted board metadata (display name, description, archive state, default workspace).                                                                                            |
+| `workboard_sessions_board_read` / `workboard_sessions_board_update` / `workboard_sessions_board_move`                                            | Read Sessions board placements, edit columns, rules, or scope, or pin a session in a column.                                                                                              |
 | `workboard_runs`                                                                                                                                 | Return the persisted run-attempt history for a card.                                                                                                                                      |
 | `workboard_specify`                                                                                                                              | Turn a rough triage/backlog card into a clarified `todo` card; records the spec summary on the card.                                                                                      |
 | `workboard_decompose`                                                                                                                            | Fan a parent orchestration card into linked children, inheriting board/tenant metadata; can complete the parent with a created-card manifest.                                             |
@@ -265,7 +482,7 @@ status are never selected for worker starts (they can still be affected by the
 data side of dispatch: stale-claim cleanup, dependency promotion, timeout
 cleanup).
 
-Session keys are deterministic per board/card, so repeated dispatches route
+Session keys are fixed per board/card, so repeated dispatches route
 back to the same worker lane instead of creating unrelated sessions:
 
 - Assigned cards: `agent:<agentId>:subagent:workboard-<boardId>-<cardId>`
@@ -312,9 +529,15 @@ openclaw workboard dispatch [--board <id>] [--json]
 `list` text output hides archived cards by default (`--include-archived`
 overrides). `--json` always includes archived cards, matching the full-card
 contract used by existing scripts. `show` and `move` accept an unambiguous id
-prefix. `list`, `create`, `show`, and `move` always read/write local plugin
-state directly. Only `dispatch` calls the running Gateway, with the fallback
-described above.
+prefix. `list`, `create`, `show`, and `move` access local plugin state directly.
+Stop the Gateway before local `create` or `move`; while it is running, use the
+Control UI or Gateway RPC for mutations. Only `dispatch` calls the running
+Gateway, with the fallback described above. Data-only dispatch also requires the
+Gateway to be stopped; a connection error alone does not establish that it stopped.
+Plugin loading can also initialize or upgrade the local database before choosing
+the subcommand. Do that preparation with the Gateway stopped, including when the
+requested command is `list` or `show`. Use the Control UI or Gateway RPC for online
+access when local state still needs preparation.
 
 See [Workboard CLI](/cli/workboard) for full flags, JSON output, Gateway
 fallback behavior, id-prefix handling, dispatch selection rules, and
@@ -366,11 +589,17 @@ If an active linked session stops reporting recent activity, Workboard marks the
 `stale` and stores that as metadata until the lifecycle clears it.
 
 Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
-not depend on an open browser tab. Agent and subagent completion hooks persist
-terminal outcomes immediately. A bounded session sweep runs once per minute to
-reconcile active, idle, missing, and stale session state. Each store mutation
-emits the normal `plugin.workboard.changed` invalidation, so an open Workboard tab
-reloads the canonical card instead of writing its own lifecycle projection.
+not depend on an open browser tab. Subagent completion hooks persist terminal
+outcomes immediately. Agent attempt hooks consult the linked session state:
+finishing a model attempt does not move a card into `review` or `blocked` while
+its run is still active. A bounded session sweep runs once per minute to reconcile
+terminal, active, idle, missing, and stale session state. Each store mutation emits
+the normal `plugin.workboard.changed` invalidation, so an open Workboard tab reloads
+the stored card instead of writing its own lifecycle projection.
+
+Incognito sessions remain absent from session discovery. Explicitly linked
+Incognito cards use authorized exact-session metadata reads, without derived
+titles or message previews, to reconcile their terminal outcomes.
 
 While a card is in an active work state, Workboard follows the linked session:
 
@@ -442,12 +671,15 @@ Diagnostics are computed from local card metadata. Built-in checks flag:
 
 ## Permissions
 
-Gateway RPC methods live under `workboard.*`:
+Gateway RPC methods live under `workboard.*`. Sessions board methods use the same
+read/write scopes as boards:
 
 | Scope            | Methods                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `operator.read`  | `cards.list`, `cards.export`, `cards.diagnostics`, attachment list/get, notification event reads, `boards.list`, `cards.stats`, `cards.runs`                                                                                                                                                                                                                                                            |
+| `operator.read`  | `sessionsBoard.read`                                                                                                                                                                                                                                                                                                                                                                                    |
 | `operator.write` | `cards.diagnostics.refresh`, create/captureSession/update/move/delete/comment/link/linkDependency/proof/artifact, attachment add/delete, worker log, protocol violation, claim/heartbeat/release/promote/reassign/reclaim/complete/block/unblock/start, `cards.dispatch`, `cards.bulk`, archive, `boards.upsert`/`archive`/`delete`, `cards.specify`/`decompose`, notification subscribe/delete/advance |
+| `operator.write` | `sessionsBoard.update`, `sessionsBoard.move`                                                                                                                                                                                                                                                                                                                                                            |
 
 `workboard.cards.update`, `workboard.cards.move`, `workboard.cards.archive`, and
 `workboard.cards.delete` accept an optional `expectedUpdatedAt` request field.
@@ -475,14 +707,31 @@ protocol state, and subscriptions all live in Workboard tables (not
 plugin key-value entries). A card export preserves the board narrative
 without inlining attachment blob contents.
 
+Sessions boards add optional `kind` and `sessions_spec` columns to
+`workboard_boards`, plus `workboard_session_placements` for operator pins.
+Existing board rows are not backfilled;
+an absent kind still means a Cards board. Rolling back to a release without Sessions
+boards shows each Sessions board as an empty Cards board and ignores the placement
+table; cards created against it there are rejected once the newer release runs again. Session transcripts and the Board agent
+conversation remain in the normal session store.
+
 SQLite opening, queries, and transactions run in a background database worker.
 Disabling or reloading the plugin drains admitted storage work before closing
 its connections.
 
-Installations that used Workboard in the `.28` release can run
-`openclaw doctor --fix` to migrate the shipped legacy plugin-state namespaces
-(`workboard.cards`, `workboard.boards`, `workboard.notify`, and, if present,
-`workboard.attachments`) into the relational database.
+Workboard instances invalidate cached card lists and board revisions using the
+physical database's in-process writer receipts, including commits through sibling
+instances. Card-list reuse checks that receipt; an unsettled receipt leaves the
+read uncached. A read overlapping a mutation can return its older snapshot; the
+next request observes the writer receipt and reloads it. Change notifications use owner publications;
+there is no timer polling SQLite for writes from other processes. If a worker
+reply fails after a possible commit, the owner discards cached facts and rereads
+them on the next use without replaying the mutation.
+
+Installations with retained pre-July 2026 Workboard plugin-state KV data must
+upgrade through OpenClaw `2026.9.7` and run `openclaw doctor --fix` before upgrading
+to the latest version. Current Doctor reports this requirement without changing
+the legacy rows; current relational SQLite stores remain supported.
 
 ## Troubleshooting
 

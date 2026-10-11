@@ -28,23 +28,6 @@ export type CommandResolution = {
   blockedWrapper?: string;
 };
 
-function parseFirstToken(command: string): string | null {
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const first = trimmed[0];
-  if (first === '"' || first === "'") {
-    const end = trimmed.indexOf(first, 1);
-    if (end > 1) {
-      return trimmed.slice(1, end);
-    }
-    return trimmed.slice(1);
-  }
-  const match = /^[^\s]+/.exec(trimmed);
-  return match ? match[0] : null;
-}
-
 function tryResolveRealpath(filePath: string | undefined): string | undefined {
   return filePath ? (safeRealpathSync(filePath) ?? undefined) : undefined;
 }
@@ -57,11 +40,7 @@ function buildExecutableResolution(
     useCache?: boolean;
   },
 ): ExecutableResolution {
-  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
-    cwd: params.cwd,
-    env: params.env,
-    useCache: params.useCache,
-  });
+  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, params);
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
@@ -71,51 +50,6 @@ function buildExecutableResolution(
     resolvedRealPath,
     executableName,
   };
-}
-
-function buildCommandResolution(params: {
-  rawExecutable: string;
-  policyRawExecutable?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  useCache?: boolean;
-  effectiveArgv: string[];
-  wrapperChain: string[];
-  policyBlocked: boolean;
-  blockedWrapper?: string;
-}): CommandResolution {
-  const execution = buildExecutableResolution(params.rawExecutable, params);
-  const policy = params.policyRawExecutable
-    ? buildExecutableResolution(params.policyRawExecutable, params)
-    : execution;
-  return {
-    kind: "command",
-    execution,
-    policy,
-    effectiveArgv: params.effectiveArgv,
-    wrapperChain: params.wrapperChain,
-    policyBlocked: params.policyBlocked,
-    blockedWrapper: params.blockedWrapper,
-  };
-}
-
-export function resolveCommandResolution(
-  command: string,
-  cwd?: string,
-  env?: NodeJS.ProcessEnv,
-): CommandResolution | null {
-  const rawExecutable = parseFirstToken(command);
-  if (!rawExecutable) {
-    return null;
-  }
-  return buildCommandResolution({
-    rawExecutable,
-    effectiveArgv: [rawExecutable],
-    wrapperChain: [],
-    policyBlocked: false,
-    cwd,
-    env,
-  });
 }
 
 export function resolveCommandResolutionFromArgv(
@@ -131,17 +65,20 @@ export function resolveCommandResolutionFromArgv(
   if (!rawExecutable) {
     return null;
   }
-  return buildCommandResolution({
-    rawExecutable,
-    policyRawExecutable: plan.policyArgv[0]?.trim(),
+  const resolutionOptions = { cwd, env, useCache: options?.useCache };
+  const execution = buildExecutableResolution(rawExecutable, resolutionOptions);
+  const policyRawExecutable = plan.policyArgv[0]?.trim();
+  return {
+    kind: "command",
+    execution,
+    policy: policyRawExecutable
+      ? buildExecutableResolution(policyRawExecutable, resolutionOptions)
+      : execution,
     effectiveArgv,
     wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
-    useCache: options?.useCache,
-    cwd,
-    env,
-  });
+  };
 }
 
 function resolveExecutableCandidatePathFromResolution(
@@ -199,7 +136,7 @@ export function resolveExecutionTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.kind === "command" ? resolution.execution : resolution,
+    resolveExecutionTargetResolution(resolution),
     cwd,
   );
 }
@@ -208,10 +145,7 @@ export function resolveExecutionTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
-  return resolveExecutableTrustPath(
-    resolution?.kind === "command" ? resolution.execution : resolution,
-    cwd,
-  );
+  return resolveExecutableTrustPath(resolveExecutionTargetResolution(resolution), cwd);
 }
 
 export function resolvePolicyTargetCandidatePath(
@@ -219,7 +153,7 @@ export function resolvePolicyTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.kind === "command" ? resolution.policy : resolution,
+    resolvePolicyTargetResolution(resolution),
     cwd,
   );
 }
@@ -228,17 +162,7 @@ export function resolvePolicyTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
-  return resolveExecutableTrustPath(
-    resolution?.kind === "command" ? resolution.policy : resolution,
-    cwd,
-  );
-}
-
-export function resolveApprovalAuditCandidatePath(
-  resolution: CommandResolution | null,
-  cwd?: string,
-): string | undefined {
-  return resolvePolicyTargetCandidatePath(resolution, cwd);
+  return resolveExecutableTrustPath(resolvePolicyTargetResolution(resolution), cwd);
 }
 
 export function resolveApprovalAuditTrustPath(
@@ -247,11 +171,6 @@ export function resolveApprovalAuditTrustPath(
 ): string | undefined {
   return resolvePolicyTargetTrustPath(resolution, cwd);
 }
-
-/** @deprecated Use resolveExecutionTargetCandidatePath. */
-export const resolveAllowlistCandidatePath = resolveExecutionTargetCandidatePath;
-
-export const resolvePolicyAllowlistCandidatePath = resolvePolicyTargetCandidatePath;
 
 const LEGACY_HASHED_ARG_PATTERN_PREFIX = "sha256:argv:";
 const CWD_BOUND_HASHED_ARG_PATTERN_PREFIX = "sha256:cwd-argv:v1:";
@@ -376,14 +295,12 @@ function matchesExecutableBasenamePattern(
   if (hasPathSelector(resolution.rawExecutable)) {
     return false;
   }
-  const candidates = new Set<string>();
-  if (resolution.executableName) {
-    candidates.add(resolution.executableName);
-  }
-  if (resolution.resolvedPath) {
-    candidates.add(path.basename(resolution.resolvedPath));
-  }
-  return [...candidates].some((candidate) => matchesExecAllowlistPattern(pattern, candidate));
+  return Boolean(
+    (resolution.executableName &&
+      matchesExecAllowlistPattern(pattern, resolution.executableName)) ||
+    (resolution.resolvedPath &&
+      matchesExecAllowlistPattern(pattern, path.basename(resolution.resolvedPath))),
+  );
 }
 
 export function matchAllowlist(
@@ -409,9 +326,6 @@ export function matchAllowlist(
     return null;
   }
   const trustPath = resolution.resolvedRealPath?.trim() || resolution.resolvedPath;
-  if (!trustPath) {
-    return null;
-  }
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   let cwdBoundHash: string | undefined;
   for (const entry of entries) {
@@ -457,73 +371,41 @@ export function matchAllowlist(
   return pathOnlyMatch;
 }
 
-export type ExecArgvToken =
-  | {
-      kind: "empty";
-      raw: string;
-    }
-  | {
-      kind: "terminator";
-      raw: string;
-    }
-  | {
-      kind: "stdin";
-      raw: string;
-    }
-  | {
-      kind: "positional";
-      raw: string;
-    }
-  | {
-      kind: "option";
-      raw: string;
-      style: "long";
-      flag: string;
-      inlineValue?: string;
-    }
-  | {
-      kind: "option";
-      raw: string;
-      style: "short-cluster";
-      cluster: string;
-      flags: string[];
-    };
-
 /**
  * Tokenizes a single argv entry into a normalized option/positional model.
  * Consumers can share this model to keep argv parsing behavior consistent.
  */
-export function parseExecArgvToken(raw: string): ExecArgvToken {
+export function parseExecArgvToken(raw: string) {
   if (!raw) {
-    return { kind: "empty", raw };
+    return { kind: "empty" as const, raw };
   }
   if (raw === "--") {
-    return { kind: "terminator", raw };
+    return { kind: "terminator" as const, raw };
   }
   if (raw === "-") {
-    return { kind: "stdin", raw };
+    return { kind: "stdin" as const, raw };
   }
   if (!raw.startsWith("-")) {
-    return { kind: "positional", raw };
+    return { kind: "positional" as const, raw };
   }
   if (raw.startsWith("--")) {
     const eqIndex = raw.indexOf("=");
     if (eqIndex > 0) {
       return {
-        kind: "option",
+        kind: "option" as const,
         raw,
-        style: "long",
+        style: "long" as const,
         flag: raw.slice(0, eqIndex),
         inlineValue: raw.slice(eqIndex + 1),
       };
     }
-    return { kind: "option", raw, style: "long", flag: raw };
+    return { kind: "option" as const, raw, style: "long" as const, flag: raw };
   }
   const cluster = raw.slice(1);
   return {
-    kind: "option",
+    kind: "option" as const,
     raw,
-    style: "short-cluster",
+    style: "short-cluster" as const,
     cluster,
     flags: cluster.split("").map((entry) => `-${entry}`),
   };

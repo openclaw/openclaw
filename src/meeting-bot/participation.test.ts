@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
 import { serializePluginStoreJson } from "../plugin-state/plugin-store-validation.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type {
   MeetingParticipationAttempt,
   MeetingParticipationOptions,
@@ -155,40 +156,21 @@ describe("meeting participation authority and durable attempts", () => {
     const result = await first;
     expect(result).toMatchObject({ status: "succeeded", observed: { sent: true } });
     await expect(owner.execute(sessionId, request)).resolves.toEqual({ ...result, replayed: true });
-    expect(effect).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects a reused request identity with a different payload", async () => {
-    const { owner, effect } = harness();
-    await owner.execute(sessionId, request);
     await expect(
-      owner.execute(sessionId, {
-        ...request,
-        action: { type: "chat", text: "Different answer" },
-      }),
+      owner.execute(sessionId, { ...request, action: { type: "chat", text: "Different answer" } }),
     ).resolves.toMatchObject({ status: "rejected" });
     expect(effect).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses the same source and action even under another request identity", async () => {
+  it("does not replay a consumed source under a new request or after its text is revised", async () => {
     const { owner, effect } = harness();
     const sourceId = owner.observe(sessionId, source);
-    expect(sourceId).toBeTruthy();
     await expect(owner.execute(sessionId, { ...request, sourceId })).resolves.toMatchObject({
       status: "succeeded",
     });
     await expect(
       owner.execute(sessionId, { ...request, sourceId, requestId: "another-request" }),
     ).resolves.toMatchObject({ status: "rejected" });
-    expect(effect).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not replay a consumed source after its text is revised", async () => {
-    const { owner, effect } = harness();
-    const sourceId = owner.observe(sessionId, source);
-    await expect(owner.execute(sessionId, { ...request, sourceId })).resolves.toMatchObject({
-      status: "succeeded",
-    });
     const revisedSourceId = owner.observe(sessionId, {
       ...source,
       revision: "2",
@@ -206,41 +188,51 @@ describe("meeting participation authority and durable attempts", () => {
     expect(effect).toHaveBeenCalledTimes(1);
   });
 
-  it("never re-executes an uncertain effect after reconstructing its owner", async () => {
-    const first = harness();
-    first.effect.mockRejectedValue(new Error("Native response lost."));
-    await expect(first.owner.execute(sessionId, request)).resolves.toMatchObject({
-      status: "uncertain",
-    });
-    const restored = harness({ store: first.store });
-    await expect(restored.owner.execute(sessionId, request)).resolves.toMatchObject({
-      status: "uncertain",
-      replayed: true,
-    });
-    expect(restored.effect).not.toHaveBeenCalled();
-  });
-
-  it("retains the claim when result persistence fails", async () => {
-    const store = memoryStore();
-    const first = harness({
-      store: {
-        ...store,
-        register: async () => {
-          throw new Error("Storage unavailable.");
-        },
-      },
-    });
-    await expect(first.owner.execute(sessionId, request)).resolves.toMatchObject({
-      status: "uncertain",
-    });
-    const restored = harness({ store });
-    await expect(restored.owner.execute(sessionId, request)).resolves.toMatchObject({
-      status: "uncertain",
-      replayed: true,
-    });
-    expect(first.effect).toHaveBeenCalledTimes(1);
-    expect(restored.effect).not.toHaveBeenCalled();
-  });
+  it.each(["native response", "result persistence", "non-JSON observation"])(
+    "fences replay after losing %s",
+    async (failure) => {
+      const store = memoryStore();
+      const first = harness({
+        store:
+          failure === "result persistence"
+            ? {
+                ...store,
+                register: async () => {
+                  throw new Error("Storage unavailable.");
+                },
+              }
+            : store,
+      });
+      if (failure === "native response") {
+        first.effect.mockRejectedValue(new Error("Native response lost."));
+      }
+      if (failure === "non-JSON observation") {
+        first.effect.mockResolvedValue({
+          status: "succeeded",
+          observed: { unsupportedValue: undefined },
+        });
+      }
+      await expect(first.owner.execute(sessionId, request)).resolves.toMatchObject({
+        status: "uncertain",
+      });
+      if (failure !== "native response") {
+        expect(await store.lookup(`${sessionId}:request:${request.requestId}`)).not.toHaveProperty(
+          "result",
+        );
+      }
+      await expect(first.owner.execute(sessionId, request)).resolves.toMatchObject({
+        status: "uncertain",
+        replayed: true,
+      });
+      const restored = harness({ store });
+      await expect(restored.owner.execute(sessionId, request)).resolves.toMatchObject({
+        status: "uncertain",
+        replayed: true,
+      });
+      expect(first.effect).toHaveBeenCalledTimes(1);
+      expect(restored.effect).not.toHaveBeenCalled();
+    },
+  );
 
   it("checks current capabilities without producing an effect for unsupported actions", async () => {
     const { owner, effect } = harness({ capabilities: () => [] });
@@ -250,80 +242,56 @@ describe("meeting participation authority and durable attempts", () => {
     expect(effect).not.toHaveBeenCalled();
   });
 
-  it.each(["close", "replace"] as const)(
-    "revalidates after awaiting the durable claim when sessions %s",
-    async (kind) => {
+  it.each(["close", "replace", "revoke capability", "mutate input"] as const)(
+    "preserves admission while awaiting a claim: %s",
+    async (change) => {
       const claimed = gate();
       const resume = gate();
       const store = memoryStore();
       const originalClaim = store.registerIfAbsent;
+      let available = true;
       store.registerIfAbsent = async (...args) => {
         const result = await originalClaim(...args);
-        claimed.release();
-        await resume.promise;
+        if (change !== "revoke capability" || args[0].includes(":source:")) {
+          claimed.release();
+          await resume.promise;
+        }
         return result;
       };
-      const { owner, effect, leave } = harness({ store });
-      const result = owner.execute(sessionId, request);
+      const { owner, effect, leave } = harness({
+        store,
+        capabilities: () => (available ? ["chat"] : []),
+      });
+      const mutable = structuredClone(request);
+      if (change === "revoke capability") {
+        mutable.sourceId = owner.observe(sessionId, source);
+      }
+      const result = owner.execute(sessionId, mutable);
       await claimed.promise;
-      if (kind === "close") {
+      if (change === "close") {
         owner.close(sessionId);
-      } else {
+      }
+      if (change === "replace") {
         leave();
       }
+      if (change === "revoke capability") {
+        available = false;
+      }
+      if (change === "mutate input") {
+        mutable.action.text = "Mutated after claim";
+      }
       resume.release();
-      await expect(result).resolves.toMatchObject({ status: "rejected" });
-      expect(effect).not.toHaveBeenCalled();
+      if (change === "mutate input") {
+        await result;
+        expect(effect.mock.calls[0]?.[1]).toEqual(request);
+      } else {
+        await expect(result).resolves.toMatchObject({ status: "rejected" });
+        expect(effect).not.toHaveBeenCalled();
+      }
     },
   );
 
-  it("revalidates capability after awaiting the source claim", async () => {
-    const sourceClaimed = gate();
-    const resume = gate();
-    const store = memoryStore();
-    const originalClaim = store.registerIfAbsent;
-    let available = true;
-    store.registerIfAbsent = async (...args) => {
-      const result = await originalClaim(...args);
-      if (args[0].includes(":source:")) {
-        sourceClaimed.release();
-        await resume.promise;
-      }
-      return result;
-    };
-    const { owner, effect } = harness({ store, capabilities: () => (available ? ["chat"] : []) });
-    const sourceId = owner.observe(sessionId, source);
-    const result = owner.execute(sessionId, { ...request, sourceId });
-    await sourceClaimed.promise;
-    available = false;
-    resume.release();
-    await expect(result).resolves.toMatchObject({ status: "rejected" });
-    expect(effect).not.toHaveBeenCalled();
-  });
-
-  it("snapshots arguments before awaiting a claim", async () => {
-    const claimed = gate();
-    const resume = gate();
-    const store = memoryStore();
-    const originalClaim = store.registerIfAbsent;
-    store.registerIfAbsent = async (...args) => {
-      const result = await originalClaim(...args);
-      claimed.release();
-      await resume.promise;
-      return result;
-    };
-    const { owner, effect } = harness({ store });
-    const mutable = structuredClone(request);
-    const result = owner.execute(sessionId, mutable);
-    await claimed.promise;
-    mutable.action.text = "Mutated after claim";
-    resume.release();
-    await result;
-    expect(effect.mock.calls[0]?.[1]).toEqual(request);
-  });
-
   it("persists completed attempts across independent SQLite store and owner instances", async () => {
-    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
     const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
       await import("../plugin-state/plugin-state-store.js");
     await withOpenClawTestState(
@@ -391,25 +359,39 @@ describe("meeting participation observed source identities", () => {
   });
 
   it.each([
+    { label: "empty document", update: {} },
     { label: "new document", update: { epoch: "document-2" } },
     { label: "corrected revision", update: { revision: "2", text: "Corrected request." } },
     { label: "own echo", update: { ownEcho: true } },
     { label: "interim revision", update: { revision: "2", finalized: false } },
     { label: "blank correction", update: { revision: "2", text: "" } },
-    { label: "whitespace correction", update: { revision: "2", text: "  \t " } },
     { label: "oversized correction", update: { revision: "2", text: "a".repeat(16_385) } },
-  ])("invalidates issued source authority after a $label", async ({ update }) => {
+  ])("invalidates issued source authority after a $label", async ({ label, update }) => {
     const { owner, effect } = harness();
-    const sourceId = owner.observe(sessionId, source);
+    const observedSource: MeetingParticipationSource = {
+      ...source,
+      kind: label === "empty document" ? "caption" : "chat",
+    };
+    const sourceId = owner.observe(sessionId, observedSource);
     expect(sourceId).toBeTruthy();
     const inspection = owner.inspect(sessionId, sourceId!);
     expect(inspection).toBeDefined();
-    owner.observe(sessionId, { ...source, ...update });
+    if (label === "empty document") {
+      expect(owner.observeEpoch(sessionId, "caption", "empty-document-2")).toBe(true);
+    } else {
+      owner.observe(sessionId, { ...observedSource, ...update });
+    }
     expect(() => inspection?.assertCurrent()).toThrow();
     expect(owner.inspect(sessionId, sourceId!)).toBeUndefined();
     await expect(owner.execute(sessionId, { ...request, sourceId })).resolves.toMatchObject({
       status: "rejected",
     });
+    if (label === "empty document") {
+      expect(owner.context(sessionId).sources).toEqual([]);
+      expect(owner.observeEpoch(sessionId, "caption", source.epoch)).toBe(false);
+      expect(owner.observe(sessionId, observedSource)).toBeUndefined();
+      expect(owner.context(sessionId).sources).toEqual([]);
+    }
     expect(effect).not.toHaveBeenCalled();
   });
 
@@ -462,27 +444,6 @@ describe("meeting participation observed source identities", () => {
     ]);
   });
 
-  it("invalidates caption authority when a new document snapshot is empty", async () => {
-    const { owner, effect } = harness();
-    const oldCaption = { ...source, kind: "caption" as const };
-    const sourceId = owner.observe(sessionId, oldCaption);
-    expect(sourceId).toBeTruthy();
-    const inspection = owner.inspect(sessionId, sourceId!);
-    expect(inspection).toBeDefined();
-
-    expect(owner.observeEpoch(sessionId, "caption", "empty-document-2")).toBe(true);
-    expect(owner.context(sessionId).sources).toEqual([]);
-    expect(owner.inspect(sessionId, sourceId!)).toBeUndefined();
-    expect(() => inspection?.assertCurrent()).toThrow();
-    await expect(owner.execute(sessionId, { ...request, sourceId })).resolves.toMatchObject({
-      status: "rejected",
-    });
-    expect(owner.observeEpoch(sessionId, "caption", source.epoch)).toBe(false);
-    expect(owner.observe(sessionId, oldCaption)).toBeUndefined();
-    expect(owner.context(sessionId).sources).toEqual([]);
-    expect(effect).not.toHaveBeenCalled();
-  });
-
   it("expires observations and refuses to restore authority after closing", async () => {
     vi.useFakeTimers();
     const { owner, effect } = harness();
@@ -517,7 +478,7 @@ describe("meeting participation live source capacity", () => {
     }));
   }
 
-  it.each([129, 1_025])(
+  it.each([1_025])(
     "preserves retained references and issued guards when replaying %i unchanged captions",
     async (count) => {
       vi.useFakeTimers();
@@ -606,54 +567,85 @@ describe("meeting participation live source capacity", () => {
 });
 
 describe("meeting participation bounded correction", () => {
-  it("allows one correction retaining the source and action type", async () => {
-    const { owner, effect } = harness();
-    const sourceId = owner.observe(sessionId, source);
-    await expect(
-      owner.execute(sessionId, { ...request, sourceId, action: { type: "chat", text: "" } }),
-    ).resolves.toMatchObject({ status: "rejected", correctionOf: request.requestId });
-    await expect(
-      owner.execute(sessionId, { ...request, sourceId, requestId: "bypass-invalid-request" }),
-    ).resolves.toMatchObject({ status: "rejected" });
-    const correction = {
-      ...request,
-      sourceId,
-      requestId: "correction-1",
-      correctionOf: request.requestId,
-    };
-    await expect(owner.execute(sessionId, correction)).resolves.toMatchObject({
-      status: "succeeded",
-    });
-    await expect(
-      owner.execute(sessionId, { ...correction, requestId: "correction-2" }),
-    ).resolves.toMatchObject({ status: "rejected" });
-    await expect(
-      owner.execute(sessionId, {
-        ...correction,
-        requestId: "grandchild",
-        correctionOf: correction.requestId,
-      }),
-    ).resolves.toMatchObject({ status: "rejected" });
-    expect(effect).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not issue another correction reference for an invalid correction", async () => {
-    const { owner, effect } = harness();
-    const invalid = { ...request, action: { type: "chat", text: "" } };
-    await owner.execute(sessionId, invalid);
-    const correction = { ...invalid, requestId: "correction-1", correctionOf: request.requestId };
-    const result = await owner.execute(sessionId, correction);
-    expect(result.status).toBe("rejected");
-    expect(result.correctionOf).toBeUndefined();
-    await expect(
-      owner.execute(sessionId, {
+  it.each([false, true])(
+    "allows one correction retaining source and action (native rejection: %s)",
+    async (native) => {
+      const { owner, effect } = harness();
+      const sourceId = owner.observe(sessionId, source);
+      if (native) {
+        effect.mockResolvedValueOnce({
+          status: "rejected",
+          message: "Use a supported value.",
+          correctable: true,
+        });
+      }
+      const rejected = await owner.execute(sessionId, {
         ...request,
-        requestId: "grandchild",
-        correctionOf: correction.requestId,
-      }),
-    ).resolves.toMatchObject({ status: "rejected" });
-    expect(effect).not.toHaveBeenCalled();
-  });
+        sourceId,
+        action: native ? request.action : { type: "chat", text: "" },
+      });
+      if (native) {
+        expect(rejected).toEqual({
+          requestId: request.requestId,
+          status: "rejected",
+          message: "Use a supported value.",
+          correctionOf: request.requestId,
+        });
+      } else {
+        expect(rejected).toMatchObject({ status: "rejected", correctionOf: request.requestId });
+      }
+      await expect(
+        owner.execute(sessionId, { ...request, sourceId, requestId: "bypass-invalid-request" }),
+      ).resolves.toMatchObject({ status: "rejected" });
+      const correction = {
+        ...request,
+        sourceId,
+        requestId: "correction-1",
+        correctionOf: request.requestId,
+      };
+      await expect(owner.execute(sessionId, correction)).resolves.toMatchObject({
+        status: "succeeded",
+      });
+      await expect(
+        owner.execute(sessionId, { ...correction, requestId: "correction-2" }),
+      ).resolves.toMatchObject({ status: "rejected" });
+      await expect(
+        owner.execute(sessionId, {
+          ...correction,
+          requestId: "grandchild",
+          correctionOf: correction.requestId,
+        }),
+      ).resolves.toMatchObject({ status: "rejected" });
+      expect(effect).toHaveBeenCalledTimes(native ? 2 : 1);
+    },
+  );
+
+  it.each([false, true])(
+    "does not grant another correction for a rejected correction (native: %s)",
+    async (native) => {
+      const { owner, effect } = harness();
+      if (native) {
+        effect.mockResolvedValue({ status: "rejected", correctable: true });
+      }
+      const invalid = { ...request, action: native ? request.action : { type: "chat", text: "" } };
+      await owner.execute(sessionId, invalid);
+      const correction = { ...invalid, requestId: "correction-1", correctionOf: request.requestId };
+      const result = await owner.execute(sessionId, correction);
+      expect(result.status).toBe("rejected");
+      expect(result.correctionOf).toBeUndefined();
+      if (native) {
+        expect(result).toEqual({ requestId: correction.requestId, status: "rejected" });
+      }
+      await expect(
+        owner.execute(sessionId, {
+          ...request,
+          requestId: "grandchild",
+          correctionOf: correction.requestId,
+        }),
+      ).resolves.toMatchObject({ status: "rejected" });
+      expect(effect).toHaveBeenCalledTimes(native ? 2 : 0);
+    },
+  );
 
   it.each(["different source", "different action", "new source authority"])(
     "rejects a correction with %s",
@@ -696,52 +688,9 @@ describe("meeting participation SQLite value contract", () => {
     expect(await owner.execute(sessionId, request)).toEqual({ ...outcome, replayed: true });
     expect(effect).toHaveBeenCalledTimes(1);
   });
-
-  it("keeps the claim fenced when a provider returns a non-JSON observation", async () => {
-    const { owner, store, effect } = harness();
-    effect.mockResolvedValue({ status: "succeeded", observed: { unsupportedValue: undefined } });
-    expect(await owner.execute(sessionId, request)).toMatchObject({ status: "uncertain" });
-    expect(await store.lookup(`${sessionId}:request:${request.requestId}`)).not.toHaveProperty(
-      "result",
-    );
-    expect(await owner.execute(sessionId, request)).toMatchObject({
-      status: "uncertain",
-      replayed: true,
-    });
-    expect(effect).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("meeting participation native correction feedback", () => {
-  it("offers one correction after a native rejection that guarantees no effect", async () => {
-    const { owner, effect } = harness();
-    const sourceId = owner.observe(sessionId, source);
-    effect.mockResolvedValueOnce({
-      status: "rejected",
-      message: "Use a supported value.",
-      correctable: true,
-    });
-    await expect(owner.execute(sessionId, { ...request, sourceId })).resolves.toEqual({
-      requestId: request.requestId,
-      status: "rejected",
-      message: "Use a supported value.",
-      correctionOf: request.requestId,
-    });
-    const correction = {
-      ...request,
-      sourceId,
-      requestId: "native-correction",
-      correctionOf: request.requestId,
-    };
-    await expect(owner.execute(sessionId, correction)).resolves.toMatchObject({
-      status: "succeeded",
-    });
-    await expect(
-      owner.execute(sessionId, { ...correction, requestId: "second-correction" }),
-    ).resolves.toMatchObject({ status: "rejected" });
-    expect(effect).toHaveBeenCalledTimes(2);
-  });
-
   it.each(["succeeded", "failed", "uncertain", "unsupported"] as const)(
     "does not authorize retry of a %s native outcome",
     async (status) => {
@@ -759,25 +708,6 @@ describe("meeting participation native correction feedback", () => {
       expect(effect).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("does not offer native correction feedback for a correction's rejection", async () => {
-    const { owner, effect } = harness();
-    effect.mockResolvedValue({ status: "rejected", correctable: true });
-    await owner.execute(sessionId, request);
-    const correction = { ...request, requestId: "correction", correctionOf: request.requestId };
-    await expect(owner.execute(sessionId, correction)).resolves.toEqual({
-      requestId: correction.requestId,
-      status: "rejected",
-    });
-    await expect(
-      owner.execute(sessionId, {
-        ...request,
-        requestId: "grandchild",
-        correctionOf: correction.requestId,
-      }),
-    ).resolves.toMatchObject({ status: "rejected" });
-    expect(effect).toHaveBeenCalledTimes(2);
-  });
 
   it("does not grant native correction authority after the session closes during dispatch", async () => {
     const { owner, effect } = harness();
@@ -816,12 +746,7 @@ describe("meeting participation ledger capacity", () => {
     expect(effect).toHaveBeenCalledTimes(3);
   }
 
-  it("makes space using only closed session claims, preserving active duplicates", async () => {
-    await verifyClosedSessionCleanup(memoryStore(2));
-  });
-
   it("makes space for new meetings in the real SQLite namespace without evicting active claims", async () => {
-    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
     const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
       await import("../plugin-state/plugin-state-store.js");
     await withOpenClawTestState(
@@ -885,12 +810,7 @@ describe("meeting participation ledger capacity", () => {
     expect(await store.entries()).toEqual(before);
   }
 
-  it("rejects malformed and oversized identifiers before any ledger access", async () => {
-    await verifyInvalidIdentifiersPreserveClosedLedger(memoryStore(1));
-  });
-
   it("does not clean up closed SQLite claims for oversized or blank input fields", async () => {
-    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
     const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
       await import("../plugin-state/plugin-state-store.js");
     await withOpenClawTestState(

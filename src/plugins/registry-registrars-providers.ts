@@ -1,7 +1,10 @@
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
+import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
+import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { canClaimReservedCommandOwnership } from "./registry-registrars-operations.js";
@@ -11,7 +14,8 @@ import type {
   PluginRecord,
   PluginTextTransformsRegistration,
 } from "./registry-types.js";
-import type { CliBackendPlugin, ProviderPlugin, WorkerProvider } from "./types.js";
+import { validateStorageProviderContract } from "./storage-provider-registry.js";
+import type { CliBackendPlugin, ProviderPlugin } from "./types.js";
 import { validateWorkerProviderContract } from "./worker-provider-registry.js";
 
 export function createProviderRegistrars(state: PluginRegistryState) {
@@ -43,6 +47,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     }
     if (!record.providerIds.includes(id)) {
       record.providerIds.push(id);
+    }
+    if (normalizedProvider.normalizeToolSchemas) {
+      getPluginInstance(record)?.admitFactory(normalizedProvider.normalizeToolSchemas);
     }
     registry.providers.push(
       createRegistration(record, {
@@ -101,12 +108,54 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `agent harness already registered: ${id}${ownerDetail}`);
       return;
     }
+    if (harness.acquireMcpAppRuntime) {
+      // oxlint-disable-next-line typescript/unbound-method -- Record factory identity; executable views bind the original receiver.
+      getPluginInstance(record)?.admitFactory(harness.acquireMcpAppRuntime);
+    }
     const normalizedHarness = { ...harness, id, pluginId: harness.pluginId ?? record.id };
     record.agentHarnessIds.push(id);
     registry.agentHarnesses.push(
       createRegistration(record, {
         harness: normalizedHarness,
         ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
+      }),
+    );
+  };
+
+  const registerAgentExecutorController = (
+    record: PluginRecord,
+    controller: AgentExecutorController,
+  ) => {
+    const workspaceDirectory = normalizeOptionalString(controller?.workspaceDirectory);
+    if (
+      !workspaceDirectory ||
+      (!path.posix.isAbsolute(workspaceDirectory) && !path.win32.isAbsolute(workspaceDirectory))
+    ) {
+      reportRegistrationError(
+        record,
+        "agent executor controller requires an absolute workspaceDirectory",
+      );
+      return;
+    }
+    if (typeof controller.ensure !== "function" || typeof controller.retire !== "function") {
+      reportRegistrationError(
+        record,
+        "agent executor controller requires ensure and retire methods",
+      );
+      return;
+    }
+    if (registry.agentExecutorControllers.has(record.id)) {
+      reportRegistrationError(record, `agent executor controller already registered: ${record.id}`);
+      return;
+    }
+    registry.agentExecutorControllers.set(
+      record.id,
+      createRegistration(record, {
+        controller: {
+          workspaceDirectory,
+          ensure: controller.ensure,
+          retire: controller.retire,
+        },
       }),
     );
   };
@@ -124,6 +173,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
         `cli backend already registered: ${id} (${existing.pluginId})`,
       );
       return;
+    }
+    if (backend.prepareExecution) {
+      getPluginInstance(record)?.admitFactory(backend.prepareExecution);
     }
     registry.cliBackends.push(
       createRegistration(record, {
@@ -182,6 +234,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `embedding provider already registered: ${id}${ownerDetail}`);
       return;
     }
+    getPluginInstance(record)?.admitFactory(adapter.create);
     registry.embeddingProviders.push(
       createRegistration(record, {
         provider: adapter,
@@ -195,6 +248,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
   const createProviderLikeRegistrar =
     <T extends { id: string }>(params: {
       kindLabel: string;
+      factory?: (provider: T) => ((...args: never[]) => unknown) | undefined;
       registrations: Array<PluginOwnedProviderRegistration<T>>;
       ownedIds: (record: PluginRecord) => string[];
       catalogKinds?: Parameters<typeof registerModelCatalogProvider>[1]["kinds"];
@@ -218,6 +272,10 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       if (!ownedIds.includes(id)) {
         ownedIds.push(id);
       }
+      const factory = params.factory?.(provider);
+      if (factory) {
+        (getPluginValueInstance(factory) ?? getPluginInstance(record))?.admitFactory(factory);
+      }
       params.registrations.push(
         createIdentityRegistration(record, {
           provider,
@@ -230,53 +288,70 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       return true;
     };
 
-  const registerWorkerProvider = (record: PluginRecord, provider: WorkerProvider) => {
-    const validation = validateWorkerProviderContract(
-      provider,
-      record.contracts?.workerProviders ?? [],
-    );
-    if (!validation.ok) {
-      reportRegistrationError(record, validation.message);
-      return;
-    }
-    const { id } = validation;
-    const existing = registry.workerProviders.get(id);
-    if (existing) {
-      reportRegistrationError(
-        record,
-        `worker provider already registered: ${id} (${existing.pluginId})`,
-      );
-      return;
-    }
-    registry.workerProviders.set(
-      id,
-      createRegistration(record, {
-        provider,
-      }),
-    );
-  };
+  const createContractProviderRegistrar =
+    <T>(
+      kind: "worker" | "storage",
+      registrations: Map<string, PluginOwnedProviderRegistration<T>>,
+      validate: (
+        provider: T,
+        declaredIds: readonly string[],
+      ) => { ok: true; id: string } | { ok: false; message: string },
+      admit?: (record: PluginRecord, provider: T) => void,
+    ) =>
+    (record: PluginRecord, provider: T) => {
+      const validation = validate(provider, record.contracts?.[`${kind}Providers`] ?? []);
+      if (!validation.ok) {
+        reportRegistrationError(record, validation.message);
+        return;
+      }
+      const { id } = validation;
+      const existing = registrations.get(id);
+      if (existing) {
+        reportRegistrationError(
+          record,
+          `${kind} provider already registered: ${id} (${existing.pluginId})`,
+        );
+        return;
+      }
+      admit?.(record, provider);
+      registrations.set(id, createRegistration(record, { provider }));
+    };
 
   return {
     registerProvider,
     registerAgentHarness,
+    registerAgentExecutorController,
     registerCliBackend,
     registerTextTransforms,
     registerEmbeddingProvider,
-    registerWorkerProvider,
+    registerWorkerProvider: createContractProviderRegistrar(
+      "worker",
+      registry.workerProviders,
+      validateWorkerProviderContract,
+    ),
+    registerStorageProvider: createContractProviderRegistrar(
+      "storage",
+      registry.storageProviders,
+      validateStorageProviderContract,
+      (record, provider) => getPluginInstance(record)?.admitFactory(provider.open),
+    ),
     registerSpeechProvider: createProviderLikeRegistrar({
       kindLabel: "speech provider",
+      factory: (provider) => provider.streamSynthesize,
       registrations: registry.speechProviders,
       ownedIds: (record) => record.speechProviderIds,
       catalogKinds: ["voice"],
     }),
     registerRealtimeTranscriptionProvider: createProviderLikeRegistrar({
       kindLabel: "realtime transcription provider",
+      factory: (provider) => provider.createSession,
       registrations: registry.realtimeTranscriptionProviders,
       ownedIds: (record) => record.realtimeTranscriptionProviderIds,
       catalogKinds: ["voice"],
     }),
     registerRealtimeVoiceProvider: createProviderLikeRegistrar({
       kindLabel: "realtime voice provider",
+      factory: (provider) => provider.createBridge,
       registrations: registry.realtimeVoiceProviders,
       ownedIds: (record) => record.realtimeVoiceProviderIds,
       catalogKinds: ["voice"],
@@ -288,6 +363,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     }),
     registerTranscriptSourceProvider: createProviderLikeRegistrar({
       kindLabel: "transcripts source provider",
+      factory: (provider) => provider.watchOccupancy,
       registrations: registry.transcriptSourceProviders,
       ownedIds: (record) => record.transcriptSourceProviderIds,
     }),
@@ -311,16 +387,19 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     }),
     registerWebFetchProvider: createProviderLikeRegistrar({
       kindLabel: "web fetch provider",
+      factory: (provider) => provider.createTool,
       registrations: registry.webFetchProviders,
       ownedIds: (record) => record.webFetchProviderIds,
     }),
     registerWebSearchProvider: createProviderLikeRegistrar({
       kindLabel: "web search provider",
+      factory: (provider) => provider.createTool,
       registrations: registry.webSearchProviders,
       ownedIds: (record) => record.webSearchProviderIds,
     }),
     registerMigrationProvider: createProviderLikeRegistrar({
       kindLabel: "migration provider",
+      factory: (provider) => provider.prepareApply,
       registrations: registry.migrationProviders,
       ownedIds: (record) => record.migrationProviderIds,
     }),

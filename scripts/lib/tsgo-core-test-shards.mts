@@ -119,6 +119,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     group: "ui",
     config: "test/tsconfig/tsconfig.core.test.ui-components.json",
   },
+  {
+    name: "ui-e2e-chat",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
+  },
 ] as const;
 
 // Root tests remain one CI inventory graph; execution partitions its checker heap.
@@ -203,19 +208,23 @@ export function resolveChangedCiTsgoInputs(
 export function selectChangedCiTsgoGraphs(
   paths: readonly string[],
   graphs: readonly { config: string; files: readonly string[] }[],
+  options: { scope?: "all" | "noncore" } = {},
 ): readonly { name: string; config: string }[] | undefined {
   const compilerPaths = resolveChangedCiTsgoInputs(paths);
+  const candidates = options.scope === "noncore" ? TSGO_CI_ADDITIONAL_GRAPHS : TSGO_CI_GRAPHS;
   if (
     !compilerPaths ||
-    graphs.length !== TSGO_CI_GRAPHS.length ||
-    TSGO_CI_GRAPHS.some(
+    (options.scope === "noncore" &&
+      !compilerPaths.every((file) => file.startsWith("extensions/"))) ||
+    graphs.length !== candidates.length ||
+    candidates.some(
       (expected) => graphs.filter((graph) => graph.config === expected.config).length !== 1,
     ) ||
     compilerPaths.some((file) => !graphs.some((graph) => graph.files.includes(file)))
   ) {
     return undefined;
   }
-  return TSGO_CI_GRAPHS.filter((expected) =>
+  return candidates.filter((expected) =>
     graphs.some(
       (graph) =>
         graph.config === expected.config &&

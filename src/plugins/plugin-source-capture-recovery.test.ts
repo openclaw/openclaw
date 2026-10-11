@@ -9,12 +9,16 @@ import { noteLegacyPluginSourceCaptures } from "../commands/doctor-plugin-source
 import * as temporaryDirectories from "../commands/doctor/shared/temporary-directories.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as census from "../infra/openclaw-process-census.js";
+import * as sqliteDiagnostics from "../infra/sqlite-error-diagnostics.js";
 import * as stagingToken from "../infra/sqlite-staging-token.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import * as captureDirectory from "./plugin-source-capture-directory.js";
 import {
   createPluginNativeCaptureRoot,
   createPluginSourceCaptureRoot,
@@ -45,6 +49,170 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.useRealTimers();
+});
+
+it.each(["failed removal", "maintenance failed removal", "identity-change return"] as const)(
+  "preserves reclamation errors and closes the original token after %s",
+  async (mode) => {
+    const stateDir = temp.make("capture-reclaim-close-");
+    const root = path.join(stateDir, "tmp", "plugin-captures", "released-producer");
+    const captures = path.join(root, "captures");
+    const payload = path.join(captures, "source.js");
+    const tokenPath = path.join(root, stagingToken.SQLITE_STAGING_TOKEN_FILES[0]);
+    const extraLink = path.join(stateDir, "token-hardlink.sqlite");
+    fs.mkdirSync(captures, { recursive: true });
+    fs.writeFileSync(payload, "retained source bytes");
+    stagingToken.acquireSqliteStagingToken(root, "create")();
+    const old = new Date(Date.now() - 2 * hour);
+    fs.utimesSync(root, old, old);
+    const primary = Object.assign(new Error("Fixture capture removal refused"), { code: "EACCES" });
+    const cleanup = Object.assign(new Error("Fixture token close refused once"), {
+      code: mode === "identity-change return" ? "EACCES" : "SQLITE_BUSY",
+    });
+    let closeRefused = false;
+    let original: ReturnType<typeof stagingToken.acquireSqliteStagingToken> | undefined;
+    const acquire = stagingToken.acquireSqliteStagingToken;
+    const acquiring = vi
+      .spyOn(stagingToken, "acquireSqliteStagingToken")
+      .mockImplementation((...args) => {
+        const token = acquire(...args);
+        if (args[0] !== root || args[1] !== "reclaim") {
+          return token;
+        }
+        original = token;
+        if (mode === "identity-change return") {
+          // A second link invalidates destructive custody without opening or closing the held inode.
+          fs.linkSync(tokenPath, extraLink);
+        }
+        return Object.assign((retiring?: boolean) => {
+          if (!retiring && !closeRefused) {
+            closeRefused = true;
+            throw cleanup;
+          }
+          token(retiring);
+        }, token);
+      });
+    const remove = fsPromises.rm.bind(fsPromises);
+    const removal = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+      if (mode !== "identity-change return" && target === captures) {
+        throw primary;
+      }
+      await remove(target, options);
+    });
+    const classification = vi.spyOn(sqliteDiagnostics, "isSqliteLockError");
+    const warning = vi.spyOn(process, "emitWarning");
+    warning.mockClear();
+    const collectWarnings = async () => {
+      if (mode !== "maintenance failed removal") {
+        await sweepPluginSourceCapturesForTest(stateDir);
+        return warning.mock.calls.map(([message]) => String(message));
+      }
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const lease = acquireGatewayStateOwner({ databasePath: resolveOpenClawStateSqlitePath(env) });
+      const scope = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: lease.assertCurrent,
+        assertDatabaseAccess: lease.assertDatabaseAccess,
+      });
+      try {
+        const result = await scope.run(() =>
+          captureDirectory.prunePluginNativeCaptureDirectories(stateDir, new Set(), () =>
+            scope.assertAdmission(),
+          ),
+        );
+        return result.warnings;
+      } finally {
+        try {
+          await scope.close();
+        } finally {
+          lease.release();
+        }
+      }
+    };
+    try {
+      const messages = await collectWarnings();
+      expect(closeRefused).toBe(true);
+      expect(messages.length).toBe(1);
+      expect(messages[0]?.includes(cleanup.message)).toBe(true);
+      if (mode !== "identity-change return") {
+        expect(messages[0]?.includes(primary.message)).toBe(true);
+        const failure = classification.mock.calls.find(
+          ([error]) => error instanceof AggregateError && error.cause === primary,
+        )?.[0];
+        if (!(failure instanceof AggregateError)) {
+          throw new Error("Expected the original reclamation and cleanup failures");
+        }
+        expect(failure.cause === primary).toBe(true);
+        expect(failure.errors.length).toBe(2);
+        expect(failure.errors[0] === primary).toBe(true);
+        expect(failure.errors[1] === cleanup).toBe(true);
+      } else {
+        expect(classification.mock.calls.some(([error]) => error === cleanup)).toBe(true);
+        expect(fs.lstatSync(tokenPath).nlink).toBe(2);
+      }
+      expect(fs.readFileSync(payload, "utf8")).toBe("retained source bytes");
+      expect(fs.existsSync(tokenPath)).toBe(true);
+    } finally {
+      removal.mockRestore();
+      acquiring.mockRestore();
+      classification.mockRestore();
+      original?.();
+      fs.rmSync(extraLink, { force: true });
+    }
+    fs.utimesSync(root, old, old);
+    const after = await collectWarnings();
+    expect(fs.existsSync(root)).toBe(false);
+    expect(after.length).toBe(mode === "maintenance failed removal" ? 0 : 1);
+  },
+);
+
+it("preserves the preparation cause when synchronous token cleanup also fails", async () => {
+  const stateDir = temp.make("capture-error-cause-");
+  const instance = retainPluginSourceCaptureInstance(stateDir);
+  await sweepPluginSourceCapturesForTest(stateDir);
+  const primary = new Error("Fixture first capture refused");
+  const cleanup = new Error("Fixture token retirement refused once");
+  let ownedRoot: string | undefined;
+  let refuseCleanup = true;
+  const acquire = stagingToken.acquireSqliteStagingToken;
+  vi.spyOn(stagingToken, "acquireSqliteStagingToken").mockImplementation((...args) => {
+    const token = acquire(...args);
+    ownedRoot = args[0];
+    return Object.assign((retiring?: boolean) => {
+      if (retiring && refuseCleanup) {
+        refuseCleanup = false;
+        throw cleanup;
+      }
+      token(retiring);
+    }, token);
+  });
+  const mkdtemp = fs.mkdtempSync.bind(fs);
+  vi.spyOn(fs, "mkdtempSync").mockImplementation((...args) => {
+    if (ownedRoot && args[0].startsWith(path.join(ownedRoot, "captures") + path.sep)) {
+      throw primary;
+    }
+    return mkdtemp(...args);
+  });
+  try {
+    let failure: unknown;
+    try {
+      instance.createDirectory();
+    } catch (error) {
+      failure = error;
+    }
+    if (!(failure instanceof AggregateError)) {
+      throw new Error("Expected the paired preparation and cleanup refusal", { cause: failure });
+    }
+    expect(failure.cause).toBe(primary);
+    expect(failure.errors.length).toBe(2);
+    expect(failure.errors[0]).toBe(primary);
+    expect(failure.errors[1]).toBe(cleanup);
+    expect(refuseCleanup).toBe(false);
+  } finally {
+    vi.restoreAllMocks();
+    await instance.releaseAsync();
+  }
+  expect(ownedRoot !== undefined && fs.existsSync(ownedRoot)).toBe(false);
 });
 
 it("recovers a removed captures directory without releasing a live instance", async () => {
@@ -199,13 +367,22 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
   expect(fs.existsSync(root)).toBe(false);
 });
 
-it.each(["lease", "canonical path", "captures", "first capture"])(
-  "leaves no tokenless roots when %s preparation fails",
-  async (stage) => {
+it.each([
+  { stage: "lease", code: "EPERM" },
+  { stage: "canonical path", code: "EPERM" },
+  { stage: "captures", code: "ENOSPC" },
+  { stage: "first capture", code: "ENOSPC" },
+])(
+  "captures usable fallback bytes without tokenless roots after $stage fails with $code",
+  async ({ stage, code }) => {
     const stateDir = temp.make("capture-recovery-allocation-");
+    const source = temp.make("capture-recovery-source-");
+    const capturedSource = "module.exports = 'captured';\n";
+    fs.writeFileSync(path.join(source, "index.cjs"), capturedSource);
     const instance = retainPluginSourceCaptureInstance(stateDir);
     await sweepPluginSourceCapturesForTest(stateDir);
     const managed = path.join(stateDir, "tmp", "plugin-captures");
+    const failure = Object.assign(new Error("Fixture capture allocation refused"), { code });
     const acquire = stagingToken.acquireSqliteStagingToken;
     const realpath = fs.realpathSync.bind(fs);
     const mkdir = fs.mkdirSync.bind(fs);
@@ -214,7 +391,7 @@ it.each(["lease", "canonical path", "captures", "first capture"])(
       vi.spyOn(stagingToken, "acquireSqliteStagingToken").mockImplementation(
         (directory, mode, options) => {
           if (directory.startsWith(managed + path.sep)) {
-            throw locked;
+            throw failure;
           }
           return acquire(directory, mode, options);
         },
@@ -222,7 +399,7 @@ it.each(["lease", "canonical path", "captures", "first capture"])(
     } else if (stage === "canonical path") {
       vi.spyOn(fs, "realpathSync").mockImplementation((file, options) => {
         if (String(file).startsWith(managed + path.sep)) {
-          throw locked;
+          throw failure;
         }
         return realpath(file, options);
       });
@@ -232,28 +409,41 @@ it.each(["lease", "canonical path", "captures", "first capture"])(
           String(file).startsWith(managed + path.sep) &&
           path.basename(String(file)) === "captures"
         ) {
-          throw locked;
+          throw failure;
         }
         return mkdir(file, options);
       });
     } else {
       vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix, options) => {
         if (prefix.startsWith(managed + path.sep)) {
-          throw locked;
+          throw failure;
         }
         return mkdtemp(prefix, options);
       });
     }
+    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
     try {
-      const directory = instance.createDirectory();
-      fs.writeFileSync(path.join(directory, "source.js"), "captured after fallback");
+      artifact = withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
+        capturePluginGenerationArtifact(source),
+      );
+      const directory = artifact.boundaryRoot;
+      expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
+        capturedSource,
+      );
+      expect(directory.startsWith(stateDir + path.sep)).toBe(false);
       expect(fs.readdirSync(managed)).toEqual([]);
       expect(fs.existsSync(path.join(path.dirname(path.dirname(directory)), "owner.sqlite"))).toBe(
         true,
       );
+      await artifact.disposeAsync();
+      expect(fs.existsSync(directory)).toBe(false);
     } finally {
       vi.restoreAllMocks();
-      await instance.releaseAsync();
+      try {
+        await artifact?.disposeAsync();
+      } finally {
+        await instance.releaseAsync();
+      }
     }
     expect(
       fs.readdirSync(tmpdir()).filter((name) => name.startsWith("openclaw-plugin-captures-")),
@@ -261,13 +451,10 @@ it.each(["lease", "canonical path", "captures", "first capture"])(
   },
 );
 
-it("reclaims aged tokenless roots without a census and retries locked roots", async () => {
+it("reclaims aged tokenless roots and retries locked roots", async () => {
   const stateDir = temp.make("capture-recovery-legacy-");
   const stateTemp = path.join(stateDir, "tmp");
   fs.mkdirSync(stateTemp);
-  vi.spyOn(census, "inspectOtherOpenClawProcesses").mockReturnValue({
-    error: "Exact process command census is unavailable on win32.",
-  });
   const create = (parent: string, name: string) => {
     const directory = path.join(parent, name);
     fs.mkdirSync(directory);
@@ -289,12 +476,12 @@ it("reclaims aged tokenless roots without a census and retries locked roots", as
   const fresh = create(tmpdir(), "openclaw-plugin-build-fresh");
   // Filesystem timestamps use the real clock even when Date is faked.
   fs.utimesSync(fresh, new Date(), new Date());
-  const rename = fsPromises.rename.bind(fsPromises);
-  const probe = vi.spyOn(fsPromises, "rename").mockImplementation(async (from, to) => {
-    if (from === busy) {
+  const remove = fsPromises.rm.bind(fsPromises);
+  const probe = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+    if (target === busy) {
       throw locked;
     }
-    await rename(from, to);
+    await remove(target, options);
   });
   await sweepPluginSourceCapturesForTest(stateDir);
   expect(old.filter((directory) => fs.existsSync(directory))).toHaveLength(0);
@@ -302,7 +489,6 @@ it("reclaims aged tokenless roots without a census and retries locked roots", as
   for (const kept of [fresh, busy, tokened, unrelated, link]) {
     expect(fs.existsSync(kept)).toBe(true);
   }
-  // Renaming alone must not count as reclaiming the payload.
   expect(fs.readdirSync(stateTemp)).toEqual([]);
   const retainedNames = () =>
     fs
@@ -514,3 +700,69 @@ it.each(["managed", "fallback"] as const)(
     }
   },
 );
+
+it("preserves artifact setup failure and borrowed custody when partial removal fails", async () => {
+  const stateDir = temp.make("capture-artifact-cleanup-");
+  const source = temp.make("capture-artifact-source-");
+  const owner = retainPluginSourceCaptureInstance(stateDir);
+  const first = owner.createDirectory();
+  const root = path.dirname(path.dirname(first));
+  await sweepPluginSourceCapturesForTest(stateDir);
+  const primary = new Error("Fixture artifact permissions refused");
+  const cleanup = new Error("Fixture partial capture removal refused");
+  let borrowed: ReturnType<typeof retainPluginSourceCaptureInstance> | undefined;
+  let created: string | undefined;
+  const retain = captureDirectory.retainPluginSourceCaptureInstance;
+  vi.spyOn(captureDirectory, "retainPluginSourceCaptureInstance").mockImplementation((...args) => {
+    borrowed = retain(...args);
+    return borrowed;
+  });
+  const chmod = fs.chmodSync.bind(fs);
+  vi.spyOn(fs, "chmodSync").mockImplementation((target, mode) => {
+    if (typeof target === "string" && path.dirname(target) === path.dirname(first)) {
+      created = target;
+      throw primary;
+    }
+    return chmod(target, mode);
+  });
+  const remove = fs.rmSync.bind(fs);
+  vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+    if (target === created) {
+      throw cleanup;
+    }
+    return remove(target, options);
+  });
+  try {
+    let failure: unknown;
+    try {
+      withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
+        capturePluginGenerationArtifact(source),
+      );
+    } catch (error) {
+      failure = error;
+    }
+    if (!(failure instanceof AggregateError)) {
+      throw new Error("Expected the artifact setup and removal failures", { cause: failure });
+    }
+    expect(failure.cause).toBe(primary);
+    expect(failure.errors.length).toBe(2);
+    expect(failure.errors[0]).toBe(primary);
+    expect(failure.errors[1]).toBe(cleanup);
+    if (!borrowed) {
+      throw new Error("Expected the artifact to borrow its capture instance");
+    }
+    const releasedBorrower = borrowed;
+    expect(() => releasedBorrower.createDirectory()).toThrow(
+      "Plugin source instance has been released",
+    );
+    expect(created !== undefined && fs.existsSync(created)).toBe(true);
+  } finally {
+    vi.restoreAllMocks();
+    try {
+      await borrowed?.releaseAsync();
+    } finally {
+      await owner.releaseAsync();
+    }
+  }
+  expect(fs.existsSync(root)).toBe(false);
+});

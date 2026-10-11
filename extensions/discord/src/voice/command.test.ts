@@ -25,15 +25,13 @@ function createVoiceCommandHarness(
     cfg?: OpenClawConfig;
     discordConfig?: DiscordAccountConfig;
     groupPolicy?: DiscordAccountConfig["groupPolicy"];
-    useAccessGroups?: boolean;
   },
 ) {
   const command = createDiscordVoiceCommand({
     cfg: overrides?.cfg ?? {},
-    discordConfig: overrides?.discordConfig ?? {},
+    discordConfig: overrides?.discordConfig ?? { allowFrom: ["*"] },
     accountId: "default",
     groupPolicy: overrides?.groupPolicy ?? "open",
-    useAccessGroups: overrides?.useAccessGroups ?? false,
     getManager: () => manager,
     ephemeralDefault: true,
   });
@@ -66,7 +64,7 @@ describe("createDiscordVoiceCommand", () => {
   it("serializes subcommands without top-level command-only fields", () => {
     const { command } = createVoiceCommandHarness(null);
     const serialized = command.serialize();
-    const firstOption = serialized.options?.[0] as Record<string, unknown> | undefined;
+    const firstOption = serialized.options?.[0];
 
     expect(firstOption).toEqual({
       name: "join",
@@ -135,7 +133,6 @@ describe("createDiscordVoiceCommand", () => {
     const { status } = createVoiceCommandHarness(manager, {
       cfg: { commands: { ownerAllowFrom: [owner] } },
       discordConfig: { dmPolicy: "disabled", allowFrom: ["*"] },
-      useAccessGroups: true,
     });
     const { interaction, reply } = createInteraction({
       guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
@@ -161,7 +158,6 @@ describe("createDiscordVoiceCommand", () => {
     const { status } = createVoiceCommandHarness(manager, {
       discordConfig: { allowFrom: [" * "], guilds: { g1: {} } },
       groupPolicy: "allowlist",
-      useAccessGroups: true,
     });
     const { interaction, reply } = createInteraction({
       guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],

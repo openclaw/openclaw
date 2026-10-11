@@ -17,14 +17,14 @@ vi.mock("../config/config.js", async () => {
 });
 
 describe("agents_list", () => {
-  type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
+  type AgentEntries = NonNullable<NonNullable<typeof configOverride.agents>["entries"]>;
 
-  function setConfigWithAgentList(agentList: AgentConfig[]) {
-    // Each test gets a fresh per-sender session config plus its agent list.
+  function setConfigWithAgentEntries(entries: AgentEntries) {
+    // Each test gets a fresh per-sender session config plus its agent roster.
     configOverride = {
       session: createPerSenderSessionConfig(),
       agents: {
-        list: agentList,
+        entries,
       },
     };
   }
@@ -49,27 +49,24 @@ describe("agents_list", () => {
   });
 
   it("omits allowlisted targets that are not configured", async () => {
-    setConfigWithAgentList([{ id: "main", subagents: { allowAgents: ["research"] } }]);
+    setConfigWithAgentEntries({ main: { subagents: { allowAgents: ["research"] } } });
     expect(readAgentList(await createTool().execute("stale", {}))).toEqual([]);
   });
 
   it("returns configured agents when allowlist is *", async () => {
-    setConfigWithAgentList([
-      {
-        id: "main",
+    setConfigWithAgentEntries({
+      main: {
         subagents: {
           allowAgents: ["*"],
         },
       },
-      {
-        id: "research",
+      research: {
         name: "Research",
       },
-      {
-        id: "coder",
+      coder: {
         name: "Coder",
       },
-    ]);
+    });
 
     const tool = createTool();
     const result = await tool.execute("call3", {});

@@ -2,8 +2,14 @@ import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isLinkLocalIpAddress, isUnspecifiedIpAddress } from "@openclaw/net-policy/ip";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
+import { sha256Base64Url } from "../../infra/crypto-digest.js";
+import {
+  ensureDevicePairSetupBootstrapToken,
+  revokeDeviceBootstrapToken,
+} from "../../infra/device-bootstrap.js";
+import type { CloudWorkerSetupMutationAdmission } from "../../infra/device-bootstrap.worker-types.js";
 import { removePairedDeviceRole } from "../../infra/device-pairing.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   encodePairingSetupCode,
   resolveConfiguredPairingPublicUrl,
@@ -22,11 +28,19 @@ import {
   workerBootstrapOperationTimeoutMs,
 } from "./bootstrap-timeouts.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
-import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact.js";
+import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact-contract.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import type { WorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 const NODE_ENROLLMENT_POLL_MS = 250;
+const log = createSubsystemLogger("gateway/worker-environments");
+
+type NodeEnrollmentBinding = {
+  record: WorkerEnvironmentRecord;
+  signal: AbortSignal;
+  setupCredential?: { setupId: string; token: string; digest: string };
+  close: () => void;
+};
 
 type WorkerNodeEnrollmentManagerOptions = {
   store: WorkerEnvironmentStore;
@@ -57,7 +71,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
   const now = options.now ?? Date.now;
   const controller = new AbortController();
   const { signal } = controller;
-  const active = new Map<string, { close: () => void }>();
+  const active = new Map<string, NodeEnrollmentBinding>();
   const enrollmentClosers = new WeakMap<
     WorkerNodeRuntimePreparation | WorkerNodeEnrollment,
     () => void
@@ -117,12 +131,24 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       enrollmentAbort.signal,
       ...(operationSignal ? [operationSignal] : []),
     ]);
-    const binding = {
+    const binding: NodeEnrollmentBinding = {
+      record,
+      signal: enrollmentSignal,
       close: () => {
         if (active.get(record.environmentId) === binding) {
           active.delete(record.environmentId);
         }
         enrollmentAbort.abort();
+        const credential = binding.setupCredential;
+        binding.setupCredential = undefined;
+        // Shutdown may already be retiring the pairing store; the live binding is closed above.
+        if (!credential || signal.aborted) {
+          return;
+        }
+        // Enqueue synchronously so a replacement's ensure cannot reuse this bearer.
+        void revokeDeviceBootstrapToken({ token: credential.token }).catch((error: unknown) => {
+          log.warn(`Cloud node enrollment credential revocation failed: ${String(error)}`);
+        });
       },
     };
     active.set(record.environmentId, binding);
@@ -218,11 +244,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     try {
       const prepared = await prepare(record, enrollmentSignal);
       requireCurrent();
-      let current = await options.store.ensureNodeEnrollment(record.environmentId);
-      requireCurrent();
-      if (!isProvisioningOwner(current, record)) {
-        throw new Error("Worker node enrollment is no longer provisioning");
-      }
+      await options.store.ensureNodeEnrollment(record.environmentId);
+      let current = requireCurrent();
       let mode:
         | { mode: "connect"; setupCode: string; setupId: string }
         | { mode: "resume"; deviceId: string };
@@ -239,9 +262,16 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
         });
         requireCurrent();
+        if (issued.status === "pending") {
+          binding.setupCredential = {
+            setupId: issued.setupId,
+            token: issued.token,
+            digest: sha256Base64Url(issued.token),
+          };
+        }
         if (issued.status === "completed") {
-          current = await options.store.ensureNodeEnrollment(record.environmentId);
-          requireCurrent();
+          await options.store.ensureNodeEnrollment(record.environmentId);
+          current = requireCurrent();
           if (!current.nodeDeviceId || current.nodeDeviceId !== issued.deviceId) {
             throw new Error("Worker node enrollment completion did not bind its environment");
           }
@@ -310,15 +340,6 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             if (live.nodeDeviceId) {
               const availability = await options.resolveAvailability(live.nodeDeviceId);
               enrollmentSignal.throwIfAborted();
-              const latest = options.store.get(owner.environmentId);
-              if (
-                !isProvisioningOwner(latest, owner) ||
-                latest.nodeSetupId !== owner.nodeSetupId ||
-                latest.nodeDeviceId !== live.nodeDeviceId ||
-                active.get(owner.environmentId) !== binding
-              ) {
-                throw new Error("Worker node enrollment is no longer current");
-              }
               if (availability.available) {
                 return live.nodeDeviceId;
               }
@@ -358,24 +379,29 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
 
   return {
     prepare: async (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
-      const preflight = new AbortController();
-      try {
-        const prepared = await prepare(
-          record,
-          AbortSignal.any([
-            signal,
-            preflight.signal,
-            ...(operationSignal ? [operationSignal] : []),
-          ]),
-        );
-        return prepared.artifact.tarballSha256;
-      } finally {
-        // Preflight creates no transfer grant; release its artifact pin even on success.
-        preflight.abort();
-      }
+      const prepared = await prepare(
+        record,
+        operationSignal ? AbortSignal.any([signal, operationSignal]) : signal,
+      );
+      return prepared.artifact.tarballSha256;
     },
     prepareRuntime,
     begin,
+    admitsNodeSetupCompletion: (setup: CloudWorkerSetupMutationAdmission) => {
+      const binding = active.get(setup.environmentId);
+      if (!binding?.setupCredential) {
+        return false;
+      }
+      // Pending replacements cannot admit the closed invocation's bearer. Fresh replay
+      // and restart adoption authorize only the credential this binding acquired.
+      return (
+        binding.setupCredential.setupId === setup.setupId &&
+        binding.setupCredential.digest === setup.credentialDigest &&
+        binding.record.provisionOperationId === setup.provisionOperationId &&
+        binding.record.ownerEpoch === setup.ownerEpoch &&
+        !binding.signal.aborted
+      );
+    },
     retire,
     closeRuntime: (preparation: WorkerNodeRuntimePreparation) =>
       enrollmentClosers.get(preparation)?.(),

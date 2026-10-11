@@ -8,7 +8,8 @@ import {
 } from "../service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "../service/state.js";
 import type { CronJob } from "../types.js";
-import { deleteCronJobRowInDatabase, upsertCronJobRow } from "./row-codec.js";
+import { deleteCronJobRowInDatabase, updateCronRuntimeRow } from "./row-codec.js";
+import { readCronDeliveryAttemptStateInDatabase } from "./run-receipt-delivery.js";
 import {
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,
@@ -73,6 +74,7 @@ export function repairCronRunInDatabase(params: {
   ) {
     return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
   }
+  const previousEnabled = job.enabled ?? true;
   let changed = false;
   if (proposal.queuedAtMs !== undefined && job.state.queuedAtMs === proposal.queuedAtMs) {
     delete job.state.queuedAtMs;
@@ -147,7 +149,15 @@ export function repairCronRunInDatabase(params: {
         taskRunId: task.taskRunId,
         runningAtMs: proposal.runningAtMs,
         nowMs,
-        recoverInterruptedOneShot: params.mode === "startup",
+        recoverInterruptedOneShot:
+          params.mode === "startup" &&
+          readCronDeliveryAttemptStateInDatabase({
+            database: database.db,
+            storeKey,
+            jobId: job.id,
+            receiptId: job.state.runningReceiptId ?? currentReceipt?.receiptId,
+            startedAtMs: proposal.runningAtMs,
+          }) === "not-started",
         deferredNotifications: notifications,
       });
       replacementAtMs = interrupted.replacementAtMs;
@@ -159,7 +169,7 @@ export function repairCronRunInDatabase(params: {
           deferredNotifications: notifications,
         });
       }
-      if (params.mode === "startup" && job.schedule.kind === "at") {
+      if (params.mode === "startup" && job.schedule.kind === "at" && job.enabled) {
         // Commit the pending occurrence with receipt retirement, so another
         // restart before admission cannot consume it as terminal run history.
         job.state.startupCatchupAtMs = job.state.nextRunAtMs;
@@ -208,14 +218,14 @@ export function repairCronRunInDatabase(params: {
     }
     return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
   }
-  upsertCronJobRow(database.db, storeKey, job, row.sort_order);
+  updateCronRuntimeRow(database.db, storeKey, job, previousEnabled);
   return {
     kind: "repaired",
     ...(interrupted ? { interrupted } : {}),
     notifications,
     ...(replacementAtMs === undefined &&
     proposal.runningAtMs !== undefined &&
-    !(params.mode === "startup" && interrupted && job.schedule.kind === "at")
+    !(params.mode === "startup" && interrupted && job.schedule.kind === "at" && job.enabled)
       ? { skipStartupCatchup: true }
       : {}),
   };

@@ -110,6 +110,15 @@ async function expectMultilineTitle(title: Locator) {
   expect(layout.whiteSpace).toBe("normal");
 }
 
+async function selectOnlineView(page: Page, touch = false) {
+  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Online", exact: true });
+  if (touch) {
+    await online.tap();
+  } else {
+    await online.click();
+  }
+}
+
 async function capturePeopleCard(page: Page, filename: string) {
   if (!captureUiProofEnabled) {
     return;
@@ -158,6 +167,7 @@ suite.define(() => {
           ],
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        await selectOnlineView(page);
         const person = page.locator('[data-online-user-id="alice"]');
         await person.hover();
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
@@ -205,10 +215,7 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
         await gateway.waitForRequest("connect");
-        await page
-          .locator("openclaw-app-sidebar")
-          .getByText("Synthetic audit session", { exact: true })
-          .waitFor({ state: "visible" });
+        await selectOnlineView(page);
         await gateway.emitGatewayEvent("presence", {
           presence: [
             {
@@ -270,8 +277,10 @@ suite.define(() => {
               .first()
               .click();
           }
+          await selectOnlineView(page, touch);
           const person = page.locator('[data-online-user-id="alice"]');
           if (action === "Enter") {
+            await page.keyboard.press("Tab");
             await person.focus();
             await page
               .getByRole("dialog", { name: "Activity for Alice" })
@@ -322,6 +331,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, scenario());
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        await selectOnlineView(page);
         const row = page
           .locator(".sidebar-online__row")
           .filter({ has: page.locator('[data-online-user-id="alice"]') });
@@ -329,7 +339,8 @@ suite.define(() => {
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await person.waitFor({ state: "visible" });
         expect(await card.count()).toBe(0);
-        expect(await row.locator("a, button").count()).toBe(1);
+        expect(await row.locator("a, button").count()).toBe(2);
+        expect(await row.getByRole("button", { name: "Pin", exact: true }).count()).toBe(1);
         await person.hover();
         await card.waitFor({ state: "visible" });
         expect(await card.textContent()).toContain("Reported time zone: Europe/Paris");
@@ -499,16 +510,22 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, scenario());
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        // A mouse click parks a hover pointer where the sliding drawer's header
+        // buttons pass; their tooltips then consume the card's Escape.
         await page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()
-          .click();
+          .tap();
+        await selectOnlineView(page, true);
         const person = page.getByRole("link", { name: "Activity for Alice" });
         await page.keyboard.press("Tab");
         await person.focus();
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await card.waitFor({ state: "visible" });
         await page.keyboard.press("Tab");
+        await expect
+          .poll(() => card.evaluate((element) => element.contains(document.activeElement)))
+          .toBe(true);
         await page.keyboard.press("Escape");
         await expect.poll(() => card.count()).toBe(0);
         expect(await person.isVisible()).toBe(true);
@@ -581,6 +598,7 @@ suite.define(() => {
           methodResponses: { "sessions.list": sessions },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        await selectOnlineView(page);
         const profileButton = page.getByRole("link", {
           name: "Activity for Profile person",
           exact: true,
@@ -697,6 +715,7 @@ suite.define(() => {
             },
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+          await selectOnlineView(page);
           await page
             .getByRole(qualified ? "button" : "link", {
               name: `${qualified ? "Details" : "Activity"} for ${peer.name}`,

@@ -1,4 +1,3 @@
-/** Applies runtime mode/config controls to live ACP backend sessions. */
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -113,7 +112,6 @@ function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
   );
 }
 
-/** Resolves backend-advertised controls plus locally inferred runtime control support. */
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -195,7 +193,7 @@ export async function applyManagerRuntimeControls(params: {
   });
   assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   const backend = params.handle.backend || params.meta.backend;
-  const runtimeMode = normalizeText(options.runtimeMode);
+  const runtimeMode = options.runtimeMode;
   const configOptions = buildRuntimeConfigOptionPairs(options, capabilities.configOptionKeys);
   const thinkingConfigKey = options.thinking
     ? resolveRuntimeConfigOptionKey("thinking", capabilities.configOptionKeys)

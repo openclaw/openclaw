@@ -163,6 +163,15 @@ export function registerCrabboxWorkerProviderDoctorChecks(
             source: "crabbox",
             target: image.profileKey,
           } as const;
+          if (image.captureUnsupported) {
+            findings.push({
+              ...details,
+              severity: "info",
+              message: `Warm-image native capture${display} is unsupported: ${image.captureUnsupported.message}`,
+              fixHint:
+                "Workers use an existing compatible snapshot when one is available and otherwise provision cold; capture attempts are skipped until `warmImages.refreshAfter` has elapsed since the refusal. Set `settings.warmImage: false` on the profile to stop capture attempts, or use a Crabbox configuration that supports native checkpoints.",
+            });
+          }
           if (image.capture) {
             const uncertain = image.capture.phase === "uncertain";
             findings.push({

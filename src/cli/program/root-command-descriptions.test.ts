@@ -1,5 +1,6 @@
 // Root help renders catalog placeholders while command help and completion use
 // registered Commander commands. Keep those user-facing descriptions aligned.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";
@@ -75,7 +76,6 @@ const JSON_NOT_APPLICABLE = {
       "users",
       "node",
       "sandbox",
-      "fleet",
       "worktrees",
       "cron",
       "dns",
@@ -136,7 +136,6 @@ const JSON_NOT_APPLICABLE = {
       "node run",
       "connect",
       "worker",
-      "fleet logs",
       "proxy start",
       "proxy run",
       "webhooks gmail run",
@@ -183,11 +182,6 @@ const JSON_NOT_APPLICABLE = {
       "skills install",
       "skills update",
       "sandbox recreate",
-      "fleet start",
-      "fleet stop",
-      "fleet restart",
-      "fleet upgrade",
-      "fleet rm",
       "dns setup",
       "proxy purge",
       "pairing approve",

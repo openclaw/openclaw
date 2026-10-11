@@ -98,6 +98,27 @@ export function getCliSessionBinding(
   return undefined;
 }
 
+// A copied binding must branch at the recorded checkpoint even if the parent advances.
+// Retain account/environment validation; force-reuse and reseed receipts belong to the parent.
+export function forkCliSessionBindings(
+  parent: CliSessionBindingEntry | undefined,
+  supportsFork: (provider: string) => boolean,
+): Record<string, CliSessionBinding> | undefined {
+  const providers = new Set([
+    ...Object.keys(parent?.cliSessionBindings ?? {}),
+    ...Object.keys(parent?.cliSessionIds ?? {}),
+  ]);
+  const forked: Record<string, CliSessionBinding> = {};
+  for (const provider of providers) {
+    const binding = getCliSessionBinding(parent, provider);
+    if (binding?.resumeCheckpointId && supportsFork(provider)) {
+      const { reseedReceipt: _reseedReceipt, forceReuse: _forceReuse, ...inherited } = binding;
+      forked[normalizeProviderId(provider)] = { ...inherited, forkNextResume: true };
+    }
+  }
+  return Object.keys(forked).length > 0 ? forked : undefined;
+}
+
 export function clearAllCliSessions(
   entry: Partial<Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId">>,
 ): void {

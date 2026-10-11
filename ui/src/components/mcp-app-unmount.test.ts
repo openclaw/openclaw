@@ -1,24 +1,26 @@
 import { LitElement, html, nothing } from "lit";
-import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
+import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { McpAppUnmountGate } from "./mcp-app-unmount.ts";
 
-const targetTag = `test-mcp-app-unmount-target-${crypto.randomUUID()}`;
+const targetTag = "mcp-app-view";
 const ownerTag = `test-mcp-app-unmount-owner-${crypto.randomUUID()}`;
 const siblingOwnerTag = `test-mcp-app-unmount-sibling-owner-${crypto.randomUUID()}`;
-const staticTargetTag = unsafeStatic(targetTag);
 const teardown = vi.fn<() => Promise<void>>();
 
-class TestMcpAppUnmountTarget extends HTMLElement {
-  restartCalls = 0;
+type TestMcpAppUnmountTarget = HTMLElement & { restartCalls: number };
 
-  restartAfterTeardown() {
-    this.restartCalls += 1;
-  }
-
-  teardown() {
-    return teardown();
+function prepareTarget(element: Element | undefined) {
+  if (element instanceof HTMLElement) {
+    Object.assign(element, {
+      restartCalls: 0,
+      restartAfterTeardown() {
+        this.restartCalls += 1;
+      },
+      // A registered App may also tear down on disconnect; the gate must act while connected.
+      teardown: () => (element.isConnected ? teardown() : Promise.resolve()),
+    });
   }
 }
 
@@ -26,10 +28,11 @@ class TestMcpAppUnmountOwner extends LitElement {
   key = "initial";
   valueKey = "initial";
   retainRenderedValue = false;
-  private readonly gate = new McpAppUnmountGate(this, targetTag);
+  private readonly gate = new McpAppUnmountGate(this);
   readonly renderValue = vi.fn(() =>
     this.valueKey === "initial"
-      ? staticHtml`<${staticTargetTag}></${staticTargetTag}><span data-value="initial">initial</span>`
+      ? html`<mcp-app-view ${ref(prepareTarget)}></mcp-app-view
+          ><span data-value="initial">initial</span>`
       : html`<span data-value=${this.valueKey}>${this.valueKey}</span>`,
   );
 
@@ -49,7 +52,7 @@ class TestMcpAppUnmountOwner extends LitElement {
 
 class TestMcpAppUnmountSiblingOwner extends LitElement {
   private includeLeaving = true;
-  private readonly gate = new McpAppUnmountGate(this, targetTag);
+  private readonly gate = new McpAppUnmountGate(this);
 
   removeLeaving() {
     this.includeLeaving = false;
@@ -59,20 +62,19 @@ class TestMcpAppUnmountSiblingOwner extends LitElement {
   override render() {
     return this.gate.render(
       this.includeLeaving ? "both" : "retained",
-      () => staticHtml`
+      () => html`
         ${
           this.includeLeaving
-            ? staticHtml`<div class="leaving"><${staticTargetTag}></${staticTargetTag}></div>`
+            ? html`<div class="leaving"><mcp-app-view ${ref(prepareTarget)}></mcp-app-view></div>`
             : nothing
         }
-        <${staticTargetTag} class="retained"></${staticTargetTag}>
+        <mcp-app-view class="retained" ${ref(prepareTarget)}></mcp-app-view>
       `,
       () => this.renderRoot.querySelectorAll(".leaving"),
     );
   }
 }
 
-customElements.define(targetTag, TestMcpAppUnmountTarget);
 customElements.define(ownerTag, TestMcpAppUnmountOwner);
 customElements.define(siblingOwnerTag, TestMcpAppUnmountSiblingOwner);
 

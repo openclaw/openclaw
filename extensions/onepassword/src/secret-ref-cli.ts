@@ -47,7 +47,6 @@ type RegisterOnePasswordSecretRefCommandsParams = {
   command: CommandLike;
   config: OpenClawConfig;
   tokenFile: string;
-  env?: NodeJS.ProcessEnv;
 };
 
 type StatusOptions = {
@@ -64,62 +63,43 @@ type SecretRefReadiness = {
   prerequisitesReady: boolean;
 };
 
-type ReadinessDependencies = {
-  resolveTrustedCli?: typeof resolveTrustedOnePasswordCli;
-  readTokenFile?: (filePath: string) => string | undefined;
-};
-
 function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
 }
 
-function writeJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-async function inspectSecretRefReadiness(
-  params: { env: NodeJS.ProcessEnv; tokenFile: string },
-  dependencies: ReadinessDependencies = {},
-): Promise<SecretRefReadiness> {
-  const resolveTrustedCli = dependencies.resolveTrustedCli ?? resolveTrustedOnePasswordCli;
-  const readTokenFile =
-    dependencies.readTokenFile ??
-    ((filePath: string) =>
-      tryReadSecretFileSync(filePath, "1Password service account token", {
-        maxBytes: DEFAULT_SECRET_FILE_MAX_BYTES,
-        rejectHardlinks: false,
-        rejectSymlink: true,
-      }));
-  const configuredOpCommand = normalizeOptionalString(params.env.CLAW_1PASSWORD_OP);
+async function inspectSecretRefReadiness(tokenFile: string): Promise<SecretRefReadiness> {
+  const configuredOpCommand = normalizeOptionalString(process.env.CLAW_1PASSWORD_OP);
   const opCommand = configuredOpCommand ?? "op";
-  const { opBinaryPath, opStatus } = await (async () => {
-    try {
-      const resolvedPath =
-        (await resolveTrustedCli({
-          ...(configuredOpCommand ? { configuredPath: configuredOpCommand } : {}),
-          pathEnv: params.env.PATH,
-        })) ?? null;
-      return {
-        opBinaryPath: resolvedPath,
-        opStatus: resolvedPath ? ("ready" as const) : ("not-found" as const),
-      };
-    } catch {
-      return { opBinaryPath: null, opStatus: "untrusted" as const };
-    }
-  })();
+  let opBinaryPath: string | null = null;
+  let opStatus: SecretRefReadiness["opStatus"];
+  try {
+    opBinaryPath =
+      (await resolveTrustedOnePasswordCli({
+        ...(configuredOpCommand ? { configuredPath: configuredOpCommand } : {}),
+        pathEnv: process.env.PATH,
+      })) ?? null;
+    opStatus = opBinaryPath ? "ready" : "not-found";
+  } catch {
+    opStatus = "untrusted";
+  }
 
-  const tokenFileStatus: SecretRefReadiness["tokenFileStatus"] = (() => {
-    try {
-      return readTokenFile(params.tokenFile) ? "ready" : "missing-or-unsafe";
-    } catch {
-      return "missing-or-unsafe";
-    }
-  })();
+  let tokenFileStatus: SecretRefReadiness["tokenFileStatus"];
+  try {
+    tokenFileStatus = tryReadSecretFileSync(tokenFile, "1Password service account token", {
+      maxBytes: DEFAULT_SECRET_FILE_MAX_BYTES,
+      rejectHardlinks: false,
+      rejectSymlink: true,
+    })
+      ? "ready"
+      : "missing-or-unsafe";
+  } catch {
+    tokenFileStatus = "missing-or-unsafe";
+  }
   return {
     opCommand,
     opBinaryPath,
     opStatus,
-    tokenFile: params.tokenFile,
+    tokenFile,
     tokenFileStatus,
     prerequisitesReady: opStatus === "ready" && tokenFileStatus === "ready",
   };
@@ -133,10 +113,7 @@ async function runStatus(
     params.config,
     options.providerAlias,
   );
-  const readiness = await inspectSecretRefReadiness({
-    env: params.env ?? process.env,
-    tokenFile: params.tokenFile,
-  });
+  const readiness = await inspectSecretRefReadiness(params.tokenFile);
   const issues = [
     ...(providerReady
       ? []
@@ -153,7 +130,7 @@ async function runStatus(
     issues,
   };
   if (options.json) {
-    writeJson(result);
+    writeLine(JSON.stringify(result, null, 2));
     return;
   }
   writeLine(
@@ -208,5 +185,3 @@ export function registerOnePasswordSecretRefCommands(
     .action((options: StatusOptions) => runStatus(params, options));
   onePasswordSecretRefSetupCli.registerSetupCommand(secretRef);
 }
-
-export const testing = { inspectSecretRefReadiness };

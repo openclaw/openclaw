@@ -33,6 +33,7 @@ export function listGatewayMethods(): string[] {
 export const GATEWAY_EVENTS = [
   "connect.challenge",
   "agent",
+  "agent.identity.changed",
   "chat",
   "chat.metadata.changed",
   "models.snapshot",
@@ -45,6 +46,7 @@ export const GATEWAY_EVENTS = [
   "session.sharing",
   "session.sharing.evidence",
   "session.suggestion",
+  "session.reaction",
   "session.typing",
   "session.tool",
   "sessions.changed",

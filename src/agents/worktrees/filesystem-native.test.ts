@@ -1,8 +1,24 @@
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { getApfsCloneId } from "../../../test/helpers/apfs.js";
+import {
+  afterAll,
+  afterEach,
+  assert,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as runner from "../../process/exec-runner.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
@@ -12,6 +28,14 @@ import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 describe.skipIf(process.platform !== "darwin")("isolated native worktree operations", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const options = { commitGuard: () => {} };
+  let receipts: FixtureReceiptChannel;
+  let cleanupWrite: (() => Promise<void>) | undefined;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts.close();
+  });
   beforeEach(() => {
     for (const name of [
       "FS_SAFE_NATIVE_MODE",
@@ -25,8 +49,11 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
   });
   afterEach(async () => {
     try {
+      // A timed-out body can still be unwinding; join before the earlier temp-dir hook runs.
+      await cleanupWrite?.();
       await drainGlobalSingletonLifecycleState();
     } finally {
+      cleanupWrite = undefined;
       configureFsSafeNative({ mode: undefined });
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
@@ -47,34 +74,38 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
       [path.join(source, "payload"), path.join(destination, "payload")],
       options,
     );
-    expect(original?.cloneId).toBe(getApfsCloneId(path.join(source, "payload")));
-    expect(cloned?.cloneId).toBe(original?.cloneId);
-    expect(cloned?.ino).not.toBe(original?.ino);
+    assert(original);
+    assert(cloned);
+    expect(original.cloneId).toBeGreaterThan(0n);
+    expect(cloned.cloneId).toBe(original.cloneId);
+    expect(cloned.ino).not.toBe(original.ino);
     expect(await fs.readFile(path.join(destination, "payload"))).toEqual(
       await fs.readFile(path.join(source, "payload")),
     );
     expect(getFsSafeNativeConfig().mode).toBe("off");
   });
 
-  it.each(["FS_SAFE_NATIVE_MODE", "OPENCLAW_FS_SAFE_NATIVE_MODE"])(
-    "honors explicit %s=off in read and write children",
-    async (name) => {
-      vi.stubEnv(name, "off");
-      const root = tempDirs.make("openclaw-native-disabled-");
-      const source = path.join(root, "source");
-      const destination = path.join(root, "destination");
-      await fs.mkdir(source);
-      await fs.writeFile(path.join(source, "payload"), "source");
-      expect(await detectWorktreeFilesystemBackend(root, options)).toBeNull();
-      await expect(
-        nativeWorktreeFilesystem.copy(source, destination, options),
-      ).rejects.toMatchObject({
+  it.each([
+    "FS_SAFE_NATIVE_MODE",
+    "OPENCLAW_FS_SAFE_NATIVE_MODE",
+    "FS_SAFE_PYTHON_MODE",
+    "OPENCLAW_FS_SAFE_PYTHON_MODE",
+  ])("honors explicit %s=off in read and write children", async (name) => {
+    vi.stubEnv(name, "off");
+    const root = tempDirs.make("openclaw-native-disabled-");
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    await fs.mkdir(source);
+    await fs.writeFile(path.join(source, "payload"), "source");
+    expect(await detectWorktreeFilesystemBackend(root, options)).toBeNull();
+    await expect(nativeWorktreeFilesystem.copy(source, destination, options)).rejects.toMatchObject(
+      {
         code: "helper-unavailable",
-      });
-      await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(getFsSafeNativeConfig().mode).toBe("off");
-    },
-  );
+      },
+    );
+    await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(getFsSafeNativeConfig().mode).toBe("off");
+  });
 
   it.each(["copy", "createSource"])(
     "revalidates allocation authority before child %s input",
@@ -119,7 +150,9 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     },
   );
 
-  it("joins an admitted write child after cancellation before returning to cleanup", async () => {
+  it("joins an admitted write child after cancellation before returning to cleanup", async ({
+    signal,
+  }) => {
     const root = tempDirs.make("openclaw-native-settlement-");
     const ready = path.join(root, "ready");
     const canceled = path.join(root, "canceled");
@@ -132,10 +165,16 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
       import path from 'node:path';
       import { setTimeout } from 'node:timers/promises';
       import { serialize } from 'node:v8';
+      ${fixtureReceiptClientSource(receipts.endpoint)}
       const root = process.argv[1];
-      process.on('SIGTERM', () => fs.writeFileSync(path.join(root, 'canceled'), 'yes'));
+      function record(name) {
+        const marker = path.join(root, name);
+        fs.writeFileSync(marker, 'yes');
+        sendReceipt(marker, 'yes');
+      }
+      process.on('SIGTERM', () => record('canceled'));
       JSON.parse(fs.readFileSync(0, 'utf8'));
-      fs.writeFileSync(path.join(root, 'ready'), 'yes');
+      record('ready');
       while (!fs.existsSync(path.join(root, 'release'))) await setTimeout(10);
       fs.writeFileSync(path.join(root, 'finished'), 'yes');
       process.stdout.write(serialize({ type: 'written' }));
@@ -157,15 +196,32 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
       .finally(() => {
         settled = true;
       });
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        await fs.writeFile(release, "yes");
+        await pending;
+      })());
+    cleanupWrite = cleanup;
+    const waitForMarker = (marker: string) =>
+      withinTest(
+        Promise.race([
+          receipts.waitFor(marker, "yes"),
+          pending.then(() => {
+            // The durable write precedes replies and exit; its receipt can arrive later.
+            expect(existsSync(marker) ? readFileSync(marker, "utf8") : "").toBe("yes");
+          }),
+        ]),
+        signal,
+      );
     try {
-      await expect.poll(() => fs.readFile(ready, "utf8").catch(() => "")).toBe("yes");
+      await waitForMarker(ready);
       controller.abort(new Error("allocation canceled"));
-      await expect.poll(() => fs.readFile(canceled, "utf8").catch(() => "")).toBe("yes");
+      await waitForMarker(canceled);
       expect(settled).toBe(false);
       await expect(fs.access(finished)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
-      await fs.writeFile(release, "yes");
-      await pending;
+      await cleanup();
     }
     expect(await pending).toMatchObject({ message: "allocation canceled" });
     expect(await fs.readFile(finished, "utf8")).toBe("yes");

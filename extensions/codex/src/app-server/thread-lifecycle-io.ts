@@ -15,15 +15,12 @@ import {
   isCodexAppServerOverloadError,
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
-import { assertCodexInferenceRouteConfig } from "./inference-routing.js";
-import { markStartedCodexManagedThread } from "./managed-thread-store.js";
-import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   attestCodexThreadToolSurface,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
-import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
+import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadStartResponse,
@@ -43,21 +40,66 @@ import {
 } from "./thread-lifecycle-errors.js";
 import {
   buildCodexThreadBindingPolicy,
+  buildCodexThreadRequestConfig,
   prepareCodexThreadFinalConfigPatch,
   resolveCodexThreadAgentDir,
+  type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
-  CodexResumeThreadContext,
-  CodexStartThreadContext,
+  CodexThreadFinalConfigPatchResult,
   CodexThreadResumePreparation,
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
-import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
+import { buildThreadStartParams } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { hasCodexAppServerSiblingRouteWork } from "./turn-router.js";
+
+type CodexResumeThreadContext = CodexThreadRequestContext & {
+  binding: CodexAppServerThreadBinding;
+  stageBindingReplacement: (operation: string) => void;
+  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
+  buildLoadedPluginThreadConfig?: (
+    binding: CodexAppServerThreadBinding,
+  ) => Promise<CodexPluginThreadConfig | undefined>;
+  prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult;
+  prepareResume: () => Promise<CodexThreadResumePreparation>;
+  releaseRetainedThread: (assertCurrent: () => void) => Promise<void>;
+};
+
+type CodexStartThreadContext = CodexThreadRequestContext & {
+  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
+  preserveExistingBinding: boolean;
+  rotatedContextEngineBinding: boolean;
+  replacementPredecessor?: CodexAppServerThreadBinding;
+};
+
+function recordCodexThreadReady(
+  params: CodexStartOrResumeThreadParams,
+  context: Pick<CodexResumeThreadContext, "contextEngineBinding" | "lifecycleTiming">,
+  threadId: string,
+  action: "resumed" | "rotated" | "started",
+): void {
+  const { contextEngineBinding, lifecycleTiming } = context;
+  const event = {
+    sessionId: params.params.sessionId,
+    sessionKey: params.params.sessionKey,
+    threadId,
+    action,
+  };
+  if (contextEngineBinding) {
+    embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
+      ...event,
+      engineId: contextEngineBinding.engineId,
+      epoch: contextEngineBinding.projection?.epoch,
+      fingerprint: contextEngineBinding.projection?.fingerprint,
+    });
+  }
+  lifecycleTiming.mark("thread-ready");
+  lifecycleTiming.logSummary({ runId: params.params.runId, ...event });
+}
 
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
@@ -66,22 +108,16 @@ export async function resumeExistingCodexThread(
   const {
     binding: resumeBinding,
     bindingIdentity,
-    startModelSelection,
     startModelProvider,
-    userMcpServersConfigPatch,
     dynamicToolsFingerprint,
     webSearchThreadConfigFingerprint,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,
-    contextEngineBinding,
-    hostSystemAgentActive,
     restrictedToolSurface,
-    restrictedToolSurfaceInheritedMcpServerNames,
-    nativeSkillIsolation,
     lifecycleTiming,
     normalizeBindingModelProvider,
     throwIfAborted,
-    clearCurrentBinding,
+    stageBindingReplacement,
   } = context;
   let acceptedConfiguration: CodexThreadResumePreparation | undefined;
   let disposeConfiguration: (() => void) | undefined;
@@ -138,27 +174,14 @@ export async function resumeExistingCodexThread(
             params.pluginThreadConfig?.build(),
           )
         : undefined);
-    const resumeConfig = applyCodexNativeSkillIsolation(
-      mergeCodexThreadConfigs(
-        params.config,
-        userMcpServersConfigPatch,
-        pluginThreadConfig?.configPatch,
-        finalConfigPatch.configPatch,
-      ),
-      nativeSkillIsolation,
+    const resumeConfig = buildCodexThreadRequestConfig(
+      params,
+      context,
+      pluginThreadConfig?.configPatch,
+      finalConfigPatch.configPatch,
     );
     const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
-      buildThreadResumeParams(params.params, {
-        ...params,
-        threadId: resumeBinding.threadId,
-        authProfileId,
-        model: startModelSelection.model,
-        modelProvider: startModelProvider,
-        preserveNativeModel: resumeBinding.preserveNativeModel === true,
-        config: resumeConfig,
-        hostSystemAgentActive,
-        restrictedToolSurfaceInheritedMcpServerNames,
-      }),
+      context.buildResumeParams(resumeBinding, authProfileId, resumeConfig),
     );
     const requestModelProvider =
       typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
@@ -176,17 +199,15 @@ export async function resumeExistingCodexThread(
         abandonClient,
         request: resumeParams,
         signal: params.signal,
+        withCurrent: params.authority?.withCurrent,
         assertCurrent: () => {
           configuration.assertCurrent();
-          assertCodexInferenceRouteConfig(
-            params.client,
-            params.inferenceRoute,
+          context.assertInferenceConfig(
             resumeParams.config,
             requestModelProvider ??
               (resumeBinding.preserveNativeModel
                 ? (configuration.modelProvider ?? undefined)
                 : undefined),
-            params.inferenceProviderRoutes,
           );
         },
       }),
@@ -223,6 +244,7 @@ export async function resumeExistingCodexThread(
       restrictedToolSurface,
       lifecycleTiming,
       assertCurrent: assertHandoffCurrent,
+      withCurrent: params.authority?.withCurrent,
     });
     throwIfAborted();
     await refreshCodexThreadPolicy({
@@ -232,6 +254,7 @@ export async function resumeExistingCodexThread(
       timeoutMs: params.appServer.requestTimeoutMs,
       signal: params.signal,
       assertCurrent: assertHandoffCurrent,
+      withCurrent: params.authority?.withCurrent,
     });
     policyOutcome = "acknowledged";
     assertHandoffCurrent();
@@ -280,6 +303,7 @@ export async function resumeExistingCodexThread(
         bindingIdentity,
         { kind: "patch", threadId: resumeBinding.threadId, patch: resumePatch },
         assertHandoffCurrent,
+        params.authority,
       ),
     );
     if (!committed) {
@@ -289,48 +313,21 @@ export async function resumeExistingCodexThread(
       );
     }
     assertHandoffCurrent();
-    if (contextEngineBinding) {
-      embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
-        sessionId: params.params.sessionId,
-        sessionKey: params.params.sessionKey,
-        threadId: response.thread.id,
-        engineId: contextEngineBinding.engineId,
-        epoch: contextEngineBinding.projection?.epoch,
-        fingerprint: contextEngineBinding.projection?.fingerprint,
-        action: "resumed",
-      });
-    }
-    lifecycleTiming.mark("thread-ready");
-    lifecycleTiming.logSummary({
-      runId: params.params.runId,
-      sessionId: params.params.sessionId,
-      sessionKey: params.params.sessionKey,
-      threadId: response.thread.id,
-      action: "resumed",
-    });
+    recordCodexThreadReady(params, context, response.thread.id, "resumed");
     const activeTurnIds = readActiveCodexTurnIdsFromResume(response);
     return {
       ...resumeBinding,
       threadId: response.thread.id,
       ...resumePatch,
       liveThreadConfigFingerprint: fingerprintCodexThreadConfig(
-        {
-          ...resumeParams,
-          model:
-            resumeBinding.preserveNativeModel === true
-              ? null
-              : (response.model ?? resumeParams.model ?? null),
-          requestedModel:
-            resumeBinding.preserveNativeModel === true ? null : (resumeParams.model ?? null),
-          modelProvider:
-            resumeBinding.preserveNativeModel === true ? null : (resumePatch.modelProvider ?? null),
-          requestedModelProvider:
-            resumeBinding.preserveNativeModel === true
-              ? null
-              : (resumeParams.modelProvider ?? resumePatch.modelProvider ?? null),
-        },
+        resumeParams,
         authProfileId,
         dynamicToolsFingerprint,
+        {
+          model: response.model,
+          modelProvider: resumePatch.modelProvider ?? null,
+          preserveNativeModel: resumeBinding.preserveNativeModel,
+        },
       ),
       lifecycle: {
         action: "resumed",
@@ -362,6 +359,7 @@ export async function resumeExistingCodexThread(
         threadId: resumeBinding.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
         assertCurrent: acceptedConfiguration.assertCurrent,
+        withCurrent: params.authority?.withCurrent,
       }).catch(() => false);
       if (
         !subscriptionReleased ||
@@ -407,7 +405,7 @@ export async function resumeExistingCodexThread(
     embeddedAgentLog.warn("codex app-server thread resume failed; starting a new thread", {
       error,
     });
-    await clearCurrentBinding("rotating a stale thread binding");
+    stageBindingReplacement("rotating a stale thread binding");
   } finally {
     disposeConfiguration?.();
   }
@@ -424,7 +422,6 @@ export async function startFreshCodexThread(
     bindingIdentity,
     startModelSelection,
     startModelProvider,
-    userMcpServersConfigPatch,
     dynamicToolsFingerprint,
     webSearchThreadConfigFingerprint,
     ringZeroConfigFingerprint,
@@ -433,7 +430,6 @@ export async function startFreshCodexThread(
     hostSystemAgentActive,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
-    nativeSkillIsolation,
     lifecycleTiming,
     normalizeBindingModelProvider,
     throwIfAborted,
@@ -453,14 +449,11 @@ export async function startFreshCodexThread(
     context.nativeModelInputTools,
   );
   const config = lifecycleTiming.measureSync("merge-thread-config", () =>
-    applyCodexNativeSkillIsolation(
-      mergeCodexThreadConfigs(
-        params.config,
-        userMcpServersConfigPatch,
-        pluginThreadConfig?.configPatch,
-        finalConfigPatch.configPatch,
-      ),
-      nativeSkillIsolation,
+    buildCodexThreadRequestConfig(
+      params,
+      context,
+      pluginThreadConfig?.configPatch,
+      finalConfigPatch.configPatch,
     ),
   );
   const startParams = lifecycleTiming.measureSync("thread-start-params", () =>
@@ -484,13 +477,7 @@ export async function startFreshCodexThread(
   };
   const assertInferenceCurrent = () => {
     assertCurrent();
-    assertCodexInferenceRouteConfig(
-      params.client,
-      params.inferenceRoute,
-      startParams.config,
-      requestModelProvider,
-      params.inferenceProviderRoutes,
-    );
+    context.assertInferenceConfig(startParams.config, requestModelProvider);
   };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
@@ -498,6 +485,7 @@ export async function startFreshCodexThread(
       return await params.client.request("thread/start", startParams, {
         signal: params.signal,
         assertCurrent: assertInferenceCurrent,
+        withCurrent: params.authority?.withCurrent,
       });
     } catch (error) {
       if (error instanceof CodexAppServerRpcError) {
@@ -534,6 +522,7 @@ export async function startFreshCodexThread(
       restrictedToolSurface,
       lifecycleTiming,
       assertCurrent,
+      withCurrent: params.authority?.withCurrent,
     });
     assertCurrent();
   } catch (error) {
@@ -585,7 +574,7 @@ export async function startFreshCodexThread(
     let committed: boolean;
     try {
       await lifecycleTiming.measure("thread-start-mark-managed", () =>
-        markStartedCodexManagedThread(params.bindingStore.managedThreads, {
+        params.bindingStore.managedThreads?.mark({
           sourceHomeId: managedSourceHomeId,
           threadId: response.thread.id,
           ...(rolloutPath ? { rolloutPath } : {}),
@@ -602,6 +591,7 @@ export async function startFreshCodexThread(
               }
             : { kind: "set", if: { kind: "absent" }, binding: nextBinding },
           assertCurrent,
+          params.authority,
         ),
       );
     } catch (error) {
@@ -615,26 +605,16 @@ export async function startFreshCodexThread(
         ),
       );
     }
-    if (contextEngineBinding) {
-      embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
-        sessionId: params.params.sessionId,
-        sessionKey: params.params.sessionKey,
-        threadId: response.thread.id,
-        engineId: contextEngineBinding.engineId,
-        epoch: contextEngineBinding.projection?.epoch,
-        fingerprint: contextEngineBinding.projection?.fingerprint,
-        action: rotatedContextEngineBinding ? "rotated" : "started",
-      });
-    }
   }
-  lifecycleTiming.mark("thread-ready");
-  lifecycleTiming.logSummary({
-    runId: params.params.runId,
-    sessionId: params.params.sessionId,
-    sessionKey: params.params.sessionKey,
-    threadId: response.thread.id,
-    action: rotatedContextEngineBinding ? "rotated" : "started",
-  });
+  recordCodexThreadReady(
+    params,
+    {
+      lifecycleTiming,
+      contextEngineBinding: preserveExistingBinding ? undefined : contextEngineBinding,
+    },
+    response.thread.id,
+    rotatedContextEngineBinding ? "rotated" : "started",
+  );
   return {
     ...startedBinding,
     // Stored native-auth bindings omit redundant provider attribution; this
@@ -650,15 +630,10 @@ export async function startFreshCodexThread(
     ...(!preserveExistingBinding
       ? {
           liveThreadConfigFingerprint: fingerprintCodexThreadConfig(
-            {
-              ...startParams,
-              model: response.model ?? startParams.model ?? null,
-              requestedModel: startParams.model ?? null,
-              modelProvider: bindingModelProvider ?? null,
-              requestedModelProvider: startParams.modelProvider ?? bindingModelProvider ?? null,
-            },
+            startParams,
             params.params.authProfileId,
             dynamicToolsFingerprint,
+            { model: response.model, modelProvider: bindingModelProvider ?? null },
           ),
         }
       : {}),

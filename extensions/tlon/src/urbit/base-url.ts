@@ -1,15 +1,10 @@
-// Tlon plugin module implements base url behavior.
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 
 type UrbitBaseUrlValidation =
   | { ok: true; baseUrl: string; hostname: string }
   | { ok: false; error: string };
 
-function hasScheme(value: string): boolean {
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value);
-}
-
-export function normalizeUrbitHostname(hostname: string | undefined): string {
+function normalizeUrbitHostname(hostname: string | undefined): string {
   return (hostname ?? "").trim().toLowerCase().replace(/\.$/, "");
 }
 
@@ -19,12 +14,10 @@ export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
     return { ok: false, error: "Required" };
   }
 
-  const candidate = hasScheme(trimmed) ? trimmed : `https://${trimmed}`;
+  const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
 
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
+  const parsed = URL.parse(candidate);
+  if (!parsed) {
     return { ok: false, error: "Invalid URL" };
   }
 

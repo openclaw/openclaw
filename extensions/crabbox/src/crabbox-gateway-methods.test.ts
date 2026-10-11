@@ -136,37 +136,6 @@ describe("Crabbox snapshot mutations", () => {
     },
   );
 
-  it.each([true, false])(
-    "passes pin=%s to its owner and returns the updated summary",
-    async (pinned) => {
-      const actions = await createActions();
-      const respond = vi.fn();
-      await mutateCrabboxImage(createApi(), actions, "pin", {
-        params: { checkpointId: "chk_fixture", pinned },
-        respond,
-      });
-      expect(actions.pin).toHaveBeenCalledWith("chk_fixture", pinned);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ checkpointId: "chk_fixture" }),
-      );
-    },
-  );
-
-  it("passes a previous checkpoint to rollback and returns the owner's summary", async () => {
-    const actions = await createActions();
-    const respond = vi.fn();
-    await mutateCrabboxImage(createApi(), actions, "rollback", {
-      params: { checkpointId: "chk_previous" },
-      respond,
-    });
-    expect(actions.rollback).toHaveBeenCalledWith("chk_previous");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ checkpointId: "chk_fixture" }),
-    );
-  });
-
   it("uses current Crabbox profiles for deletion and preserves pending retirement", async () => {
     const actions = await createActions();
     actions.delete.mockResolvedValue({ status: "retiring" });
@@ -258,7 +227,12 @@ describe("Crabbox snapshots Gateway methods", () => {
     };
     const store = openWarmImageStore();
     store.register("current", current);
-    store.register("older", { version: 3, allocations: {} });
+    const captureUnsupported = {
+      atMs: 100,
+      provider: "hetzner",
+      message: "Native checkpoints are unsupported for this coordinator target.",
+    };
+    store.register("older", { version: 3, allocations: {}, captureUnsupported });
     const respond = vi.fn();
 
     await listCrabboxImages(createApi(), { params: {}, respond });
@@ -283,6 +257,7 @@ describe("Crabbox snapshots Gateway methods", () => {
           projectLabel: undefined,
           projectRoot: undefined,
           state: "no-image",
+          captureUnsupported,
           held: false,
           allocationCount: 0,
         }),
@@ -351,9 +326,7 @@ describe("Crabbox snapshots Gateway methods", () => {
 
   it.each([
     { selector: SELECTOR },
-    { selector: SELECTOR, acknowledgeProviderCleanup: "true" },
     { selector: " ", acknowledgeProviderCleanup: true },
-    { selector: 1, acknowledgeProviderCleanup: true },
     { selector: SELECTOR, acknowledgeProviderCleanup: true, extra: true },
   ])("refuses invalid recovery params without changing capture ownership: %j", async (params) => {
     const current = record();

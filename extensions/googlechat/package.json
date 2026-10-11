@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/googlechat",
-  "version": "2026.9.6",
+  "version": "2026.9.9",
   "description": "OpenClaw Google Chat channel plugin for spaces and direct messages.",
   "repository": {
     "type": "git",
@@ -16,7 +16,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.6"
+    "openclaw": ">=2026.9.9"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -136,13 +136,13 @@
       "clawhubSpec": "clawhub:@openclaw/googlechat",
       "npmSpec": "@openclaw/googlechat",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
+      "minHostVersion": ">=2026.9.8"
     },
     "compat": {
-      "pluginApi": ">=2026.9.6"
+      "pluginApi": ">=2026.9.9"
     },
     "build": {
-      "openclawVersion": "2026.9.6"
+      "openclawVersion": "2026.9.9"
     },
     "release": {
       "publishToClawHub": true,

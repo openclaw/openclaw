@@ -26,7 +26,9 @@ Inspect or continue an existing parent:
 
 ```bash
 pnpm frv status --run <parent-run-id> --json
+pnpm frv watch --run <parent-run-id> [--once] [--json]
 pnpm frv rerun --run <parent-run-id> --job "normalCi:checks-node-agentic-control-plane-agent-chat"
+pnpm frv rerun --run <parent-run-id> --child <child-key|run-id> [--max-attempts 2]
 pnpm frv continue --failed --run <parent-run-id>
 pnpm frv verify --run <successful-parent-run-id>
 pnpm frv prioritize --restore <record> [--dry-run]
@@ -42,6 +44,30 @@ no longer pauses CI or supporting workflows.
 then uses GitHub's job-rerun API on the job's accepted attempt. GitHub also
 reruns dependent jobs. Other failures stay visible and require their own retry;
 a targeted retry never declares the parent recovered while blockers remain.
+
+`watch` resolves child runs from the parent's `Dispatched <workflow>: <url>
+(attempt N)` dispatch-job log lines and reports each attempt transition and
+failed job once, with runner labels. Transient network failures retry on the next
+poll without repeating unchanged warnings. Rate-limited reads pause until GitHub's
+`Retry-After` or exhausted-primary reset boundary; headerless throttles wait at
+least one minute, with exponential backoff for repeated throttles. The watcher
+prints the next eligible check and resumes automatically. Permission-denied
+403 responses remain terminal. A local state file under `$TMPDIR/openclaw-frv/`
+retains the retry boundary and reported events across watcher restarts.
+
+`rerun --child` waits for one failed child, sends exactly one retry request,
+confirms the new attempt has no duplicate jobs, and
+records an audit line. It refuses children past `--max-attempts` (default 2,
+which allows one rerun). When a failed consumer is bound to a green producer's
+run attempt, it reruns that producer and its dependents instead. It returns
+after the new attempt starts; `continue --failed` still owns the final reseal.
+
+When every workload passed and only **Seal child receipt** failed, the preview
+reports `mode: receipt`. The same bounded `rerun --child` command selects that
+exact receipt job instead of rerunning the passing workloads. It carries forward
+their accepted attempts, seals the new receipt against the exact child attempt,
+and still requires `continue --failed` plus strict verification before reporting
+qualification accepted. A metadata retry starting is not qualification success.
 
 `continue --failed` reruns each failed child's jobs as soon as that child is
 terminal, while sibling children and the original parent may still run. It
@@ -83,6 +109,15 @@ Each child or parent rerun mutation is sent exactly once. If GitHub returns an
 ambiguous transient error, the controller performs read-only reconciliation
 until the newer attempt becomes visible or the bounded reconciliation deadline
 expires. It never repeats the mutation, and provenance drift fails closed.
+`frv status` leads with qualification, evidence acceptance, diagnostic drain,
+workload failures, and the next supported command. A passing GitHub badge or green
+child list is not an accepted seal: terminal successful parents are checked by the
+same strict verifier used by recovery. Missing or unreadable evidence stays
+explicitly unavailable. JSON preserves child facts and marks incomplete collection.
+The candidate's admitted context ref is read freshly to label a superseded tip;
+qualification of that frozen candidate never claims qualification of a newer tip.
+Retry suggestions are dry-run previews; mutations still perform fresh admission.
+
 After a timeout or an interrupted command, inspect `frv status` and the exact
 GitHub attempts before deciding on another retry; the local process cannot
 prove that an unobserved mutation was rejected.
@@ -98,7 +133,7 @@ controller never reconstructs old state or dispatches a replacement parent.
 
 For new dispatches, including dry runs, the helper first proves GitHub serves the
 exact Validation SHA by bare-SHA fetch in a fresh temporary repository. It pushes
-one immutable `release-ci/*` workflow ref pinned to the Tooling SHA,
+one immutable `release-ci/*` workflow ref pinned to Q=C after independent P admission,
 passes the exact Validation SHA as both `ref` and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
 verification. The helper reads Release Decision artifacts while the parent is
@@ -120,27 +155,68 @@ Validation SHA is the exact commit being qualified: the Code SHA, which can
 also be the Release SHA, or a later changelog-only Release SHA. It is not a
 third release identity. The workflow
 rejects malformed or mismatched expected SHAs before child dispatch. Every
-child must report the same Tooling SHA. Pass
-`-f reuse_evidence=false` to force a fresh run. Regular release-branch runs
-require `--workflow-sha` with the recorded full SHA, which must remain reachable
-from current `origin/main`. The helper rejects a pinned Tooling SHA that does
-not declare the current release-isolation contract or the `expected_sha`
-dispatch input; it never silently substitutes newer tooling. The workflow never
-creates or updates repository refs itself.
+child must report the same Q. Pass `-f reuse_evidence=false` to force a fresh run.
+New publication requests retain Q=C and select P with the admission-workflow
+arguments. Only P requires independent trusted-main or protected-tag authority;
+Q requires its reviewed candidate context and frozen qualification contracts.
+Missing contracts require deliberate candidate backports, never newer-tooling
+substitution. Existing historical requests retain their original identities.
+The workflow never creates or updates repository refs itself.
+
+### Cancel an owned validation tree
+
+Preview the exact cancellation targets, then request cancellation:
+
+```bash
+pnpm frv cancel --run <parent-run-id> --dry-run --json
+pnpm frv cancel --run <parent-run-id> --json
+```
+
+The command authenticates the original sealed execution plan and dispatch
+producer logs. It cancels recorded Telegram descendants, owned diagnostic and
+artifact children, then the parent. Reused children are borrowed evidence and
+remain untouched. Current run identities and attempts are checked immediately
+before each request; unrelated runs are never selected by branch or latest-run
+order.
+
+Cancellation acceptance is not completion. JSON lists requested actions,
+remaining active run IDs, excluded borrowed children, failures, and the next
+command. Missing plans, unsettled dispatch logs, changed attempts, or unavailable
+observations stay explicit; they never prove the tree is terminal. Exit 0 requires
+a complete terminal tree (or a read-only preview); incomplete cancellation exits 1.
+Repeat the same command after an interruption or delayed response. It rereads
+GitHub state and skips terminal runs without creating a cancellation ledger,
+replacement parent, or candidate. Wait for completion before dispatching a replacement.
+
+If an earlier cancellation is not settling, explicitly use
+`pnpm frv cancel --run <parent-run-id> --force`. GitHub's force-cancel operation
+bypasses conditions such as `always()`; it is not an automatic fallback.
+
+GitHub's cancellation endpoint has no atomic run-attempt compare-and-swap. FRV
+refreshes the target and then its originating lineage immediately before each
+request, and validates exact identities again during reconciliation. Concurrent
+reruns remain an external coordination risk; do not rerun a tree while cancelling it.
 
 ### Automatic retries for declared flakes
 
-Automatic test retries are disabled. A failed or timed out child job remains a
-blocker; `known_flaky_jobs_json` is rejected on new dispatches. Inspect the
-original failure and fix its owner before requesting another execution. The
+Automatic test retries are disabled. Failed or timed out jobs remain blockers;
+`known_flaky_jobs_json` is rejected
+on new dispatches. Inspect the original failure before requesting another execution. The
 explicit `frv rerun` and `frv continue --failed` commands remain operator recovery
 operations and never run as an automatic response to a test outcome.
 
 Published artifacts may contain empty `knownFlakyJobs` and `automaticRetries`
 fields. Readers retain their original plan digest and reject nonempty allowances
-or retry records. Current qualification requires successful selected child
-results. Evidence carrying retired waivers or advisory failure allowances must
-be replaced with a fresh qualifying run; it cannot authorize publication.
+or retry records. Current qualification requires successful selected results. A
+campaign already dispatched with an
+older pinned Tooling SHA remains owned by that immutable tooling and must not be
+retargeted mid-run. Current strict tooling rejects retained `windows-node-ci`
+advisory evidence; start a fresh campaign that satisfies the restored blocking
+gate. Candidate-owned qualification still uses Q=C: if the frozen harness needs
+the policy repair, deliberately backport it and freeze a new candidate instead
+of substituting newer main tooling. Retired waivers and pre-declared advisory failure
+allowances remain rejected and must be replaced with a fresh qualifying run; they
+cannot authorize publication.
 
 ### Read publication observations
 

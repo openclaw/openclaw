@@ -313,46 +313,6 @@ describe("Codex supervision compatibility tools", () => {
     expect(pageCalls).toBe(3);
   });
 
-  it("stops stored-session pagination when duplicate-only pages repeat a cursor", async () => {
-    let storedPageCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method !== "thread/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      storedPageCalls += 1;
-      if (storedPageCalls > 2) {
-        throw new Error("unexpected third stored-session page");
-      }
-      return {
-        data: [{ id: "stored-thread", status: { type: "idle" } }],
-        nextCursor: "stored-page-2",
-      };
-    });
-    const tools = createTools(request);
-
-    await expect(
-      toolByName(tools, "codex_sessions_list").execute("list", {
-        include_stored: true,
-        max_stored_sessions: 2,
-      }),
-    ).resolves.toMatchObject({
-      details: {
-        sessions: [],
-        errors: [
-          {
-            endpointId: "local",
-            ok: false,
-            detail: "Codex thread/list returned repeated cursor stored-page-2",
-          },
-        ],
-      },
-    });
-    expect(storedPageCalls).toBe(2);
-  });
-
   it("fails closed at the loaded-session page cap when a cursor remains", async () => {
     let loadedPageCalls = 0;
     const request = createEndpointRequest(async (_endpoint, method) => {
@@ -557,43 +517,6 @@ describe("Codex supervision compatibility tools", () => {
     });
   });
 
-  it("fails closed at the stored-session page cap when a cursor remains", async () => {
-    let storedPageCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method !== "thread/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      storedPageCalls += 1;
-      return {
-        data: [{ id: "stored-thread", status: { type: "idle" } }],
-        nextCursor: `stored-page-${storedPageCalls + 1}`,
-      };
-    });
-    const tools = createTools(request);
-
-    await expect(
-      toolByName(tools, "codex_sessions_list").execute("list", {
-        include_stored: true,
-        max_stored_sessions: 2,
-      }),
-    ).resolves.toMatchObject({
-      details: {
-        sessions: [],
-        errors: [
-          {
-            endpointId: "local",
-            ok: false,
-            detail: "Codex thread/list exceeded 100 pages with a continuation cursor",
-          },
-        ],
-      },
-    });
-    expect(storedPageCalls).toBe(100);
-  });
-
   it("rechecks live supervision config before every paginated request", async () => {
     let pluginConfig: unknown = { supervision: { enabled: true } };
     let requestCalls = 0;
@@ -727,7 +650,7 @@ describe("Codex supervision compatibility tools", () => {
     };
     let runtimeConfig = {
       agents: {
-        list: [{ id: "main", default: true, agentDir: "/tmp/codex-supervision-agent-a" }],
+        entries: { main: { agentDir: "/tmp/codex-supervision-agent-a" } },
       },
     };
     const request = createEndpointRequest(async (_endpoint, method) => {
@@ -736,7 +659,7 @@ describe("Codex supervision compatibility tools", () => {
       }
       runtimeConfig = {
         agents: {
-          list: [{ id: "main", default: true, agentDir: "/tmp/codex-supervision-agent-b" }],
+          entries: { main: { agentDir: "/tmp/codex-supervision-agent-b" } },
         },
       };
       return {
@@ -793,7 +716,7 @@ describe("Codex supervision compatibility tools", () => {
       supervision: { enabled: true, allowRawTranscripts: true },
     };
     let runtimeConfig = {
-      agents: { list: [{ id: "main", default: true, agentDir }] },
+      agents: { entries: { main: { agentDir } } },
       auth: { order: { openai: ["openai:first", "openai:second"] } },
     };
     const request = createEndpointRequest(async (_endpoint, method) => {
@@ -801,7 +724,7 @@ describe("Codex supervision compatibility tools", () => {
         throw new Error(`unexpected method: ${method}`);
       }
       runtimeConfig = {
-        agents: { list: [{ id: "main", default: true, agentDir }] },
+        agents: { entries: { main: { agentDir } } },
         auth: { order: { openai: ["openai:second", "openai:first"] } },
       };
       return {

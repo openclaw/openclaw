@@ -16,6 +16,7 @@ import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
+import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import {
   transcriptListParams,
   transcriptRouteSearch,
@@ -104,6 +105,26 @@ class MeetingsPage extends OpenClawLightDomElement {
     return this.selection.query ? "text" : "summary";
   }
 
+  private captureArchiveRequest(client: GatewayClient | null) {
+    const scope = this.gateway.capture();
+    const gateway = this.context.gateway;
+    const hello = gateway.snapshot.hello;
+    const auth = gateway.snapshot.hello?.auth;
+    const generation = this.accessGeneration;
+    return {
+      scope,
+      auth,
+      isCurrent: () =>
+        this.requestClient() === client &&
+        this.context.gateway === gateway &&
+        gateway.snapshot.hello === hello &&
+        gateway.snapshot.hello?.auth === auth &&
+        scope !== null &&
+        this.gateway.isCurrent(scope) &&
+        this.accessGeneration === generation,
+    };
+  }
+
   private async readArchive<Method extends keyof ArchiveReadResults>(request: {
     client: GatewayClient;
     method: Method;
@@ -112,21 +133,8 @@ class MeetingsPage extends OpenClawLightDomElement {
     current: () => boolean;
     accept: (result: ArchiveReadResults[Method]) => void;
   }) {
-    const scope = this.gateway.capture();
-    const gateway = this.context.gateway;
-    const hello = gateway.snapshot.hello;
-    const auth = gateway.snapshot.hello?.auth;
-    const generation = this.accessGeneration;
-    const current = () =>
-      !request.signal.aborted &&
-      this.requestClient() === request.client &&
-      this.context.gateway === gateway &&
-      gateway.snapshot.hello === hello &&
-      gateway.snapshot.hello?.auth === auth &&
-      scope !== null &&
-      this.gateway.isCurrent(scope) &&
-      this.accessGeneration === generation &&
-      request.current();
+    const context = this.captureArchiveRequest(request.client);
+    const current = () => !request.signal.aborted && context.isCurrent() && request.current();
     try {
       const result = await request.client.request<ArchiveReadResults[Method]>(
         request.method,
@@ -349,17 +357,13 @@ class MeetingsPage extends OpenClawLightDomElement {
   private async generateMissingSummary(retry = false) {
     const client = this.requestClient();
     const { selector } = this.selection;
-    const gateway = this.context.gateway;
-    const hello = gateway.snapshot.hello;
-    const auth = hello?.auth;
-    const scope = this.gateway.capture();
-    const generation = this.accessGeneration;
+    const context = this.captureArchiveRequest(client);
     if (
       !client ||
       !selector ||
-      !scope ||
+      !context.scope ||
       this.readerDenial ||
-      !hasOperatorWriteAccess(auth ?? null) ||
+      !hasOperatorWriteAccess(context.auth ?? null) ||
       !this.summary ||
       this.summary.summary ||
       this.summary.session.utteranceCount === 0 ||
@@ -374,12 +378,7 @@ class MeetingsPage extends OpenClawLightDomElement {
     const current = () =>
       !abort.signal.aborted &&
       this.summaryAbort === abort &&
-      this.requestClient() === client &&
-      this.context.gateway === gateway &&
-      gateway.snapshot.hello === hello &&
-      gateway.snapshot.hello?.auth === auth &&
-      this.gateway.isCurrent(scope) &&
-      this.accessGeneration === generation &&
+      context.isCurrent() &&
       this.selection.selector === selector;
     try {
       const result = await client.request<TranscriptsGetResult>(
@@ -461,11 +460,10 @@ class MeetingsPage extends OpenClawLightDomElement {
       return;
     }
     this.lastReaderRefresh = this.now;
-    if (this.summaryTask.status !== TaskStatus.PENDING) {
-      void this.summaryTask.run();
-    }
-    if (this.readerTask.status !== TaskStatus.PENDING) {
-      void this.readerTask.run();
+    for (const task of [this.summaryTask, this.readerTask]) {
+      if (task.status !== TaskStatus.PENDING) {
+        void task.run();
+      }
     }
   }
 
@@ -545,14 +543,18 @@ class MeetingsPage extends OpenClawLightDomElement {
       onSummaryRetry: () => void this.generateMissingSummary(true),
       exportState: this.exportState,
       onNavigate: (patch) => this.navigate(patch),
+      onOpenCaptureSettings: () => {
+        const target = SETTINGS_SEARCH_TARGETS.meetingCapture;
+        this.context.navigate(target.routeId, { search: target.search, hash: target.hash });
+      },
       onRefresh: () => this.refresh(),
       onReaderRetry: () => {
+        if (!this.readerPages.length) {
+          this.resetReader();
+        }
         if (this.readerTab === "summary") {
           void this.summaryTask.run();
           return;
-        }
-        if (!this.readerPages.length) {
-          this.resetReader();
         }
         if (!this.summary) {
           void this.summaryTask.run();

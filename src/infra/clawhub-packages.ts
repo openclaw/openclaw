@@ -61,29 +61,18 @@ export type ClawHubPackageSecurityTrust = {
   pending: boolean;
   stale: boolean;
 };
-export type ClawHubResolvedArtifact =
-  | {
-      source: "clawhub";
-      artifactKind: "legacy-zip";
-      packageName: string;
-      version: string;
-      downloadUrl?: string | null;
-      artifactSha256?: string | null;
-      scanState?: ClawHubArtifactScanState | null;
-      moderationState?: ClawHubArtifactModerationState | null;
-    }
-  | {
-      source: "clawhub";
-      artifactKind: "npm-pack";
-      packageName: string;
-      version: string;
-      downloadUrl?: string | null;
-      npmIntegrity: string;
-      npmShasum?: string | null;
-      artifactSha256?: string | null;
-      scanState?: ClawHubArtifactScanState | null;
-      moderationState?: ClawHubArtifactModerationState | null;
-    };
+export type ClawHubResolvedArtifact = {
+  source: "clawhub";
+  packageName: string;
+  version: string;
+  downloadUrl?: string | null;
+  artifactSha256?: string | null;
+  scanState?: ClawHubArtifactScanState | null;
+  moderationState?: ClawHubArtifactModerationState | null;
+} & (
+  | { artifactKind: "legacy-zip" }
+  | { artifactKind: "npm-pack"; npmIntegrity: string; npmShasum?: string | null }
+);
 export type ClawHubPackageArtifactResolverResponse = {
   package?: {
     name?: string | null;
@@ -259,18 +248,14 @@ function parseOptionalSecurityRelease(value: unknown): ClawHubPackageSecurityRes
       "Malformed ClawHub security response: expected release to be an object or null.",
     );
   }
-  const result: NonNullable<ClawHubPackageSecurityResponse["release"]> = {};
   const releaseId = readClawHubStringField(value, "releaseId", "security release");
   const legacyId = readClawHubStringField(value, "id", "security release");
   const version = readClawHubStringField(value, "version", "security release");
   const id = releaseId ?? legacyId;
-  if (id !== undefined) {
-    result.id = id;
-  }
-  if (version !== undefined) {
-    result.version = version;
-  }
-  return result;
+  return {
+    ...(id !== undefined ? { id } : {}),
+    ...(version !== undefined ? { version } : {}),
+  };
 }
 
 export function parseClawHubPackageSecurityResponse(
@@ -312,17 +297,13 @@ export function parseClawHubPackageSecurityResponse(
   };
   const parsedPackage = parseOptionalSecurityPackage(value.package);
   const verdict = readClawHubStringField(value, "verdict", "security response");
-  if (verdict) {
-    result.verdict = verdict;
-  }
   const parsedRelease = parseOptionalSecurityRelease(value.release);
-  if (parsedPackage !== undefined) {
-    result.package = parsedPackage;
-  }
-  if (parsedRelease !== undefined) {
-    result.release = parsedRelease;
-  }
-  return result;
+  return {
+    ...result,
+    ...(verdict ? { verdict } : {}),
+    ...(parsedPackage !== undefined ? { package: parsedPackage } : {}),
+    ...(parsedRelease !== undefined ? { release: parsedRelease } : {}),
+  };
 }
 
 export async function fetchClawHubPackageDetail(
@@ -331,11 +312,8 @@ export async function fetchClawHubPackageDetail(
   },
 ): Promise<ClawHubPackageDetail> {
   return await fetchClawHubJson<ClawHubPackageDetail>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -346,13 +324,10 @@ export async function fetchClawHubPackageVersion(
   },
 ): Promise<ClawHubPackageVersion> {
   return await fetchClawHubJson<ClawHubPackageVersion>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
     )}`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -363,13 +338,10 @@ export async function fetchClawHubPackageArtifact(
   },
 ): Promise<ClawHubPackageArtifactResolverResponse> {
   return await fetchClawHubJson<ClawHubPackageArtifactResolverResponse>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
     )}/artifact`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -380,13 +352,10 @@ export async function fetchClawHubPackageSecurity(
   },
 ): Promise<ClawHubPackageSecurityResponse> {
   const response = await fetchClawHubJson<unknown>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
     )}/security`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
   return parseClawHubPackageSecurityResponse(response);
 }
@@ -399,11 +368,8 @@ export async function searchClawHubPackages(
   },
 ): Promise<ClawHubPackageSearchResult[]> {
   const result = await fetchClawHubJson<{ results: ClawHubPackageSearchResult[] }>({
-    baseUrl: params.baseUrl,
+    ...params,
     path: "/api/v1/packages/search",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
     search: {
       q: params.query.trim(),
       family: params.family,

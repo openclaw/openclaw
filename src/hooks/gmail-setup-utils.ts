@@ -1,4 +1,3 @@
-// Gmail setup utilities write helper files and normalize Gmail setup settings.
 import fs from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -96,7 +95,7 @@ async function resolvePythonExecutablePath(): Promise<string | undefined> {
       continue;
     }
     const lines = res.stdout.trim().split(/\r?\n/);
-    const resolved = lines[0]?.trim().split(/\s+/)[0];
+    const resolved = lines[0]?.trim();
     if (!resolved) {
       continue;
     }

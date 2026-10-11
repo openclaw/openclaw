@@ -1,4 +1,4 @@
-import type { DiscordSourceConfig, Roster, SourceRuntime } from "../../types.js";
+import type { DiscordSourceConfig, SourceRuntime } from "../../types.js";
 
 export const config: DiscordSourceConfig = {
   token: "synthetic-discord-secret",
@@ -9,7 +9,6 @@ export const config: DiscordSourceConfig = {
 };
 
 export const window = { sinceMs: 1462015105000, untilMs: 1462015107000 };
-export const roster: Roster = { members: [], byLogin: new Map(), byDiscordId: new Map() };
 
 export function thread(id: string, archivedMs: number, type = 12) {
   return {

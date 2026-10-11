@@ -2,6 +2,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -15,7 +16,9 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
+import type { TranscriptAppendPostimage } from "./session-transcript-append-postimage.js";
 
 // Append results are public SDK contracts. Keep commit-only cursor metadata
 // attached to their object lifetime without changing the returned message shape.
@@ -29,17 +32,55 @@ export function readCommittedTranscriptMessageSequence(
   return committedTranscriptMessageSequences.get(message);
 }
 
+/** Installs the executor's final active cursors on the exact acknowledged result objects. */
+export function installCommittedTranscriptMessageSequences(
+  messages: readonly TranscriptMessageAppendResult<unknown>[],
+  sequences: readonly (number | undefined)[],
+): void {
+  for (const [index, message] of messages.entries()) {
+    const sequence = sequences[index];
+    if (sequence !== undefined) {
+      committedTranscriptMessageSequences.set(message, sequence);
+    }
+  }
+}
+
 /** Captures atomic turn cursors from the final projection before SQLite commits. */
 export function rememberCommittedTranscriptMessageSequencesInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
   messages: readonly TranscriptMessageAppendResult<unknown>[],
+  postimage?: TranscriptAppendPostimage,
 ): void {
   const appendedMessages = messages.filter((message) => message.appended);
   for (const message of appendedMessages) {
     committedTranscriptMessageSequences.delete(message);
   }
   if (appendedMessages.length === 0) {
+    return;
+  }
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    if (actor.transcript.projection?.needsRebuild !== false) {
+      return;
+    }
+    for (const message of appendedMessages) {
+      const identity = actor.transcript.identities.get(message.messageId);
+      const position = identity && actor.transcript.active.get(identity.seq)?.message_position;
+      if (position !== null && position !== undefined) {
+        committedTranscriptMessageSequences.set(message, position + 1);
+      }
+    }
+    return;
+  }
+  const only = appendedMessages.length === 1 ? appendedMessages[0] : undefined;
+  if (
+    only &&
+    postimage?.anchor.sessionId === sessionId &&
+    postimage.anchor.entryId === only.messageId &&
+    getSqliteReadScopeRevision(database.db) === postimage.revision
+  ) {
+    committedTranscriptMessageSequences.set(only, postimage.anchor.activeMessagePosition + 1);
     return;
   }
   const db = getSessionKysely(database.db);

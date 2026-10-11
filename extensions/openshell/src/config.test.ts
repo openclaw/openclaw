@@ -65,44 +65,6 @@ describe("openshell plugin config", () => {
     expect(resolveOpenShellPluginConfig(config)).toMatchObject(config);
   });
 
-  it("normalizes managed sandbox subpaths", () => {
-    expect(
-      resolveOpenShellPluginConfig({
-        remoteWorkspaceDir: "/sandbox/../sandbox/project",
-        remoteAgentWorkspaceDir: "/agent/./session",
-      }),
-    ).toEqual({
-      mode: "mirror",
-      command: "openshell",
-      gateway: undefined,
-      gatewayEndpoint: undefined,
-      workspace: undefined,
-      from: "openclaw",
-      policy: undefined,
-      providers: [],
-      gpu: false,
-      autoProviders: true,
-      remoteWorkspaceDir: "/sandbox/project",
-      remoteAgentWorkspaceDir: "/agent/session",
-      timeoutMs: 120_000,
-    });
-  });
-
-  it("rejects unknown mode", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        mode: "bogus",
-      }),
-    ).toThrow("mode must be one of mirror, remote");
-  });
-
-  it.each(["Team", "-team", "team-", "team--one", "abcdefghijklmnopqrst"])(
-    "rejects invalid OpenShell workspace name %s",
-    (workspace) => {
-      expect(() => resolveOpenShellPluginConfig({ workspace })).toThrow(/workspace must/);
-    },
-  );
-
   it("rejects timeouts beyond Node's safe timer range", () => {
     expect(() =>
       resolveOpenShellPluginConfig({

@@ -30,6 +30,7 @@ export async function runUpdateStateInspectionWorker(params: {
   databases: Awaited<ReturnType<typeof readUpdateStateDatabaseSizes>>;
   timeoutMs?: number;
   readOnlySource?: string;
+  ioBudget?: "probe" | "deadline";
 }) {
   const selectedUrl = resolveRuntimeWorkerUrl({
     ...(params.readOnlySource
@@ -57,64 +58,66 @@ export async function runUpdateStateInspectionWorker(params: {
         : [path.resolve(params.input.stateDir, "state", "openclaw.sqlite")],
   });
   try {
+    const timeoutMs = Math.max(
+      params.timeoutMs ?? 0,
+      resolveAggregateSqliteInspectionTimeoutMs("state schema inspection", params.databases),
+    );
+    const run = (signal: AbortSignal | undefined) =>
+      runUtf8CommandWithTimeout(
+        [
+          params.nodeRunner,
+          ...resolveRuntimeWorkerArgv(workerUrl, params.nodeRunner),
+          ...(params.readOnlySource
+            ? [SQLITE_READONLY_CHILD_ARG, "sync", params.readOnlySource, params.stagingRoot]
+            : []),
+        ],
+        {
+          cwd: os.tmpdir(),
+          input: params.readOnlySource
+            ? undefined
+            : JSON.stringify({
+                ...params.input,
+                env: {
+                  HOME: params.sourceEnv.HOME,
+                  OPENCLAW_HOME: params.sourceEnv.OPENCLAW_HOME,
+                  USERPROFILE: params.sourceEnv.USERPROFILE,
+                  OPENCLAW_AGENT_DIR: params.sourceEnv.OPENCLAW_AGENT_DIR,
+                  PI_CODING_AGENT_DIR: params.sourceEnv.PI_CODING_AGENT_DIR,
+                },
+              }),
+          baseEnv: params.sourceEnv,
+          env: {
+            XDG_CACHE_HOME: params.stagingRoot,
+            ...(sourceTsconfigPath ? { TSX_TSCONFIG_PATH: sourceTsconfigPath } : {}),
+          },
+          killGraceMs: 500,
+          killProcessTree: true,
+          maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+          outputCapture: { stdout: "head", stderr: "discard" },
+          terminateOnOutputLimit: { stdout: true },
+          onOutputChunk: inspection.onOutputChunk,
+          signal,
+          ...(params.ioBudget === "deadline" ? { timeoutMs } : {}),
+        },
+      );
     const work = withUpdateStateInspectionWork(
       () =>
-        withUpdateCandidateIoBudget(
-          {
-            directory: params.stagingRoot,
-            bytes: params.databases.reduce(
-              (total, database) => total + Number(database.sizeBytes ?? 0),
-              0,
-            ),
-            timeoutMs: Math.max(
-              params.timeoutMs ?? 0,
-              resolveAggregateSqliteInspectionTimeoutMs(
-                "state schema inspection",
-                params.databases,
-              ),
-            ),
-            signal: params.signal,
-            nodeRunner: params.nodeRunner,
-            env: params.sourceEnv,
-          },
-          (signal) =>
-            runUtf8CommandWithTimeout(
-              [
-                params.nodeRunner,
-                ...resolveRuntimeWorkerArgv(workerUrl, params.nodeRunner),
-                ...(params.readOnlySource
-                  ? [SQLITE_READONLY_CHILD_ARG, "sync", params.readOnlySource, params.stagingRoot]
-                  : []),
-              ],
+        params.ioBudget === "deadline"
+          ? run(params.signal)
+          : withUpdateCandidateIoBudget(
               {
-                cwd: os.tmpdir(),
-                input: params.readOnlySource
-                  ? undefined
-                  : JSON.stringify({
-                      ...params.input,
-                      env: {
-                        HOME: params.sourceEnv.HOME,
-                        OPENCLAW_HOME: params.sourceEnv.OPENCLAW_HOME,
-                        USERPROFILE: params.sourceEnv.USERPROFILE,
-                        OPENCLAW_AGENT_DIR: params.sourceEnv.OPENCLAW_AGENT_DIR,
-                        PI_CODING_AGENT_DIR: params.sourceEnv.PI_CODING_AGENT_DIR,
-                      },
-                    }),
-                baseEnv: params.sourceEnv,
-                env: {
-                  XDG_CACHE_HOME: params.stagingRoot,
-                  ...(sourceTsconfigPath ? { TSX_TSCONFIG_PATH: sourceTsconfigPath } : {}),
-                },
-                killGraceMs: 500,
-                killProcessTree: true,
-                maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-                outputCapture: { stdout: "head", stderr: "discard" },
-                terminateOnOutputLimit: { stdout: true },
-                onOutputChunk: inspection.onOutputChunk,
-                signal,
+                directory: params.stagingRoot,
+                bytes: params.databases.reduce(
+                  (total, database) => total + Number(database.sizeBytes ?? 0),
+                  0,
+                ),
+                timeoutMs,
+                signal: params.signal,
+                nodeRunner: params.nodeRunner,
+                env: params.sourceEnv,
               },
+              run,
             ),
-        ),
       params.signal,
     );
     source.runtimeGeneration?.retain(work, async () => {
@@ -127,10 +130,9 @@ export async function runUpdateStateInspectionWorker(params: {
     const result = await work;
     return { ...result, stderr: inspection.stderr(), inspection };
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
-      throw inspection.failure(error);
+    if (!hasCommandProcessCleanupError(error)) {
+      params.signal?.throwIfAborted();
     }
-    params.signal?.throwIfAborted();
     throw inspection.failure(error);
   }
 }

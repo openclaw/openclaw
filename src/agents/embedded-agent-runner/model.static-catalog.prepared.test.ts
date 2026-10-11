@@ -226,7 +226,7 @@ describe("prepared bundled provider static catalogs", () => {
       providerIds: ["google"],
       metadataSnapshot,
       preparedStaticProviderCatalog: {
-        entries: [{ provider, result, providerConfigs }],
+        entries: [{ provider, providerConfigs }],
       },
     });
 
@@ -270,48 +270,42 @@ describe("prepared bundled provider static catalogs", () => {
     expect(mocks.normalizePluginDiscoveryResult).not.toHaveBeenCalled();
   });
 
-  it.each(["prepared", "registered"])(
-    "uses %s static hooks without a discovery entry",
-    async (source) => {
-      mocks.runProviderStaticCatalog.mockResolvedValue({ marker: "full-static-result" });
-      mocks.normalizePluginDiscoveryResult.mockReturnValue({
-        google: {
-          models: [{ id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 }],
-        },
-      });
+  it("uses registered static hooks without a discovery entry", async () => {
+    mocks.runProviderStaticCatalog.mockResolvedValue({ marker: "full-static-result" });
+    mocks.normalizePluginDiscoveryResult.mockReturnValue({
+      google: {
+        models: [{ id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 }],
+      },
+    });
 
-      await expect(
-        loadBundledProviderStaticCatalogContextModels({
-          cfg,
-          metadataSnapshot: createMetadataSnapshot(["google"], false),
-          registeredProviders:
-            source === "registered"
-              ? [
-                  {
-                    pluginId: "google",
-                    provider: { ...provider, pluginId: "not-the-owner" },
-                    source: "fixture",
-                  },
-                ]
-              : [],
-          preparedStaticProviderCatalog: {
-            providers: source === "prepared" ? [provider] : [],
-            entries: [],
+    await expect(
+      loadBundledProviderStaticCatalogContextModels({
+        cfg,
+        metadataSnapshot: createMetadataSnapshot(["google"], false),
+        registeredProviders: [
+          {
+            pluginId: "google",
+            provider: { ...provider, pluginId: "not-the-owner" },
+            source: "fixture",
           },
-        }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          id: "gemini-3.1-pro-preview",
-          provider: "google",
-        }),
-      ]);
-      expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
-      expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith(
-        expect.objectContaining({ provider }),
-      );
-      expect(mocks.runProviderStaticCatalog).toHaveBeenCalledOnce();
-    },
-  );
+        ],
+        preparedStaticProviderCatalog: {
+          providers: [],
+          entries: [],
+        },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "gemini-3.1-pro-preview",
+        provider: "google",
+      }),
+    ]);
+    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ provider }),
+    );
+    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledOnce();
+  });
 
   it("does not activate an unknown runtime-only plugin to collect static rows", async () => {
     await expect(
@@ -345,7 +339,6 @@ describe("prepared bundled provider static catalogs", () => {
           entries: [
             {
               provider,
-              result: undefined,
               providerConfigs: {
                 google: {
                   baseUrl: "https://fixture.example/v1",

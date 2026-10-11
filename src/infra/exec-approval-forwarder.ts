@@ -15,7 +15,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy-support.js";
@@ -118,30 +117,6 @@ type ExecApprovalForwarderDeps = {
 
 const SYNTHETIC_APPROVAL_REQUEST_ID = "__approval-routing__";
 
-const loadExecApprovalForwarderRuntime = createLazyRuntimeModule(
-  () => import("./exec-approval-forwarder.runtime.js"),
-);
-
-function shouldForwardRoute(params: {
-  config?: {
-    enabled?: boolean;
-    agentFilter?: string[];
-    sessionFilter?: string[];
-  };
-  routeRequest: ApprovalRouteRequest;
-}): boolean {
-  const config = params.config;
-  if (!config?.enabled) {
-    return false;
-  }
-  return matchesApprovalRequestFilters({
-    request: params.routeRequest,
-    agentFilter: config.agentFilter,
-    sessionFilter: config.sessionFilter,
-    fallbackAgentIdFromSessionKey: true,
-  });
-}
-
 function buildTargetKey(target: ExecApprovalForwardTarget): string {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
   return channelRouteDedupeKey({
@@ -158,12 +133,7 @@ function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): Exec
     id: SYNTHETIC_APPROVAL_REQUEST_ID,
     request: {
       command: "",
-      agentId: routeRequest.agentId ?? null,
-      sessionKey: routeRequest.sessionKey ?? null,
-      turnSourceChannel: routeRequest.turnSourceChannel ?? null,
-      turnSourceTo: routeRequest.turnSourceTo ?? null,
-      turnSourceAccountId: routeRequest.turnSourceAccountId ?? null,
-      turnSourceThreadId: routeRequest.turnSourceThreadId ?? null,
+      ...extractApprovalRouteRequest(routeRequest),
     },
     createdAtMs: 0,
     expiresAtMs: 0,
@@ -197,14 +167,14 @@ function restoreApprovalRequestForSuppression(params: {
   }
 }
 
-function shouldSkipForwardingFallback(params: {
+async function shouldSkipForwardingFallback(params: {
   approvalKind: ChannelApprovalKind;
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
   approvalRequest?: ApprovalRequestInput;
   nativeRouteCoordinator: ApprovalNativeRouteCoordinator | undefined;
-}): boolean {
+}): Promise<boolean> {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
   if (!channel) {
     return false;
@@ -228,7 +198,10 @@ function shouldSkipForwardingFallback(params: {
   if (adapter?.delivery?.shouldBlockForwardingFallback?.(fallbackInput)) {
     return true;
   }
-  const suppress = adapter?.delivery?.shouldSuppressForwardingFallback?.(fallbackInput) ?? false;
+  const delivery = adapter?.delivery;
+  const suppress = delivery?.shouldSuppressForwardingFallbackAsync
+    ? await delivery.shouldSuppressForwardingFallbackAsync(fallbackInput)
+    : (delivery?.shouldSuppressForwardingFallback?.(fallbackInput) ?? false);
   if (!suppress || !plugin) {
     return false;
   }
@@ -285,29 +258,31 @@ function defaultResolveSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }): Promise<ExecApprovalForwardTarget | null> {
-  return loadExecApprovalForwarderRuntime().then(({ resolveExecApprovalSessionTarget }) => {
-    const resolvedTarget = resolveExecApprovalSessionTarget({
-      cfg: params.cfg,
-      request: params.request,
-      turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
-      turnSourceTo: normalizeOptionalString(params.request.request.turnSourceTo),
-      turnSourceAccountId: normalizeOptionalString(params.request.request.turnSourceAccountId),
-      turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
-    });
-    if (!resolvedTarget?.channel || !resolvedTarget.to) {
-      return null;
-    }
-    const channel = resolvedTarget.channel;
-    if (!isDeliverableMessageChannel(channel)) {
-      return null;
-    }
-    return {
-      channel,
-      to: resolvedTarget.to,
-      accountId: resolvedTarget.accountId,
-      threadId: resolvedTarget.threadId,
-    };
-  });
+  return import("./exec-approval-forwarder.runtime.js").then(
+    ({ resolveExecApprovalSessionTarget }) => {
+      const resolvedTarget = resolveExecApprovalSessionTarget({
+        cfg: params.cfg,
+        request: params.request,
+        turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
+        turnSourceTo: normalizeOptionalString(params.request.request.turnSourceTo),
+        turnSourceAccountId: normalizeOptionalString(params.request.request.turnSourceAccountId),
+        turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
+      });
+      if (!resolvedTarget?.channel || !resolvedTarget.to) {
+        return null;
+      }
+      const channel = resolvedTarget.channel;
+      if (!isDeliverableMessageChannel(channel)) {
+        return null;
+      }
+      return {
+        channel,
+        to: resolvedTarget.to,
+        accountId: resolvedTarget.accountId,
+        threadId: resolvedTarget.threadId,
+      };
+    },
+  );
 }
 
 async function deliverToTargets(params: {
@@ -372,10 +347,8 @@ async function resolveForwardTargets(params: {
     });
     if (sessionTarget) {
       const key = buildTargetKey(sessionTarget);
-      if (!seen.has(key)) {
-        seen.add(key);
-        targets.push({ ...sessionTarget, source: "session" });
-      }
+      seen.add(key);
+      targets.push({ ...sessionTarget, source: "session" });
     }
   }
 
@@ -397,14 +370,11 @@ async function resolveForwardTargets(params: {
 function createApprovalHandlers<
   TRequest extends ApprovalRequestInput,
   TResolved extends { id: string; request?: ApprovalRouteRequest | null },
->(params: {
-  strategy: ApprovalStrategy<TRequest, TResolved>;
-  getConfig: () => OpenClawConfig;
-  deliver: DeliverApprovalPayloads;
-  nowMs: () => number;
-  resolveSessionTarget: ResolveSessionTargetFn;
-  getNativeApprovalRouteCoordinator: () => ApprovalNativeRouteCoordinator | undefined;
-}) {
+>(
+  params: {
+    strategy: ApprovalStrategy<TRequest, TResolved>;
+  } & Required<ExecApprovalForwarderDeps>,
+) {
   const pending = createPendingApprovalRegistry<PendingApproval>();
   const work = new AsyncWorkScope();
   let stopped = false;
@@ -418,7 +388,15 @@ function createApprovalHandlers<
     routeRequest: ApprovalRouteRequest;
     approvalRequest?: ApprovalRequestInput;
   }): Promise<ForwardTarget[]> => {
-    if (!shouldForwardRoute(paramsForRoute)) {
+    if (
+      !paramsForRoute.config?.enabled ||
+      !matchesApprovalRequestFilters({
+        request: paramsForRoute.routeRequest,
+        agentFilter: paramsForRoute.config.agentFilter,
+        sessionFilter: paramsForRoute.config.sessionFilter,
+        fallbackAgentIdFromSessionKey: true,
+      })
+    ) {
       return [];
     }
     if (params.strategy.liveOriginOnly) {
@@ -437,17 +415,20 @@ function createApprovalHandlers<
       resolveSessionTarget: params.resolveSessionTarget,
     });
     const nativeRouteCoordinator = params.getNativeApprovalRouteCoordinator();
-    return targets.filter(
-      (target) =>
-        !shouldSkipForwardingFallback({
-          approvalKind: params.strategy.kind,
-          target,
-          cfg: paramsForRoute.cfg,
-          routeRequest: paramsForRoute.routeRequest,
-          approvalRequest: paramsForRoute.approvalRequest,
-          nativeRouteCoordinator,
-        }),
+    const selected = await Promise.all(
+      targets.map(
+        async (target) =>
+          !(await shouldSkipForwardingFallback({
+            approvalKind: params.strategy.kind,
+            target,
+            cfg: paramsForRoute.cfg,
+            routeRequest: paramsForRoute.routeRequest,
+            approvalRequest: paramsForRoute.approvalRequest,
+            nativeRouteCoordinator,
+          })),
+      ),
     );
+    return targets.filter((_, index) => selected[index]);
   };
 
   const deliverResolved = async (resolved: TResolved, entry?: PendingApproval): Promise<void> => {
@@ -635,7 +616,7 @@ export function createExecApprovalForwarder(
   const deliver =
     deps.deliver ??
     (async (params) => {
-      const { sendDurableMessageBatchCore } = await loadExecApprovalForwarderRuntime();
+      const { sendDurableMessageBatchCore } = await import("./exec-approval-forwarder.runtime.js");
       return sendDurableMessageBatchCore(params);
     });
   const nowMs = deps.nowMs ?? Date.now;

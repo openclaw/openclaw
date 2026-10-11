@@ -38,6 +38,48 @@ Codex buffers the input for the next model boundary.
 Use `/queue followup` or `/queue collect` when messages should queue
 by default instead of steering. See [Steering queue](/concepts/queue-steering).
 
+## Configuration and policy warnings
+
+The Codex warning about an unknown `ultrafast_mode` feature requirement appears
+once per OpenClaw chat session, including bursts of separate native notifications
+in one response. Later turns, retries, and replacement native threads or
+app-server connections reuse the chat's receipt. Different text, details, or
+diagnostic locations still get their own first notice. Other operational and
+policy warnings, and Guardian events, keep their normal delivery even when their
+wording repeats.
+
+Receipts contain hashes, not private policy names or warning text, in the chat's
+existing plugin-owned session state. They survive Gateway restart. A new chat or
+an actual reset gets its own first warning, including resets that retain the
+session ID but rotate its lifecycle revision. Incognito state follows the chat's
+existing process-lifetime contract; it is not copied to durable storage. Existing
+plugin-state cleanup on reset, deletion, or plugin disablement clears receipts.
+
+Only successful projection is acknowledged. Failed or ignored projection can
+retry. Storage failure, or a crash between projection and receipt persistence,
+can allow a repeat rather than hide an unseen warning. Each chat retains at most
+256 distinct variants of this diagnostic without evicting acknowledged receipts;
+additional variants remain visible but are not remembered for deduplication.
+
+This changes duplicate delivery, not Codex feature support or enterprise policy
+enforcement. The managed-app-server Doctor check validates the selected binary
+and version; a passing result does not certify that Codex recognizes every feature
+in the account's policy.
+
+## Diagnostic-log warnings
+
+If Codex reports a process-wide failure to save its diagnostic logs, OpenClaw
+records that notice at warning level in the [Gateway logs](/gateway/logging).
+It records each native notice when received, rather than repeating it in every
+conversation sharing that app-server. A new app-server can report a new failure.
+
+This routing does not repair the native logging failure or upload diagnostics.
+The warning alone does not mean conversation state was lost. Other task-specific,
+configuration, and unrecognized warnings still reach chat. Gateway log visibility
+follows the configured logging levels and available sinks. As with other Gateway
+diagnostics, reporting is best effort: a logging failure never interrupts the
+native connection, and these operator-only notices do not fall back to chat.
+
 ## Codex feedback upload
 
 When `/diagnostics [note]` is approved for a session on the native Codex

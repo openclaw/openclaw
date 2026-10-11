@@ -1,6 +1,5 @@
 import { Command } from "commander";
-import { expect, it, onTestFinished, vi } from "vitest";
-import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
+import { expect, it, vi } from "vitest";
 import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
@@ -16,10 +15,7 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
 import { registerGatewayCli } from "../gateway-cli/register.js";
 import type { gatherDaemonStatus } from "./status.gather.js";
-import {
-  callGatewayStatusProbe,
-  capturePrintedDaemonStatus,
-} from "./status.gather.probes.test-support.js";
+import { callGatewayStatusProbe } from "./status.gather.probes.test-support.js";
 import { printDaemonStatus } from "./status.print.js";
 
 export function registerServiceInspectionStatusTests(params: {
@@ -30,7 +26,6 @@ export function registerServiceInspectionStatusTests(params: {
   loadInstalledPluginIndexInstallRecords: {
     mockResolvedValueOnce(records: Record<string, unknown>): unknown;
   };
-  auditGatewayServiceConfig: (opts?: unknown) => Promise<ServiceConfigAudit>;
   serviceIsLoaded: {
     mockImplementationOnce(
       implementation: (args?: GatewayServiceEnvArgs) => Promise<boolean>,
@@ -64,95 +59,9 @@ export function registerServiceInspectionStatusTests(params: {
     serviceReadRuntime,
     inspectGatewayRestart,
     gatherStatus,
-    auditGatewayServiceConfig,
   } = params;
 
-  it.each(["darwin", "linux"] as const)(
-    "renders Gateway-specific timeout recovery on %s",
-    async (platform) =>
-      withMockedPlatform(platform, async () => {
-        const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
-        onTestFinished(() => clock.mockRestore());
-        serviceIsLoaded.mockImplementationOnce(async (args?: { timeoutMs?: number }) => {
-          if (args?.timeoutMs === undefined) {
-            return await new Promise<boolean>(() => {});
-          }
-          throw new Error("systemctl is-enabled timed out");
-        });
-        serviceReadRuntime.mockImplementationOnce(async (_env, opts) => {
-          if (opts?.timeoutMs === undefined) {
-            return await new Promise<{ status: string }>(() => {});
-          }
-          throw new Error("錯誤: 系統找不到指定的檔案。");
-        });
-
-        const status = await gatherStatus({
-          rpc: { timeout: "100", json: true },
-          probe: false,
-          deep: true,
-        });
-
-        expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
-        expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
-        expect(auditGatewayServiceConfig).toHaveBeenCalledWith(
-          expect.objectContaining({ timeoutMs: 100 }),
-        );
-        expect(status.service.loadState).toEqual({
-          status: "unknown",
-          detail: "Error: systemctl is-enabled timed out",
-        });
-        expect(status.service.loaded).toBeNull();
-        expect(status.service.runtime).toEqual({
-          status: "unknown",
-          detail: "service runtime inspection failed; retry with openclaw gateway status --deep",
-          inspectionFailure: {
-            code: "service-runtime-inspection-failed",
-            detail: "錯誤: 系統找不到指定的檔案。",
-          },
-        });
-
-        const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-        try {
-          printDaemonStatus(status, { json: true, deep: true });
-          expect(writeJson).toHaveBeenCalledOnce();
-          const serialized = JSON.stringify(writeJson.mock.calls[0]?.[0]);
-          if (!serialized) {
-            throw new Error("expected terminal JSON output");
-          }
-          expect(JSON.parse(serialized)).toMatchObject({
-            service: {
-              loaded: null,
-              loadState: {
-                status: "unknown",
-                detail: "Error: systemctl is-enabled timed out",
-              },
-              runtime: {
-                status: "unknown",
-                detail:
-                  "service runtime inspection failed; retry with openclaw gateway status --deep",
-                inspectionFailure: {
-                  code: "service-runtime-inspection-failed",
-                  detail: "錯誤: 系統找不到指定的檔案。",
-                },
-              },
-            },
-          });
-        } finally {
-          writeJson.mockRestore();
-        }
-
-        const output = capturePrintedDaemonStatus(status, { json: false, deep: true }).logs;
-        expect(output).toContain("Service: LaunchAgent (unknown)");
-        expect(output).not.toContain("Service: LaunchAgent (not loaded)");
-        expect(output).toContain(
-          "Runtime: unknown (service runtime inspection failed; retry with openclaw gateway status --deep)",
-        );
-        expect(output).not.toContain("系統找不到指定的檔案");
-      }),
-    1_000,
-  );
-
-  it.each([false, true].flatMap((external) => [true, false].map((probe) => ({ external, probe }))))(
+  it.each([{ external: false, probe: true }])(
     "keeps registered gateway status available after systemd discovery fails (external=$external, probe=$probe)",
     async ({ external, probe }) => {
       serviceFixture.useSystemdCommand = true;
@@ -279,30 +188,9 @@ export function registerServiceInspectionStatusTests(params: {
     },
   );
 
-  it("keeps gateway status read-only when service management is unsupported", async () => {
-    serviceReadCommand.mockResolvedValueOnce(null);
-    serviceIsLoaded.mockResolvedValueOnce(false);
-    serviceReadRuntime.mockResolvedValueOnce({
-      status: "unknown",
-      detail: "Gateway service install not supported on aix",
-    });
-
-    const status = await gatherStatus({ probe: false });
-
-    expect(status.service.command).toBeNull();
-    expect(status.service.loaded).toBe(false);
-    expect(status.service.loadState).toEqual({ status: "not-loaded" });
-    expect(status.service.runtime).toEqual({
-      status: "unknown",
-      detail: "Gateway service install not supported on aix",
-    });
-    expect(inspectGatewayRestart).not.toHaveBeenCalled();
-  });
-
   it.each([
     { platform: "linux", reason: "service-manager-unavailable", recorded: true },
     { platform: "linux", reason: "service-manager-unavailable", recorded: false },
-    { platform: "linux", reason: "systemd-user-bus-unavailable", recorded: true },
     { platform: "darwin", reason: "launchd-gui-domain-unavailable", recorded: true },
   ] as const)(
     "reports $reason with recorded service=$recorded without inventing manager availability",

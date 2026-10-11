@@ -2,7 +2,11 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
-import { registerSessionResourceCleanup } from "../session-resources.js";
+import {
+  getSessionResourceOwnerId,
+  registerSessionResourceCleanup,
+  type SessionResourceOwner,
+} from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
   canReferenceResponsesReasoningHistory,
@@ -16,7 +20,12 @@ import {
 } from "./openai-responses-tool-call-id-shape.js";
 import { sha256Hex } from "./transport-utils.js";
 
-const HTTP_CONTINUATION_IDLE_TTL_MS = 5 * 60 * 1000;
+// Keep completed baselines across ordinary conversation gaps; ready entries are
+// bounded by count and serialized content size so the longer idle window cannot
+// retain an unbounded backlog. Session cleanup discards them earlier.
+const HTTP_CONTINUATION_IDLE_TTL_MS = 90 * 60 * 1000;
+const MAX_HTTP_CONTINUATION_READY_ENTRIES = 1000;
+const MAX_HTTP_CONTINUATION_RETAINED_BYTES = 64 * 1024 * 1024;
 const TURN_HEADERS = new Set(["traceparent", "x-openclaw-turn-id", "x-openclaw-turn-attempt"]);
 
 export type ResponsesContinuationRequest = Record<string, unknown> & {
@@ -131,16 +140,15 @@ function pendingResponsesToolCalls(
     const owner = ownerByReplayShape.get(item.call_id);
     if (item.type === "function_call") {
       replayedCallIds.add(item.call_id);
-      if (owner !== undefined && owner !== null) {
-        lastCallPosition.set(owner, inputIndex);
-      }
-      continue;
     }
-    if (item.type !== "function_call_output") {
-      continue;
-    }
-    if (owner !== undefined && owner !== null) {
-      lastOutputPosition.set(owner, inputIndex);
+    const positions =
+      item.type === "function_call"
+        ? lastCallPosition
+        : item.type === "function_call_output"
+          ? lastOutputPosition
+          : undefined;
+    if (positions && owner !== undefined && owner !== null) {
+      positions.set(owner, inputIndex);
     }
   }
   return calls.filter((_call, index) => {
@@ -444,15 +452,12 @@ export function resolveResponsesContinuationRequest(
   const replayedToolRoundInput = currentInput.slice(previousInput.length, baselineLength);
   const replayedToolRound = normalizeAssistantReplayInput(replayedToolRoundInput);
   // Replay may keep or omit function_call.id, so compare both cached forms.
-  const historyToolRoundUnchanged =
+  const historyToolRoundUnchanged = [false, true].some((ignoreCachedItemIds) =>
     jsonValuesEqual(
       replayedToolRound,
-      normalizeAssistantReplayInput(continuation.lastResponseItems, true),
-    ) ||
-    jsonValuesEqual(
-      replayedToolRound,
-      normalizeAssistantReplayInput(continuation.lastResponseItems, true, true),
-    );
+      normalizeAssistantReplayInput(continuation.lastResponseItems, true, ignoreCachedItemIds),
+    ),
+  );
   if (
     !continuationHistoryMatches(previousInput, currentInput.slice(0, previousInput.length)) ||
     !historyToolRoundUnchanged
@@ -487,16 +492,63 @@ type HttpContinuationEntry =
   | {
       kind: "ready";
       sessionId: string;
+      owner: SessionResourceOwner;
       state: ResponsesContinuationState;
       idleTimer: ReturnType<typeof setTimeout>;
+      retainedBytes: number;
     }
-  | { kind: "claimed"; sessionId: string };
+  | { kind: "claimed"; sessionId: string; owner: SessionResourceOwner };
 
 const httpContinuationEntries = new Map<string, HttpContinuationEntry>();
+// Commit order owns eviction order. Index only ready entries so eviction work
+// stays bounded even when many requests are still in flight.
+const readyHttpContinuationEntries = new Map<
+  string,
+  Extract<HttpContinuationEntry, { kind: "ready" }>
+>();
+// Updated with ready-entry insertion/removal; no full-cache scan on commit.
+let httpContinuationRetainedBytes = 0;
 
+// Keep timer closures outside the attempt scope, which retains prior baselines and callers.
+function createHttpContinuationTimer(key: string): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(() => {
+    const entry = httpContinuationEntries.get(key);
+    if (entry?.kind === "ready" && entry.idleTimer === timer) {
+      deleteHttpContinuationIfOwned(key, entry);
+    }
+  }, HTTP_CONTINUATION_IDLE_TTL_MS);
+  timer.unref?.();
+  return timer;
+}
+
+// Timers and released handles must not remove a replacement claim.
 function deleteHttpContinuationIfOwned(key: string, entry: HttpContinuationEntry): void {
-  if (httpContinuationEntries.get(key) === entry) {
-    httpContinuationEntries.delete(key);
+  if (httpContinuationEntries.get(key) !== entry) {
+    return;
+  }
+  if (entry.kind === "ready") {
+    clearTimeout(entry.idleTimer);
+    httpContinuationRetainedBytes -= entry.retainedBytes;
+    readyHttpContinuationEntries.delete(key);
+  }
+  httpContinuationEntries.delete(key);
+}
+
+// Evict oldest committed baselines until the incoming entry fits both bounds.
+function evictReadyEntriesForCapacity(pendingBytes: number): void {
+  for (;;) {
+    const overCapacity = readyHttpContinuationEntries.size >= MAX_HTTP_CONTINUATION_READY_ENTRIES;
+    const overBudget =
+      httpContinuationRetainedBytes + pendingBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES;
+    if (!overCapacity && !overBudget) {
+      return;
+    }
+    const oldest = readyHttpContinuationEntries.entries().next();
+    if (oldest.done) {
+      return;
+    }
+    const [oldestKey, oldestEntry] = oldest.value;
+    deleteHttpContinuationIfOwned(oldestKey, oldestEntry);
   }
 }
 
@@ -527,23 +579,20 @@ export function claimOpenAIResponsesHttpContinuation(
     restoreRequest?: () => ResponsesContinuationRequest;
   },
 ) {
-  const key = `${params.sessionId}\0${connectionIdentity(params)}`;
+  const owner = getAiTransportHost();
+  const key = `${getSessionResourceOwnerId(owner)}\0${params.sessionId}\0${connectionIdentity(params)}`;
   const previous = httpContinuationEntries.get(key);
   if (previous?.kind === "claimed") {
     return undefined;
   }
-  if (previous?.kind === "ready") {
-    clearTimeout(previous.idleTimer);
+  if (previous) {
+    deleteHttpContinuationIfOwned(key, previous);
   }
-  const claimed = { kind: "claimed", sessionId: params.sessionId } as const;
+  const claimed = { kind: "claimed", sessionId: params.sessionId, owner } as const;
   httpContinuationEntries.set(key, claimed);
   try {
-    const request =
-      previous?.kind === "ready" ? params.request : (params.restoreRequest?.() ?? params.request);
-    const resolved = resolveResponsesContinuationRequest(
-      previous?.kind === "ready" ? previous.state : undefined,
-      request,
-    );
+    const request = previous ? params.request : (params.restoreRequest?.() ?? params.request);
+    const resolved = resolveResponsesContinuationRequest(previous?.state, request);
     const fullRequest = resolved.fullRequest ?? request;
     return {
       // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.
@@ -557,23 +606,36 @@ export function claimOpenAIResponsesHttpContinuation(
         if (httpContinuationEntries.get(key) !== claimed) {
           return;
         }
+        const state = recordResponsesContinuationState(
+          previous?.state,
+          effectiveRequest,
+          response,
+          previous !== undefined && dispatchedPreviousResponseId === previous.state.lastResponseId,
+        );
+        // Serialized-content budget, not JavaScript heap overhead.
+        const retainedBytes = Buffer.byteLength(JSON.stringify(state), "utf8");
+        // Serialization can invoke caller-owned toJSON/getters that clean up or
+        // reclaim this session. Fence stale commits before eviction or mutation.
+        if (httpContinuationEntries.get(key) !== claimed) {
+          return;
+        }
+        if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
+          // Keep other sessions when this baseline cannot fit alone. Its next
+          // request sends full history; the completed response remains valid.
+          deleteHttpContinuationIfOwned(key, claimed);
+          return;
+        }
+        evictReadyEntriesForCapacity(retainedBytes);
         const ready = {
           ...claimed,
           kind: "ready",
-          state: recordResponsesContinuationState(
-            previous?.kind === "ready" ? previous.state : undefined,
-            effectiveRequest,
-            response,
-            previous?.kind === "ready" &&
-              dispatchedPreviousResponseId === previous.state.lastResponseId,
-          ),
-          idleTimer: setTimeout(
-            () => deleteHttpContinuationIfOwned(key, ready),
-            HTTP_CONTINUATION_IDLE_TTL_MS,
-          ),
+          state,
+          idleTimer: owner.runInDetachedAsyncContext(() => createHttpContinuationTimer(key)),
+          retainedBytes,
         } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
-        ready.idleTimer.unref?.();
+        httpContinuationRetainedBytes += retainedBytes;
         httpContinuationEntries.set(key, ready);
+        readyHttpContinuationEntries.set(key, ready);
       },
       release: () => deleteHttpContinuationIfOwned(key, claimed),
     };
@@ -584,13 +646,10 @@ export function claimOpenAIResponsesHttpContinuation(
   }
 }
 
-registerSessionResourceCleanup((sessionId) => {
+registerSessionResourceCleanup((sessionId, owner) => {
   for (const [key, entry] of httpContinuationEntries) {
-    if (!sessionId || entry.sessionId === sessionId) {
-      if (entry.kind === "ready") {
-        clearTimeout(entry.idleTimer);
-      }
-      httpContinuationEntries.delete(key);
+    if ((!owner || entry.owner === owner) && (!sessionId || entry.sessionId === sessionId)) {
+      deleteHttpContinuationIfOwned(key, entry);
     }
   }
 });

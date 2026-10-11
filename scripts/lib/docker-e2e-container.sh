@@ -54,7 +54,16 @@ await runWatchdog('docker', timeoutValue, args);
 }
 
 docker_e2e_docker_cmd() {
-  local timeout_value="${DOCKER_COMMAND_TIMEOUT:-600s}"
+  docker_e2e_docker_with_timeout "${DOCKER_COMMAND_TIMEOUT:-600s}" "$@"
+}
+
+docker_e2e_docker_run_cmd() {
+  docker_e2e_docker_with_timeout "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" "$@"
+}
+
+docker_e2e_docker_with_timeout() {
+  local timeout_value="$1"
+  shift
   if [ "${1:-}" = "run" ]; then
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
@@ -68,17 +77,6 @@ docker_e2e_docker_cmd() {
 docker_e2e_cleanup_container_run() {
   docker_e2e_docker_cmd rm -f "$1" >/dev/null 2>&1 || true
   rm -f "$2"
-}
-
-docker_e2e_docker_run_cmd() {
-  local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
-  if [ "${1:-}" = "run" ]; then
-    shift
-    docker_e2e_docker_run_resource_args "$@" || return $?
-    docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
-    return "$?"
-  fi
-  docker_e2e_timeout_cmd "$timeout_value" docker "$@"
 }
 
 docker_e2e_resource_limits_disabled() {
@@ -100,8 +98,9 @@ docker_e2e_resource_value_disabled() {
 }
 
 docker_e2e_detect_available_cpus() {
-  if [ -n "${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}" ]; then
-    printf '%s\n' "$OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS"
+  local available="${1:-${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}}"
+  if [ -n "$available" ]; then
+    printf '%s\n' "$available"
     return 0
   fi
   if command -v nproc >/dev/null 2>&1; then
@@ -118,7 +117,7 @@ docker_e2e_detect_available_cpus() {
 docker_e2e_resolve_cpus() {
   local requested="$1"
   local available=""
-  available="$(docker_e2e_detect_available_cpus 2>/dev/null || true)"
+  available="$(docker_e2e_detect_available_cpus "${2:-}" 2>/dev/null || true)"
   if [[ "$requested" =~ ^[0-9]+$ ]] && [[ "$available" =~ ^[0-9]+$ ]] && [ "$requested" -gt "$available" ]; then
     printf '%s\n' "$available"
     return 0
@@ -145,8 +144,9 @@ docker_e2e_run_arg_present() {
 
 docker_e2e_resolve_pids_limit() {
   local pids_limit="$1"
+  local env_name="${2:-OPENCLAW_DOCKER_E2E_PIDS_LIMIT}"
   if [[ ! "$pids_limit" =~ ^[0-9]+$ ]] || (( 10#$pids_limit < 1 )); then
-    echo "invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: $pids_limit" >&2
+    echo "invalid $env_name: $pids_limit" >&2
     return 2
   fi
   printf '%s\n' "$((10#$pids_limit))"

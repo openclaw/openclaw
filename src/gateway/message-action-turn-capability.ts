@@ -7,6 +7,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
+  readUserTurnPromptReactionSource,
+  getUserTurnTranscriptAdmissionOwner,
+  type CurrentPromptReaction,
+  type UserTurnPromptReactionSource,
+} from "../sessions/user-turn-transcript-admission.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
+import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel-normalize.js";
@@ -26,6 +33,18 @@ type ScheduledMessageActionAuthority = {
   channelRequester?: CronAuthenticatedChannelRequester;
 };
 
+/** Host-only delivery restriction; carries no channel, requester, or source privilege. */
+type MessageActionDeliveryAttempt = {
+  beforeAttempt: () => Promise<void>;
+  assertCurrent: () => void;
+};
+
+type PromptReactionBinding = {
+  source: UserTurnPromptReactionSource;
+  recorder: UserTurnTranscriptRecorder;
+  react: CurrentPromptReaction;
+};
+
 /** Private handoff from authenticated dashboard admission to the exact reply run. */
 export type DashboardMessageReadAdmission = Readonly<{
   agentId: string;
@@ -41,6 +60,8 @@ export type MessageActionAuthorization = {
   toolContext?: InternalChannelThreadingToolContext;
   /** @internal Redeemed from the process-local turn capability. */
   scheduled?: ScheduledMessageActionAuthority;
+  /** @internal Restricts writes independently of scheduled authorization. */
+  deliveryAttempt?: MessageActionDeliveryAttempt;
   /** @internal Redeemed only by the host; never serialized or passed to plugins. */
   assertDashboardReadCurrent?: () => void;
 };
@@ -92,7 +113,10 @@ type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   runId: string;
   sessionKey: string;
   scheduled?: ScheduledMessageActionAuthority;
+  deliveryAttempt?: MessageActionDeliveryAttempt;
   assertDashboardReadCurrent?: () => void;
+  currentPromptReaction?: CurrentPromptReaction;
+  promptReactionBinding?: PromptReactionBinding;
 };
 
 const capabilitiesByToken = new Map<string, MessageActionTurnCapability>();
@@ -187,7 +211,12 @@ export function mintMessageActionTurnCapability(params: {
   requesterSenderE164?: string;
   toolContext?: InternalChannelThreadingToolContext;
   scheduled?: ScheduledMessageActionAuthority;
+  deliveryAttempt?: MessageActionDeliveryAttempt;
   assertDashboardReadCurrent?: () => void;
+  promptReactionSource?: {
+    source: UserTurnPromptReactionSource;
+    recorder: UserTurnTranscriptRecorder;
+  };
   expiresWithRun?: boolean;
   ttlMs?: number;
   nowMs?: number;
@@ -247,11 +276,55 @@ export function mintMessageActionTurnCapability(params: {
         : {}),
     };
   }
+  const deliveryAttempt = params.deliveryAttempt;
+  if (deliveryAttempt) {
+    capability.deliveryAttempt = {
+      assertCurrent: () => {
+        assertActive();
+        deliveryAttempt.assertCurrent();
+      },
+      beforeAttempt: async () => {
+        assertActive();
+        deliveryAttempt.assertCurrent();
+        await deliveryAttempt.beforeAttempt();
+        assertActive();
+        deliveryAttempt.assertCurrent();
+      },
+    };
+  }
   const assertDashboardReadCurrent = params.assertDashboardReadCurrent;
   if (assertDashboardReadCurrent) {
     capability.assertDashboardReadCurrent = () => {
       assertActive();
       assertDashboardReadCurrent();
+    };
+  }
+  const promptSource = params.promptReactionSource;
+  if (
+    promptSource &&
+    promptSource.source.agentId === agentId &&
+    promptSource.source.sessionKey === sessionKey &&
+    readUserTurnPromptReactionSource(promptSource.recorder) === promptSource.source
+  ) {
+    capability.promptReactionBinding = {
+      ...promptSource,
+      react: promptSource.source.createReaction(promptSource.recorder),
+    };
+    capability.currentPromptReaction = (input) => {
+      const binding = capability.promptReactionBinding;
+      if (!binding) {
+        throw new Error("Current prompt has no admitted WebChat reaction source.");
+      }
+      const assertCurrent = () => {
+        assertActive();
+        binding.source.assertCurrent();
+        input.assertCurrent();
+        if (capability.promptReactionBinding !== binding) {
+          throw new Error("Current WebChat prompt changed before reaction mutation.");
+        }
+      };
+      assertCurrent();
+      return binding.react({ ...input, assertCurrent });
     };
   }
   capabilitiesByToken.set(token, capability);
@@ -326,9 +399,60 @@ export function resolveMessageActionTurnAuthorization(
     ? {
         ...copyMessageActionTurnContext(capability),
         scheduled: capability.scheduled,
+        deliveryAttempt: capability.deliveryAttempt,
         assertDashboardReadCurrent: capability.assertDashboardReadCurrent,
       }
     : undefined;
+}
+
+/** Publish only after the runtime has committed and consumed this exact user input. */
+export function advanceMessageActionPrompt(params: {
+  runId?: string;
+  agentId?: string;
+  sessionKey?: string;
+  sessionId: string;
+  recorder?: UserTurnTranscriptRecorder;
+}): void {
+  if (!params.runId || !params.agentId || !params.sessionKey) {
+    return;
+  }
+  const source = readUserTurnPromptReactionSource(params.recorder);
+  const receipt =
+    params.recorder && getUserTurnTranscriptAdmissionOwner(params.recorder)?.receipt();
+  for (const [token, capability] of capabilitiesByToken) {
+    if (
+      !capability.currentPromptReaction ||
+      !resolveStoredMessageActionTurnCapability({
+        token,
+        agentId: params.agentId,
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+      })
+    ) {
+      continue;
+    }
+    // A new non-WebChat input must not leave the previous prompt target current.
+    if (capability.promptReactionBinding?.recorder === params.recorder) {
+      continue;
+    }
+    capability.promptReactionBinding =
+      source &&
+      params.recorder &&
+      receipt &&
+      receipt.sessionId === params.sessionId &&
+      source.agentId === capability.agentId &&
+      source.sessionKey === capability.sessionKey
+        ? { source, recorder: params.recorder, react: source.createReaction(params.recorder) }
+        : undefined;
+  }
+}
+
+/** Current-prompt callbacks never enter channel authorization or serialized runtime context. */
+export function resolveCurrentPromptReaction(
+  params: MessageActionTurnCapabilityLookup,
+): CurrentPromptReaction | undefined {
+  return resolveStoredMessageActionTurnCapability(params)?.currentPromptReaction;
 }
 
 export function revokeMessageActionTurnCapability(token: string | undefined): boolean {

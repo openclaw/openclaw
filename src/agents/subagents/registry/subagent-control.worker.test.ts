@@ -1,9 +1,13 @@
 // Preserve the real registry fixture before importing its runtime consumers.
 // oxfmt-ignore
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
+import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { existsSync } from "node:fs";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+} from "../../../../test/helpers/sqlite-parent-observer.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
@@ -27,15 +31,17 @@ import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-age
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { createOpenClawTools } from "../../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 
 const fixture = useSubagentControlFixture();
-const nativeState = await vi.importActual<typeof registryState>("./subagent-registry-state.js");
 
 it.each(["caller admission", "session generation"] as const)(
   "releases an acknowledged native claim when %s retires before publication",
@@ -62,27 +68,33 @@ it.each(["caller admission", "session generation"] as const)(
     const handle = createEmbeddedRunHandle({ runId, abort });
     setActiveEmbeddedRun(sessionId, handle, sessionKey);
     let retiredAfterAck = false;
-    vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-      (runs, ids, options) => {
-        const claim = runs.get(runId)?.killIntent;
-        return nativeState.persistSubagentRunsToDiskAsyncOrThrow(runs, ids, {
-          ...options,
-          onCommitted() {
-            if (claim && !retiredAfterAck) {
-              retiredAfterAck = true;
-              if (retirement === "caller admission") {
-                caller.abort(new Error("Caller retired after commit"));
-              } else {
-                replaceSessionEntrySync(
-                  { agentId: "main", sessionKey },
-                  { sessionId, updatedAt: Date.now(), lifecycleRevision: "replacement" },
-                );
+    fixture.worker.mockImplementation((context, operation, options) =>
+      runSubagentStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            execute: async (command, commandOptions) => {
+              const row = isSubagentRegistryWriteCommand(command)
+                ? command.input.values.find((candidate) => candidate.run_id === runId)
+                : undefined;
+              const claim = row && rowToSubagentRunRecord(row)?.killIntent;
+              const receipt = await scope.execute(command, commandOptions);
+              if (claim && !retiredAfterAck) {
+                retiredAfterAck = true;
+                if (retirement === "caller admission") {
+                  caller.abort(new Error("Caller retired after commit"));
+                } else {
+                  replaceSessionEntrySync(
+                    { agentId: "main", sessionKey },
+                    { sessionId, updatedAt: Date.now(), lifecycleRevision: "replacement" },
+                  );
+                }
               }
-            }
-            options.onCommitted?.();
-          },
-        });
-      },
+              return receipt;
+            },
+          }),
+        options,
+      ),
     );
     const tool = createOpenClawTools({
       config: getRuntimeConfig(),
@@ -140,9 +152,6 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
   "preserves registered Stop selection across %s",
   async (kind) => {
     await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
-      vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-        nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-      );
       const runId = "replace-during-control-preparation";
       const sessionKey = `agent:main:subagent:${runId}`;
       const sessionId = `${runId}-session`;
@@ -177,11 +186,12 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
       registryState.clearSubagentRunsReadCacheForTest();
       const entered = createDeferred();
       const release = createDeferred();
-      vi.mocked(registryState.prepareSubagentSessionListReadCache).mockImplementationOnce(
+      const prepareReadCache = registryState.prepareSubagentSessionListReadCache;
+      vi.spyOn(registryState, "prepareSubagentSessionListReadCache").mockImplementationOnce(
         async () => {
           entered.resolve();
           await release.promise;
-          await nativeState.prepareSubagentSessionListReadCache();
+          await prepareReadCache();
         },
       );
       const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
@@ -200,9 +210,7 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
           await registerSubagentRun({ ...registration, task: "successor" });
         } else {
           // The existing startup owner hydrates the persisted row; this is not an absence witness.
-          expect(nativeState.restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBeGreaterThan(
-            0,
-          );
+          expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBeGreaterThan(0);
         }
         const successor = subagentRuns.get(runId)!;
         expect(successor).not.toBe(original);
@@ -218,7 +226,7 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
         if (kind === "same-ID replacement") {
           expect(abort, "Stop must not transfer to newly registered work").not.toHaveBeenCalled();
           expect(outcome).toBeInstanceOf(Error);
-          expect(successor.execution.endedAt).toBeUndefined();
+          expect(subagentRuns.get(runId)?.execution.endedAt).toBeUndefined();
         } else {
           expect(outcome).toMatchObject({ details: { found: true, killed: true } });
           expect(abort).toHaveBeenCalledOnce();
@@ -244,9 +252,6 @@ it.each([
   "earlier success",
 ] as const)("settles registered runId Stop for an %s native child", async (kind) =>
   withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
-    vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-      nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-    );
     const runId = `native-run-stop-${kind.replaceAll(" ", "-")}`;
     const siblingId = `${runId}-untouched`;
     const missingStore = kind === "queued without child store";
@@ -323,22 +328,29 @@ it.each([
     let admission: SessionWorkAdmissionLease | undefined;
     let runnerSettlement: Promise<void> | undefined;
     if (completesDuringStop) {
-      vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-        (runs, ids, options) => {
-          if (
-            !heldTerminal &&
-            ids.includes(runId) &&
-            runs.get(runId)?.execution.status === "terminal"
-          ) {
-            heldTerminal = true;
-            const snapshot = structuredClone(runs);
-            terminalEntered.resolve();
-            return terminalRelease.promise.then(() =>
-              nativeState.persistSubagentRunsToDiskAsyncOrThrow(snapshot, ids, options),
-            );
-          }
-          return nativeState.persistSubagentRunsToDiskAsyncOrThrow(runs, ids, options);
-        },
+      fixture.worker.mockImplementation((context, operation, options) =>
+        runSubagentStateWorkerOperation(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                const row = isSubagentRegistryWriteCommand(command)
+                  ? command.input.values.find((candidate) => candidate.run_id === runId)
+                  : undefined;
+                if (
+                  !heldTerminal &&
+                  row &&
+                  rowToSubagentRunRecord(row)?.execution.status === "terminal"
+                ) {
+                  heldTerminal = true;
+                  terminalEntered.resolve();
+                  await terminalRelease.promise;
+                }
+                return scope.execute(command, commandOptions);
+              },
+            }),
+          options,
+        ),
       );
     }
     if (queued) {
@@ -430,9 +442,10 @@ it.each([
     }
     await fixture.settle();
     registryState.clearSubagentRunsReadCacheForTest();
-    const sql = observeMainThreadSql();
-    sql.calibrate();
-    let counts: number[];
+    // Warm initialization ends here. Count all eight host APIs through Stop and
+    // its owned settlement; independent durable readbacks begin after restore.
+    const sql = observeParentSqlite();
+    let counts: ReturnType<typeof emptySqliteCounts>;
     let unexpectedHold: ReturnType<typeof holdQueuedSwarmRun>;
     let cancellation: ReturnType<typeof tool.execute> | undefined;
     try {
@@ -467,14 +480,9 @@ it.each([
       terminalRelease.resolve();
       admission?.release();
       await Promise.allSettled([runnerSettlement, cancellation]);
-      counts = sql.calls.map((probe) => probe.mock.calls.length);
+      counts = { ...sql.counts };
       sql.restore();
       if (earlierSuccess) {
-        // Ordinary success cleanup shares this observed window; its composed proof owns
-        // the whole-window zero-SQL assertion after the separate owner cutover.
-        console.info("Earlier-success Stop SQL, including ordinary cleanup", {
-          counts,
-        });
         resetGlobalHookRunner();
       }
       for (const { id, sessionId, handle } of handles) {
@@ -534,9 +542,8 @@ it.each([
           loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(runId) })?.entry
             .abortedLastRun,
         ).not.toBe(true);
-      } else {
-        expect(counts).toEqual(counts.map(() => 0));
       }
+      expect(counts).toEqual(emptySqliteCounts());
     } finally {
       await unexpectedHold?.release();
     }

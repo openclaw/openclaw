@@ -29,7 +29,7 @@ type GetSessionEntryFn = typeof import("openclaw/plugin-sdk/session-store-runtim
 type ResolveStorePathFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 type ReadSessionUpdatedAtFn =
-  typeof import("openclaw/plugin-sdk/session-store-runtime").readSessionUpdatedAt;
+  typeof import("openclaw/plugin-sdk/session-store-runtime").readSessionUpdatedAtAsync;
 type LoadWebMediaFn = typeof import("openclaw/plugin-sdk/web-media").loadWebMedia;
 type ResolveTelegramApprovalForTest = NonNullable<TelegramBotDeps["resolveApproval"]>;
 type DispatchReplyWithBufferedBlockDispatcherFn =
@@ -59,10 +59,6 @@ const { loadWebMedia } = vi.hoisted((): { loadWebMedia: MockFn<LoadWebMediaFn> }
   loadWebMedia: vi.fn<LoadWebMediaFn>(),
 }));
 
-export function getLoadWebMediaMock(): MockFn<LoadWebMediaFn> {
-  return loadWebMedia;
-}
-
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
@@ -86,7 +82,7 @@ const {
       (storePath?: string) => storePath ?? sessionStorePath,
     ),
     getSessionEntryMock: vi.fn<GetSessionEntryFn>(() => undefined),
-    readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(() => undefined),
+    readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(async () => undefined),
     recordInboundSessionMock: vi.fn(async () => undefined),
   }),
 );
@@ -121,7 +117,9 @@ export function getUpsertChannelPairingRequestMock(): MockFn<
 }
 
 const skillCommandListHoisted = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn<TelegramBotDeps["listSkillCommandsForAgents"]>(() => []),
+  prepareSkillCommandsForAgents: vi.fn<TelegramBotDeps["prepareSkillCommandsForAgents"]>(
+    async () => [],
+  ),
 }));
 const modelProviderDataHoisted = vi.hoisted(() => ({
   buildModelsProviderData: vi.fn() as MockFn<TelegramBotDeps["buildModelsProviderData"]>,
@@ -188,7 +186,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
       ),
   };
 });
-export const listSkillCommandsForAgents = skillCommandListHoisted.listSkillCommandsForAgents;
+export const prepareSkillCommandsForAgents = skillCommandListHoisted.prepareSkillCommandsForAgents;
 const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData;
 export const replySpy = replySpyHoisted.replySpy;
 const menuSyncHoisted = vi.hoisted(() => ({
@@ -391,8 +389,9 @@ const telegramBotRuntimeForTest = {
 export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
   getSessionEntry: getSessionEntryMock,
+  getSessionEntryAsync: async (params) => getSessionEntryMock(params),
   resolveStorePath: resolveStorePathMock,
-  readSessionUpdatedAt: readSessionUpdatedAtMock,
+  readSessionUpdatedAtAsync: readSessionUpdatedAtMock,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],
   recordChannelActivity: vi.fn() as TelegramBotDeps["recordChannelActivity"],
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
@@ -407,8 +406,8 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   dispatchReplyWithBufferedBlockDispatcher,
   loadWebMedia: loadWebMedia as TelegramBotDeps["loadWebMedia"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
-  listSkillCommandsForAgents:
-    listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
+  prepareSkillCommandsForAgents:
+    prepareSkillCommandsForAgents as TelegramBotDeps["prepareSkillCommandsForAgents"],
   syncTelegramMenuCommands: syncTelegramMenuCommands as TelegramBotDeps["syncTelegramMenuCommands"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   resolveApproval: resolveExecApprovalSpy,
@@ -417,7 +416,9 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
 
 export const getOnHandler = (event: string) => {
-  const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
+  const handler = onSpy.mock.calls.find(([filter]) =>
+    Array.isArray(filter) ? filter.includes(event) : filter === event,
+  )?.[1];
   if (!handler) {
     throw new Error(`Missing handler for event: ${event}`);
   }
@@ -447,7 +448,7 @@ beforeEach(() => {
   getSessionEntryMock.mockReset();
   getSessionEntryMock.mockReturnValue(undefined);
   readSessionUpdatedAtMock.mockReset();
-  readSessionUpdatedAtMock.mockReturnValue(undefined);
+  readSessionUpdatedAtMock.mockResolvedValue(undefined);
   recordInboundSessionMock.mockReset();
   recordInboundSessionMock.mockResolvedValue(undefined);
   loadWebMedia.mockReset();
@@ -530,8 +531,8 @@ beforeEach(() => {
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);
-  listSkillCommandsForAgents.mockReset();
-  listSkillCommandsForAgents.mockReturnValue([]);
+  prepareSkillCommandsForAgents.mockReset();
+  prepareSkillCommandsForAgents.mockResolvedValue([]);
   buildModelsProviderData.mockReset();
   buildModelsProviderData.mockResolvedValue({
     byProvider: new Map([["openai", new Set(["gpt-5.4"])]]),

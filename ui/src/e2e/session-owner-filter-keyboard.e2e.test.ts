@@ -8,6 +8,7 @@ import {
   sessionsListResponse,
   waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 import {
   chooseSidebarOwner,
   openSidebarMenu,
@@ -51,34 +52,31 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await waitForSessionRosterHydration(page);
-      const trigger = page.getByRole("button", { name: "Filter & sort" });
-      await trigger.focus();
+      await selectAllSidebarSessions(page);
+      const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const owners = page.locator("#sidebar-session-owner-title");
+      const picker = page.locator(".sidebar-session-owner-filter");
+      await owners.focus();
       await page.keyboard.press("Enter");
-      const menu = page.locator(".sidebar-session-sort-menu");
-      await expectBrowser(menu.getByRole("dialog")).toBeVisible();
-      const active = menu.getByRole("radio", { name: "Active", exact: true });
-      const owners = menu.locator("#sidebar-sessions-owner");
-      await expectBrowser(owners).toBeFocused();
-      await page.keyboard.press("Enter");
-      await expectBrowser(menu.locator('[role="option"][data-value^="owner:"]')).toHaveCount(5);
+      await expectBrowser(picker.locator('[role="option"][data-value^="owner:"]')).toHaveCount(5);
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("Enter");
       await expect
-        .poll(async () =>
-          (await gateway.getRequests("sessions.list")).some(
-            (request) =>
-              (request.params as { ownerId?: unknown } | undefined)?.ownerId === "profile-ada",
-          ),
+        .poll(
+          async () =>
+            (await gateway.getRequests("sessions.list", { ownerId: "profile-ada" })).length > 0,
         )
         .toBe(true);
       await expectBrowser(owners).toHaveAccessibleName("Owners: Ada Lovelace Byron");
-      await owners.focus();
-      await page.keyboard.press("Tab");
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      const menu = page.locator(".sidebar-session-sort-menu");
+      const active = menu.getByRole("radio", { name: "Active", exact: true });
       await expectBrowser(active).toBeFocused();
       await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Archived", exact: true })).toBeChecked();
+      await expectBrowser(menu.getByRole("radio", { name: "Snoozed", exact: true })).toBeChecked();
       await page.keyboard.press("ArrowLeft");
       await expectBrowser(active).toBeChecked();
       // Row order, switches, and display submenus are covered by the sidebar
@@ -87,10 +85,9 @@ suite.define(() => {
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(trigger).toBeFocused();
       await page.keyboard.press("Enter");
-      await expectBrowser(owners).toBeFocused();
+      await expectBrowser(active).toBeFocused();
+      await expectBrowser(menu.getByRole("button", { name: "Reset", exact: true })).toHaveCount(0);
       await expectBrowser(owners).toHaveAccessibleName("Owners: Ada Lovelace Byron");
-      await page.keyboard.press("Shift+Tab");
-      await expectBrowser(menu.getByRole("button", { name: "Reset", exact: true })).toBeFocused();
       await menu.getByRole("link", { name: "Session sources", exact: true }).focus();
       await page.keyboard.press("Tab");
       await expectBrowser(menu).toHaveCount(0);
@@ -125,7 +122,7 @@ suite.define(() => {
         if (name === "compact") {
           await page.getByRole("button", { name: "Expand sidebar" }).click();
         }
-        await page.getByRole("button", { name: "Filter & sort" }).click();
+        await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
         await openSidebarMenu(page);
         const menu = page.locator(".sidebar-session-sort-menu");
         const menuBounds = await menu.locator(".sidebar-session-filter-panel").boundingBox();
@@ -134,12 +131,13 @@ suite.define(() => {
         expect(menuBounds!.y).toBeGreaterThanOrEqual(0);
         expect(menuBounds!.x + menuBounds!.width).toBeLessThanOrEqual(viewport.width);
         expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(viewport.height);
-        const owners = menu.locator("#sidebar-sessions-owner");
+        await page.keyboard.press("Escape");
+        const owners = page.locator("#sidebar-session-owner-title");
         await owners.click();
-        await expectBrowser(menu.locator('[role="option"][data-value^="owner:"]')).toHaveCount(
-          ownerCount,
-        );
-        const list = menu.getByRole("listbox", { name: "Owners", exact: true });
+        await expectBrowser(
+          page.locator('.sidebar-session-owner-filter [role="option"][data-value^="owner:"]'),
+        ).toHaveCount(ownerCount);
+        const list = page.getByRole("listbox", { name: "Owners", exact: true });
         await settleSidebarMenuMotion(list);
         const listBounds = await list.boundingBox();
         expect(listBounds).not.toBeNull();
@@ -147,12 +145,12 @@ suite.define(() => {
         expect(listBounds!.y).toBeGreaterThanOrEqual(0);
         expect(listBounds!.x + listBounds!.width).toBeLessThanOrEqual(viewport.width);
         expect(listBounds!.y + listBounds!.height).toBeLessThanOrEqual(viewport.height);
-        await menu
+        await page
           .getByRole("combobox", { name: "Search", exact: true })
           .fill(ownerOptions.at(-1)!.id);
         await expectBrowser(list.getByRole("option")).toHaveCount(1);
         await list.getByRole("option").click();
-        await expectBrowser(menu.getByRole("dialog")).toBeVisible();
+        await expectBrowser(menu).toHaveCount(0);
         await expectBrowser(owners).toHaveAccessibleName(`Owners: ${ownerOptions.at(-1)!.id}`);
         const selectedBounds = await owners.boundingBox();
         expect(selectedBounds).not.toBeNull();
@@ -180,16 +178,23 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rtl-owners"));
       await page.locator("html").evaluate((element) => element.setAttribute("dir", "rtl"));
       await page.getByRole("button", { name: "Expand sidebar" }).click();
-      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await openSidebarMenu(page);
       const menu = page.locator(".sidebar-session-sort-menu");
-      const owners = menu.locator("#sidebar-sessions-owner");
+      const owners = page.locator("#sidebar-session-owner-title");
+      await page.keyboard.press("Escape");
       await chooseSidebarOwner(page, "owner:profile-0");
       await expectBrowser(owners).toHaveAccessibleName("Owners: Owner 1");
+      await openSidebarMenu(page);
       const active = menu.getByRole("radio", { name: "Active", exact: true });
+      const snoozed = menu.getByRole("radio", { name: "Snoozed", exact: true });
       await active.focus();
+      await page.keyboard.press("ArrowLeft");
+      await expectBrowser(snoozed).toBeChecked();
+      await expectBrowser(snoozed).toBeFocused();
       await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Archived", exact: true })).toBeChecked();
+      await expectBrowser(active).toBeChecked();
+      await expectBrowser(active).toBeFocused();
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(

@@ -8,8 +8,9 @@ import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
 import selectorParser, { type ClassName, type Selector } from "postcss-selector-parser";
 import * as ts from "typescript/unstable/ast";
+import { groupBy } from "./lib/group-by.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
-import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
+import { getPropertyNameText, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -18,34 +19,17 @@ const UI_SOURCE_ROOT = path.join(UI_ROOT, "src");
 const CLASS_TOKEN_PATTERN = /[-_A-Za-z][-_A-Za-z0-9]*/gu;
 const CLASS_STEM_PATTERN = /(?:^|[\s"'`=])([-_A-Za-z][-_A-Za-z0-9]*)$/u;
 
-type ExternalClassFamily = {
-  matches: (className: string) => boolean;
-  producer: string;
-};
-
 // These classes are emitted by dependencies rather than written literally in ui/src.
-const EXTERNAL_CLASS_FAMILIES: ExternalClassFamily[] = [
+const EXTERNAL_CLASS_PREFIXES = [
   // highlight.js emits language token spans during markdown rendering.
-  {
-    matches: (className) => className === "hljs" || className.startsWith("hljs-"),
-    producer: "highlight.js via ui/src/components/markdown-code-blocks.ts",
-  },
+  "hljs-",
   // CodeMirror owns cm-* editor DOM; its Lezer highlighter owns tok-* spans.
-  {
-    matches: (className) => className.startsWith("cm-") || className.startsWith("tok-"),
-    producer:
-      "CodeMirror and @lezer/highlight via ui/src/pages/chat/components/file-editor-view.ts",
-  },
+  "cm-",
+  "tok-",
   // Web Awesome owns wa-* classes inside its component implementation.
-  {
-    matches: (className) => className.startsWith("wa-"),
-    producer: "Web Awesome custom-element internals",
-  },
+  "wa-",
   // ProseMirror owns the editor-root and state classes it adds to its DOM.
-  {
-    matches: (className) => className.startsWith("ProseMirror"),
-    producer: "ProseMirror editor DOM",
-  },
+  "ProseMirror",
 ];
 
 type SourceReferences = {
@@ -78,17 +62,6 @@ type DeadClassFinding = {
   startLine: number;
   testOnlyFiles: string[];
 };
-
-function groupBy<T, K>(values: Iterable<T>, keyFor: (value: T) => K): Map<K, T[]> {
-  const groups = new Map<K, T[]>();
-  for (const value of values) {
-    const key = keyFor(value);
-    const group = groups.get(key) ?? [];
-    group.push(value);
-    groups.set(key, group);
-  }
-  return groups;
-}
 
 function walkFiles(rootDir: string, accepts: (fileName: string) => boolean): string[] {
   const files: string[] = [];
@@ -147,12 +120,53 @@ function classMapPropertyName(node: ts.ObjectLiteralElementLike): string | null 
   return getPropertyNameText(node.name);
 }
 
-/** Collect literal class tokens and dynamic class stems from TypeScript source. */
 export function collectControlUiClassReferences(sourceFile: ts.SourceFile): SourceReferences {
   const literalClasses = new Set<string>();
   const stems = new Set<string>();
 
+  function collectClassKeys(expression: ts.Expression): void {
+    const value = unwrapExpression(expression);
+    if (ts.isObjectLiteralExpression(value)) {
+      for (const property of value.properties) {
+        if (ts.isSpreadAssignment(property)) {
+          collectClassKeys(property.expression);
+          continue;
+        }
+        const name = classMapPropertyName(property);
+        if (name) {
+          addLiteralClassTokens(name, literalClasses);
+        }
+      }
+    } else if (ts.isArrayLiteralExpression(value)) {
+      for (const element of value.elements) {
+        collectClassKeys(ts.isSpreadElement(element) ? element.expression : element);
+      }
+    } else if (ts.isConditionalExpression(value)) {
+      collectClassKeys(value.whenTrue);
+      collectClassKeys(value.whenFalse);
+    } else if (ts.isBinaryExpression(value)) {
+      if (value.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+        collectClassKeys(value.right);
+      } else if (
+        value.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        value.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      ) {
+        collectClassKeys(value.left);
+        collectClassKeys(value.right);
+      }
+    }
+  }
+
   function visit(node: ts.Node): void {
+    if (
+      ts.isJsxAttribute(node) &&
+      node.name.getText(sourceFile) === "class" &&
+      node.initializer &&
+      ts.isJsxExpression(node.initializer) &&
+      node.initializer.expression
+    ) {
+      collectClassKeys(node.initializer.expression);
+    }
     if (ts.isStringLiteralLikeNode(node)) {
       addLiteralClassTokens(node.text, literalClasses);
     } else if (ts.isTemplateExpression(node)) {
@@ -352,7 +366,7 @@ function collectSourceReferenceFiles(): {
   production: SourceReferences;
   tests: SourceReferenceFile[];
 } {
-  const sourceFiles = walkFiles(UI_SOURCE_ROOT, (fileName) => fileName.endsWith(".ts")).map(
+  const sourceFiles = walkFiles(UI_SOURCE_ROOT, (fileName) => /\.tsx?$/u.test(fileName)).map(
     (fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") }),
   );
   const productionFiles: SourceReferenceFile[] = [];
@@ -368,8 +382,7 @@ function collectSourceReferenceFiles(): {
         ...collectControlUiClassReferences(sourceFile),
       };
       const isTestSupport =
-        filePath.endsWith(".test.ts") ||
-        filePath.endsWith(".test-support.ts") ||
+        /\.(?:test|test-support)\.tsx?$/u.test(filePath) ||
         filePath.split(path.sep).includes("test-helpers");
       if (isTestSupport) {
         testFiles.push(entry);
@@ -408,8 +421,10 @@ function isReferenced(className: string, references: SourceReferences): boolean 
   );
 }
 
-function externalProducer(className: string): string | null {
-  return EXTERNAL_CLASS_FAMILIES.find((family) => family.matches(className))?.producer ?? null;
+function isExternallyProducedClass(className: string): boolean {
+  return (
+    className === "hljs" || EXTERNAL_CLASS_PREFIXES.some((prefix) => className.startsWith(prefix))
+  );
 }
 
 function selectorClasses(selector: Selector): ClassName[] {
@@ -462,7 +477,7 @@ function auditStylesheet(
       }
       const classNames = [...new Set(classes.map((classNode) => classNode.value))];
       const keptAlive = classNames.some(
-        (className) => externalProducer(className) || isReferenced(className, references),
+        (className) => isExternallyProducedClass(className) || isReferenced(className, references),
       );
       if (keptAlive) {
         continue;

@@ -44,7 +44,10 @@ extension DashboardWindowOwnershipTests {
         defer { server.stop() }
         let autosaveName = "OpenClawDashboardWindow-Test-\(UUID().uuidString)"
         defer { NSWindow.removeFrame(usingName: autosaveName) }
-        let auth = DashboardWindowAuth(gatewayUrl: server.websocketURL().absoluteString, token: nil, password: nil)
+        let auth = DashboardWindowAuth.nativeDevice(
+            gatewayUrl: server.websocketURL().absoluteString,
+            token: nil,
+            password: nil)
         let sessionStore = transition == "revoke-session" ? DashboardBrowserSessionStore(dataStore: .nonPersistent()) :
             nil
         let controller = DashboardWindowController(
@@ -56,7 +59,7 @@ extension DashboardWindowOwnershipTests {
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         controller.show(url: server.url(), auth: auth)
-        try #require(await Self.waitForDashboardDocument(controller))
+        try await Self.waitForDashboardDocument(controller)
         let window = try #require(controller.window)
         defer {
             if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .cancel) }
@@ -75,7 +78,7 @@ extension DashboardWindowOwnershipTests {
         recordDeviceReply('status', {type: 'status'});
         null;
         """)
-        try #require(await Self.waitForConsentState { window.attachedSheet != nil })
+        try await TestWait.state("device settings consent sheet") { window.attachedSheet != nil }
 
         var replacement: DashboardWindowController?
         defer { replacement?.closeDashboard() }
@@ -99,7 +102,7 @@ extension DashboardWindowOwnershipTests {
                 requestBrowserProfileImportOffer: { _ in false })
             other = second
             second.show(url: server.url(), auth: auth)
-            try #require(await Self.waitForDashboardDocument(second))
+            try await Self.waitForDashboardDocument(second)
             _ = try await second.webView.callAsyncJavaScript("""
             return await window.webkit.messageHandlers.openclawDeviceSettings.postMessage({
               type: 'set', key: 'browser.cookieSync.domains', value: []
@@ -128,7 +131,7 @@ extension DashboardWindowOwnershipTests {
         let retired = ["replacement", "committed", "close"].contains(transition)
         let allowed = transition == "provisional" || transition == "normalize-profile"
         if retired {
-            #expect(await Self.waitForConsentState { window.attachedSheet == nil })
+            try await TestWait.state("retired device settings consent") { window.attachedSheet == nil }
         } else {
             #expect(window.attachedSheet != nil)
         }
@@ -162,42 +165,31 @@ extension DashboardWindowOwnershipTests {
         guard transition != "close" else { return }
         let current = replacement ?? controller
         if replacement != nil {
-            try #require(await Self.waitForDashboardDocument(current))
+            try await Self.waitForDashboardDocument(current)
         }
         let fresh = Task { await current.deviceSettingsMessageHandler.confirm(.activityReporting) }
         defer {
             if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .cancel) }
             fresh.cancel()
         }
-        try #require(await Self.waitForConsentState { window.attachedSheet != nil })
+        try await TestWait.state("fresh device settings consent sheet") { window.attachedSheet != nil }
         let freshSheet = try #require(window.attachedSheet)
         window.endSheet(freshSheet, returnCode: .alertFirstButtonReturn)
         #expect(await fresh.value == false)
     }
 
-    private static func waitForDashboardDocument(_ controller: DashboardWindowController) async -> Bool {
+    private static func waitForDashboardDocument(_ controller: DashboardWindowController) async throws {
         // Lease-backed loads report deliverable before the document exists; requests from the
         // interim blank page are untrusted, so wait for the real dashboard page to finish.
-        await self.waitForConsentState {
-            controller.webView.url != nil && !controller.webView.isLoading && controller.canDeliverNativeCommands
-        }
+        try await DashboardTestWait.document(controller, "device settings document") { controller.webView.url != nil }
     }
 
     private static func waitForDeviceReplies(_ webView: WKWebView) async throws -> [[String: Any]] {
-        let deadline = ContinuousClock.now + .seconds(5)
-        repeat {
-            let replies = try #require(try await webView.evaluateJavaScript("window.deviceReplies") as? [[String: Any]])
-            if replies.count == 2 { return replies }
-            try await Task.sleep(for: .milliseconds(10))
-        } while ContinuousClock.now < deadline
-        throw URLError(.timedOut)
-    }
-
-    private static func waitForConsentState(_ condition: () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while !condition(), ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(10))
+        var replies: [[String: Any]] = []
+        try await TestWait.state("device settings replies") {
+            replies = try #require(try await webView.evaluateJavaScript("window.deviceReplies") as? [[String: Any]])
+            return replies.count == 2
         }
-        return condition()
+        return replies
     }
 }

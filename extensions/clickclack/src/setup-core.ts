@@ -38,19 +38,11 @@ type ClickClackSetupInput = ChannelSetupInput & {
 };
 
 export function normalizeClickClackBaseUrl(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
+  const parsed = URL.parse(value?.trim() ?? "");
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return undefined;
   }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return parsed.toString().replace(/\/+$/, "");
-  } catch {
-    return undefined;
-  }
+  return parsed.toString().replace(/\/+$/, "");
 }
 
 function normalizeClickClackSetupCode(value: string): string | undefined {
@@ -86,10 +78,8 @@ function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string 
   let baseUrl: string;
   let exactClaimUrl: string | undefined;
   if (/^[a-z][a-z\d+.-]*:\/\//iu.test(rawCode)) {
-    let setupUrl: URL;
-    try {
-      setupUrl = new URL(rawCode);
-    } catch {
+    const setupUrl = URL.parse(rawCode);
+    if (!setupUrl) {
       throw new Error("ClickClack --code must be a valid HTTP(S) setup URL or a bare setup code.");
     }
     if (setupUrl.protocol !== "http:" && setupUrl.protocol !== "https:") {
@@ -208,10 +198,9 @@ export function applyClickClackCredentialConfig(params: {
   });
 }
 
-const clickClackSetupAdapter: ChannelSetupAdapter = {
+const clickClackSetupAdapter: ChannelSetupAdapter<ClickClackSetupInput> = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  prepareAccountConfigInput: async ({ cfg, accountId, input }) => {
-    const setupInput = input as ClickClackSetupInput;
+  prepareAccountConfigInput: async ({ cfg, accountId, input: setupInput }) => {
     if (!setupInput.code?.trim()) {
       return setupInput;
     }
@@ -261,15 +250,14 @@ const clickClackSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: createSetupInputPresenceValidator({
+  validateInput: createSetupInputPresenceValidator<ClickClackSetupInput>({
     defaultAccountOnlyEnvError: "CLICKCLACK_BOT_TOKEN can only be used for the default account.",
     whenNotUseEnv: [
       { someOf: ["token", "tokenFile"], message: REQUIRED_INPUT_ERROR },
       { someOf: ["baseUrl"], message: REQUIRED_INPUT_ERROR },
       { someOf: ["workspace"], message: REQUIRED_INPUT_ERROR },
     ],
-    validate: ({ cfg, accountId, input }) => {
-      const setupInput = input as ClickClackSetupInput;
+    validate: ({ cfg, accountId, input: setupInput }) => {
       const baseUrl = normalizeClickClackBaseUrl(setupInput.baseUrl);
       if (setupInput.baseUrl && !baseUrl) {
         return INVALID_BASE_URL_ERROR;
@@ -291,8 +279,7 @@ const clickClackSetupAdapter: ChannelSetupAdapter = {
       return null;
     },
   }),
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const setupInput = input as ClickClackSetupInput;
+  applyAccountConfig: ({ cfg, accountId, input: setupInput }) => {
     const existing = setupInput.useEnv
       ? resolveClickClackAccountConfig(cfg as CoreConfig, accountId)
       : undefined;

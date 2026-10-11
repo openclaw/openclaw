@@ -42,15 +42,8 @@ export function escapeFeishuCardPlainText(text: string): string {
 
 export function resolveSafeFeishuButtonUrl(url: unknown): string | undefined {
   const trimmed = typeof url === "string" ? url.trim() : "";
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === "https:" || parsed.protocol === "http:" ? trimmed : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(trimmed);
+  return parsed?.protocol === "https:" || parsed?.protocol === "http:" ? trimmed : undefined;
 }
 
 function sanitizeNativeFeishuButtonBehavior(
@@ -70,6 +63,14 @@ function sanitizeNativeFeishuButtonBehavior(
   return undefined;
 }
 
+export function resolveFeishuButtonType(style: unknown): "primary" | "danger" | "default" {
+  return style === "primary" || style === "success"
+    ? "primary"
+    : style === "danger"
+      ? "danger"
+      : "default";
+}
+
 function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown> | undefined {
   if (!isRecord(button)) {
     return undefined;
@@ -81,12 +82,6 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
   if (!text?.trim()) {
     return undefined;
   }
-  const style =
-    button.type === "danger"
-      ? "danger"
-      : button.type === "primary" || button.type === "success"
-        ? "primary"
-        : undefined;
   const behaviors = Array.isArray(button.behaviors)
     ? button.behaviors
         .map(sanitizeNativeFeishuButtonBehavior)
@@ -105,7 +100,7 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
   return {
     tag: "button",
     text: { tag: "plain_text", content: text },
-    type: style ?? "default",
+    type: resolveFeishuButtonType(button.type),
     behaviors,
   };
 }

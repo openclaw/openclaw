@@ -195,9 +195,6 @@ function createSwarmHarness(onSpawn?: (input: SpawnSubagentParams) => void | Pro
   applyCodeModeCatalog({
     tools: [...harness.tools, spawnTool],
     config: harness.config,
-    sessionId: harness.ctx.sessionId,
-    sessionKey: harness.ctx.sessionKey,
-    runId: harness.ctx.runId,
     catalogRef: harness.catalogRef,
   });
   return { ...harness, spawnTool };
@@ -219,7 +216,7 @@ beforeEach(() => {
     childSessionKey: "agent:main:subagent:1",
   });
   swarmMocks.emitSessionLifecycleEvent.mockReset();
-  swarmMocks.getSwarmRunByLaunchReplayKey.mockReset().mockReturnValue(undefined);
+  swarmMocks.getSwarmRunByLaunchReplayKey.mockReset().mockResolvedValue(undefined);
   swarmMocks.initSubagentRegistry.mockReset();
   swarmMocks.waitForCollectorCompletion.mockReset().mockResolvedValue({
     runId: "collector-1",
@@ -647,6 +644,7 @@ describe("Code Mode swarm host bridge", () => {
       catalog: "native",
       allow: ["skill_workshop"],
       enabled: false,
+      advertised: true,
     },
     {
       name: "execution allowed",
@@ -655,46 +653,45 @@ describe("Code Mode swarm host bridge", () => {
       allow: ["sessions_spawn"],
       enabled: true,
     },
-  ])(
-    "aligns the prompt and guest surface for $name",
-    async ({ swarm, catalog, allow, enabled }) => {
-      const harness = createCodeModeHarness();
-      if (swarm !== undefined) {
-        (harness.config as { tools: Record<string, unknown> }).tools.swarm = swarm;
-      }
-      const ctx = Object.assign(harness.ctx, { toolExecutionAllow: allow });
-      const spawn =
-        catalog === "mcp"
-          ? mcpTool({ name: "sessions_spawn", serverName: "lookalike", toolName: "sessions_spawn" })
-          : createSessionsSpawnTool({
-              config: harness.config,
-              agentSessionKey: harness.ctx.sessionKey,
-            });
-      spawn.execute = vi.fn(spawn.execute);
-      applyCodeModeCatalog({
-        ...ctx,
-        tools: [...harness.tools, ...(catalog === "empty" ? [] : [spawn])],
-      });
-      const execTool = harness.tools[0]!;
-      expect(execTool.description.includes("Swarm globals")).toBe(enabled);
-      harness.catalogRef.onChange?.();
-      expect(execTool.description.includes("Swarm globals")).toBe(enabled);
+  ])("preserves catalog guidance and enforces the guest surface for $name", async (testCase) => {
+    const { swarm, catalog, allow, enabled } = testCase;
+    const advertised = "advertised" in testCase ? testCase.advertised : enabled;
+    const harness = createCodeModeHarness();
+    if (swarm !== undefined) {
+      (harness.config as { tools: Record<string, unknown> }).tools.swarm = swarm;
+    }
+    const ctx = Object.assign(harness.ctx, { toolExecutionAllow: allow });
+    const spawn =
+      catalog === "mcp"
+        ? mcpTool({ name: "sessions_spawn", serverName: "lookalike", toolName: "sessions_spawn" })
+        : createSessionsSpawnTool({
+            config: harness.config,
+            agentSessionKey: harness.ctx.sessionKey,
+          });
+    spawn.execute = vi.fn(spawn.execute);
+    applyCodeModeCatalog({
+      ...ctx,
+      tools: [...harness.tools, ...(catalog === "empty" ? [] : [spawn])],
+    });
+    const execTool = harness.tools[0]!;
+    expect(execTool.description.includes("Swarm globals")).toBe(advertised);
+    harness.catalogRef.onChange?.();
+    expect(execTool.description.includes("Swarm globals")).toBe(advertised);
 
-      const result = await runUntilCompleted({
-        execTool,
-        waitTool: harness.tools[1]!,
-        code: 'return [typeof agents, typeof phase, typeof log, (await API.list()).files.some(file => file.path === "agents.d.ts")];',
-      });
-      expect(result).toMatchObject({
-        status: "completed",
-        value: enabled
-          ? ["object", "function", "function", true]
-          : ["undefined", "undefined", "undefined", false],
-      });
-      expect(swarmMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
-      expect(spawn.execute).not.toHaveBeenCalled();
-    },
-  );
+    const result = await runUntilCompleted({
+      execTool,
+      waitTool: harness.tools[1]!,
+      code: 'return [typeof agents, typeof phase, typeof log, (await API.list()).files.some(file => file.path === "agents.d.ts")];',
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      value: enabled
+        ? ["object", "function", "function", true]
+        : ["undefined", "undefined", "undefined", false],
+    });
+    expect(swarmMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
+    expect(spawn.execute).not.toHaveBeenCalled();
+  });
 
   it.each(["abort", "catalog"] as const)(
     "discards queued collector launches after %s closure",
@@ -761,7 +758,7 @@ describe("Code Mode swarm host bridge", () => {
         swarmLaunchRequestFingerprint: String(requestFingerprint),
       });
     });
-    swarmMocks.getSwarmRunByLaunchReplayKey.mockImplementation(() => persisted);
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockImplementation(async () => persisted);
     const code = 'return await agents.run("Research");';
 
     const first = await runSwarmCode(harness, code);
@@ -775,20 +772,20 @@ describe("Code Mode swarm host bridge", () => {
   });
 
   it("rejects a persisted collector whose request fingerprint does not match", async () => {
-    swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockResolvedValue(
       collectorRecord({ swarmLaunchRequestFingerprint: collectorFingerprint("Different task") }),
     );
     const harness = createSwarmHarness();
 
     const result = await runSwarmCode(harness, 'return await agents.run("Research");');
 
-    expect(result).toMatchObject({ status: "failed", code: "internal_error" });
+    expect(result).toMatchObject({ status: "failed", code: "invalid_input" });
     expect(String(result.error)).toContain("does not match the persisted collector");
     expect(harness.spawnTool.execute).not.toHaveBeenCalled();
   });
 
   it("rejects a pending reservation without durable launch state", async () => {
-    swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockResolvedValue(
       collectorRecord({
         swarmLaunchPending: true,
         swarmLaunchRequestFingerprint: collectorFingerprint(),
@@ -798,14 +795,14 @@ describe("Code Mode swarm host bridge", () => {
 
     const result = await runSwarmCode(harness, 'return await agents.run("Research");');
 
-    expect(result).toMatchObject({ status: "failed", code: "internal_error" });
+    expect(result).toMatchObject({ status: "failed", code: "invalid_input" });
     expect(String(result.error)).toContain("launch reservation cannot be recovered");
     expect(swarmMocks.initSubagentRegistry).not.toHaveBeenCalled();
     expect(harness.spawnTool.execute).not.toHaveBeenCalled();
   });
 
   it("re-enqueues a durable pending reservation before returning its handle", async () => {
-    swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockResolvedValue(
       collectorRecord({
         swarmLaunchPending: true,
         swarmLaunchRequestFingerprint: collectorFingerprint(),

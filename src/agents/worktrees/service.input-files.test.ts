@@ -228,7 +228,12 @@ it.each(["writable sandbox", "cloud"])(
         base: base.manifest,
         current,
         acceptance: { kind: "reconcile" },
-        journal: { load: () => undefined, begin: () => {}, commit: () => {}, abort: () => {} },
+        journal: {
+          load: async () => undefined,
+          begin: async () => {},
+          commit: async () => {},
+          abort: async () => {},
+        },
       });
       expect(applied.conflictPaths).toEqual([]);
       const replacement = await snapshot(cwd, "replacement-transfer");

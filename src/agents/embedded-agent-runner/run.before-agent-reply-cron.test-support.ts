@@ -1,5 +1,9 @@
 // Full-entry coverage for before_agent_reply hook handling before embedded attempts.
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
+import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
+import { readClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -21,6 +25,29 @@ function firstBeforeAgentReplyCall() {
     throw new Error("expected before_agent_reply hook call");
   }
   return call;
+}
+
+async function prepareHookSession(sessionKey: string) {
+  const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
+  const sessionTarget = {
+    agentId: "main",
+    sessionId: "hook-admitted-run",
+    sessionKey,
+    storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+    expectedLifecycleRevision: "hook-admitted-revision",
+  };
+  await replaceSessionEntry(sessionTarget, {
+    sessionId: sessionTarget.sessionId,
+    lifecycleRevision: sessionTarget.expectedLifecycleRevision,
+    updatedAt: 1,
+  });
+  return {
+    ...createOverflowRunParams(state),
+    sessionId: sessionTarget.sessionId,
+    sessionKey,
+    sessionTarget,
+    trigger: "cron" as const,
+  };
 }
 
 describe("runEmbeddedAgent before_agent_reply seam", () => {
@@ -79,7 +106,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
   });
 
-  it("re-arms setup progress when a cron hook does not claim", async () => {
+  it("passes the heartbeat queue and re-arms setup progress when its hook does not claim", async () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_agent_reply",
     );
@@ -89,10 +116,16 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
 
     await runEmbeddedAgent({
       ...createOverflowRunParams(state),
-      trigger: "cron",
+      trigger: "heartbeat",
+      sessionKey: "agent:main:heartbeat:heartbeat",
+      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
       onExecutionPhase,
     });
 
+    expect(firstBeforeAgentReplyCall()[1]).toMatchObject({
+      sessionKey: "agent:main:heartbeat:heartbeat",
+      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+    });
     expect(onExecutionPhase).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "before_agent_reply" }),
     );
@@ -100,5 +133,103 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
       expect.objectContaining({ phase: "runtime_plugins" }),
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: "stable cron root", sessionKey: "agent:main:cron:hook-authority", fenced: true },
+    { name: "ordinary session", sessionKey: "agent:main:hook-authority", fenced: false },
+  ])("retains before-reply authority through a handled hook for $name", async (scenario) => {
+    const params = await prepareHookSession(scenario.sessionKey);
+    let requestAuthority: (() => void) | undefined;
+    let claimAuthority: (() => void) | undefined;
+    const effect = vi.fn();
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "before_agent_reply",
+    );
+    mockedGlobalHookRunner.runBeforeAgentReply.mockImplementation(async (_event, context) => {
+      requestAuthority = captureGuardedFetchRequestAuthority();
+      claimAuthority = readClaimingHookAdmission(context)?.assertCurrent;
+      if (scenario.fenced) {
+        expect(requestAuthority).toBeTypeOf("function");
+        expect(claimAuthority).toBeTypeOf("function");
+        requestAuthority?.();
+        claimAuthority?.();
+      } else {
+        expect(requestAuthority).toBeUndefined();
+        expect(claimAuthority).toBeUndefined();
+      }
+      effect();
+      return { handled: true, reply: { text: "hook completed" } };
+    });
+
+    const result = await runEmbeddedAgent(params);
+
+    expect(result.payloads).toEqual([{ text: "hook completed" }]);
+    expect(effect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    if (scenario.fenced) {
+      expect(() => requestAuthority?.()).toThrow("Guarded request authority is no longer active");
+      expect(() => claimAuthority?.()).toThrow();
+    }
+  });
+
+  it("rejects a reassigned cron root before the before-reply hook effect", async () => {
+    const params = await prepareHookSession("agent:main:cron:hook-rotation");
+    const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
+    const effect = vi.fn();
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "before_agent_reply",
+    );
+    mockedGlobalHookRunner.runBeforeAgentReply.mockImplementation(async () => {
+      effect();
+      return { handled: true, reply: { text: "stale hook result" } };
+    });
+
+    await expect(
+      withBeforeAgentReplyObserver(
+        {
+          beforeDispatch: async () => {
+            await replaceSessionEntry(params.sessionTarget, {
+              sessionId: "replacement-cron-run",
+              lifecycleRevision: "replacement-cron-revision",
+              updatedAt: 2,
+            });
+          },
+          afterDispatch: async (result) => result,
+        },
+        () => runEmbeddedAgent(params),
+      ),
+    ).rejects.toThrow("The original session generation no longer accepts this delivery");
+
+    expect(effect).not.toHaveBeenCalled();
+    expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+  });
+
+  it("does not swallow cron-root revocation in a model-selection hook", async () => {
+    const params = await prepareHookSession("agent:main:cron:model-hook-rotation");
+    const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
+    const effect = vi.fn();
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "before_model_resolve",
+    );
+    mockedGlobalHookRunner.runBeforeModelResolve.mockImplementationOnce(async () => {
+      const assertRequestCurrent = captureGuardedFetchRequestAuthority();
+      await replaceSessionEntry(params.sessionTarget, {
+        sessionId: "replacement-model-run",
+        lifecycleRevision: "replacement-model-revision",
+        updatedAt: 2,
+      });
+      assertRequestCurrent?.();
+      effect();
+      return undefined;
+    });
+
+    await expect(runEmbeddedAgent(params)).rejects.toThrow(
+      "The original session generation no longer accepts this delivery",
+    );
+    expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledOnce();
+    expect(effect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
   });
 });

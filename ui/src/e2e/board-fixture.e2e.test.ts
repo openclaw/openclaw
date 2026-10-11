@@ -12,7 +12,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.ts";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
-import type { SkillWorkshopDiffResponse } from "../lib/skill-workshop/diff.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -20,11 +19,13 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   type ControlUiMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeStandaloneMockServer =
   chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
@@ -398,7 +399,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const context = await browser.newContext({
       serviceWorkers: "block",
       viewport: { width: 1440, height: 1000 },
-      recordVideo: { dir: artifacts },
+      recordVideo: captureUiProof ? { dir: artifacts } : undefined,
     });
     await runQaGatewayFixture(
       async () => {
@@ -414,6 +415,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         });
         const page = await context.newPage();
         await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
+        // The fixture viewer is Riley; this shared checkout belongs to Peter.
+        await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
         await page.getByRole("button", { name: "Write a message to send." }).waitFor();
         await page.screenshot({ path: path.join(artifacts, "chat.png") });
@@ -484,31 +487,31 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           });
         });
         await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
-        const localDiff = await page.evaluate(async () => {
+        const localWorkerOutput = await page.evaluate(async () => {
+          const canvas = new OffscreenCanvas(1, 1);
+          canvas.getContext("2d")?.fillRect(0, 0, 1, 1);
+          const image = new File([await canvas.convertToBlob({ type: "image/png" })], "dot.png", {
+            type: "image/png",
+          });
           const worker = new Worker(
-            "/src/lib/skill-workshop/diff.worker.ts?worker_file&type=module",
-            {
-              type: "module",
-            },
+            "/src/pages/chat/components/chat-attachment-image.worker.ts?worker_file&type=module",
+            { type: "module" },
           );
           try {
-            return await new Promise<SkillWorkshopDiffResponse["diff"]["stat"]>(
-              (resolve, reject) => {
-                worker.addEventListener(
-                  "message",
-                  ({ data }: MessageEvent<SkillWorkshopDiffResponse>) => resolve(data.diff.stat),
-                );
-                worker.addEventListener("error", () =>
-                  reject(new Error("The local Workshop worker could not run.")),
-                );
-                worker.postMessage({ id: 1, previous: "Before\n", current: "After\n" }, []);
-              },
-            );
+            return await new Promise<string | null>((resolve, reject) => {
+              worker.addEventListener("message", ({ data }: MessageEvent<File | null>) =>
+                resolve(data?.type ?? null),
+              );
+              worker.addEventListener("error", () =>
+                reject(new Error("The local image worker could not run.")),
+              );
+              worker.postMessage({ file: image, maxBytes: 1024 * 1024 }, []);
+            });
           } finally {
             worker.terminate();
           }
         });
-        expect(localDiff).toEqual({ added: 1, removed: 1 });
+        expect(localWorkerOutput).toBe("image/png");
         await expect.poll(() => hmr.length).toBeGreaterThan(0);
         expect(hmr.every((url) => new URL(url).host === new URL(origin).host)).toBe(true);
         outcomes.hmr = hmr;
@@ -895,6 +898,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      // External catalog sessions have no human owner.
+      await selectAllSidebarSessions(page);
       await page.getByText("Release checklist sweep", { exact: true }).click();
 
       const transcript = [
@@ -927,8 +932,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
       expect(await page.locator(".community-invite-card").count()).toBe(0);
       expect(
-        await page.evaluate(() => localStorage.getItem("openclaw:control-ui:community-invite")),
+        await page.evaluate(() => localStorage.getItem("openclaw:control-ui:community-invite:v2")),
       ).not.toBeNull();
+      await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
 
       await page.getByRole("button", { name: "Write a message to send." }).waitFor();
@@ -965,6 +971,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
       await page.getByRole("button", { name: "Write a message to send." }).waitFor();
 
@@ -1007,7 +1014,9 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
     const artifactDir = createControlUiE2eArtifactDir("standalone-native-plugin-preview");
     const context = await previewBrowser.newContext({
       viewport: { width: 1440, height: 1000 },
-      recordVideo: { dir: artifactDir, size: { width: 1440, height: 1000 } },
+      recordVideo: captureUiProof
+        ? { dir: artifactDir, size: { width: 1440, height: 1000 } }
+        : undefined,
     });
     const page = await context.newPage();
     try {

@@ -1,6 +1,6 @@
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
-import { parseCmdScriptCommandLine } from "./cmd-argv.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 
 export async function describeUnverifiedPortListeners(
   port: number,
@@ -15,7 +15,7 @@ export async function describeUnverifiedPortListeners(
   }
   const described = listeners.map((listener) => {
     const pid = typeof listener.pid === "number" ? listener.pid : null;
-    const argv = listener.commandLine ? parseCmdScriptCommandLine(listener.commandLine) : null;
+    const argv = listener.commandLine ? parseWindowsNativeCommandLine(listener.commandLine) : null;
     const identity = argv
       ? classifyOpenClawArgv(argv, { command: "gateway" }).kind === "openclaw"
         ? "openclaw gateway"
@@ -24,10 +24,7 @@ export async function describeUnverifiedPortListeners(
     const name = listener.command ?? "unknown";
     return pid ? `pid ${pid} (${name}, ${identity})` : `${name} (${identity})`;
   });
-  const pids = listeners
-    .map((listener) => listener.pid)
-    .filter((pid): pid is number => typeof pid === "number");
-  const hint = pids.length
+  const hint = listeners.some((listener) => typeof listener.pid === "number")
     ? ` If one of these is this gateway, stop it with "Stop-Process -Id <pid> -Force" and retry.`
     : "";
   return ` Remaining listener(s): ${described.join(", ")}. If gateway.cmd redirects output, quote the entire redirection target, including environment variables.${hint}`;

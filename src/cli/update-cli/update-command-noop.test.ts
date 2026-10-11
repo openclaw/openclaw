@@ -9,12 +9,12 @@ const boundary = vi.hoisted(() => ({
 vi.mock("./update-command-database-context.js", () => ({
   inspectUpdateDatabaseContexts: boundary.contexts,
 }));
-vi.mock("./update-command-managed-context.js", () => ({
-  revalidateUpdateDatabaseContext: async () => {},
+vi.mock("./update-command-managed-context.js", async (original) => ({
+  ...(await original<typeof import("./update-command-managed-context.js")>()),
   captureOwnedManagedUpdateContext: async () => undefined,
 }));
-vi.mock("./update-command-service-plan.js", async (original) => ({
-  ...(await original<typeof import("./update-command-service-plan.js")>()),
+vi.mock("./update-command-runtime-preflight.js", async (original) => ({
+  ...(await original<typeof import("./update-command-runtime-preflight.js")>()),
   resolvePackageRuntimePreflight: async () => ({
     ok: true,
     value: { nodeRunner: "/target/node" },

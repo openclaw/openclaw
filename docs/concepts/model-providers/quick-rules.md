@@ -15,7 +15,7 @@ title: "Quick rules"
     - `agents.defaults.models` stores aliases and per-model settings; `agents.defaults.modelPolicy.allow` is the optional explicit override allowlist.
     - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
     - `models.providers.*.maxTokens` sets the provider-level output-token default. On each `models.providers.*.models[]` entry, `contextWindow` declares the native window, `contextTokens` caps active input, and `maxTokens` overrides output capacity for that model. Configured output limits are clamped to the final native context window when known: the per-model `contextWindow`, otherwise the discovered window.
-    - Fallback rules, cooldown probes, and session-override persistence: [Model failover](/concepts/model-failover).
+    - Fallback rules, cooldown checks, and session-override persistence: [Model failover](/concepts/model-failover).
 
   </Accordion>
   <Accordion title="Adding provider auth does not change your primary model">

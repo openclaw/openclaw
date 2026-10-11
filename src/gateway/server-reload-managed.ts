@@ -25,7 +25,6 @@ import {
   type AcceptedRestartTarget,
   type AcceptedRestartTargetOwnership,
   type CurrentRuntimeSecretsPreparation,
-  type GatewayGmailRestartAbortController,
   type GatewayRestartRequestOptions,
   type GatewayRestartTransactionResult,
   type ManagedGatewayConfigReloaderHandle,
@@ -120,12 +119,12 @@ export function startManagedGatewayConfigReloader(
       throw error;
     }
   };
-  let activeGmailRestartAbortController: GatewayGmailRestartAbortController | null = null;
+  let activeGmailRestartAbortController: AbortController | null = null;
   const abortActiveGmailRestart = () => {
     activeGmailRestartAbortController?.abort();
     activeGmailRestartAbortController = null;
   };
-  const createGmailRestartAbortController = (): GatewayGmailRestartAbortController => {
+  const createGmailRestartAbortController = (): AbortController => {
     abortActiveGmailRestart();
     const abortController = new AbortController();
     if (lifecycle.signal.aborted) {
@@ -137,6 +136,7 @@ export function startManagedGatewayConfigReloader(
   };
   const {
     applyHotReload,
+    hasPendingModelRuntimeReload,
     getDeferredChannelReloads,
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
@@ -189,6 +189,7 @@ export function startManagedGatewayConfigReloader(
           previousRequired: string | undefined | null;
           previousCurrent: string | undefined;
           nextGeneration: string | undefined;
+          previousRuntimeConfig: OpenClawConfig;
           runtimeConfig: OpenClawConfig;
         }
       | undefined;
@@ -197,6 +198,7 @@ export function startManagedGatewayConfigReloader(
         await transactionOwnership.checkpoint();
         assertCurrent();
         const ownership = params.sharedGatewaySessionGenerationState.capture();
+        const previousRuntimeConfig = committedRuntimeConfig;
         const previousRequired = params.sharedGatewaySessionGenerationState.required;
         const prepared = await tryPrepareRuntimeSecrets(
           prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
@@ -219,6 +221,7 @@ export function startManagedGatewayConfigReloader(
           ownership,
           previousRequired,
           previousCurrent: ownership.generation,
+          previousRuntimeConfig,
           nextGeneration: params.resolveSharedGatewaySessionGenerationForConfig(
             prepared.snapshot.config,
           ),
@@ -236,6 +239,7 @@ export function startManagedGatewayConfigReloader(
       previousCurrent: previousSharedGatewaySessionGeneration,
       nextGeneration: nextSharedGatewaySessionGeneration,
       runtimeConfig: preparedRuntimeConfig,
+      previousRuntimeConfig,
     } = preparation;
     let restartTransaction: GatewayRestartTransactionResult | undefined;
     let requiredOwnership: SharedGatewaySessionGenerationOwnership | null = null;
@@ -276,6 +280,7 @@ export function startManagedGatewayConfigReloader(
           state: params.sharedGatewaySessionGenerationState,
           clients: params.clients,
           expectedGeneration: nextSharedGatewaySessionGeneration,
+          transition: { previous: previousRuntimeConfig, next: preparedRuntimeConfig },
         });
       }
       restartTransaction.settle("committed");
@@ -301,6 +306,7 @@ export function startManagedGatewayConfigReloader(
       prepareRuntimeCandidate,
       tryPrepareRuntimeSecrets,
       applyHotReload,
+      hasPendingModelRuntimeReload,
     });
 
   let committedRuntimeConfig = params.initialConfig;
@@ -342,7 +348,7 @@ export function startManagedGatewayConfigReloader(
       if (sessionStoresChanged) {
         publishSystemEventStoreConfig(nextCommittedRuntimeConfig);
       }
-      params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
+      void params.resolveGatewayContext?.()?.mentionInbox?.invalidateAsync();
     },
     ...(params.prepareConfigCandidate
       ? { prepareConfigCandidate: params.prepareConfigCandidate }

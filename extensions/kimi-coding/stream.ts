@@ -1,5 +1,9 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple } from "openclaw/plugin-sdk/llm";
+import {
+  resolveOpenAIRequestReasoning,
+  streamSimple,
+  type ToolCall,
+} from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeOpenAICompatibleReasoningReplay,
@@ -7,10 +11,12 @@ import {
   transformProviderStreamMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  asFiniteNumberInRange,
+  asOptionalObjectRecord,
   isRecord,
-  normalizeOptionalLowercaseString,
+  parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isKimiK3ModelId } from "./provider-policy-api.js";
+import { isKimiK3ModelId, KIMI_K3_THINKING_EFFORTS } from "./provider-policy-api.js";
 
 const TOOL_CALLS_SECTION_BEGIN = "<|tool_calls_section_begin|>";
 const TOOL_CALLS_SECTION_END = "<|tool_calls_section_end|>";
@@ -18,15 +24,7 @@ const TOOL_CALL_BEGIN = "<|tool_call_begin|>";
 const TOOL_CALL_ARGUMENT_BEGIN = "<|tool_call_argument_begin|>";
 const TOOL_CALL_END = "<|tool_call_end|>";
 
-type KimiToolCallBlock = {
-  type: "toolCall";
-  id: string;
-  name: string;
-  arguments: Record<string, unknown>;
-};
-
 type KimiThinkingType = "enabled" | "disabled";
-type KimiK3ThinkingEffort = "low" | "high" | "max";
 type KimiThinkingConfig = {
   type: KimiThinkingType;
   budget_tokens?: number;
@@ -44,31 +42,6 @@ const KIMI_ANTHROPIC_THINKING_BUDGETS: Record<Exclude<KimiThinkingLevel, "off">,
 };
 const KIMI_ANTHROPIC_VISIBLE_OUTPUT_RESERVE_TOKENS = 1024;
 const KIMI_ANTHROPIC_MIN_OUTPUT_TOKENS = 16000;
-const KIMI_K3_THINKING_EFFORTS: Record<Exclude<KimiThinkingLevel, "off">, KimiK3ThinkingEffort> = {
-  minimal: "low",
-  low: "low",
-  medium: "high",
-  high: "high",
-  adaptive: "high",
-  xhigh: "max",
-  max: "max",
-};
-
-function normalizeKimiThinkingBudgetTokens(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const normalized = Math.floor(value);
-  return normalized >= 1024 ? normalized : undefined;
-}
-
-function normalizeKimiAnthropicMaxTokens(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : undefined;
-}
 
 function ensureKimiAnthropicMaxTokens(
   payloadObj: Record<string, unknown>,
@@ -81,31 +54,20 @@ function ensureKimiAnthropicMaxTokens(
     KIMI_ANTHROPIC_MIN_OUTPUT_TOKENS,
     thinkingConfig.budget_tokens + KIMI_ANTHROPIC_VISIBLE_OUTPUT_RESERVE_TOKENS,
   );
-  const current = normalizeKimiAnthropicMaxTokens(payloadObj.max_tokens);
-  payloadObj.max_tokens = current === undefined ? required : Math.max(current, required);
+  const current = asFiniteNumberInRange(payloadObj.max_tokens, { min: 1 });
+  payloadObj.max_tokens =
+    current === undefined ? required : Math.max(Math.floor(current), required);
 }
 
 function normalizeKimiThinkingType(value: unknown): KimiThinkingType | undefined {
-  if (typeof value === "boolean") {
-    return value ? "enabled" : "disabled";
-  }
-  if (typeof value === "string") {
-    const normalized = normalizeOptionalLowercaseString(value);
-    if (!normalized) {
-      return undefined;
-    }
-    if (["enabled", "enable", "on", "true"].includes(normalized)) {
-      return "enabled";
-    }
-    if (["disabled", "disable", "off", "false"].includes(normalized)) {
-      return "disabled";
-    }
-    return undefined;
-  }
   if (isRecord(value)) {
     return normalizeKimiThinkingType(value.type);
   }
-  return undefined;
+  const enabled = parseBooleanValue(value, {
+    truthy: ["enabled", "enable", "on", "true"],
+    falsy: ["disabled", "disable", "off", "false"],
+  });
+  return enabled === undefined ? undefined : enabled ? "enabled" : "disabled";
 }
 
 function normalizeKimiThinkingConfig(value: unknown): KimiThinkingConfig | undefined {
@@ -113,16 +75,15 @@ function normalizeKimiThinkingConfig(value: unknown): KimiThinkingConfig | undef
   if (!type) {
     return undefined;
   }
-  if (type === "disabled") {
-    return { type: "disabled" };
+  if (type === "disabled" || !isRecord(value)) {
+    return { type };
   }
-  if (!isRecord(value)) {
-    return { type: "enabled" };
-  }
-  const budgetTokens = normalizeKimiThinkingBudgetTokens(value.budget_tokens ?? value.budgetTokens);
+  const budgetTokens = asFiniteNumberInRange(value.budget_tokens ?? value.budgetTokens, {
+    min: 1024,
+  });
   return budgetTokens === undefined
     ? { type: "enabled" }
-    : { type: "enabled", budget_tokens: budgetTokens };
+    : { type: "enabled", budget_tokens: Math.floor(budgetTokens) };
 }
 
 function resolveKimiThinkingConfig(
@@ -146,11 +107,7 @@ function resolveKimiThinkingConfig(
     : { type: "enabled", budget_tokens: levelBudgetTokens };
 }
 
-function stripTaggedToolCallCounter(value: string): string {
-  return value.trim().replace(/:\d+$/, "");
-}
-
-function parseKimiTaggedToolCalls(text: string): KimiToolCallBlock[] | null {
+function parseKimiTaggedToolCalls(text: string): ToolCall[] | null {
   const trimmed = text.trim();
   // Kimi emits tagged tool-call sections as standalone text blocks on this path.
   if (!trimmed.startsWith(TOOL_CALLS_SECTION_BEGIN) || !trimmed.endsWith(TOOL_CALLS_SECTION_END)) {
@@ -159,7 +116,7 @@ function parseKimiTaggedToolCalls(text: string): KimiToolCallBlock[] | null {
 
   let cursor = TOOL_CALLS_SECTION_BEGIN.length;
   const sectionEndIndex = trimmed.length - TOOL_CALLS_SECTION_END.length;
-  const toolCalls: KimiToolCallBlock[] = [];
+  const toolCalls: ToolCall[] = [];
 
   while (cursor < sectionEndIndex) {
     while (cursor < sectionEndIndex && /\s/.test(trimmed[cursor] ?? "")) {
@@ -200,7 +157,7 @@ function parseKimiTaggedToolCalls(text: string): KimiToolCallBlock[] | null {
       return null;
     }
 
-    const name = stripTaggedToolCallCounter(rawId);
+    const name = rawId.replace(/:\d+$/, "");
     if (!name) {
       return null;
     }
@@ -219,29 +176,19 @@ function parseKimiTaggedToolCalls(text: string): KimiToolCallBlock[] | null {
 }
 
 function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
+  const record = asOptionalObjectRecord(message);
+  if (!record || !Array.isArray(record.content)) {
     return;
   }
 
   let changed = false;
   const nextContent: unknown[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      nextContent.push(block);
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; text?: unknown };
-    if (typedBlock.type !== "text" || typeof typedBlock.text !== "string") {
-      nextContent.push(block);
-      continue;
-    }
-
-    const parsed = parseKimiTaggedToolCalls(typedBlock.text);
+  for (const block of record.content) {
+    const typedBlock = asOptionalObjectRecord(block);
+    const parsed =
+      typedBlock?.type === "text" && typeof typedBlock.text === "string"
+        ? parseKimiTaggedToolCalls(typedBlock.text)
+        : null;
     if (!parsed) {
       nextContent.push(block);
       continue;
@@ -255,10 +202,9 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
     return;
   }
 
-  (message as { content: unknown[] }).content = nextContent;
-  const typedMessage = message as { stopReason?: unknown };
-  if (typedMessage.stopReason === "stop") {
-    typedMessage.stopReason = "toolUse";
+  record.content = nextContent;
+  if (record.stopReason === "stop") {
+    record.stopReason = "toolUse";
   }
 }
 
@@ -277,14 +223,24 @@ function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): St
 
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   const configured = normalizeKimiThinkingConfig(ctx.extraParams?.thinking);
+  const extraBody = asOptionalObjectRecord(
+    ctx.extraParams?.extra_body ?? ctx.extraParams?.extraBody,
+  );
+  const templateKwargs = asOptionalObjectRecord(
+    extraBody?.chat_template_kwargs ??
+      ctx.extraParams?.chat_template_kwargs ??
+      ctx.extraParams?.chatTemplateKwargs,
+  );
   const underlying = ctx.streamFn ?? streamSimple;
   return createKimiToolCallMarkupWrapper((model, context, options) => {
-    const anthropic = (ctx.sourceApi ?? model.api) === "anthropic-messages";
+    const api = ctx.sourceApi ?? model.api;
+    const anthropic = api === "anthropic-messages";
     const k3 = anthropic && isKimiK3ModelId(model.id);
+    const openaiK3 = api === "openai-completions" && isKimiK3ModelId(model.id);
     const thinkingLevel = options?.reasoning ?? ctx.thinkingLevel ?? (k3 ? "high" : undefined);
     const thinkingConfig = resolveKimiThinkingConfig(configured, thinkingLevel);
     const enabledLevel =
-      thinkingLevel && thinkingLevel !== "off" ? thinkingLevel : k3 ? "high" : "low";
+      thinkingLevel && thinkingLevel !== "off" ? thinkingLevel : k3 || openaiK3 ? "high" : "low";
     // Replay needs scalar effort; legacy adaptive keeps its resolved thinking budget.
     const nativeLevel = enabledLevel === "adaptive" ? "high" : enabledLevel;
     const reasoning =
@@ -295,7 +251,9 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
           : nativeLevel;
     const runtimeModel = k3
       ? { ...model, compat: { ...model.compat, allowEmptySignature: true } }
-      : model;
+      : openaiK3
+        ? { ...model, thinkingLevelMap: { ...KIMI_K3_THINKING_EFFORTS, ...model.thinkingLevelMap } }
+        : model;
     return streamWithPayloadPatch(
       underlying,
       runtimeModel,
@@ -331,6 +289,13 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
         if (anthropic) {
           ensureKimiAnthropicMaxTokens(payloadObj, thinkingConfig);
         } else {
+          // A generated root effort would outrank explicit vLLM template kwargs.
+          if (openaiK3 && reasoning !== "off" && templateKwargs?.reasoning_effort === undefined) {
+            const { effort } = resolveOpenAIRequestReasoning(runtimeModel, reasoning);
+            if (effort !== undefined) {
+              payloadObj.reasoning_effort = effort;
+            }
+          }
           normalizeOpenAICompatibleReasoningReplay(payloadObj, {
             thinkingEnabled: thinkingConfig.type === "enabled",
             shouldBackfillAssistantMessage: (message) =>
@@ -342,28 +307,20 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   });
 }
 
-function stripContentBlockCacheControl(block: unknown): void {
-  if (!block || typeof block !== "object") {
-    return;
-  }
-
-  const record = block as Record<string, unknown>;
-  delete record.cache_control;
-
-  if (record.type === "tool_result" && Array.isArray(record.content)) {
-    for (const nestedBlock of record.content) {
-      stripContentBlockCacheControl(nestedBlock);
-    }
-  }
-}
-
 function stripContentArrayCacheControl(value: unknown): void {
   if (!Array.isArray(value)) {
     return;
   }
 
   for (const block of value) {
-    stripContentBlockCacheControl(block);
+    const record = asOptionalObjectRecord(block);
+    if (!record) {
+      continue;
+    }
+    delete record.cache_control;
+    if (record.type === "tool_result") {
+      stripContentArrayCacheControl(record.content);
+    }
   }
 }
 
@@ -375,10 +332,6 @@ function stripAnthropicCacheControlMarkers(payloadObj: Record<string, unknown>):
   }
 
   for (const message of payloadObj.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-
-    stripContentArrayCacheControl((message as Record<string, unknown>).content);
+    stripContentArrayCacheControl(asOptionalObjectRecord(message)?.content);
   }
 }

@@ -19,11 +19,7 @@ import {
 } from "./constants.js";
 import { resolveGeneratedEnvWrapperLayout } from "./launchd-plist.js";
 import { resolveRuntimeScriptPosition } from "./runtime-binary.js";
-import {
-  parseSystemdInlineEnvironment,
-  parseSystemdExecStart,
-  splitSystemdLogicalLines,
-} from "./systemd-unit.js";
+import { parseSystemdExecStart, splitSystemdLogicalLines } from "./systemd-unit.js";
 
 export const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
 
@@ -46,7 +42,7 @@ export function hasGatewaySubcommandArg(programArguments: string[]): boolean {
     args = resolveCarrierCommandArgv(inner, 0, { includeExec: true }) ?? inner;
   }
   args = resolveCarrierCommandArgv(args, 0, { includeExec: true }) ?? args;
-  const position = resolveRuntimeScriptPosition(args);
+  const { position } = resolveRuntimeScriptPosition(args);
   if (typeof position !== "number" && position.kind !== "not-runtime") {
     return false;
   }
@@ -93,10 +89,6 @@ export function hasGatewayServiceMarker(value: unknown): boolean {
   );
 }
 
-export function hasSystemdGatewayServiceMarker(content: string): boolean {
-  return hasGatewayServiceMarker(parseSystemdInlineEnvironment(content));
-}
-
 export function detectLaunchdGatewayExecutionMarker(plist: Record<string, unknown>): Marker | null {
   const args = plist.ProgramArguments;
   if (!Array.isArray(args) || !args.every((arg): arg is string => typeof arg === "string")) {
@@ -118,26 +110,9 @@ export function detectLaunchdGatewayExecutionMarker(plist: Record<string, unknow
   return EXTRA_MARKERS.find((marker) => launchCommand.includes(marker)) ?? null;
 }
 
-export function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
-  if (hasSystemdGatewayServiceMarker(contents)) {
-    return true;
-  }
-  if (!name.startsWith("openclaw-gateway")) {
-    return false;
-  }
-  return normalizeLowercaseStringOrEmpty(contents).includes("gateway");
-}
-
 export function isOpenClawGatewayTaskName(name: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name);
-  if (!normalized) {
-    return false;
-  }
-  // Windows schtasks /Query returns task names prefixed with \ (e.g.
-  // \OpenClaw Gateway for root-folder tasks). Strip the leading
-  // backslash so the configured name matches correctly and the live
-  // gateway task is not misidentified as an extra gateway service.
-  const stripped = normalized.replace(/^\\+/, "");
+  // Task Scheduler prefixes root-folder task names with a backslash.
+  const stripped = normalizeLowercaseStringOrEmpty(name).replace(/^\\+/, "");
   const defaultName = normalizeLowercaseStringOrEmpty(resolveGatewayWindowsTaskName());
   return stripped === defaultName || /^openclaw gateway \(.+\)$/.test(stripped);
 }
@@ -162,7 +137,7 @@ export function detectWindowsServiceExecutionMarker(args: string[], cwd?: string
 export function detectLauncherGatewayMarker(contents: string): Marker | null {
   const environment: Record<string, string> = {};
   for (const line of contents.split(/\r?\n/)) {
-    const command = normalizeLowercaseStringOrEmpty(line.trim());
+    const command = normalizeLowercaseStringOrEmpty(line);
     if (command.startsWith("set ")) {
       const assignment = parseCmdSetAssignment(line.trimStart().slice(4), true);
       if (assignment) {

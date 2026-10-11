@@ -1,4 +1,5 @@
 // Browser tests cover pw tools core.waits next download saves it plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -102,6 +103,7 @@ describe("pw-tools-core", () => {
     await Promise.resolve();
     harness.trigger({
       url: () => params.downloadUrl,
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => params.suggestedFilename,
       saveAs,
     });
@@ -146,6 +148,7 @@ describe("pw-tools-core", () => {
 
       type DownloadFixture = {
         url: () => string;
+        cancel: () => Promise<void>;
         suggestedFilename: () => string;
         saveAs: (outPath: string) => Promise<void>;
       };
@@ -155,6 +158,7 @@ describe("pw-tools-core", () => {
       });
       const download: DownloadFixture = {
         url: () => "https://example.com/file.bin",
+        cancel: vi.fn(async () => {}),
         suggestedFilename: () => "file.bin",
         saveAs,
       };
@@ -212,6 +216,7 @@ describe("pw-tools-core", () => {
         harness.expectArmed();
         harness.trigger({
           url: () => "https://example.com/file.bin",
+          cancel: vi.fn(async () => {}),
           suggestedFilename: () => "file.bin",
           saveAs,
         });
@@ -252,6 +257,7 @@ describe("pw-tools-core", () => {
     await Promise.resolve();
     harness.trigger({
       url: () => "https://example.com/successor.bin",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "successor.bin",
       saveAs,
     });
@@ -312,6 +318,7 @@ describe("pw-tools-core", () => {
       });
       const download = {
         url: () => "https://example.com/report.pdf",
+        cancel: vi.fn(async () => {}),
         suggestedFilename: () => "report.pdf",
         saveAs,
       };
@@ -455,6 +462,7 @@ describe("pw-tools-core", () => {
         harness.expectArmed();
         harness.trigger({
           url: () => "https://example.com/file.bin",
+          cancel: vi.fn(async () => {}),
           suggestedFilename: () => "file.bin",
           saveAs,
         });
@@ -528,6 +536,7 @@ describe("pw-tools-core", () => {
         harness.expectArmed();
         harness.trigger({
           url: () => "https://example.com/file.bin",
+          cancel: vi.fn(async () => {}),
           suggestedFilename: () => "file.bin",
           saveAs,
         });

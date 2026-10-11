@@ -83,10 +83,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
 
   constructor() {
     super();
-    new SubscriptionsController(this).watch(
-      () => this.uploadConfig,
-      (config, notify) => config.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.uploadConfig);
   }
   private readonly composer = createSessionRailComposer({
     submit: () => this.submit(),
@@ -109,16 +106,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         preventScroll: true,
       });
     }
-  }
-
-  private visibleDigest(): SessionObserverDigest | null {
-    if (!this.digest) {
-      return null;
-    }
-    if (!this.running) {
-      return this.digest;
-    }
-    return this.activeRunId && this.digest.runId === this.activeRunId ? this.digest : null;
   }
 
   private submit() {
@@ -306,7 +293,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       canCompose: this.connected,
     });
     const pending = this.companion.turns.some((turn) => turn.status === "pending");
-    const digest = this.visibleDigest();
+    const showPullRequests =
+      this.digest &&
+      (!this.running || (this.activeRunId && this.digest.runId === this.activeRunId));
     return html`
       <section
         class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded"
@@ -318,7 +307,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         @dragover=${drop.onDragover}
         @drop=${drop.onDrop}
       >
-        ${digest ? this.renderPullRequests() : nothing} ${this.renderThread(pending)}
+        ${showPullRequests ? this.renderPullRequests() : nothing} ${this.renderThread(pending)}
         ${
           !this.companion.turns.some((turn) => turn.status !== "failed")
             ? this.renderStarters()
@@ -327,6 +316,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         <openclaw-chat-comment-controller
           .paneId=${`side-chat:${this.sessionKey}`}
           .props=${attachmentProps}
+          .disabled=${attachmentProps.disabled}
           .sessionKey=${this.sessionKey}
           .presented=${this.presented}
         ></openclaw-chat-comment-controller>

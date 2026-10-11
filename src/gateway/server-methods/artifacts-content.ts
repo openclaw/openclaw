@@ -35,13 +35,7 @@ export function mediaUrlValue(value: unknown): string | undefined {
 
 function isSafeDownloadUrl(value: string): boolean {
   const trimmed = value.trim();
-  if (!trimmed || /^data:/i.test(trimmed)) {
-    return false;
-  }
-  if (trimmed.startsWith("/")) {
-    return !trimmed.startsWith("//") && trimmed.startsWith("/api/");
-  }
-  return isHttpUrl(trimmed);
+  return trimmed.startsWith("/api/") || isHttpUrl(trimmed);
 }
 
 export function resolveMessageRunId(message: Record<string, unknown>): string | undefined {
@@ -58,6 +52,8 @@ export function resolveBlockDownload(
   url?: string;
   mimeType?: string;
   sizeBytes?: number;
+  /** Decoded size measured from the inline payload itself, ignoring declared metadata. */
+  payloadSizeBytes?: number;
 } {
   const data = readStringValue(block.data)?.trim();
   const content = readStringValue(block.content)?.trim();
@@ -94,7 +90,13 @@ export function resolveBlockDownload(
       ? Math.floor(explicitSize)
       : base64?.sizeBytes;
   if (base64) {
-    return { mode: "bytes", data: base64.data, mimeType, sizeBytes };
+    return {
+      mode: "bytes",
+      data: base64.data,
+      mimeType,
+      sizeBytes,
+      payloadSizeBytes: base64.sizeBytes,
+    };
   }
   if (remoteUrl) {
     return { mode: "url", url: remoteUrl, mimeType, sizeBytes };

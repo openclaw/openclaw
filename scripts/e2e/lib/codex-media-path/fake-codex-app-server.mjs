@@ -1,11 +1,10 @@
-// Fake Codex app server used by media-path E2E scenarios.
 import {
   createFakeInitializeResponse,
   createFakeThreadStartResponse,
   runFakeCodexAppServer,
 } from "../codex-app-server-fixture.mjs";
 
-const version = "0.158.0";
+const version = "0.160.0";
 const requestLog =
   process.env.OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG ??
   "/tmp/openclaw-codex-media-path-app-server.jsonl";

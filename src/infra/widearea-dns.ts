@@ -1,4 +1,3 @@
-// Stores and validates wide-area DNS discovery settings.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -47,21 +46,13 @@ export function resolveWideAreaDiscoveryDomain(params?: {
   }
 }
 
-function zoneFilenameForDomain(domain: string): string {
-  return `${normalizedDomainLabels(domain).join(".")}.db`;
-}
-
-function assertZonePathUnderDnsDir(zonePath: string, dnsDir: string): void {
+export function getWideAreaZonePath(domain: string): string {
+  const dnsDir = path.resolve(CONFIG_DIR, "dns");
+  const zonePath = path.resolve(dnsDir, `${normalizedDomainLabels(domain).join(".")}.db`);
   const relativePath = path.relative(dnsDir, zonePath);
   if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     throw new Error("wide-area discovery zone path must stay under DNS config directory");
   }
-}
-
-export function getWideAreaZonePath(domain: string): string {
-  const dnsDir = path.resolve(CONFIG_DIR, "dns");
-  const zonePath = path.resolve(dnsDir, zoneFilenameForDomain(domain));
-  assertZonePathUnderDnsDir(zonePath, dnsDir);
   return zonePath;
 }
 
@@ -183,15 +174,15 @@ export function renderWideAreaGatewayZoneText(
     txt.push(`cliPath=${opts.cliPath.trim()}`);
   }
 
-  const records: string[] = [];
-
-  records.push(`$ORIGIN ${domain}`);
-  records.push(`$TTL 60`);
   const soaLine = `@ IN SOA ns1 hostmaster ${opts.serial} 7200 3600 1209600 60`;
-  records.push(soaLine);
-  records.push(`@ IN NS ns1`);
-  records.push(`ns1 IN A ${opts.tailnetIPv4}`);
-  records.push(`${hostLabel} IN A ${opts.tailnetIPv4}`);
+  const records = [
+    `$ORIGIN ${domain}`,
+    `$TTL 60`,
+    soaLine,
+    `@ IN NS ns1`,
+    `ns1 IN A ${opts.tailnetIPv4}`,
+    `${hostLabel} IN A ${opts.tailnetIPv4}`,
+  ];
   if (opts.tailnetIPv6) {
     records.push(`${hostLabel} IN AAAA ${opts.tailnetIPv6}`);
   }

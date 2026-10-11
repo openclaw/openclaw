@@ -7,15 +7,19 @@ waived by success on another surface.
 
 ## Older updater checks
 
-Before freezing a release, refresh `scripts/lib/update-compat-inventory.json`
-from every release in the supported upgrade window. Verify each downloaded npm
-tarball against its published `dist.integrity` before extraction, then run
+`scripts/lib/update-compat-inventory.json` is test-fixture maintenance, not a
+packaging or publish gate: npm preflight, prepack, `release-check`, and
+`release:prep` never consult live npm dist-tags, so another release moving
+`latest` or `beta` cannot invalidate a validated candidate. Refresh it on
+`main` (stable closeout or a normal PR) from every release in the supported
+upgrade window. Verify each downloaded npm tarball against its published
+`dist.integrity` before extraction, then run
 `pnpm update:compat:gen --release '<unpacked-dir>=<verified-integrity>'`, repeating
 `--release` for every supported version. Generation replaces the recorded set:
 keep empty entries, drop expired versions and their historical corrections, and
-never hand-edit recorded origins. Run `pnpm update:compat:check`; both npm
-`latest` and `beta` must be covered. Repeat the generation arguments with
-`--check` for an offline regeneration check.
+never hand-edit recorded origins. `pnpm update:compat:check` remains a manual
+maintainer report of npm `latest`/`beta` coverage. Repeat the generation
+arguments with `--check` for an offline regeneration check.
 
 Run every recorded `update-first-hop-compat*` lane and the upgrade survivor lane
 from the oldest supported release. Native Windows proof must invoke the old
@@ -56,6 +60,11 @@ Keep plugin `openclaw.release.requireLatestDependencies` declarations. Upstream
 latest drift/unavailable lookups are advisory: retain the tested Codex pin and
 record warnings. Malformed runtime metadata, package/install failures and
 required validation failures still block.
+
+Dependency advisory findings in release dependency evidence and
+release-dispatched CI audits are warnings at every severity; only known malware
+blocks. Record them in the handoff and queue the bump on `main` after
+publication; never re-cut, change tooling, or rerun validation for them.
 
 Install smoke also checks pack budget and direct npm global fresh/update paths;
 keep those enabled. `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1` is the existing
@@ -107,7 +116,12 @@ also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile `main` too, but it does not
 qualify for `npm-beta-v1`.
 
-Selected native-app CI and Windows Node tests block validation on failure.
+FRV `normalCi` Windows Node shards and all other selected failures block. Decide
+blocker or flake for every failure,
+rerun flakes on the same Release SHA at most twice, and file a fix-in-parallel
+issue/PR on `main`. Do not re-cut, change tooling, or start another FRV solely
+to clear a flake; the selected job must still pass before publication. See the
+[CI skill](../../release-openclaw-ci/SKILL.md#publication-requirements).
 Native platform publication remains independent and follows its own gates.
 All-group cross-OS qualification requires all nine Linux/Windows/macOS
 install/upgrade pairs. Focused recovery may select individual lanes but does
@@ -148,9 +162,12 @@ diagnosis but cannot substitute for required stable evidence.
 Preserve the validation parent and successful children when continuation is
 eligible; parents that produced sealed candidate artifacts need a new parent
 with verified evidence reuse. Diagnose failures and retry only the affected
-surface within the controller's budget. Selected test failures block publication; an untouched test or passing replay
-alone proves neither a flake nor a fix. Change Code SHA for a confirmed
-product defect and validate the repaired source. Aim to seal within approximately 20 minutes
+surface within the controller's budget. Classify every selected test failure as
+a real blocker or a flake under the
+[shared release boundaries](../SKILL.md#shared-release-boundaries): flakes get
+bounded recorded reruns on the same Release SHA and a fix-in-parallel issue or
+PR on `main`. Change Code SHA only for a real blocker and validate the repaired
+source. Aim to seal within approximately 20 minutes
 and publish within an hour; report observed blockers and timing rather than
 claiming those objectives as measured guarantees.
 

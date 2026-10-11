@@ -23,6 +23,7 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const PACKAGE_NAME_PATTERN = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 const PACKAGE_DIR_PATTERN = /^extensions\/[a-z0-9][a-z0-9._-]*$/u;
 const TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u;
+const PACKAGE_FAMILIES = new Set(["", "bundle-plugin"]);
 const PROTECTED_WORKFLOW_TAG_PATTERN =
   /^refs\/tags\/(release-publish\/([a-f0-9]{12})-[1-9][0-9]*)$/u;
 const VERSION_PATTERN = /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-beta\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
@@ -114,6 +115,10 @@ function normalizePlanEntry(value, index) {
   if (bootstrapMode === "configure-only" && !requiresManualOverride) {
     fail(`matrix[${index}] configure-only entries must require the manual override.`);
   }
+  const family = typeof value.family === "string" ? value.family : "";
+  if (!PACKAGE_FAMILIES.has(family)) {
+    fail(`matrix[${index}].family is invalid.`);
+  }
   return {
     packageName,
     version,
@@ -121,6 +126,7 @@ function normalizePlanEntry(value, index) {
     publishTag,
     bootstrapMode,
     requiresManualOverride,
+    family,
   };
 }
 
@@ -256,6 +262,7 @@ function normalizeBootstrapManifestEntry(value, index) {
     [
       "artifactPath",
       "bootstrapMode",
+      "family",
       "packageDir",
       "packageName",
       "publishTag",
@@ -691,19 +698,23 @@ export async function verifyClawHubBootstrapArtifactManifest(options) {
   return manifest;
 }
 
-function parseArgs(argv) {
-  const values = [...argv];
-  const command = values.shift();
-  const result = { command };
-  while (values.length > 0) {
-    const key = values.shift();
-    const value = values.shift();
+export function parseClawHubArtifactOptions(argv) {
+  const result = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
     if (!key?.startsWith("--") || value === undefined) {
       fail(`Invalid argument: ${String(key)}`);
     }
     result[key.slice(2).replaceAll("-", "_")] = value;
   }
   return result;
+}
+
+function parseArgs(argv) {
+  const values = [...argv];
+  const command = values.shift();
+  return { command, ...parseClawHubArtifactOptions(values) };
 }
 
 async function main() {

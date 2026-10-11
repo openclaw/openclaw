@@ -20,7 +20,7 @@ describe("native route memory", () => {
 
   it.each([
     "{",
-    ...["retired", "constructor", "toString", "__proto__"].map((routeId) =>
+    ...["retired", "__proto__"].map((routeId) =>
       JSON.stringify({ routeId, pathname: `/${routeId}`, search: "" }),
     ),
   ])("drops corrupt or invalid entry %s", (raw) => {

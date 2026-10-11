@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { applyRemoteModelCatalogUpdate } from "../agents/prepared-model-runtime.js";
 import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -10,9 +13,13 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
 
+vi.mock("../agents/prepared-model-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-runtime.js")>()),
+  applyRemoteModelCatalogUpdate: vi.fn(),
+}));
+
 type UpdateCheckStartupParams = Parameters<typeof createDeferredGatewayUpdateCheck>[0];
 type UpdateCheck = Awaited<ReturnType<UpdateCheckStartupParams["createUpdateCheck"]>>;
-type UpdateCheckParams = Parameters<UpdateCheckStartupParams["createUpdateCheck"]>[0];
 
 describe("deferred Gateway update-check lifecycle", () => {
   let state: OpenClawTestState;
@@ -53,6 +60,7 @@ describe("deferred Gateway update-check lifecycle", () => {
       scheduler,
       createUpdateCheck: () => defaultUpdateCheck,
       getConfig: () => ({}),
+      getPluginRegistry: () => undefined,
       log: { info: vi.fn(), warn: vi.fn() },
       isNixMode: false,
       broadcastToConnIds: vi.fn(),
@@ -68,14 +76,6 @@ describe("deferred Gateway update-check lifecycle", () => {
 
   async function waitForGatewayTestState(assertion: () => void | Promise<void>) {
     await vi.waitFor(assertion, { interval: 1 });
-  }
-
-  function mockCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
-    const call = mock.mock.calls[0];
-    if (!call) {
-      throw new Error("expected update-check factory call");
-    }
-    return call[0];
   }
 
   it("owns RPC update work when autonomous checks never start", async () => {
@@ -128,7 +128,9 @@ describe("deferred Gateway update-check lifecycle", () => {
           .filter((client) => !filter || filter(client as never))
           .map((client) => client.connId),
       );
-    const createGatewayUpdateCheck = vi.fn(() => defaultUpdateCheck);
+    const createGatewayUpdateCheck = vi.fn<UpdateCheckStartupParams["createUpdateCheck"]>(
+      () => defaultUpdateCheck,
+    );
 
     const result = await startUpdateCheck({
       broadcastToConnIds,
@@ -139,7 +141,7 @@ describe("deferred Gateway update-check lifecycle", () => {
       expect(createGatewayUpdateCheck).toHaveBeenCalledTimes(1);
     });
 
-    const updateCheckParams = mockCallArg(createGatewayUpdateCheck) as UpdateCheckParams;
+    const updateCheckParams = createGatewayUpdateCheck.mock.calls[0]![0];
     const updateAvailable = {
       currentVersion: "2026.8.7",
       latestVersion: "2026.8.8",
@@ -167,38 +169,28 @@ describe("deferred Gateway update-check lifecycle", () => {
     updateCheckParams.onUpdateAvailableChange?.(updateAvailable);
     updateCheckParams.onUpdateScheduleChange?.(schedule);
 
+    const legacyBroadcast = [
+      "update.available",
+      {
+        updateAvailable: {
+          currentVersion: updateAvailable.currentVersion,
+          latestVersion: updateAvailable.latestVersion,
+          channel: updateAvailable.channel,
+        },
+      },
+      new Set(["pairing", "node"]),
+      { dropIfSlow: true },
+    ];
     expect(broadcastToConnIds.mock.calls).toEqual([
       ["update.available", { updateAvailable }, new Set(["operator-read"]), { dropIfSlow: true }],
-      [
-        "update.available",
-        {
-          updateAvailable: {
-            currentVersion: updateAvailable.currentVersion,
-            latestVersion: updateAvailable.latestVersion,
-            channel: updateAvailable.channel,
-          },
-        },
-        new Set(["pairing", "node"]),
-        { dropIfSlow: true },
-      ],
+      legacyBroadcast,
       [
         "update.available",
         { updateAvailable, schedule },
         new Set(["operator-read"]),
         { dropIfSlow: true },
       ],
-      [
-        "update.available",
-        {
-          updateAvailable: {
-            currentVersion: updateAvailable.currentVersion,
-            latestVersion: updateAvailable.latestVersion,
-            channel: updateAvailable.channel,
-          },
-        },
-        new Set(["pairing", "node"]),
-        { dropIfSlow: true },
-      ],
+      legacyBroadcast,
     ]);
     await result.stop();
     broadcastToConnIds.mockClear();
@@ -274,6 +266,27 @@ describe("deferred Gateway update-check lifecycle", () => {
     }
   });
 
+  it("warns once when initialization records unavailable Git facts", async () => {
+    const warned = createDeferred();
+    const warn = vi.fn(() => warned.resolve());
+    defaultUpdateCheck.initialize = vi.fn<UpdateCheck["initialize"]>(async () => ({
+      root: null,
+      installReceipt: null,
+      status: {
+        root: null,
+        installKind: "unknown",
+        packageManager: "unknown",
+        error: { status: "failed", message: "Git discovery timed out", timeoutMs: 120_000 },
+      },
+    }));
+    const owner = await startUpdateCheck({ log: { info: vi.fn(), warn } });
+    await warned.promise;
+    await owner.stop();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "gateway update status failed to initialize: Error: Git discovery timed out",
+    );
+  });
+
   it("fences update discovery immediately and joins its pending initialization", async () => {
     const initialization = createDeferred<Awaited<ReturnType<UpdateCheck["initialize"]>>>();
     const cleanup = createDeferred();
@@ -302,5 +315,30 @@ describe("deferred Gateway update-check lifecycle", () => {
       initialization.resolve(await defaultUpdateCheck.initialize());
       await (stopping ?? result.stop());
     }
+  });
+
+  it("adopts scheduled remote catalogs inside the live Gateway registry scope", async () => {
+    // Prepared rebuilds borrow unchanged plugin instances only from this scope's registry;
+    // without it every external plugin is captured again after startup.
+    const gatewayRegistry = createEmptyPluginRegistry();
+    let adoptedIn: unknown;
+    vi.mocked(applyRemoteModelCatalogUpdate).mockImplementation(async () => {
+      adoptedIn = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      return "published";
+    });
+    let applyRemoteCatalogUpdate: ((signal: AbortSignal) => Promise<unknown>) | undefined;
+    await startUpdateCheck({
+      getPluginRegistry: () => gatewayRegistry,
+      createUpdateCheck: (params) => {
+        applyRemoteCatalogUpdate = params.applyRemoteCatalogUpdate;
+        return defaultUpdateCheck;
+      },
+    });
+    await waitForGatewayTestState(() => expect(applyRemoteCatalogUpdate).toBeDefined());
+
+    await expect(applyRemoteCatalogUpdate!(new AbortController().signal)).resolves.toBe(
+      "published",
+    );
+    expect(adoptedIn).toBe(gatewayRegistry);
   });
 });

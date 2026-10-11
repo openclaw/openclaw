@@ -1,0 +1,128 @@
+name: Shared native SDK declarations
+description: Restore or publish the full native SDK behind its checked input receipt.
+inputs:
+  mode:
+    description: restore-main, save-main, publish-run, or restore-run.
+    required: true
+  cache-mode:
+    default: "off"
+    description: Existing preflight cache authority.
+  candidate-trust:
+    default: ""
+    description: Existing preflight source trust.
+  cache-write-allowed:
+    default: "false"
+    description: Existing preflight publication authority.
+  frozen-target:
+    default: "false"
+    description: Whether the target is frozen.
+  compatibility-target:
+    default: "false"
+    description: Whether the target uses historical compatibility.
+  release-gate:
+    default: "false"
+    description: Whether this is a release validation gate.
+  cache-hit:
+    default: "false"
+    description: Exact cache hit reported by the earlier restore-main invocation.
+  artifact-id:
+    default: ""
+    description: Current-run artifact published by the boundary producer.
+outputs:
+  cache-key:
+    value: ${{ steps.identity.outputs.cache-key }}
+    description: Content and native-toolchain cache identity.
+  cache-hit:
+    value: ${{ steps.cache.outputs.cache-hit || 'false' }}
+    description: Whether the exact persistent cache was restored.
+  artifact-id:
+    value: ${{ steps.upload.outputs.artifact-id }}
+    description: Published current-run SDK artifact.
+runs:
+  using: composite
+  steps:
+    - name: Identify native SDK inputs
+      id: identity
+      shell: bash
+      env:
+        SDK_OPERATION: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        case "$SDK_OPERATION" in restore-main|save-main|publish-run|restore-run) ;; *) exit 1 ;; esac
+        if [[ ! -f scripts/ci-sdk-declarations.mts ]]; then
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "enabled=true" >> "$GITHUB_OUTPUT"
+        node scripts/ci-sdk-declarations.mts key
+
+    - name: Restore main SDK declarations
+      id: cache
+      if: inputs.mode == 'restore-main' && steps.identity.outputs.enabled == 'true' && steps.identity.outputs.fresh != 'true' && inputs.cache-mode != 'off'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .artifacts/ci-sdk-declarations/sdk.json.gz
+        key: ${{ steps.identity.outputs.cache-key }}
+        restore-keys: ${{ steps.identity.outputs.cache-prefix }}
+
+    - name: Admit restored main SDK declarations
+      if: inputs.mode == 'restore-main' && steps.cache.outputs.cache-matched-key != ''
+      shell: bash
+      run: node scripts/ci-sdk-declarations.mts restore
+
+    - name: Download current-run SDK declarations
+      if: inputs.mode == 'restore-run' && steps.identity.outputs.enabled == 'true'
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        artifact-ids: ${{ inputs.artifact-id }}
+        name: ${{ inputs.artifact-id == '' && format('sdk-declarations-{0}-{1}', github.run_id, github.run_attempt) || '' }}
+        path: .artifacts/ci-sdk-declarations
+        merge-multiple: true
+
+    - name: Admit current-run SDK declarations
+      if: inputs.mode == 'restore-run' && steps.identity.outputs.enabled == 'true'
+      shell: bash
+      run: node scripts/ci-sdk-declarations.mts restore --required
+
+    - name: Pack current-run SDK declarations
+      if: inputs.mode == 'publish-run' && steps.identity.outputs.enabled == 'true'
+      shell: bash
+      run: node scripts/ci-sdk-declarations.mts pack
+
+    - name: Publish current-run SDK declarations
+      id: upload
+      if: inputs.mode == 'publish-run' && steps.identity.outputs.enabled == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: sdk-declarations-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/ci-sdk-declarations/sdk.json.gz
+        include-hidden-files: true
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: 1
+
+    - name: Pack main SDK declarations
+      id: main-pack
+      if: >-
+        success() && inputs.mode == 'save-main' && steps.identity.outputs.enabled == 'true' &&
+        github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' &&
+        contains(fromJSON('["push","schedule","workflow_dispatch","repository_dispatch"]'), github.event_name) &&
+        inputs.candidate-trust == 'main' && inputs.cache-write-allowed == 'true' &&
+        inputs.cache-mode != 'off' && inputs.cache-hit != 'true' &&
+        inputs.frozen-target != 'true' && inputs.compatibility-target != 'true' && inputs.release-gate != 'true'
+      shell: bash
+      run: node scripts/ci-sdk-declarations.mts pack
+
+    - name: Save main SDK declarations
+      if: >-
+        success() && inputs.mode == 'save-main' && steps.identity.outputs.enabled == 'true' &&
+        github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' &&
+        contains(fromJSON('["push","schedule","workflow_dispatch","repository_dispatch"]'), github.event_name) &&
+        inputs.candidate-trust == 'main' && inputs.cache-write-allowed == 'true' &&
+        inputs.cache-mode != 'off' && inputs.cache-hit != 'true' &&
+        inputs.frozen-target != 'true' && inputs.compatibility-target != 'true' && inputs.release-gate != 'true'
+      continue-on-error: true
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .artifacts/ci-sdk-declarations/sdk.json.gz
+        key: ${{ steps.identity.outputs.cache-key }}

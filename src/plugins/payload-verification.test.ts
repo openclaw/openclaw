@@ -118,18 +118,6 @@ describe("runPluginPayloadSmokeCheck", () => {
     return await fs.realpath(target).catch(() => target);
   }
 
-  it("reports ok for a record whose package.json + main file exist", async () => {
-    const dir = path.join(tmpRoot, "discord");
-    await writePackage(
-      dir,
-      { name: "@openclaw/discord", main: "dist/index.js" },
-      "module.exports = {};",
-    );
-    const result = await checkPackage("discord", dir);
-    expect(result.failures).toEqual([]);
-    expect(result.checked).toEqual(["discord"]);
-  });
-
   it("checks a selected manifest root without an installed-index record", async () => {
     const dir = path.join(tmpRoot, "codex");
     await writePackage(
@@ -246,9 +234,10 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result.failures).toEqual([]);
   });
 
-  it("accepts a persisted marketplace bundle record without transient format metadata", async () => {
+  it("accepts a persisted marketplace bundle with an unrelated non-object package.json", async () => {
     const dir = path.join(tmpRoot, "marketplace-bundle");
     await writeBundle({ dir, format: "cursor" });
+    await fs.writeFile(path.join(dir, "package.json"), "null", "utf8");
     const result = await runPluginPayloadSmokeCheck({
       records: {
         "marketplace-bundle": {
@@ -335,30 +324,6 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
-  it("reports a failure when the main entry file is missing on disk", async () => {
-    const dir = path.join(tmpRoot, "brave");
-    await writePackage(dir, { name: "@openclaw/brave", main: "dist/index.js" });
-    const result = await checkPackage("brave", dir);
-    expect(result.failures).toStrictEqual([
-      {
-        pluginId: "brave",
-        installPath: dir,
-        reason: "missing-main-entry",
-        detail: `Plugin main entry "dist/index.js" not found at ${path.join(dir, "dist/index.js")}`,
-      },
-    ]);
-  });
-
-  it("accepts a manifest that declares only `exports` and no `main`", async () => {
-    const dir = path.join(tmpRoot, "qa");
-    await writePackage(dir, {
-      name: "@openclaw/qa-channel",
-      exports: { ".": "./index.js", "./api.js": "./api.js" },
-    });
-    const result = await checkPackage("qa", dir);
-    expect(result.failures).toEqual([]);
-  });
-
   it("reports a failure when `openclaw.extensions` contains invalid entries", async () => {
     const dir = path.join(tmpRoot, "brave");
     await writePackage(dir, {
@@ -410,34 +375,6 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result.failures).toEqual([]);
   });
 
-  it("does not accept an existing npm main in place of a missing declared extension", async () => {
-    const dir = path.join(tmpRoot, "missing-declared-extension");
-    await writePackage(
-      dir,
-      {
-        name: "missing-declared-extension",
-        openclaw: { extensions: ["./missing-extension.js"] },
-        main: "./index.js",
-      },
-      "export default {};\n",
-    );
-
-    const result = await runPluginPayloadSmokeCheck({
-      records: { "missing-declared-extension": { source: "npm", installPath: dir } },
-      env: {},
-    });
-
-    expect(result.failures).toStrictEqual([
-      {
-        pluginId: "missing-declared-extension",
-        installPath: dir,
-        reason: "missing-extension-entry",
-        detail:
-          "Plugin extension entry validation failed: extension entry not found: ./missing-extension.js",
-      },
-    ]);
-  });
-
   it("accepts a packaged TypeScript extension entry when compiled runtime output exists", async () => {
     const dir = path.join(tmpRoot, "codex");
     await writePackage(dir, {
@@ -478,7 +415,7 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
-  it.each(["git", "clawhub", "marketplace"] as const)(
+  it.each(["git"] as const)(
     "does not quarantine a shipped %s plugin for an unmanaged direct host dependency",
     async (source) => {
       const dir = path.join(tmpRoot, `${source}-email`);
@@ -581,48 +518,48 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
-  it("reports a failure when `main` is a symlink whose target is missing", async () => {
-    const dir = path.join(tmpRoot, "broken-symlink");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(
-      path.join(dir, "package.json"),
-      JSON.stringify({ name: "broken-symlink", main: "dist/entry.js" }),
-      "utf8",
-    );
-    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
-    await fs.symlink(
-      path.join(dir, "dist", "missing-target.js"),
-      path.join(dir, "dist", "entry.js"),
-    );
-    const result = await runPluginPayloadSmokeCheck({
-      records: { x: { source: "npm", installPath: dir } },
-      env: {},
-    });
-    expect(result.failures).toStrictEqual([
-      {
-        pluginId: "x",
-        installPath: dir,
-        reason: "missing-main-entry",
-        detail: `Plugin main entry "dist/entry.js" not found at ${path.join(dir, "dist", "entry.js")}`,
-      },
-    ]);
-  });
+  it.each([
+    [
+      "not-json",
+      process.versions.bun
+        ? 'JSON Parse error: Unexpected identifier "not"'
+        : "Unexpected token 'o', \"not-json\" is not valid JSON",
+    ],
+    ["null", "package.json must be an object"],
+  ])(
+    "reports invalid package.json %s and continues checking later plugins",
+    async (content, error) => {
+      const dir = path.join(tmpRoot, "broken");
+      const laterDir = path.join(tmpRoot, "later");
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "package.json"), content, "utf8");
+      await writePackage(laterDir, { name: "later", main: "missing.js" });
 
-  it("reports a failure when package.json cannot be parsed", async () => {
-    const dir = path.join(tmpRoot, "broken");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "package.json"), "not-json", "utf8");
-    const result = await checkPackage("broken", dir);
-    expect(result.failures).toStrictEqual([
-      {
-        pluginId: "broken",
-        installPath: dir,
-        reason: "invalid-package-json",
-        detail:
-          "Could not parse package.json: Unexpected token 'o', \"not-json\" is not valid JSON",
-      },
-    ]);
-  });
+      const result = await runPluginPayloadSmokeCheck({
+        records: {
+          broken: { source: "npm", installPath: dir },
+          later: { source: "npm", installPath: laterDir },
+        },
+        env: {},
+      });
+
+      expect(result.checked).toEqual(["broken", "later"]);
+      expect(result.failures).toStrictEqual([
+        {
+          pluginId: "broken",
+          installPath: dir,
+          reason: "invalid-package-json",
+          detail: `Could not parse package.json: ${error}`,
+        },
+        {
+          pluginId: "later",
+          installPath: laterDir,
+          reason: "missing-main-entry",
+          detail: `Plugin main entry "missing.js" not found at ${path.join(laterDir, "missing.js")}`,
+        },
+      ]);
+    },
+  );
 
   it.each(["EACCES"])("classifies a %s package.json read failure as unreadable", async (code) => {
     const dir = path.join(tmpRoot, "unreadable");

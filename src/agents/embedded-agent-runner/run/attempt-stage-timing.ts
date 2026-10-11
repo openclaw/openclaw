@@ -5,7 +5,6 @@ import {
   type StageTimingSummary,
 } from "../../../shared/stage-timing.js";
 
-/** Canonical stage names for dispatch-time embedded attempt diagnostics. */
 export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
   workspace: "attempt-workspace",
   prompt: "attempt-prompt",
@@ -16,7 +15,6 @@ export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
 const EMBEDDED_RUN_STAGE_WARN_TOTAL_MS = 10_000;
 const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
 
-/** Returns true when either total runtime or any single stage exceeds warning thresholds. */
 export function shouldWarnEmbeddedRunStageSummary(
   summary: StageTimingSummary,
   options?: {
@@ -32,11 +30,6 @@ export function shouldWarnEmbeddedRunStageSummary(
   );
 }
 
-/**
- * Builds the shared "emit stage summary" closure used by run startup and
- * attempt prep: warn when thresholds trip, trace otherwise, stay silent when
- * neither applies.
- */
 export function createEmbeddedRunStageSummaryEmitter(options: {
   label: string;
   log: {
@@ -48,25 +41,28 @@ export function createEmbeddedRunStageSummaryEmitter(options: {
   sessionId?: string;
   tracker: ReturnType<typeof createStageTimingTracker>;
 }): (phase: string) => void {
-  return (phase) => {
-    const summary = options.tracker.snapshot();
-    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
-    if (!shouldWarn && !options.log.isEnabled("trace")) {
-      return;
-    }
-    const message = formatEmbeddedRunStageSummary(
-      `[trace:embedded-run] ${options.label}: runId=${options.runId} sessionId=${options.sessionId} phase=${phase}`,
-      summary,
+  return (phase) =>
+    logEmbeddedRunStageSummary(
+      options.tracker.snapshot(),
+      options.log,
+      () =>
+        `[trace:embedded-run] ${options.label}: runId=${options.runId} sessionId=${options.sessionId} phase=${phase}`,
     );
-    if (shouldWarn) {
-      options.log.warn(message);
-    } else {
-      options.log.trace(message);
-    }
-  };
 }
 
-/** Formats stage timing into compact log text for startup/attempt diagnostics. */
+export function logEmbeddedRunStageSummary(
+  summary: StageTimingSummary,
+  log: Parameters<typeof createEmbeddedRunStageSummaryEmitter>[0]["log"],
+  prefix: () => string,
+  thresholds?: Parameters<typeof shouldWarnEmbeddedRunStageSummary>[1],
+): void {
+  const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary, thresholds);
+  if (shouldWarn || log.isEnabled("trace")) {
+    const message = formatEmbeddedRunStageSummary(prefix(), summary);
+    log[shouldWarn ? "warn" : "trace"](message);
+  }
+}
+
 export function formatEmbeddedRunStageSummary(prefix: string, summary: StageTimingSummary): string {
   const stages = formatStageTimings(summary.stages);
   return `${prefix} pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=${summary.totalMs} stages=${stages}`;

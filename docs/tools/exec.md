@@ -12,10 +12,14 @@ Supports foreground and background execution via `process`. If `process` is disa
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
 
+Headless node-host commands terminated by an operating-system signal include the signal name in the result, even when no numeric exit code is available. Output printed before termination does not mean the command succeeded.
+
 ## Parameters
 
 <ParamField path="command" type="string" required>
 Shell command to run.
+Gateway-hosted commands containing a literal NUL (U+0000) return an error before process launch; correct the command and retry.
+Empty arguments, newlines, and literal backslash-zero text remain valid and are not rewritten.
 </ParamField>
 
 <ParamField path="workdir" type="string" default="cwd">
@@ -27,11 +31,11 @@ Key/value environment overrides merged on top of the inherited environment.
 </ParamField>
 
 <ParamField path="yieldMs" type="number" default="10000">
-Auto-background the command after this delay (ms).
+Return a running process handle after this delay (ms). On the Gateway and in its sandbox, an ordinary yielded command remains owned by its request: the browser's Stop button and typed `/stop` cancel it. Normal model completion leaves it running.
 </ParamField>
 
 <ParamField path="background" type="boolean" default="false">
-Background the command immediately instead of waiting for `yieldMs`. The process timeout still applies after the tool returns.
+Start a deliberately independent service immediately. Request Stop leaves it running; stop it separately with its process handle. Use `yieldMs` for ordinary work. The process timeout still applies after the tool returns.
 </ParamField>
 
 <ParamField path="timeoutSeconds" type="number" default="tools.exec.timeoutSeconds">
@@ -51,6 +55,8 @@ Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, a
 
 <ParamField path="host" type="'auto' | 'sandbox' | 'gateway' | 'node'" default="auto">
 Where to execute. Omit `host` or use `auto` to inherit the configured exec host, including agent and session overrides. When that configured host is also `auto`, it resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise. A session that requires a sandbox stays sandboxed regardless of the configured host.
+
+The model-facing schema and code-mode signature list only hosts permitted by the session's host policy, and omit `sandbox` when no sandbox runtime is active. These choices are captured when the tool is created. Node connectivity is checked at execution time.
 </ParamField>
 
 <ParamField path="ask" type="'off' | 'on-miss' | 'always'">
@@ -76,20 +82,22 @@ Notes:
 - `exec host=node` is the only shell-execution path for nodes. The legacy `nodes.run` wrapper was removed in 2026.3.31.
 - On non-Windows hosts, exec uses `SHELL` when set. If `SHELL` is `fish`, it prefers `bash` (or `sh`) from `PATH` to avoid fish-incompatible bashisms, then falls back to `SHELL` if neither exists.
 - On Windows hosts, exec prefers PowerShell 7 (`pwsh`) discovery: Program Files, ProgramW6432, then PATH. It falls back to Windows PowerShell 5.1.
-- On non-Windows gateway hosts, bash and zsh exec commands use a startup snapshot. OpenClaw captures sourceable aliases/functions and a small safe environment set from shell startup files into `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command. Secret-looking variables are excluded. Sandbox and node exec do not use this snapshot. Set `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.
+- On non-Windows gateway hosts, bash and zsh exec commands use a startup snapshot. OpenClaw captures sourceable aliases/functions and a small safe environment set from shell startup files into `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command. Secret-looking variables are excluded. The in-memory cache keeps up to 128 recently used snapshot keys; evicted keys can reuse fresh snapshots on disk. Sandbox and node exec do not use this snapshot. Set `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to prevent binary hijacking or injected code.
 - Exact `"cat"` or empty `GIT_PAGER` and `PAGER` overrides are normalized to empty values, including on node shell-wrapper execution. This disables Git paging without passing an executable pager name through `PATH`. Other programs may interpret an empty `PAGER` differently. Use their noninteractive flags when needed. Other pager commands, paths, whitespace variants, and `MANPAGER` overrides remain blocked.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
 - With the default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy), Gateway-hosted exec receives shared-store `secret` entries only as process-local sentinels. The authenticated loopback proxy substitutes plaintext at outbound HTTPS request time. Each managed process has its own proxy grant, which survives the originating turn and is revoked on process exit, cancellation, timeout, or Gateway shutdown.
 - Shared-store `env` entries are intentionally plaintext and reach Gateway-hosted exec from the next agent run. They do not reach sandbox, remote `node`, ACP, or Codex-native shell execution. Under the Codex harness, use `gateway_exec` for this OpenClaw-managed environment path.
 - With a [managed GitHub identity](/gateway/config-tools#tools.github), Gateway-hosted exec validates the selected profile and binds its credential privately at each process launch. An unavailable profile blocks that local execution with reconnect guidance instead of falling back to native keyring credentials. Running shells retain their launch token. Later exec launches observe refreshes. Codex-native shell does not share this launch binding.
+- Sandboxed exec excludes that identity unless `agents.entries.<id>.tools.github.allowInSandbox: true`. This agent-only opt-in supports Docker and Podman, including role-required sandboxes: the profile is mounted read-only at `/openclaw/github`, and commands receive its managed token and Git author. Effective shared scope refuses injection with a warning; security audit warns for every opt-in. See [sandbox GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in).
 - Secret egress sets `NODE_USE_ENV_PROXY=1` so supported Node.js global `fetch` clients honor the process-scoped proxy. It does not use `NODE_OPTIONS`.
 - For channel-origin runs, OpenClaw also exposes a narrow sender/chat identity JSON payload in `OPENCLAW_CHANNEL_CONTEXT` when the channel provided those ids.
+- Capable nodes receive channel/subagent routing context separately from custom environment overrides and inject the fixed markers themselves. See [node execution context](/nodes/node-exec#channel-and-subagent-context) for capability negotiation and mixed-version behavior.
 - `exec` cannot run `openclaw channels login` or `/approve` shell commands: `openclaw channels login` is an interactive channel-auth flow, and `/approve` needs to go through the approval command handler, not a shell. Run channel login in a terminal on the gateway host, or use a channel-specific login agent tool when one exists (for example `whatsapp_login`).
-- Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
+- Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` requests are still rejected instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
 - Python script preflight checks for common shell-syntax mistakes only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, the file check is skipped. JavaScript source is left to Node, which returns its normal diagnostics and exit code; statements before a runtime error may already have executed. Separate restrictions on ambiguous Python/Node interpreter commands still apply. Preflight skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
 - For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails. Use `process` for logs, status, input, or intervention. Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
-- When `tools.exec.notifyOnExit=false`, a running result explicitly says that automatic completion wake is disabled, in both its text and structured `followUp`. If the task needs the result, collect it with `process poll` and a timeout before ending the turn, unless another continuation is already arranged. A running process or active session goal does not arrange that continuation.
+- When `tools.exec.notifyOnExit=false`, a running result explicitly says that automatic completion wake is disabled, in both its text and structured `followUp`. Later `process poll`, `log`, and `list` results preserve that guidance while the command is running, using the policy captured when it started. If the task needs the result, collect it with `process poll` and a timeout before ending the turn, unless another continuation is already arranged. A running process or active session goal does not arrange that continuation.
 - When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
 - Subagent sessions do not receive automatic background-exec wakes. Collect the result with `process poll` before yielding without another completion source.
 - The process owner tracks agent-started background commands. Use the returned process session ID to inspect output, poll, or stop a command; its completion can wake the agent.
@@ -101,11 +109,11 @@ Notes:
 | ------------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `tools.exec.timeoutSeconds`          | `1800`                   | Default per-command exec timeout in seconds. Per-call `timeoutSeconds` overrides it; per-call `timeoutSeconds: 0` disables the exec process timeout.               |
 | `tools.exec.host`                    | `auto`                   | Resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.                                                                                       |
-| `tools.exec.mode`                    | host-derived             | Canonical policy knob. See [Modes](#modes) below.                                                                                                                  |
+| `tools.exec.mode`                    | host-derived             | Saved execution mode. See [Modes](#modes) below.                                                                                                                   |
 | `tools.exec.reviewer.model`          | configured agent primary | Optional provider/model override for `mode=auto` review.                                                                                                           |
 | `tools.exec.reviewer.timeoutMs`      | `30000`                  | Per-stage timeout for reviewer model preparation and completion before human fallback.                                                                             |
 | `tools.exec.node`                    | unset                    | Selects which paired node runs `host=node` commands, by id, name, or IP. Only needed when more than one eligible node is connected; see [Parameters](#parameters). |
-| `tools.exec.notifyOnExit`            | `true`                   | When true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.                                                                      |
+| `tools.exec.notifyOnExit`            | `true`                   | When true, backgrounded host exec sessions continue through an ordinary turn in their originating session on exit.                                                 |
 | `tools.exec.approvalRunningNoticeMs` | `10000`                  | Emit a single "running" notice when an approval-gated exec runs longer than this (`0` disables).                                                                   |
 | `tools.exec.strictInlineEval`        | `false`                  | See [Inline eval](#inline-eval-strictinlineeval).                                                                                                                  |
 | `tools.exec.commandHighlighting`     | `false`                  | When true, approval prompts can highlight parser-derived command spans in the command text. Set globally or per agent; does not change approval policy.            |
@@ -130,7 +138,7 @@ Example:
 
 ### Modes
 
-`tools.exec.mode` is the canonical persisted policy knob. Runtime security and approval behavior are derived from it.
+`tools.exec.mode` is the saved execution mode. Runtime security and approval behavior are derived from it.
 
 | Mode        | security    | ask       | Behavior                                                                                                                        |
 | ----------- | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -148,19 +156,21 @@ Set `tools.exec.reviewer.thinking` to `minimal`, `low`, `medium`, `high`, `xhigh
 
 Set `tools.exec.reviewer.fastMode` to `true` to request Fast processing on supported OpenAI Responses and ChatGPT/OAuth routes, or `false` for standard processing. For example, `reviewer: { model: "openai/gpt-5.6-terra", thinking: "low", fastMode: true }` requests both low reasoning effort and priority processing. Omit `fastMode` to preserve provider defaults. This setting is independent of the main agent's Fast mode and is also available per agent. Priority processing may cost more and remains subject to provider/model availability; other providers may ignore the setting.
 
+Reviewers marked as reasoning models automatically receive a bounded thinking allowance on top of the 1,024-token verdict budget, based on `thinking` (medium when omitted). The request stays within the model's advertised output limit. Non-reasoning reviewers keep the 1,024-token budget. No separate completion-budget setting is needed; an exhausted budget still falls back to human approval.
+
 Model preparation and completion each receive the configured `tools.exec.reviewer.timeoutMs` budget. A timeout returns to human approval immediately. Pending preparation and provider cleanup remain owned until they settle. Preparation that finishes after its timeout does not start a review.
 
 For embedded agent runs, the reviewer receives a bounded, redacted excerpt of the current conversation: user requests, assistant text, tool calls, and tool results, labeled by origin. It uses this context to judge whether a command serves the user's request. The excerpt is untrusted evidence, not instructions. Conversation context is unavailable for direct node `system.run` calls and widgets.
 
 On the gateway, commands must still pass the existing mutable-file binding checks before review. Those checks continue to reject heredocs, unresolved executables, and missing script operands. The whole ordinary external dispatch chain—each original wrapper executable and the final command-segment executable—is bound at review time and re-checked before launch: protected executables use resolved real-path identity only, while writable executables also use a content hash. A changed executable resolution, including a new executable earlier on `PATH`, denies the approved run. The committed host approval policy is also revalidated at the final process-spawn boundary, including after asynchronous startup work and before a PTY fallback. Policy revocation blocks a pending launch; it does not stop a process that already started. Identity-only binding does not make an otherwise eligible human approval single-use.
 
-Reviewer-approved unpinned execution requires the complete dispatch chain to be identity-bound: the authorization plan must be complete, use direct transports, and have a recorded executable operand for every wrapper and final executable. Eligible globs and chains preserve their argument expansion while each wrapper and executable is pinned to its bound absolute invocation path. Executable symlinks retain their invocation semantics, including Python virtual environments, while their canonical target and mutable contents remain bound and revalidated. Commands rebuilt from an authorization plan use the prepared runtime environment without loading shell startup snapshots, so aliases, functions, and startup PATH changes cannot replace the approved dispatch. Ordinary full-mode commands retain shell startup customization. Node-host auto-review accepts a prepared pinned direct command, including the node's own canonical POSIX shell transport around one direct absolute executable with static arguments. Bare executable names, unquoted globs, and user-supplied wrappers still require human approval when the gateway cannot inspect the node's in-memory binding. Node executable-identity revalidation covers local policy evaluation through dispatch. Node-host launches also revalidate the committed approval policy after asynchronous preparation. It does not preserve every inner shell executable's identity across a remote human approval wait. See [Interpreter/runtime commands](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands) for that boundary.
+Reviewer-approved unpinned execution requires the complete dispatch chain to be identity-bound: the authorization plan must be complete, use direct transports, and have a recorded executable operand for every wrapper and final executable. Eligible globs and chains preserve their argument expansion while each wrapper and executable is pinned to its bound absolute invocation path. Executable symlinks retain their invocation semantics, including Python virtual environments, while their resolved target and mutable contents remain bound and revalidated. Commands rebuilt from an authorization plan use the prepared runtime environment without loading shell startup snapshots, so aliases, functions, and startup PATH changes cannot replace the approved dispatch. Ordinary full-mode commands retain shell startup customization. Node-host auto-review accepts a prepared pinned direct command, including the node's own built-in POSIX shell transport around one direct absolute executable with static arguments. Bare executable names, unquoted globs, and user-supplied wrappers still require human approval when the gateway cannot inspect the node's in-memory binding. Node executable-identity revalidation covers local policy evaluation through dispatch. Node-host launches also revalidate the committed approval policy after asynchronous preparation. It does not preserve every inner shell executable's identity across a remote human approval wait. See [Interpreter/runtime commands](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands) for that boundary.
 
 Shell `-c` wrappers, `env` with assignments, `xcrun`, BusyBox/Toybox applets, shell `builtin`/`command`/`exec` dispatch, and any other incomplete dispatch chain skip the reviewer with `Exec auto-review skipped: dispatch chain cannot be bound`. In auto mode, these forms take the one-shot human approval path when existing binding checks succeed. Existing binding rejections still apply. Plain commands and transparent `env` without assignments remain eligible when their complete chains are bound. There are no persisted data model changes: binding stays in memory for the approval lifetime.
 
 POSIX login or interactive shell wrappers in the requested command never receive auto-review. When binding succeeds, as with `bash -lc 'printf ok'`, they require human approval because their implicit startup files are outside operand binding. Existing binding rejections still take precedence. Interactive forms rejected as code-loading options remain denied. This applies to wrappers in the requested command. The gateway's ordinary shell startup snapshot is unchanged.
 
-Explicit `ask=always`, security-audit suppression changes, and commands above the review candidate limit go directly to human approval.
+Explicit `ask=always` and commands above the review candidate limit go directly to human approval.
 
 Codex app-server command approvals that are not already decided by explicit runtime or native policy use the human approval route. OpenClaw does not run its configured exec reviewer for these requests because Codex does not expose an enforceable resolved executable that can bind the review decision to the command Codex runs.
 
@@ -179,13 +189,19 @@ For ordinary configured full/off execution without prompts for these forms, leav
 
 ### PATH handling
 
+Gateway-hosted commands use an `openclaw` launcher tied to the running Gateway's installation. Source checkouts pin any inherited TSX preload to that checkout on both Node and Bun, so the launcher also works from an agent workspace outside the checkout.
+
+Prepared child commands resolve the launcher's concrete path before they start.
+Switching an installation symlink during an update does not redirect a command
+that was already prepared. A fresh `openclaw` invocation follows the updated link.
+
 - `host=gateway`: merges your login-shell `PATH` into the exec environment. `env.PATH` overrides are rejected for host execution. The daemon itself still runs with a minimal `PATH`:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
   - To prevent user shell configuration (like `~/.zshenv` or `/etc/zshenv`) from overriding priority paths during startup, `tools.exec.pathPrepend` entries are securely prepended to the final `PATH` inside the shell command right before execution.
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`. OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation). `tools.exec.pathPrepend` applies here too.
 - Native Codex on an owned local stdio process receives a nonempty configured prefix and Gateway CLI shim ahead of an explicitly configured native shell `PATH`, or the Gateway process `PATH` when no native value is set. Request-level native PATH overrides take precedence over native config files; an explicit empty PATH keeps only the prefix. Per-agent `tools.exec.pathPrepend` overrides the global list, including an empty list. OpenClaw applies this environment to new and resumed native threads without changing native login-shell policy. Codex reapplies the environment after loading a shell snapshot, but shell startup files can still replace `PATH` when snapshots are unavailable or bypassed, or when the command shell starts. Codex's existing `allow_login_shell = false` setting opts out of login-profile startup; it does not suppress every shell startup file. Host PATH entries are not forwarded to sandbox, remote-workspace, or socket-backed Codex execution.
-- `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are rejected for host execution and ignored by node hosts. If you need additional PATH entries on a node, configure the node host service environment (systemd/launchd) or install tools in standard locations.
+- `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are rejected for host execution and ignored by node hosts. If you need additional PATH entries on a node, configure the node host service environment (systemd/launchd) or install tools in standard locations. For Linux login-shell commands, the node re-applies its service PATH after profile startup, ahead of profile-provided entries.
 
 Per-agent node binding (use the keyed agent ID in config):
 
@@ -266,10 +282,10 @@ Foreground:
 { "tool": "exec", "command": "ls -la" }
 ```
 
-Background + poll:
+Ordinary work that yields a handle, then poll:
 
 ```json
-{"tool":"exec","command":"npm run build","background":true}
+{"tool":"exec","command":"npm run build","yieldMs":1000}
 {"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
 ```
 

@@ -36,20 +36,8 @@ function classifyBrowserDocumentNavigationRequest(
     frameResolutionFailed = true;
   }
 
-  try {
-    if (request.isNavigationRequest()) {
-      return kind;
-    }
-  } catch {
-    // Fall through to the resource-type check.
-  }
-
-  try {
-    if (request.resourceType() === "document") {
-      return kind;
-    }
-  } catch {
-    // Fall through to the unresolved-frame result below.
+  if (request.isNavigationRequest() || request.resourceType() === "document") {
+    return kind;
   }
   // Match the previous two-step classifier: known non-doc requests fall
   // through, while an unresolved frame remains guarded as a subframe.
@@ -158,12 +146,8 @@ async function removePageNavigationRequestGuard(
   } catch (err) {
     // A closed page owns no remaining route. Preserve close-triggering actions,
     // but surface cleanup failures while the page is still usable.
-    try {
-      if (page.isClosed()) {
-        return undefined;
-      }
-    } catch {
-      // Keep the original cleanup failure when page state is unavailable.
+    if (page.isClosed()) {
+      return undefined;
     }
     return err;
   }
@@ -199,7 +183,6 @@ export async function withPageNavigationRequestGuard<T>(
   let hasGuardError = false;
   let firstGuardError: unknown;
   let deniedDocumentCount = 0;
-  let fulfilledDeniedDocumentCount = 0;
   let pendingDeniedDocumentCount = 0;
   let unpreservedDocumentCount = 0;
   let policyDeniedDetected = false;
@@ -226,7 +209,7 @@ export async function withPageNavigationRequestGuard<T>(
       // Notification only exposes state already owned by this guard.
     }
   };
-  const updateImmediateSourcePreservation = () => {
+  const updateSourcePreservation = (notify = true) => {
     if (typeof firstGuardError !== "object" || firstGuardError === null) {
       return;
     }
@@ -236,8 +219,7 @@ export async function withPageNavigationRequestGuard<T>(
     } else if (
       isPolicyDenyNavigationError(firstGuardError) &&
       deniedDocumentCount > 0 &&
-      pendingDeniedDocumentCount === 0 &&
-      fulfilledDeniedDocumentCount === deniedDocumentCount
+      pendingDeniedDocumentCount === 0
     ) {
       sourcePreserved = true;
     }
@@ -250,7 +232,7 @@ export async function withPageNavigationRequestGuard<T>(
     } else {
       sourcePreservedPolicyDenials.delete(firstGuardError);
     }
-    if (policyDeniedDetected && sourcePreserved !== lastNotifiedSourcePreserved) {
+    if (notify && policyDeniedDetected && sourcePreserved !== lastNotifiedSourcePreserved) {
       lastNotifiedSourcePreserved = sourcePreserved;
       emitPolicyDenied({ state: "handled", error: firstGuardError, sourcePreserved });
     }
@@ -274,9 +256,8 @@ export async function withPageNavigationRequestGuard<T>(
         // A synthetic 204 stops the document load while Chromium keeps the
         // selected page's current document. route.abort() commits an error page.
         await route.fulfill({ status: 204, body: "" });
-        fulfilledDeniedDocumentCount += 1;
         pendingDeniedDocumentCount -= 1;
-        updateImmediateSourcePreservation();
+        updateSourcePreservation();
         return;
       } catch {
         pendingDeniedDocumentCount -= 1;
@@ -285,42 +266,36 @@ export async function withPageNavigationRequestGuard<T>(
     }
     if (preserveDocument) {
       unpreservedDocumentCount += 1;
-      updateImmediateSourcePreservation();
+      updateSourcePreservation();
     }
     await route.abort().catch(() => {});
   };
   const handleRoute = async (route: Route, request: Request) => {
-    if (!classifyBrowserDocumentNavigationRequest(opts.page, request)) {
+    const preserveDocument = Boolean(classifyBrowserDocumentNavigationRequest(opts.page, request));
+    if (preserveDocument) {
+      const policyCheck = assertBrowserNavigationAllowed({
+        url: request.url(),
+        ...navigationPolicy,
+      });
       try {
-        await resumeRouteSafely(route, "fallback");
+        opts.onPolicyCheckStarted?.(policyCheck);
+      } catch {
+        // Observation cannot change the policy decision owned by this guard.
+      }
+      try {
+        await policyCheck;
       } catch (err) {
         recordGuardError(err);
-        await stopGuardedRoute(route, false, err);
+        notifyPolicyDeniedDetected();
+        await stopGuardedRoute(route, true, err);
+        return;
       }
-      return;
-    }
-    const policyCheck = assertBrowserNavigationAllowed({
-      url: request.url(),
-      ...navigationPolicy,
-    });
-    try {
-      opts.onPolicyCheckStarted?.(policyCheck);
-    } catch {
-      // Observation cannot change the policy decision owned by this guard.
-    }
-    try {
-      await policyCheck;
-    } catch (err) {
-      recordGuardError(err);
-      notifyPolicyDeniedDetected();
-      await stopGuardedRoute(route, true, err);
-      return;
     }
     try {
       await resumeRouteSafely(route, "fallback");
     } catch (err) {
       recordGuardError(err);
-      await stopGuardedRoute(route, true, err);
+      await stopGuardedRoute(route, preserveDocument, err);
     }
   };
   const handler = (route: Route, request: Request) => {
@@ -365,7 +340,7 @@ export async function withPageNavigationRequestGuard<T>(
       recordGuardError(err);
       notifyPolicyDeniedDetected();
       unpreservedDocumentCount += 1;
-      updateImmediateSourcePreservation();
+      updateSourcePreservation();
     }
   }
 
@@ -379,21 +354,8 @@ export async function withPageNavigationRequestGuard<T>(
   // Request-policy denial wins over locator/action/cleanup errors. Only 204
   // responses prove that every denied document was intercepted and source-preserved.
   if (hasGuardError) {
-    const sourcePreserved =
-      isPolicyDenyNavigationError(firstGuardError) &&
-      deniedDocumentCount > 0 &&
-      fulfilledDeniedDocumentCount === deniedDocumentCount &&
-      unpreservedDocumentCount === 0 &&
-      !(actionFailed && isPolicyDenyNavigationError(actionError)) &&
-      typeof firstGuardError === "object" &&
-      firstGuardError !== null;
-    if (typeof firstGuardError === "object" && firstGuardError !== null) {
-      if (sourcePreserved) {
-        sourcePreservedPolicyDenials.add(firstGuardError);
-      } else {
-        sourcePreservedPolicyDenials.delete(firstGuardError);
-      }
-    }
+    // Failed fulfillments and action-policy failures already mark the source unpreserved.
+    updateSourcePreservation(false);
     throw toErrorObject(firstGuardError, "Non-Error thrown");
   }
   if (actionFailed) {

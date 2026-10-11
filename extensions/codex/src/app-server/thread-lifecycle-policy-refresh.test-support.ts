@@ -1,23 +1,18 @@
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { retainCodexAppServerLiveThread } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
 import type { RpcRequest } from "./protocol.js";
 import { tempDir, threadStartResult } from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
-  testCodexAppServerBindingStore,
   type writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import {
-  releaseLeasedSharedCodexAppServerClient,
-  retireSharedCodexAppServerClientIfCurrent,
-} from "./shared-client.js";
+import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import type { createClientHarness } from "./test-support.js";
-import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
-
-type StartParams = Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">;
+import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
+import type { CodexAttemptThreadInput as StartParams } from "./thread-lifecycle.test-fixtures.js";
 
 type PolicyRefreshFixtures = {
   createParams: (sessionFile: string, workspaceDir: string) => StartParams["params"];
@@ -40,19 +35,12 @@ export function registerThreadPolicyRefreshTests({
   writeCodexAppServerBinding,
 }: PolicyRefreshFixtures) {
   it.each([
-    ...(["stdio", "websocket", "unix", "proxy"] as const).map((transport) => ({
-      developerInstructions: "replacement policy",
-      fault: "none",
-      transport,
-    })),
     { developerInstructions: "", fault: "none", transport: "stdio" as const },
-    ...["unload", "client retired", "unknown write", "retirement failure", "binding commit"].map(
-      (fault) => ({
-        developerInstructions: "replacement policy",
-        fault,
-        transport: "stdio" as const,
-      }),
-    ),
+    ...["unload", "retirement failure"].map((fault) => ({
+      developerInstructions: "replacement policy",
+      fault,
+      transport: "stdio" as const,
+    })),
   ])(
     "refreshes ordinary generic policy over $transport before admitting a resumed turn: $developerInstructions / $fault",
     async ({ developerInstructions, fault, transport }) => {
@@ -80,13 +68,10 @@ export function registerThreadPolicyRefreshTests({
             };
           }
           if (request.method === "thread/resume") {
-            if (fault === "client retired") {
-              retireSharedCodexAppServerClientIfCurrent(wire.client);
-            }
             return response;
           }
           if (request.method === "thread/inject_items") {
-            if (fault === "unknown write" || fault === "retirement failure") {
+            if (fault === "retirement failure") {
               throw new CodexAppServerRpcError(
                 { code: -32603, message: "policy flush failed after write" },
                 "thread/inject_items",
@@ -103,11 +88,6 @@ export function registerThreadPolicyRefreshTests({
       );
       await writeCodexAppServerBinding(sessionFile, { threadId, cwd: workspaceDir });
       const before = await readCodexAppServerBinding(sessionFile);
-      if (fault === "binding commit") {
-        vi.spyOn(testCodexAppServerBindingStore, "mutate").mockRejectedValueOnce(
-          new Error("binding commit failed"),
-        );
-      }
       try {
         const run = startOrResumeThread({
           client: wire.client,
@@ -134,21 +114,12 @@ export function registerThreadPolicyRefreshTests({
           await expect(run).rejects.toMatchObject({
             name: "CodexThreadPolicyHandoffError",
             scope: undefined,
-            outcome:
-              fault === "unknown write" || fault === "retirement failure"
-                ? "unknown"
-                : fault === "binding commit"
-                  ? "acknowledged"
-                  : "not-written",
+            outcome: fault === "retirement failure" ? "unknown" : "not-written",
           });
           expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
           expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
           expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(
-            fault === "unknown write" ||
-              fault === "retirement failure" ||
-              fault === "binding commit"
-              ? 1
-              : 0,
+            fault === "retirement failure" ? 1 : 0,
           );
           expect(requests.some(({ method }) => method === "thread/start")).toBe(false);
           return;

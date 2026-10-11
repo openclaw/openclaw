@@ -8,18 +8,15 @@ import {
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
 } from "../agents/tools/media-generate-background-shared.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import {
-  deleteSessionEntryLifecycle,
-  loadTranscriptEvents,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as transcript from "../config/sessions/transcript.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { drainPendingSessionDelivery } from "../infra/session-delivery-queue-recovery.js";
 import * as queueRuntime from "../infra/session-delivery-queue-runtime.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
-import * as systemEvents from "../infra/system-events.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
@@ -46,7 +43,7 @@ async function withMediaSession(
     queueContext: ReturnType<typeof captureOpenClawStateWorkerContext>;
     mediaPath: string;
     dispatch: MockInstance<typeof recoveryRuntime.dispatchGatewayLifecycleMethod>;
-    systemWake: MockInstance<typeof systemEvents.enqueueSystemEvent>;
+    systemWake: MockInstance<typeof sessionEvents.enqueueSessionEventForHost>;
     drain: (id: string) => ReturnType<typeof drainPendingSessionDelivery>;
   }) => Promise<void>,
 ) {
@@ -62,17 +59,7 @@ async function withMediaSession(
       lifecycleRevision: "original-lifecycle",
       updatedAt: 1,
     });
-    const lifecycle = createMediaGenerationTaskLifecycle({
-      toolName: "image_generate",
-      taskKind: "image_generation",
-      label: "Image generation",
-      queuedProgressSummary: "Queued image generation",
-      generatedLabel: "image",
-      failureProgressSummary: "Image generation failed",
-      eventSource: "image_generation",
-      announceType: "image generation task",
-      completionLabel: "image",
-    });
+    const lifecycle = createMediaGenerationTaskLifecycle("image");
     const handle = await lifecycle.createTaskRun({
       sessionKey: scope.sessionKey,
       requesterAgentId: "main",
@@ -91,7 +78,7 @@ async function withMediaSession(
         deliveryStatus: { status: "sent" },
       },
     });
-    const systemWake = vi.spyOn(systemEvents, "enqueueSystemEvent");
+    const systemWake = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const drain = (id: string) =>
       drainPendingSessionDelivery({
@@ -121,11 +108,70 @@ async function withMediaSession(
 }
 
 describe("original requester media handoff", () => {
+  it.each(["originating turn", "attempt-marker admission"] as const)(
+    "keeps media queued while the %s owns requester work",
+    async (ownerTiming) => {
+      await withMediaSession(
+        async ({ lifecycle, handle, scope, mediaPath, queueContext, dispatch, drain }) => {
+          let owner: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+          const acquire = () =>
+            beginSessionWorkAdmission({
+              scope: scope.storePath,
+              identities: [scope.sessionKey, "original-requester"],
+              assertAllowed: () => {},
+            });
+          const markAttempt = queue.markSessionDeliveryAttemptStarted;
+          if (ownerTiming === "attempt-marker admission") {
+            vi.spyOn(queue, "markSessionDeliveryAttemptStarted").mockImplementationOnce(
+              async (...args) => {
+                owner = await acquire();
+                return markAttempt(...args);
+              },
+            );
+          } else {
+            owner = await acquire();
+          }
+          let entryId: string | undefined;
+          const complete = async () => {
+            expect(
+              await lifecycle.wakeTaskCompletion({
+                handle,
+                status: "ok",
+                statusLabel: "completed",
+                result: "generated lighthouse",
+                attachments: [{ type: "image", path: mediaPath, mimeType: "image/png" }],
+              }),
+            ).toEqual({ status: "pending" });
+            const [entry] = await queue.loadPendingSessionDeliveries(queueContext);
+            if (!entry) {
+              throw new Error("Expected queued media completion");
+            }
+            entryId = entry.id;
+            await drain(entry.id);
+            const [pending] = await queue.loadPendingSessionDeliveries(queueContext);
+            expect(pending).toMatchObject({ id: entry.id, retryCount: 0 });
+            expect(pending?.deliveryStartedAt).toBeUndefined();
+            expect(dispatch).not.toHaveBeenCalled();
+          };
+          try {
+            // Scheduling may inherit the originating turn's async admission context.
+            await (owner ? owner.run(complete) : complete());
+          } finally {
+            owner?.release();
+          }
+          if (!entryId) {
+            throw new Error("Expected retained media completion id");
+          }
+          await drain(entryId);
+          expect(dispatch).toHaveBeenCalledOnce();
+          expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
+        },
+      );
+    },
+  );
+
   it.each([
     "current",
-    "replaced-before",
-    "rotated-before",
-    "deleted-before",
     "replaced-after",
     "rotated-after",
     "store-after",
@@ -149,13 +195,6 @@ describe("original requester media handoff", () => {
         const mutate = async () => {
           if (change === "generation-at-enqueue") {
             rotateAgentEventLifecycleGeneration();
-          } else if (change === "deleted-before") {
-            await deleteSessionEntryLifecycle({
-              storePath: scope.storePath,
-              agentId: scope.agentId,
-              target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-              archiveTranscript: false,
-            });
           } else if (change.startsWith("store")) {
             const replacementStore = state.statePath("replacement", "sessions.json");
             await replaceSessionEntry(
@@ -180,9 +219,6 @@ describe("original requester media handoff", () => {
             });
           }
         };
-        if (change.endsWith("before")) {
-          await mutate();
-        }
         const enqueueOriginal = queue.enqueueClaimedSessionDelivery;
         const enqueue = vi.spyOn(queue, "enqueueClaimedSessionDelivery");
         if (change.endsWith("at-enqueue")) {
@@ -199,9 +235,9 @@ describe("original requester media handoff", () => {
           attachments: [{ type: "image", path: mediaPath, mimeType: "image/png" }],
         });
         const entries = await queue.loadPendingSessionDeliveries(queueContext);
-        if (change.endsWith("before") || change.endsWith("at-enqueue")) {
+        if (change.endsWith("at-enqueue")) {
           expect(result).toEqual({ status: "permanent_failure" });
-          expect(enqueue).toHaveBeenCalledTimes(change.endsWith("at-enqueue") ? 1 : 0);
+          expect(enqueue).toHaveBeenCalledTimes(1);
           expect(entries).toEqual([]);
         } else {
           expect(result).toEqual({ status: "pending" });

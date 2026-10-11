@@ -9,15 +9,14 @@ import {
   asNonArrayRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { Static } from "typebox";
-import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { DiffRenderInputError, renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
 import {
   type DiffArtifactContext,
-  type DiffRenderOptions,
   type DiffRenderTarget,
   type DiffToolDefaults,
   DIFF_IMAGE_QUALITY_PRESETS,
@@ -26,11 +25,7 @@ import {
   DIFF_OUTPUT_FORMATS,
   DIFF_THEMES,
   type DiffInput,
-  type DiffImageQualityPreset,
-  type DiffLayout,
   type DiffMode,
-  type DiffOutputFormat,
-  type DiffTheme,
 } from "./types.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
 
@@ -124,15 +119,8 @@ export function createDiffsTool(params: {
   defaults: DiffToolDefaults;
   viewerBaseUrl?: string;
   languagePackAvailable?: boolean;
-  screenshotter?: DiffScreenshotter;
   context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
-  const loadScreenshotter = async (config: OpenClawConfig) =>
-    params.screenshotter ??
-    new (await loadDiffsBrowserRuntime()).PlaywrightDiffScreenshotter({
-      config,
-    });
-
   return {
     name: "diffs",
     label: "Diffs",
@@ -146,22 +134,16 @@ export function createDiffsTool(params: {
       const artifactContext = buildArtifactContext(params.context);
       const input = normalizeDiffInput(toolParams);
       if (input.kind === "before_after" && input.before === input.after) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Before and after are identical — no changes to render.",
-            },
-          ],
-          details: {
-            changed: false,
-            ...(artifactContext ? { context: artifactContext } : {}),
-          },
-        };
+        return textResult("Before and after are identical — no changes to render.", {
+          changed: false,
+          ...(artifactContext ? { context: artifactContext } : {}),
+        });
       }
-      const mode = normalizeMode(toolParams.mode, params.defaults.mode);
-      const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
-      const layout = normalizeLayout(toolParams.layout, params.defaults.layout);
+      const mode = DIFF_MODES.find((value) => value === toolParams.mode) ?? params.defaults.mode;
+      const theme =
+        DIFF_THEMES.find((value) => value === toolParams.theme) ?? params.defaults.theme;
+      const layout =
+        DIFF_LAYOUTS.find((value) => value === toolParams.layout) ?? params.defaults.layout;
       const expandUnchanged = toolParams.expandUnchanged === true;
       const ttlSeconds =
         readFiniteNumberParam(rawRecord, "ttlSeconds") ?? params.defaults.ttlSeconds;
@@ -170,8 +152,8 @@ export function createDiffsTool(params: {
       const ttlMs = normalizeTtlMs(ttlSeconds);
       const image = resolveDiffImageRenderOptions({
         defaults: params.defaults,
-        fileFormat: normalizeOutputFormat(toolParams.fileFormat),
-        fileQuality: normalizeFileQuality(toolParams.fileQuality),
+        fileFormat: DIFF_OUTPUT_FORMATS.find((value) => value === toolParams.fileFormat),
+        fileQuality: DIFF_IMAGE_QUALITY_PRESETS.find((value) => value === toolParams.fileQuality),
         fileScale,
         fileMaxWidth,
       });
@@ -231,85 +213,76 @@ export function createDiffsTool(params: {
         : undefined;
 
       if (mode === "view") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Diff viewer ready.\n${viewerUrl}`,
-            },
-          ],
-          details: viewerDetails,
-        };
+        return textResult(`Diff viewer ready.\n${viewerUrl}`, viewerDetails);
       }
 
       try {
-        const screenshotter = await loadScreenshotter(config);
-        const artifactFile = await renderDiffArtifactFile({
-          screenshotter,
-          store: params.store,
-          html: requireRenderedHtml(rendered.imageHtml, "image"),
-          theme,
-          image,
+        const screenshotter = new (await loadDiffsBrowserRuntime()).PlaywrightDiffScreenshotter({
+          config,
+        });
+        const html = requireRenderedHtml(rendered.imageHtml, "image");
+        const artifactFile = await params.store.createStandaloneFileArtifact({
+          format: image.format,
           ttlMs,
           context: artifactContext,
         });
+        let fileBytes: number;
+        try {
+          await screenshotter.screenshotHtml({
+            html,
+            outputPath: artifactFile.filePath,
+            theme,
+            image,
+          });
+          fileBytes = (await fs.stat(artifactFile.filePath)).size;
+          await params.store.completeFileArtifact(artifactFile.id);
+        } catch (error) {
+          await params.store.deleteFileArtifact(artifactFile.id);
+          throw error;
+        }
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: buildFileArtifactMessage({
-                format: image.format,
-                filePath: artifactFile.path,
-                viewerUrl,
-              }),
-            },
-          ],
-          details: buildArtifactDetails({
-            baseDetails: viewerDetails ?? {
+        return textResult(
+          [
+            ...(viewerUrl ? [`Diff viewer: ${viewerUrl}`] : []),
+            `Diff ${image.format.toUpperCase()} generated at: ${artifactFile.filePath}`,
+            "To send this file, use an available file-sending tool to send it as an attachment.",
+          ].join("\n"),
+          {
+            ...(viewerDetails ?? {
               changed: true,
-              ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
-              ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
+              artifactId: artifactFile.id,
+              expiresAt: artifactFile.expiresAt,
               title: rendered.title,
               inputKind: rendered.inputKind,
               fileCount: rendered.fileCount,
               mode,
               ...(artifactContext ? { context: artifactContext } : {}),
-            },
-            artifactFile,
-            image,
-          }),
-        };
+            }),
+            filePath: artifactFile.filePath,
+            // `path` mirrors filePath so the message tool can send the artifact directly.
+            path: artifactFile.filePath,
+            fileBytes,
+            fileFormat: image.format,
+            fileQuality: image.qualityPreset,
+            fileScale: image.scale,
+            fileMaxWidth: image.maxWidth,
+          },
+        );
       } catch (error) {
         if (mode === "both") {
           const errorMessage = formatErrorMessage(error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Diff viewer ready.\n${viewerUrl}\nFile rendering failed: ${errorMessage}`,
-              },
-            ],
-            details: {
+          return textResult(
+            `Diff viewer ready.\n${viewerUrl}\nFile rendering failed: ${errorMessage}`,
+            {
               ...viewerDetails,
               fileError: errorMessage,
             },
-          };
+          );
         }
         throw error;
       }
     },
   };
-}
-
-function normalizeFileQuality(
-  fileQuality: DiffImageQualityPreset | undefined,
-): DiffImageQualityPreset | undefined {
-  return fileQuality && DIFF_IMAGE_QUALITY_PRESETS.includes(fileQuality) ? fileQuality : undefined;
-}
-
-function normalizeOutputFormat(format: DiffOutputFormat | undefined): DiffOutputFormat | undefined {
-  return format && DIFF_OUTPUT_FORMATS.includes(format) ? format : undefined;
 }
 
 function isArtifactOnlyMode(mode: DiffMode): mode is "image" | "file" {
@@ -333,71 +306,6 @@ function requireRenderedHtml(html: string | undefined, target: DiffRenderTarget)
   throw new Error(`Missing ${target} render output.`);
 }
 
-function buildArtifactDetails(params: {
-  baseDetails: Record<string, unknown>;
-  artifactFile: { path: string; bytes: number };
-  image: DiffRenderOptions["image"];
-}) {
-  return {
-    ...params.baseDetails,
-    filePath: params.artifactFile.path,
-    // `path` mirrors filePath so the message tool can send the artifact directly.
-    path: params.artifactFile.path,
-    fileBytes: params.artifactFile.bytes,
-    fileFormat: params.image.format,
-    fileQuality: params.image.qualityPreset,
-    fileScale: params.image.scale,
-    fileMaxWidth: params.image.maxWidth,
-  };
-}
-
-function buildFileArtifactMessage(params: {
-  format: DiffOutputFormat;
-  filePath: string;
-  viewerUrl?: string;
-}): string {
-  const lines = params.viewerUrl ? [`Diff viewer: ${params.viewerUrl}`] : [];
-  lines.push(`Diff ${params.format.toUpperCase()} generated at: ${params.filePath}`);
-  lines.push("To send this file, use an available file-sending tool to send it as an attachment.");
-  return lines.join("\n");
-}
-
-async function renderDiffArtifactFile(params: {
-  screenshotter: DiffScreenshotter;
-  store: DiffArtifactStore;
-  html: string;
-  theme: DiffTheme;
-  image: DiffRenderOptions["image"];
-  ttlMs?: number;
-  context?: DiffArtifactContext;
-}): Promise<{ path: string; bytes: number; artifactId?: string; expiresAt?: string }> {
-  const fileArtifact = await params.store.createStandaloneFileArtifact({
-    format: params.image.format,
-    ttlMs: params.ttlMs,
-    context: params.context,
-  });
-  try {
-    await params.screenshotter.screenshotHtml({
-      html: params.html,
-      outputPath: fileArtifact.filePath,
-      theme: params.theme,
-      image: params.image,
-    });
-
-    const stats = await fs.stat(fileArtifact.filePath);
-    await params.store.completeFileArtifact(fileArtifact.id);
-    return {
-      path: fileArtifact.filePath,
-      bytes: stats.size,
-      artifactId: fileArtifact.id,
-      expiresAt: fileArtifact.expiresAt,
-    };
-  } catch (error) {
-    await params.store.deleteFileArtifact(fileArtifact.id);
-    throw error;
-  }
-}
-
 function buildArtifactContext(
   context: OpenClawPluginToolContext | undefined,
 ): DiffArtifactContext | undefined {
@@ -405,16 +313,13 @@ function buildArtifactContext(
     return undefined;
   }
 
-  const agentId = normalizeOptionalString(context.agentId);
-  const sessionId = normalizeOptionalString(context.sessionId);
-  const messageChannel = normalizeOptionalString(context.messageChannel);
-  const agentAccountId = normalizeOptionalString(context.agentAccountId);
-  const artifactContext: DiffArtifactContext = {
-    ...(agentId ? { agentId } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    ...(messageChannel ? { messageChannel } : {}),
-    ...(agentAccountId ? { agentAccountId } : {}),
-  };
+  const artifactContext: DiffArtifactContext = {};
+  for (const key of ["agentId", "sessionId", "messageChannel", "agentAccountId"] as const) {
+    const value = normalizeOptionalString(context[key]);
+    if (value) {
+      artifactContext[key] = value;
+    }
+  }
 
   return Object.keys(artifactContext).length > 0 ? artifactContext : undefined;
 }
@@ -485,18 +390,6 @@ function normalizeBaseUrl(baseUrl?: string): string | undefined {
   } catch {
     throw new PluginToolInputError(`Invalid baseUrl: ${normalized}`);
   }
-}
-
-function normalizeMode(mode: DiffMode | undefined, fallback: DiffMode): DiffMode {
-  return mode && DIFF_MODES.includes(mode) ? mode : fallback;
-}
-
-function normalizeTheme(theme: DiffTheme | undefined, fallback: DiffTheme): DiffTheme {
-  return theme && DIFF_THEMES.includes(theme) ? theme : fallback;
-}
-
-function normalizeLayout(layout: DiffLayout | undefined, fallback: DiffLayout): DiffLayout {
-  return layout && DIFF_LAYOUTS.includes(layout) ? layout : fallback;
 }
 
 function normalizeTtlMs(ttlSeconds?: number): number | undefined {

@@ -105,16 +105,16 @@ async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
-  child.kill("SIGTERM");
   await new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      resolve();
     }, 1_000);
     child.once("exit", () => {
       clearTimeout(timer);
       resolve();
     });
+    // Escalation requests termination; only this child's exit completes cleanup.
+    child.kill("SIGTERM");
   });
 }
 

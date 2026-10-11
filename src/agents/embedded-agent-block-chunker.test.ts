@@ -3,19 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { EmbeddedBlockChunker, type BlockChunkMetadata } from "./embedded-agent-block-chunker.js";
 import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
-
-function createFlushOnParagraphChunker(params: { minChars: number; maxChars: number }) {
-  return new EmbeddedBlockChunker({
-    minChars: params.minChars,
-    maxChars: params.maxChars,
-    breakPreference: "paragraph",
-    flushOnParagraph: true,
-  });
-}
 
 function drainChunks(chunker: EmbeddedBlockChunker, force = false) {
   const chunks: string[] = [];
@@ -32,6 +22,92 @@ function expectChunksWithinLength(chunks: string[], maxLength: number) {
 }
 
 describe("EmbeddedBlockChunker", () => {
+  it("emits a whole leading grapheme that exactly fills the hard cap", () => {
+    const cluster = `e${"\u0301".repeat(1199)}`;
+    const chunker = new EmbeddedBlockChunker({ minChars: 800, maxChars: 1200 });
+    chunker.append(cluster);
+    expect(drainChunks(chunker)).toEqual([cluster]);
+    expect(chunker.bufferedText).toBe("");
+
+    chunker.append("done");
+    expect(drainChunks(chunker)).toEqual([]);
+    expect(drainChunks(chunker, true)).toEqual(["done"]);
+    expect(chunker.consumedLength).toBe(cluster.length + 4);
+  });
+
+  it.each([
+    { name: "family emoji", prefixLength: 1195, cluster: "👨‍👩‍👧‍👦" },
+    { name: "accented character", prefixLength: 1199, cluster: "e\u0301" },
+    { name: "flag", prefixLength: 1198, cluster: "🇨🇦" },
+    { name: "skin tone", prefixLength: 1198, cluster: "👋🏽" },
+  ])("keeps a fitting $name intact at the normal streaming cap", ({ prefixLength, cluster }) => {
+    const source = `${"x".repeat(prefixLength)}${cluster}done`;
+    const boundaries = new Set(
+      Array.from(
+        new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(source),
+        (segment) => segment.index,
+      ),
+    );
+    boundaries.add(source.length);
+
+    // Cover complete terminal output and provider-like deltas, including a
+    // delta ending at the cap before the rest of its grapheme has arrived.
+    for (const deltaSize of [source.length, 17, 1]) {
+      for (const force of [false, true]) {
+        const chunker = new EmbeddedBlockChunker({ minChars: 800, maxChars: 1200 });
+        const chunks: string[] = [];
+        const metadata: BlockChunkMetadata[] = [];
+        const emit = (chunk: string, options?: BlockChunkMetadata) => {
+          chunks.push(chunk);
+          if (options) {
+            metadata.push(options);
+          }
+        };
+        for (let offset = 0; offset < source.length; offset += deltaSize) {
+          chunker.append(source.slice(offset, offset + deltaSize));
+          if (!force) {
+            chunker.drain({ force: false, emit });
+          }
+        }
+        chunker.drain({ force: true, emit });
+
+        expect(chunks.join("")).toBe(source);
+        expectChunksWithinLength(chunks, 1200);
+        expect(chunks.filter((chunk) => chunk.includes(cluster))).toHaveLength(1);
+        expect(metadata.map((entry) => entry.sourceText).join("")).toBe(source);
+        expect(metadata.every((entry) => boundaries.has(entry.sourceEnd))).toBe(true);
+        expect(metadata.map((entry) => entry.sourceStart)).toEqual([
+          0,
+          ...metadata.slice(0, -1).map((entry) => entry.sourceEnd),
+        ]);
+        expect(chunker.consumedLength).toBe(source.length);
+        expect(chunker.bufferedText).toBe("");
+      }
+    }
+  });
+
+  it.each([
+    { name: "ASCII", text: "x".repeat(1207), maxChars: 1200, expectedLengths: [1200, 7] },
+    { name: "a grapheme larger than the hard cap", text: "👨‍👩‍👧‍👦done", maxChars: 8 },
+  ])("retains progress and the hard cap for $name", ({ text, maxChars, expectedLengths }) => {
+    const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars });
+    const chunks: string[] = [];
+    for (const character of text) {
+      chunker.append(character);
+      chunks.push(...drainChunks(chunker));
+    }
+    chunks.push(...drainChunks(chunker, true));
+
+    expect(chunks.join("")).toBe(text);
+    expectChunksWithinLength(chunks, maxChars);
+    if (expectedLengths) {
+      expect(chunks.map((chunk) => chunk.length)).toEqual(expectedLengths);
+    }
+    expect(chunks).not.toContain("");
+    expect(chunker.consumedLength).toBe(text.length);
+    expect(chunker.bufferedText).toBe("");
+  });
+
   it.each([
     { breakPreference: "paragraph", suffix: "ready\n\nTail", expected: "First line is ready" },
     { breakPreference: "newline", suffix: "ready\nTail", expected: "First line is ready" },
@@ -223,8 +299,8 @@ describe("EmbeddedBlockChunker", () => {
       // A synchronous stalled drain needs an external deadline, not Vitest's in-process timer.
       const chunkerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.blockChunker);
       const result = await runNodeScript(
-        [
-          ...resolveRuntimeWorkerArgv(chunkerUrl, resolveTestNodeExecPath()).slice(0, -1),
+        (workerArgv) => [
+          ...workerArgv(chunkerUrl).slice(0, -1),
           "--input-type=module",
           "--eval",
           `
@@ -299,55 +375,53 @@ describe("EmbeddedBlockChunker", () => {
     expect(drainChunks(chunker, true)).toEqual([]);
   });
 
-  it("balances an unfinished fence at the exact cap and retains its later continuation", () => {
-    const chunker = new EmbeddedBlockChunker({
-      minChars: 8,
-      maxChars: 20,
-      breakPreference: "paragraph",
-    });
-    chunker.append("```ts\nabcdefghijklm");
-    expect(drainChunks(chunker)).toEqual([]);
-
-    chunker.append("n");
-    expect(drainChunks(chunker)).toEqual(["```ts\nabcdefghij\n```"]);
-    expect(chunker.bufferedText).toBe("```ts\nklmn");
-
-    chunker.append("op\n```");
-    expect(drainChunks(chunker)).toEqual([]);
-    expect(drainChunks(chunker, true)).toEqual(["```ts\nklmnop\n```"]);
-    expect(chunker.bufferedText).toBe("");
-  });
-
+  type FenceDrainScenario = {
+    name: string;
+    steps: Array<{ append?: string; force?: boolean; expected: string[]; buffered?: string }>;
+  };
   it.each([
-    { text: "```ts\nabcdefg.", expected: [] },
-    { text: "```ts\nabcdefghijklm.", expected: ["```ts\nabcdefghij\n```"] },
-  ])("keeps terminal code punctuation inside its unfinished fence: $text", ({ text, expected }) => {
-    const chunker = new EmbeddedBlockChunker({
-      minChars: 8,
-      maxChars: 20,
-      breakPreference: "paragraph",
-    });
-    chunker.append(text);
-
-    expect(drainChunks(chunker)).toEqual(expected);
-  });
-
-  it("keeps a genuinely closed fence at the exact cap without reopening it", () => {
-    const chunker = new EmbeddedBlockChunker({
-      minChars: 8,
-      maxChars: 20,
-      breakPreference: "paragraph",
-    });
-    chunker.append("```ts\nabcdefghij\n");
-    expect(drainChunks(chunker)).toEqual([]);
-
-    chunker.append("```");
-    expect(drainChunks(chunker)).toEqual(["```ts\nabcdefghij\n```"]);
-    expect(drainChunks(chunker, true)).toEqual([]);
-
-    chunker.append("Tail");
-    expect(drainChunks(chunker, true)).toEqual(["Tail"]);
-  });
+    {
+      name: "unfinished fence continuation",
+      steps: [
+        { append: "```ts\nabcdefghijklm", expected: [] },
+        { append: "n", expected: ["```ts\nabcdefghij\n```"], buffered: "```ts\nklmn" },
+        { append: "op\n```", expected: [] },
+        { force: true, expected: ["```ts\nklmnop\n```"], buffered: "" },
+      ],
+    },
+    { name: "punctuation below cap", steps: [{ append: "```ts\nabcdefg.", expected: [] }] },
+    {
+      name: "punctuation at cap",
+      steps: [{ append: "```ts\nabcdefghijklm.", expected: ["```ts\nabcdefghij\n```"] }],
+    },
+    {
+      name: "genuine closing fence",
+      steps: [
+        { append: "```ts\nabcdefghij\n", expected: [] },
+        { append: "```", expected: ["```ts\nabcdefghij\n```"] },
+        { force: true, expected: [] },
+        { append: "Tail", force: true, expected: ["Tail"] },
+      ],
+    },
+  ] satisfies FenceDrainScenario[])(
+    "keeps streamed fence boundaries intact: $name",
+    ({ steps }: FenceDrainScenario) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 8,
+        maxChars: 20,
+        breakPreference: "paragraph",
+      });
+      for (const step of steps) {
+        if (step.append !== undefined) {
+          chunker.append(step.append);
+        }
+        expect(drainChunks(chunker, "force" in step && step.force)).toEqual(step.expected);
+        if (step.buffered !== undefined) {
+          expect(chunker.bufferedText).toBe(step.buffered);
+        }
+      }
+    },
+  );
 
   it.each([false, true])(
     "reports original source across synthetic wrappers with a preserved break: %s",
@@ -549,56 +623,77 @@ describe("EmbeddedBlockChunker", () => {
     expect(drainChunks(chunker, true)).toEqual(["Fixed"]);
   });
 
-  it("breaks at paragraph boundary right after fence close", () => {
-    // A closed fence is a safe boundary; splitting before it would corrupt
-    // markdown rendered by downstream clients.
-    const chunker = new EmbeddedBlockChunker({
+  it.each([
+    {
+      name: "closed fence before prose",
       minChars: 1,
       maxChars: 40,
-      breakPreference: "paragraph",
-    });
-
-    const text = [
-      "Intro",
-      "```js",
-      "console.log('x')",
-      "```",
-      "",
-      "After first line",
-      "After second line",
-    ].join("\n");
-
-    chunker.append(text);
-
-    const chunks = drainChunks(chunker);
-
-    expect(chunks.length).toBe(1);
-    expect(chunks[0]).toContain("console.log");
-    expect(chunks[0]).toMatch(/```\n?$/);
-    expect(chunks[0]).not.toContain("After");
-    expect(chunker.bufferedText).toMatch(/^After/);
-  });
-
-  it("waits until minChars before flushing paragraph boundaries when flushOnParagraph is set", () => {
-    const chunker = createFlushOnParagraphChunker({ minChars: 30, maxChars: 200 });
-
-    chunker.append("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
-
-    const chunks = drainChunks(chunker);
-
-    expect(chunks).toEqual(["First paragraph.\n\nSecond paragraph."]);
-    expect(chunker.bufferedText).toBe("Third paragraph.");
-  });
-
-  it("still force flushes buffered paragraphs below minChars at the end", () => {
-    const chunker = createFlushOnParagraphChunker({ minChars: 100, maxChars: 200 });
-
-    chunker.append("First paragraph.\n \nSecond paragraph.");
-
-    expect(drainChunks(chunker)).toStrictEqual([]);
-    expect(drainChunks(chunker, true)).toEqual(["First paragraph.\n \nSecond paragraph."]);
-    expect(chunker.bufferedText).toBe("");
-  });
+      flushOnParagraph: false,
+      flushTail: false,
+      source: "Intro\n```js\nconsole.log('x')\n```\n\nAfter first line\nAfter second line",
+      expected: ["Intro\n```js\nconsole.log('x')\n```"],
+      tail: "After first line\nAfter second line",
+    },
+    {
+      name: "minimum paragraph length",
+      minChars: 30,
+      maxChars: 200,
+      flushOnParagraph: true,
+      flushTail: false,
+      source: "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.",
+      expected: ["First paragraph.\n\nSecond paragraph."],
+      tail: "Third paragraph.",
+    },
+    {
+      name: "forced short tail",
+      minChars: 100,
+      maxChars: 200,
+      flushOnParagraph: true,
+      flushTail: true,
+      source: "First paragraph.\n \nSecond paragraph.",
+      expected: [],
+      tail: "First paragraph.\n \nSecond paragraph.",
+    },
+    {
+      name: "capped paragraph",
+      minChars: 1,
+      maxChars: 10,
+      flushOnParagraph: true,
+      flushTail: false,
+      source: "abcdefghijk\n\nRest",
+      expected: ["abcdefghij", "k"],
+      tail: "Rest",
+    },
+    {
+      name: "blank lines inside a fence",
+      minChars: 10,
+      maxChars: 200,
+      flushOnParagraph: true,
+      flushTail: false,
+      source: "Intro\n```js\nconst a = 1;\n\nconst b = 2;\n```\n\nAfter fence",
+      expected: ["Intro\n```js\nconst a = 1;\n\nconst b = 2;\n```"],
+      tail: "After fence",
+    },
+  ])(
+    "respects paragraph boundaries and size limits: $name",
+    ({ minChars, maxChars, flushOnParagraph, flushTail, source, expected, tail }) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars,
+        maxChars,
+        breakPreference: "paragraph",
+        flushOnParagraph,
+      });
+      chunker.append(source);
+      const chunks = drainChunks(chunker);
+      expect(chunks).toEqual(expected);
+      expectChunksWithinLength(chunks, maxChars);
+      expect(chunker.bufferedText).toBe(tail);
+      if (flushTail) {
+        expect(drainChunks(chunker, true)).toEqual([tail]);
+        expect(chunker.bufferedText).toBe("");
+      }
+    },
+  );
 
   it("keeps forced maxChars chunks valid at UTF-16 boundaries", () => {
     const plainChunker = new EmbeddedBlockChunker({
@@ -632,68 +727,6 @@ describe("EmbeddedBlockChunker", () => {
     expect(fencedChunker.bufferedText).toBe("```txt\nxxx😀tail");
   });
 
-  it("clamps long paragraphs to maxChars when flushOnParagraph is set", () => {
-    const chunker = new EmbeddedBlockChunker({
-      minChars: 1,
-      maxChars: 10,
-      breakPreference: "paragraph",
-      flushOnParagraph: true,
-    });
-
-    chunker.append("abcdefghijk\n\nRest");
-
-    const chunks = drainChunks(chunker);
-
-    expectChunksWithinLength(chunks, 10);
-    expect(chunks).toEqual(["abcdefghij", "k"]);
-    expect(chunker.bufferedText).toBe("Rest");
-  });
-
-  it("ignores paragraph breaks inside fences when flushOnParagraph is set", () => {
-    // Blank lines inside fenced code are content, not paragraph boundaries.
-    const chunker = new EmbeddedBlockChunker({
-      minChars: 10,
-      maxChars: 200,
-      breakPreference: "paragraph",
-      flushOnParagraph: true,
-    });
-
-    const text = [
-      "Intro",
-      "```js",
-      "const a = 1;",
-      "",
-      "const b = 2;",
-      "```",
-      "",
-      "After fence",
-    ].join("\n");
-
-    chunker.append(text);
-
-    const chunks = drainChunks(chunker);
-
-    expect(chunks).toEqual(["Intro\n```js\nconst a = 1;\n\nconst b = 2;\n```"]);
-    expect(chunker.bufferedText).toBe("After fence");
-  });
-
-  it("scans fence spans once per drain call for long fenced buffers", () => {
-    // Long streaming buffers should not rescan fences for every emitted chunk.
-    const scanSpy = vi.spyOn(fences, "scanFenceSpans");
-    const chunker = new EmbeddedBlockChunker({
-      minChars: 20,
-      maxChars: 80,
-      breakPreference: "paragraph",
-    });
-
-    chunker.append(`\`\`\`txt\n${"line\n".repeat(600)}\`\`\``);
-    const chunks = drainChunks(chunker);
-
-    expect(chunks.length).toBeGreaterThan(2);
-    expect(scanSpy).toHaveBeenCalledTimes(1);
-    scanSpy.mockRestore();
-  });
-
   it.each(["open", "closed"])(
     "bounds paragraph candidate scans while streaming a long %s fence",
     (kind) => {
@@ -716,6 +749,7 @@ describe("EmbeddedBlockChunker", () => {
       };
       chunker.append(initial);
       let candidates = 0;
+      const scanSpy = vi.spyOn(fences, "scanFenceSpans");
       // Capture before spying; every invocation explicitly supplies the original RegExp receiver.
       // oxlint-disable-next-line typescript/unbound-method
       const nativeExec = RegExp.prototype.exec;
@@ -732,8 +766,10 @@ describe("EmbeddedBlockChunker", () => {
       });
       try {
         chunker.drain({ force: false, emit });
+        expect(scanSpy).toHaveBeenCalledTimes(1);
       } finally {
         spy.mockRestore();
+        scanSpy.mockRestore();
       }
       const streamedCount = chunks.length;
       expect(streamedCount).toBeGreaterThan(1);
@@ -760,29 +796,6 @@ describe("EmbeddedBlockChunker", () => {
       expect(candidates).toBeLessThanOrEqual(3 * (streamedCount + 1));
     },
   );
-
-  it("does not split inside the closing fence marker when clamping at maxChars", () => {
-    // Clamp-based splitting rewraps fenced chunks so no partial closing marker
-    // leaks into the stream.
-    const chunker = new EmbeddedBlockChunker({
-      minChars: 10,
-      maxChars: 30,
-      breakPreference: "paragraph",
-    });
-
-    chunker.append(`\`\`\`txt\n${"a".repeat(80)}\n\`\`\``);
-    const chunks = drainChunks(chunker, true);
-
-    expectChunksWithinLength(chunks, 30);
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.join("").match(/a/g)?.length).toBe(80);
-    for (const chunk of chunks) {
-      expect(chunk.startsWith("```txt")).toBe(true);
-      expect(chunk.match(/```/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
-      expect(chunk).not.toContain("``\n```");
-      expect(chunk).not.toMatch(/^```txt\n```\n?$/);
-    }
-  });
 
   it.each([
     { marker: "```", finalLine: "XXXXXXXX", force: true },
@@ -842,67 +855,102 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it.each([
-    { name: "Discord", maxChars: 2_000, bodyChars: 3_983, marker: "```" },
-    { name: "tilde", maxChars: 30, bodyChars: 83, marker: "~~~" },
-    { name: "indented", maxChars: 40, bodyChars: 83, marker: "  ```" },
-  ])(
-    "keeps $name fenced replies within their actual message budget",
-    ({ maxChars, bodyChars, marker }) => {
-      const chunker = new EmbeddedBlockChunker({
-        minChars: Math.min(800, maxChars),
-        maxChars,
-        breakPreference: "paragraph",
-      });
-      chunker.append(`${marker}typescript\n${"x".repeat(bodyChars)}\n${marker}`);
-
-      const chunks = drainChunks(chunker, true);
-
-      expectChunksWithinLength(chunks, maxChars);
-      expect(chunks.join("").match(/x/g)?.length).toBe(bodyChars);
-      expect(chunks).not.toContain(`${marker}typescript\n${marker}`);
-      for (const chunk of chunks) {
-        expect(chunk.startsWith(`${marker}typescript\n`)).toBe(true);
-        expect(chunk.trimEnd().endsWith(marker)).toBe(true);
-      }
-    },
-  );
-
-  it("degrades oversized fence language markers without turning them into code", () => {
-    const chunker = new EmbeddedBlockChunker({
+    {
+      name: "closed fence clamp",
       minChars: 10,
       maxChars: 30,
-      breakPreference: "paragraph",
-    });
-    const body = "q".repeat(70);
-    chunker.append(`\`\`\`very-long-language-name\n${body}\n\`\`\``);
-
-    const chunks = drainChunks(chunker, true);
-
-    expectChunksWithinLength(chunks, 30);
-    expect(chunks[0]).toMatch(/^```\n/);
-    expect(
-      chunks.map((chunk) => chunk.trimEnd().split("\n").slice(1, -1).join("\n")).join(""),
-    ).toBe(body);
-  });
-
-  it.each([
-    { maxChars: 9, marker: "```", language: "" },
-    { maxChars: 13, marker: "````", language: "js" },
+      marker: "```",
+      language: "txt",
+      renderedLanguage: "txt",
+      char: "a",
+      count: 80,
+    },
+    {
+      name: "Discord budget",
+      minChars: 800,
+      maxChars: 2_000,
+      marker: "```",
+      language: "typescript",
+      renderedLanguage: "typescript",
+      char: "x",
+      count: 3_983,
+    },
+    {
+      name: "tilde budget",
+      minChars: 30,
+      maxChars: 30,
+      marker: "~~~",
+      language: "typescript",
+      renderedLanguage: "typescript",
+      char: "x",
+      count: 83,
+    },
+    {
+      name: "indented budget",
+      minChars: 40,
+      maxChars: 40,
+      marker: "  ```",
+      language: "typescript",
+      renderedLanguage: "typescript",
+      char: "x",
+      count: 83,
+    },
+    {
+      name: "oversized language metadata",
+      minChars: 10,
+      maxChars: 30,
+      marker: "```",
+      language: "very-long-language-name",
+      renderedLanguage: "",
+      char: "q",
+      count: 70,
+    },
+    {
+      name: "smallest bare fence",
+      minChars: 1,
+      maxChars: 9,
+      marker: "```",
+      language: "",
+      renderedLanguage: "",
+      char: "a",
+      count: 21,
+    },
+    {
+      name: "smallest language fence",
+      minChars: 1,
+      maxChars: 13,
+      marker: "````",
+      language: "js",
+      renderedLanguage: "js",
+      char: "a",
+      count: 21,
+    },
   ])(
-    "honors the smallest balanced $marker fence at $maxChars characters",
-    ({ maxChars, marker, language }) => {
+    "balances fences without losing code or exceeding $name",
+    ({ minChars, maxChars, marker, language, renderedLanguage, char, count }) => {
       const chunker = new EmbeddedBlockChunker({
-        minChars: 1,
+        minChars,
         maxChars,
         breakPreference: "paragraph",
       });
-      chunker.append(`${marker}${language}\n${"a".repeat(21)}\n${marker}`);
-
+      const body = char.repeat(count);
+      chunker.append(`${marker}${language}\n${body}\n${marker}`);
       const chunks = drainChunks(chunker, true);
-
       expectChunksWithinLength(chunks, maxChars);
-      expect(chunks.join("").match(/a/g)?.length).toBe(21);
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(Array.from(chunks.join("")).filter((value) => value === char)).toHaveLength(count);
+      expect(chunks).not.toContain(`${marker}${language}\n${marker}`);
       expect(chunks.every((chunk) => chunk.trimEnd() !== `${marker}\n${marker}`)).toBe(true);
+      expect(
+        chunks.map((chunk) => chunk.trimEnd().split("\n").slice(1, -1).join("\n")).join(""),
+      ).toBe(body);
+      for (const chunk of chunks) {
+        expect(chunk.startsWith(`${marker}${renderedLanguage}\n`)).toBe(true);
+        expect(chunk.trimEnd().endsWith(marker)).toBe(true);
+        expect(chunk.split(marker).length - 1).toBeGreaterThanOrEqual(2);
+        expect(chunk).not.toContain(`${marker.slice(0, -1)}\n${marker}`);
+        expect(chunk).not.toMatch(/^```txt\n```\n?$/);
+      }
     },
   );
 

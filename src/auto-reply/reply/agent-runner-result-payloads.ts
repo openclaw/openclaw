@@ -1,3 +1,4 @@
+import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
@@ -10,18 +11,22 @@ import {
   resolveReplyCompletion,
 } from "../../agents/reply-completion.js";
 import {
+  assertSubagentRegistryWriteSourceCurrent,
+  SubagentRegistryWriteError,
+} from "../../agents/subagents/registry/subagent-registry-persistence.js";
+import {
   deriveContextPromptTokens,
   hasBillableUsage,
   toDiagnosticUsage,
 } from "../../agents/usage.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import type { ProgressContinuationState } from "../../channels/progress-continuation.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import {
   buildFallbackClearedNotice,
@@ -57,10 +62,15 @@ import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
-import { buildWaitingStatusPayload } from "./waiting-status.js";
+import {
+  attachWaitingStatusProgressContinuation,
+  buildWaitingStatusPayload,
+} from "./waiting-status.js";
 export async function prepareReplyAgentPayloads(state: {
   context: FinalizeReplyAgentRunInput;
   accounting: AccountedAgentTurn;
@@ -127,6 +137,15 @@ export async function prepareReplyAgentPayloads(state: {
     runResult.didSendDeterministicApprovalPrompt === true;
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const implicitContinuation = runResult.meta?.continuationPending === true;
+  // A media-run continuation has no completion child to take over delivery; its status is the reply.
+  const continuationOwner =
+    implicitContinuation && hasCompletionMessageSessionSpawn(runResult.acceptedSessionSpawns)
+      ? {
+          stateContext: captureOpenClawStateWorkerContext(),
+          operationKey: replyOperation.key,
+          operationSessionId: replyOperation.sessionId,
+        }
+      : undefined;
   const pendingContinuation =
     runResult.meta?.yielded === true ||
     implicitContinuation ||
@@ -253,18 +272,15 @@ export async function prepareReplyAgentPayloads(state: {
   const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const isGeneratedToolWarning = (payload: ReplyPayload) =>
     getReplyPayloadMetadata(payload)?.toolErrorWarning !== undefined;
+  const isPayloadLaneEnabled = (payload: ReplyPayload) =>
+    (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
+    (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true);
   const applyFinalReplyToMode = (payload: ReplyPayload) => {
-    const isDisabledReasoningLane =
-      payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
-    const isDisabledCommentaryLane =
-      payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
+    const laneEnabled = isPayloadLaneEnabled(payload);
     const isFilteredPayload =
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
     const shouldDeferToolWarning = waitingStatusPayload && isGeneratedToolWarning(payload);
-    return isDisabledReasoningLane ||
-      isDisabledCommentaryLane ||
-      isFilteredPayload ||
-      shouldDeferToolWarning
+    return !laneEnabled || isFilteredPayload || shouldDeferToolWarning
       ? payload
       : applyDeliveredReplyToMode(payload);
   };
@@ -299,16 +315,6 @@ export async function prepareReplyAgentPayloads(state: {
     didLogHeartbeatStrip = result.didLogHeartbeatStrip;
     return result.replyPayloads;
   };
-  const returnPreparedFallbackPayload = async (
-    payload: ReplyPayload,
-  ): Promise<ReplyPayload | undefined> => {
-    const [preparedPayload] = await buildFinalPayloads([payload]);
-    if (!preparedPayload) {
-      return undefined;
-    }
-    await signalTypingIfNeeded([preparedPayload], typingSignals);
-    return returnWithQueuedFollowupDrain(preparedPayload);
-  };
   const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
     const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
       fallbackTransition,
@@ -327,7 +333,12 @@ export async function prepareReplyAgentPayloads(state: {
       ),
     );
     opts?.onAgentRunTerminalOutcome?.("failed");
-    return returnPreparedFallbackPayload(silentFallbackFailurePayload);
+    const [preparedPayload] = await buildFinalPayloads([silentFallbackFailurePayload]);
+    if (!preparedPayload) {
+      return undefined;
+    }
+    await signalTypingIfNeeded([preparedPayload], typingSignals);
+    return returnWithQueuedFollowupDrain(preparedPayload);
   };
   const finishEmptyReply = async () => {
     if (completion.outcome === "silent" || completion.outcome === "blocked") {
@@ -370,6 +381,12 @@ export async function prepareReplyAgentPayloads(state: {
         cfg,
       })
     : null;
+  const fallbackModels = {
+    selectedProvider,
+    selectedModel,
+    activeProvider: sessionModel.provider,
+    activeModel: sessionModel.model,
+  };
   if (fallbackNoticeChanged && fallbackTransition.fallbackTransitioned) {
     emitAgentEvent({
       runId,
@@ -377,10 +394,7 @@ export async function prepareReplyAgentPayloads(state: {
       stream: "lifecycle",
       data: {
         phase: "fallback",
-        selectedProvider,
-        selectedModel,
-        activeProvider: sessionModel.provider,
-        activeModel: sessionModel.model,
+        ...fallbackModels,
         reasonSummary: fallbackTransition.reasonSummary,
         attemptSummaries: fallbackTransition.attemptSummaries,
         attempts: fallbackAttempts,
@@ -388,10 +402,7 @@ export async function prepareReplyAgentPayloads(state: {
     });
     if (shouldDeliverFallbackNotice && !providerPolicyRetrySucceeded) {
       fallbackNoticeText = buildFallbackNotice({
-        selectedProvider,
-        selectedModel,
-        activeProvider: sessionModel.provider,
-        activeModel: sessionModel.model,
+        ...fallbackModels,
         attempts: fallbackAttempts,
         cfg,
       });
@@ -404,10 +415,7 @@ export async function prepareReplyAgentPayloads(state: {
       stream: "lifecycle",
       data: {
         phase: "fallback_cleared",
-        selectedProvider,
-        selectedModel,
-        activeProvider: sessionModel.provider,
-        activeModel: sessionModel.model,
+        ...fallbackModels,
         previousActiveModel: fallbackTransition.previousState.activeModel,
       },
     });
@@ -428,9 +436,46 @@ export async function prepareReplyAgentPayloads(state: {
       ]
     : [];
 
-  // Drain any late tool/block deliveries before deciding there's "nothing to send".
-  // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
-  // keep the typing indicator stuck.
+  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
+  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
+    const contextUsedTokens = deriveContextPromptTokens({
+      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+      promptTokens,
+      usage,
+    });
+    const costUsd = estimateAggregateUsageCost({
+      usage: diagnosticUsage,
+      provider: providerUsed,
+      model: modelUsed,
+      config: cfg,
+      agentDir: followupRun.run.agentDir,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      ...(runResult.diagnosticTrace
+        ? {
+            trace: freezeDiagnosticTraceContext(
+              createChildDiagnosticTraceContext(runResult.diagnosticTrace),
+            ),
+          }
+        : {}),
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      channel: replyToChannel,
+      agentId: followupRun.run.agentId,
+      provider: providerUsed,
+      model: modelUsed,
+      usage: toDiagnosticUsage(diagnosticUsage),
+      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+      context: {
+        limit: contextTokensUsed,
+        ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
+      },
+      costUsd,
+      durationMs: Date.now() - runStartedAt,
+    });
+  }
+
   if (
     payloadArray.length === 0 &&
     fallbackNoticePayloads.length === 0 &&
@@ -443,11 +488,7 @@ export async function prepareReplyAgentPayloads(state: {
 
   const payloadCandidates = (
     fallbackNoticePayloads.length > 0 ? [...fallbackNoticePayloads, ...payloadArray] : payloadArray
-  ).filter(
-    (payload) =>
-      (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
-      (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true),
-  );
+  ).filter(isPayloadLaneEnabled);
   let replyPayloads = await buildFinalPayloads(payloadCandidates);
   if (sourceReplyDelivery !== "delivered" && completion.outcome === "delivered") {
     await opts?.onObservedReplyDelivery?.();
@@ -513,8 +554,7 @@ export async function prepareReplyAgentPayloads(state: {
   const hasVisibleReplyPayload = replyPayloads.some(
     (payload) =>
       !isReplyPayloadStatusNotice(payload) &&
-      (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
-      (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true) &&
+      isPayloadLaneEnabled(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   const hasDeliveredBlockStream = Boolean(blockReplyPipeline?.didStream());
@@ -539,120 +579,92 @@ export async function prepareReplyAgentPayloads(state: {
   // turn) already covers the commitment — avoids false positives (#32228).
   const coveredByExistingCron =
     hasReminderCommitment && successfulCronAdds === 0
-      ? await hasSessionRelatedCronJobs({
-          cronStorePath: undefined,
-          sessionKey,
-        })
+      ? await hasSessionRelatedCronJobs(sessionKey)
       : false;
   const guardedReplyPayloads =
     hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
       ? appendUnscheduledReminderNote(replyPayloads)
       : replyPayloads;
 
-  if (implicitContinuation || (pendingContinuation && runResult.acceptedSessionSpawns?.length)) {
-    const statusPayload = guardedReplyPayloads.find(
-      (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
-    );
+  const statusPayload = guardedReplyPayloads.find(
+    (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
+  );
+  // Media admission owns runs under the tools' runtime policy key, not a shared main key.
+  const mediaSessionKey =
+    implicitContinuation && !continuationOwner
+      ? (runtimePolicySessionKey ?? sessionKey ?? followupRun.run.sessionKey)
+      : undefined;
+  if (statusPayload) {
+    await attachWaitingStatusProgressContinuation({
+      payload: statusPayload,
+      acceptedSessionSpawns: runResult.acceptedSessionSpawns,
+      mediaRequester: mediaSessionKey
+        ? { sessionKey: mediaSessionKey, agentId: followupRun.run.agentId }
+        : undefined,
+      operation: replyOperation,
+    });
+  }
+
+  if (continuationOwner) {
     const acceptedSessionSpawns = runResult.acceptedSessionSpawns;
     const requesterSessionKey = sessionKey ?? followupRun.run.sessionKey;
-    if (
-      implicitContinuation &&
-      (!requesterSessionKey || !acceptedSessionSpawns?.length || !statusPayload)
-    ) {
+    if (!requesterSessionKey || !acceptedSessionSpawns?.length || !statusPayload) {
       throw new Error("accepted continuation status could not be prepared for delivery");
     }
-    if (requesterSessionKey && acceptedSessionSpawns?.length && statusPayload) {
-      let progressPresentation: ProgressContinuationState | undefined;
-      if (implicitContinuation) {
-        let settlementPromise: Promise<void> | undefined;
-        const settlement: PendingContinuationSettlement = {
-          settle: (statusDelivered) =>
-            (settlementPromise ??= (async () => {
-              const presentation = progressPresentation;
-              progressPresentation = undefined;
-              try {
-                const { settleRequesterAfterSessionSpawns } =
-                  await import("../../agents/subagents/registry/subagent-registry.js");
-                const requester = {
-                  requesterSessionKey,
-                  requesterAgentId: followupRun.run.agentId,
-                  requesterTurnRunId: runId,
-                  acceptedSessionSpawns,
-                };
-                const requesterYielded = statusDelivered || presentation !== undefined;
-                try {
-                  if (
-                    !settleRequesterAfterSessionSpawns({
-                      ...requester,
-                      requesterYielded,
-                      ...(presentation ? { progressPresentation: presentation } : {}),
-                    })
-                  ) {
-                    throw new Error(
-                      "accepted continuation children could not transfer terminal delivery",
-                    );
-                  }
-                } catch (error) {
-                  // Adoption is positive visibility even when the later transport
-                  // outcome is unknown. A failed handoff must still release the child.
-                  if (!statusDelivered && requesterYielded) {
-                    settleRequesterAfterSessionSpawns({ ...requester, requesterYielded: false });
-                  }
-                  throw error;
-                }
-              } finally {
-                getReplyPayloadMetadata(statusPayload)?.progressContinuation?.close();
-              }
-            })().catch((error: unknown) => {
-              settlementPromise = undefined;
-              throw error;
-            })),
-        };
-        opts?.onPendingContinuation?.(settlement);
+    const { stateContext, operationKey, operationSessionId } = continuationOwner;
+    const assertRequesterCurrent = () => {
+      assertSubagentRegistryWriteSourceCurrent(stateContext);
+      // Abort can still owe non-yielded cleanup; replacement cannot inherit this cohort.
+      if (
+        replyRunRegistry.get(operationKey) !== replyOperation ||
+        replyOperation.key !== operationKey ||
+        replyOperation.sessionId !== operationSessionId
+      ) {
+        throw new Error("Requester continuation lost its original reply operation");
       }
-    }
+    };
+    assertRequesterCurrent();
+    let settlementPromise: Promise<void> | undefined;
+    const settlement: PendingContinuationSettlement = {
+      settle: (statusDelivered) =>
+        (settlementPromise ??= (async () => {
+          try {
+            assertRequesterCurrent();
+            const { settleRequesterAfterSessionSpawns } =
+              await import("../../agents/subagents/registry/subagent-registry.js");
+            assertRequesterCurrent();
+            const transferred = await settleRequesterAfterSessionSpawns({
+              requesterSessionKey,
+              requesterAgentId: followupRun.run.agentId,
+              requesterTurnRunId: runId,
+              acceptedSessionSpawns,
+              requesterYielded: statusDelivered,
+              stateContext,
+              assertCurrent: assertRequesterCurrent,
+            });
+            if (!transferred) {
+              throw new Error(
+                "accepted continuation children could not transfer terminal delivery",
+              );
+            }
+            try {
+              assertRequesterCurrent();
+            } catch (error) {
+              throw new SubagentRegistryWriteError("committed", error, "published");
+            }
+          } finally {
+            getReplyPayloadMetadata(statusPayload)?.progressContinuation?.close();
+          }
+        })().catch((error: unknown) => {
+          if (!(error instanceof SubagentRegistryWriteError) || error.outcome === "not-committed") {
+            settlementPromise = undefined;
+          }
+          throw error;
+        })),
+    };
+    opts?.onPendingContinuation?.(settlement);
   }
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
-
-  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
-  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
-    const contextUsedTokens = deriveContextPromptTokens({
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      promptTokens,
-      usage,
-    });
-    const costUsd = estimateAggregateUsageCost({
-      usage: diagnosticUsage,
-      provider: providerUsed,
-      model: modelUsed,
-      config: cfg,
-      agentDir: followupRun.run.agentDir,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      ...(runResult.diagnosticTrace
-        ? {
-            trace: freezeDiagnosticTraceContext(
-              createChildDiagnosticTraceContext(runResult.diagnosticTrace),
-            ),
-          }
-        : {}),
-      sessionKey,
-      sessionId: followupRun.run.sessionId,
-      channel: replyToChannel,
-      agentId: followupRun.run.agentId,
-      provider: providerUsed,
-      model: modelUsed,
-      usage: toDiagnosticUsage(diagnosticUsage),
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      context: {
-        limit: contextTokensUsed,
-        ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
-      },
-      costUsd,
-      durationMs: Date.now() - runStartedAt,
-    });
-  }
 
   const responseUsageSessionRaw =
     activeSessionEntry?.responseUsage ??
@@ -672,13 +684,16 @@ export async function prepareReplyAgentPayloads(state: {
   // Refresh inherited verbosity even when it started off: session preferences
   // and plugin diagnostics may change while the model runs.
   if (followupRun.run.verboseLevelOverride !== "off" || followupRun.run.traceAuthorized === true) {
-    activeSessionEntry = refreshSessionEntryFromStore({
-      storePath,
-      sessionKey,
-      fallbackEntry: activeSessionEntry,
-      activeSessionStore,
-      expectedGeneration: accounting.expectedSession,
-    });
+    activeSessionEntry = context.completion
+      ? await context.completion.refresh()
+      : await refreshSessionEntryFromStore({
+          storePath,
+          sessionKey,
+          fallbackEntry: activeSessionEntry,
+          activeSessionStore,
+          expectedGeneration: accounting.expectedSession,
+          reader: getReplyOperationSessionReader(replyOperation),
+        });
   }
 
   return {

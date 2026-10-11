@@ -71,6 +71,15 @@ describe("runEmbeddedAgent fast auto progress", () => {
     await state?.cleanup();
   });
 
+  it("preserves explicit Ultrafast through attempt dispatch", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      expect(params.fastMode).toBe("ultrafast");
+      return successAttempt("ollama", "glm-5.1:cloud");
+    });
+    await runEmbeddedAgent({ ...createOverflowRunParams(state), fastMode: "ultrafast" });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+  });
+
   it("uses the selected model's auto cutoff when the caller omits one", async () => {
     let attemptParams: FastModeAttemptParams | undefined;
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {

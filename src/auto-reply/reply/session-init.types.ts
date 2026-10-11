@@ -7,7 +7,9 @@ import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory
 import type { FinalizedTemplateContext } from "../templating.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 
-export type SessionInitResult = {
+export type SessionInitResult = Required<
+  Pick<SessionEntry, "sessionId" | "systemSent" | "abortedLastRun">
+> & {
   sessionCtx: FinalizedTemplateContext;
   sessionEntry: SessionEntry;
   initialSessionEntry?: SessionEntry;
@@ -17,11 +19,8 @@ export type SessionInitResult = {
   sessionEntryHandle: ReplySessionEntryHandle;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
-  sessionId: string;
   isNewSession: boolean;
   resetTriggered: boolean;
-  systemSent: boolean;
-  abortedLastRun: boolean;
   storePath: string;
   sessionScope: SessionScope;
   groupResolution?: GroupKeyResolution;

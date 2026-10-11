@@ -84,10 +84,8 @@ async function pathExistsBeforeDeadline(
   deadline: MantisCleanupDeadline,
 ): Promise<boolean> {
   try {
-    await runBeforeMantisCleanupDeadline(
-      deadline,
-      "checking the worktree path",
-      async () => await fs.lstat(filePath),
+    await runBeforeMantisCleanupDeadline(deadline, "checking the worktree path", () =>
+      fs.lstat(filePath),
     );
     return true;
   } catch (error) {
@@ -104,14 +102,11 @@ async function verifyMantisDirectoryOwnershipBeforeDeadline(params: {
   repoRoot: string;
   worktreeDir: string;
 }): Promise<boolean> {
-  await runBeforeMantisCleanupDeadline(
-    params.deadline,
-    "verifying worktree path containment",
-    async () =>
-      await assertNoSymlinkParents({
-        rootDir: path.resolve(params.repoRoot),
-        targetPath: path.resolve(params.worktreeDir),
-      }),
+  await runBeforeMantisCleanupDeadline(params.deadline, "verifying worktree path containment", () =>
+    assertNoSymlinkParents({
+      rootDir: path.resolve(params.repoRoot),
+      targetPath: path.resolve(params.worktreeDir),
+    }),
   );
   let matches = true;
   for (const [directory, operation, dev, ino] of [
@@ -152,14 +147,12 @@ async function normalizeWorktreePath(
   repoRoot: string,
   deadline: MantisCleanupDeadline,
 ): Promise<string> {
-  const resolvedPath = path.isAbsolute(filePath)
-    ? path.resolve(filePath)
-    : path.resolve(repoRoot, filePath);
+  const resolvedPath = path.resolve(repoRoot, filePath);
   try {
     return await runBeforeMantisCleanupDeadline(
       deadline,
       "normalizing a registered worktree path",
-      async () => await fs.realpath(resolvedPath),
+      () => fs.realpath(resolvedPath),
     );
   } catch (error) {
     if (!isNotFoundError(error)) {
@@ -171,29 +164,12 @@ async function normalizeWorktreePath(
   const canonicalRepoRoot = await runBeforeMantisCleanupDeadline(
     deadline,
     "normalizing the repository root",
-    async () => await fs.realpath(resolvedRepoRoot),
+    () => fs.realpath(resolvedRepoRoot),
   );
   if (!isPathWithinOrEqual(resolvedRepoRoot, resolvedPath)) {
     return resolvedPath;
   }
   return path.join(canonicalRepoRoot, path.relative(resolvedRepoRoot, resolvedPath));
-}
-
-async function parseRegisteredWorktreePaths(
-  stdout: string,
-  repoRoot: string,
-  nulTerminated: boolean,
-  deadline: MantisCleanupDeadline,
-): Promise<string[]> {
-  const fields = nulTerminated
-    ? stdout.split("\0")
-    : stdout.split("\n").map((field) => (field.endsWith("\r") ? field.slice(0, -1) : field));
-  const entries = fields
-    .filter((entry) => entry.startsWith("worktree "))
-    .map((entry) => entry.slice("worktree ".length));
-  return await Promise.all(
-    entries.map((entry) => normalizeWorktreePath(entry, repoRoot, deadline)),
-  );
 }
 
 async function listRegisteredWorktreePaths(params: {
@@ -204,16 +180,18 @@ async function listRegisteredWorktreePaths(params: {
   runner: MantisCommandRunner;
   worktreeDir: string;
 }): Promise<string[]> {
-  let listResult: MantisCommandResult;
-  let nulTerminated = true;
-  try {
-    listResult = await runMantisCommand({
+  const list = (nulDelimited: boolean) =>
+    runMantisCommand({
       command: "git",
-      args: ["worktree", "list", "--porcelain", "-z"],
+      args: ["worktree", "list", "--porcelain", ...(nulDelimited ? ["-z"] : [])],
       execution: params.createExecution(),
       lane: params.lane,
       runner: params.runner,
     });
+  let listResult: MantisCommandResult;
+  let nulTerminated = true;
+  try {
+    listResult = await list(true);
   } catch (nulListError) {
     rethrowMantisCleanupBoundaryError(nulListError);
     // Git gained `worktree list -z` in 2.36. Older porcelain is safe for the
@@ -224,13 +202,7 @@ async function listRegisteredWorktreePaths(params: {
         { cause: nulListError },
       );
     }
-    listResult = await runMantisCommand({
-      command: "git",
-      args: ["worktree", "list", "--porcelain"],
-      execution: params.createExecution(),
-      lane: params.lane,
-      runner: params.runner,
-    });
+    listResult = await list(false);
     nulTerminated = false;
   }
 
@@ -239,24 +211,18 @@ async function listRegisteredWorktreePaths(params: {
       `${params.lane} worktree cleanup truncated registration output for ${params.worktreeDir}`,
     );
   }
-  return await parseRegisteredWorktreePaths(
-    listResult.stdout,
-    params.repoRoot,
-    nulTerminated,
-    params.deadline,
+  const fields = nulTerminated
+    ? listResult.stdout.split("\0")
+    : listResult.stdout
+        .split("\n")
+        .map((field) => (field.endsWith("\r") ? field.slice(0, -1) : field));
+  return Promise.all(
+    fields
+      .filter((entry) => entry.startsWith("worktree "))
+      .map((entry) =>
+        normalizeWorktreePath(entry.slice("worktree ".length), params.repoRoot, params.deadline),
+      ),
   );
-}
-
-async function isDirectoryEmptyBeforeDeadline(
-  directoryPath: string,
-  deadline: MantisCleanupDeadline,
-): Promise<boolean> {
-  const entries = await runBeforeMantisCleanupDeadline(
-    deadline,
-    "checking an unregistered worktree directory",
-    async () => await fs.readdir(directoryPath),
-  );
-  return entries.length === 0;
 }
 
 function createCleanupVerificationAggregate(params: {
@@ -268,17 +234,6 @@ function createCleanupVerificationAggregate(params: {
     params.errors,
     `${params.lane} worktree cleanup could not verify complete registration state for ${params.worktreeDir}`,
     { cause: params.errors[0] },
-  );
-}
-
-function createRetainedDirectoryError(params: {
-  cause: unknown;
-  lane: "baseline" | "candidate";
-  worktreeDir: string;
-}): Error {
-  return new Error(
-    `${params.lane} worktree cleanup left ${params.worktreeDir}; Mantis preserved the path because Git no longer owns it`,
-    { cause: params.cause },
   );
 }
 
@@ -295,6 +250,11 @@ async function removeMantisWorktreeBeforeDeadline(
   params: RemoveMantisWorktreeParams,
   deadline: MantisCleanupDeadline,
 ): Promise<void> {
+  const retainedDirectoryError = (cause: unknown) =>
+    new Error(
+      `${params.lane} worktree cleanup left ${params.worktreeDir}; Mantis preserved the path because Git no longer owns it`,
+      { cause },
+    );
   const createCleanupExecution = (): MantisCommandExecution => ({
     cwd: params.repoRoot,
     env: process.env,
@@ -314,25 +274,24 @@ async function removeMantisWorktreeBeforeDeadline(
     const registeredWorktreePaths = await listRegisteredPaths();
     if (!registeredWorktreePaths.includes(normalizedWorktreeDir)) {
       if (await pathExistsBeforeDeadline(params.worktreeDir, deadline)) {
-        throw createRetainedDirectoryError({
-          cause: new Error("the failed worktree add did not yield an ownership receipt"),
-          lane: params.lane,
-          worktreeDir: params.worktreeDir,
-        });
+        throw retainedDirectoryError(
+          new Error("the failed worktree add did not yield an ownership receipt"),
+        );
       }
       return;
     }
     throw new Error(`${params.lane} worktree cleanup left registered path ${params.worktreeDir}`, {
       cause: new Error("Mantis cannot prove ownership without a directory receipt"),
     });
-  } else if (
-    !(await verifyMantisDirectoryOwnershipBeforeDeadline({
+  }
+  const verifyOwnership = () =>
+    verifyMantisDirectoryOwnershipBeforeDeadline({
       deadline,
       ownership,
       repoRoot: params.repoRoot,
       worktreeDir: params.worktreeDir,
-    }))
-  ) {
+    });
+  if (!(await verifyOwnership())) {
     const registeredWorktreePaths = await listRegisteredPaths();
     if (!registeredWorktreePaths.includes(normalizedWorktreeDir)) {
       return;
@@ -343,12 +302,7 @@ async function removeMantisWorktreeBeforeDeadline(
   }
 
   try {
-    const present = await verifyMantisDirectoryOwnershipBeforeDeadline({
-      deadline,
-      ownership,
-      repoRoot: params.repoRoot,
-      worktreeDir: params.worktreeDir,
-    });
+    const present = await verifyOwnership();
     if (!present) {
       throw new Error(`Mantis registered worktree path disappeared: ${params.worktreeDir}`);
     }
@@ -402,13 +356,15 @@ async function removeMantisWorktreeBeforeDeadline(
 
   if (await pathExistsBeforeDeadline(params.worktreeDir, deadline)) {
     try {
-      const stillOwned = await verifyMantisDirectoryOwnershipBeforeDeadline({
-        deadline,
-        ownership,
-        repoRoot: params.repoRoot,
-        worktreeDir: params.worktreeDir,
-      });
-      if (stillOwned && (await isDirectoryEmptyBeforeDeadline(params.worktreeDir, deadline))) {
+      const stillOwned = await verifyOwnership();
+      const entries = stillOwned
+        ? await runBeforeMantisCleanupDeadline(
+            deadline,
+            "checking an unregistered worktree directory",
+            () => fs.readdir(params.worktreeDir),
+          )
+        : undefined;
+      if (entries?.length === 0) {
         // Git no longer owns this unique prepared directory. Keep the empty
         // inode rather than deleting through a pathname race.
         return;
@@ -416,11 +372,9 @@ async function removeMantisWorktreeBeforeDeadline(
     } catch {
       // The retained-path error below reports the safe fail-closed outcome.
     }
-    throw createRetainedDirectoryError({
-      cause: removeError ?? new Error("Git reported success but left the directory"),
-      lane: params.lane,
-      worktreeDir: params.worktreeDir,
-    });
+    throw retainedDirectoryError(
+      removeError ?? new Error("Git reported success but left the directory"),
+    );
   }
 }
 
@@ -477,8 +431,8 @@ export async function removeLegacyMantisWorktrees(params: {
     const ownership = await runBeforeMantisCleanupDeadline(
       laneDeadline,
       "capturing a legacy worktree identity",
-      async () =>
-        await captureMantisDirectoryOwnership({
+      () =>
+        captureMantisDirectoryOwnership({
           directoryPath: worktreeDir,
           repoRoot: params.repoRoot,
         }),

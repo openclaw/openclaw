@@ -1,4 +1,3 @@
-// Hook metadata discovery shared by runtime loading and plugin inspection.
 import fs from "node:fs";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
@@ -8,7 +7,7 @@ import { parseFrontmatterBlockResult } from "../../packages/markdown-core/src/fr
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
-import { resolveHookInvocationPolicy, resolveHookManifestMetadata } from "./frontmatter.js";
+import { resolveHookManifestMetadata } from "./frontmatter.js";
 import type { Hook, HookEntry, HookSource } from "./types.js";
 
 // Hook descriptors are small metadata. Bounding the pinned descriptor read also
@@ -123,7 +122,6 @@ function loadHookFromDir(
       frontmatter,
       invalidMetadata: issues.length > 0,
       metadata: resolveHookManifestMetadata(frontmatter),
-      invocation: resolveHookInvocationPolicy(frontmatter),
     };
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);

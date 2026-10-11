@@ -2,16 +2,9 @@ import { generateSecureToken } from "../../infra/secure-random.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { estimateTokens } from "../sessions/index.js";
-import type { CompactionMessageMetrics } from "./compact.types.js";
 
 export function createDirectCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
-}
-
-export function normalizeObservedTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
 }
 
 function getMessageTextChars(msg: AgentMessage): number {
@@ -36,12 +29,11 @@ function resolveMessageToolLabel(msg: AgentMessage): string | undefined {
   return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
 }
 
-export function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessageMetrics {
+export function summarizeCompactionMessages(messages: AgentMessage[]) {
   let historyTextChars = 0;
   let toolResultChars = 0;
   const contributors: Array<{ role: string; chars: number; tool?: string }> = [];
-  let estTokens = 0;
-  let tokenEstimationFailed = false;
+  let estTokens: number | undefined = 0;
 
   for (const msg of messages) {
     const role = typeof msg.role === "string" ? msg.role : "unknown";
@@ -51,11 +43,11 @@ export function summarizeCompactionMessages(messages: AgentMessage[]): Compactio
       toolResultChars += chars;
     }
     contributors.push({ role, chars, tool: resolveMessageToolLabel(msg) });
-    if (!tokenEstimationFailed) {
+    if (estTokens !== undefined) {
       try {
         estTokens += estimateTokens(msg);
       } catch {
-        tokenEstimationFailed = true;
+        estTokens = undefined;
       }
     }
   }
@@ -64,7 +56,7 @@ export function summarizeCompactionMessages(messages: AgentMessage[]): Compactio
     messages: messages.length,
     historyTextChars,
     toolResultChars,
-    estTokens: tokenEstimationFailed ? undefined : estTokens,
+    estTokens,
     contributors: contributors.toSorted((left, right) => right.chars - left.chars).slice(0, 3),
   };
 }

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import {
@@ -9,9 +8,8 @@ import {
 import { CronHistoryResultSchema } from "../../../packages/gateway-protocol/src/schema/cron.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionHistoryPageInWorker } from "../../config/sessions/session-history-worker-runtime.js";
-import { cronRunRecordToRunLogEntry } from "../../cron/run-history-detail.js";
 import { cronStoreKey } from "../../cron/store/key.js";
-import { readCronRunRecords } from "../../cron/store/read-only.js";
+import { readCronRunHistoryBinding } from "../../cron/store/read-only.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { cronJobMatchesCallerScope, readCronCallerScope } from "./cron-caller-scope.js";
@@ -62,7 +60,12 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
     if (
       (callerScope || visibility) &&
       (!job ||
-        !cronJobMatchesCallerScope({ job, callerScope, defaultAgentId, allowCurrentJob: true }) ||
+        !cronJobMatchesCallerScope({
+          job,
+          callerScope,
+          defaultAgentId,
+          allowCurrentJob: true,
+        }) ||
         !cronJobIsVisible(job, visibility, defaultAgentId))
     ) {
       throw new Error("Cron job not found");
@@ -78,42 +81,19 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
       cronJobVisibilityTarget(context.cron.getJob(params.id), context.cron.getDefaultAgentId()),
     ]);
     assertAllowed();
-    const select = async () =>
-      (await readCronRunRecords(storeKey, params.id)).flatMap((record) => {
-        const entry = cronRunRecordToRunLogEntry(record);
-        return entry &&
-          (!params.runId || entry.runId === params.runId) &&
-          (params.runAtMs === undefined || entry.runAtMs === params.runAtMs)
-          ? [{ record, entry }]
-          : [];
+    const select = () =>
+      readCronRunHistoryBinding(storeKey, params.id, {
+        runId: params.runId,
+        runAtMs: params.runAtMs,
       });
-    const matches = await select();
+    const selected = await select();
     assertAllowed();
-    const selected = matches.length === 1 ? matches[0] : undefined;
-    const sessionKey = selected?.entry.sessionKey;
-    const sessionId = selected?.entry.sessionId;
-    if (!selected || !sessionKey || !sessionId) {
+    if (!selected) {
       fail();
       return;
     }
-    const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? selected.record.agentId;
-    const bindingFor = (value: typeof selected) =>
-      createHash("sha256")
-        .update(
-          JSON.stringify([
-            storeKey,
-            value.record.id,
-            value.record.runId,
-            value.entry.jobId,
-            value.entry.runId,
-            value.entry.runAtMs,
-            value.entry.sessionKey,
-            value.entry.sessionId,
-            value.record.agentId,
-          ]),
-        )
-        .digest("base64url");
-    const binding = bindingFor(selected);
+    const { sessionKey, sessionId, binding } = selected;
+    const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? selected.agentId;
     let offset = 0;
     if (params.cursor) {
       const cursor: unknown = JSON.parse(Buffer.from(params.cursor, "base64url").toString("utf8"));
@@ -176,7 +156,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
           assertCurrent(physical.sessionKey);
           const current = await select();
           assertCurrent(physical.sessionKey);
-          return current.length === 1 && bindingFor(current[0]!) === binding;
+          return current?.binding === binding;
         },
       },
       params: {

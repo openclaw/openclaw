@@ -11,7 +11,7 @@ import {
   withPreparedSessionEventRow,
 } from "./session-event-prepared-row.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { withPreparedSessionRows } from "./session-row-prepared-read.js";
+import { withPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
@@ -21,7 +21,7 @@ it.each([0, 7])(
     vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
     let now = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const keys = Array.from({ length: 12 }, (_, index) => `agent:main:burst-${index}`);
     const yieldedKey = "agent:main:burst-9";
@@ -86,7 +86,7 @@ it.each(["replacement", "reset"])(
     vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const changedKey = "agent:main:changed";
     const keys = ["agent:main:first", changedKey];
@@ -126,7 +126,7 @@ it.each(["replacement", "reset"])(
       "sessions.changed",
       expect.objectContaining({ sessionKey: keys[0], reason: "rename" }),
       new Set(["viewer"]),
-      { dropIfSlow: true },
+      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
     );
   },
 );
@@ -135,7 +135,17 @@ it("retains canonical deferral and rejects asynchronous prepared consumers", asy
   const projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
   projection.withPreparedExactRows = (queries, consume) =>
     withPreparedSessionRows(projection, () => true, queries, consume);
-  const database = { agentId: "main", path: "/synthetic/pending.sqlite" };
+  const database = {
+    agentId: "main",
+    path: "/synthetic/pending.sqlite",
+    initializeCanonicalValidation: true,
+    assertStateCurrent: () => {},
+    source: {
+      key: "file:synthetic",
+      canonicalPath: "/synthetic/pending.sqlite",
+      incarnation: "test",
+    },
+  };
   vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
     kind: "pending",
     database,
@@ -160,9 +170,9 @@ it("retains canonical deferral and rejects asynchronous prepared consumers", asy
   ).rejects.toThrow("Session row read consumers must remain synchronous");
 });
 
-it("publishes without forwarding the prepared view while exact rows and ancestors are ready", async () => {
+it("keeps prepared exact rows and ancestors inside the synchronous publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const parentKey = "agent:main:event-parent";
     const childKey = "agent:main:event-child";
@@ -179,16 +189,20 @@ it("publishes without forwarding the prepared view while exact rows and ancestor
     try {
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(0);
-      const publish = vi.fn((..._args: unknown[]) => {
-        const row = projection.describe({ key: childKey, agentId: "main" });
+      let retained: SessionRowReadView | undefined;
+      const publish = vi.fn((read?: SessionRowReadView) => {
+        retained = read;
+        const row = read?.describe({ key: childKey, agentId: "main" });
         expect(row?.entry.sessionId).toBe("child");
         expect(
-          row && projection.ancestorRows(row)?.map((ancestor) => ancestor.entry.sessionId),
+          row && projection.ancestorRows(row, read)?.map((ancestor) => ancestor.entry.sessionId),
         ).toEqual(["parent"]);
       });
       await withPreparedSessionEventRow(projection, childKey, "main", publish);
       expect(publish).toHaveBeenCalledTimes(1);
-      expect(publish.mock.calls[0]?.length).toBe(0);
+      expect(() => retained?.describe({ key: childKey, agentId: "main" })).toThrow(
+        "no longer active",
+      );
     } finally {
       projection.dispose();
       release();

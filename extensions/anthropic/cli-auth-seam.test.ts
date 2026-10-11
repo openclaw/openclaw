@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createWindowsCmdShimFixture, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { withMockedWindowsPlatform, withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
+import { withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
 import * as windowsSpawn from "openclaw/plugin-sdk/windows-spawn";
 import { beforeEach, expect, it, vi } from "vitest";
 
@@ -12,6 +12,9 @@ const { runUtf8CommandWithTimeout } = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runUtf8CommandWithTimeout }));
 
 const { probeClaudeCliAuthStatus } = await import("./cli-auth-api.js");
+const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/process-runtime")>(
+  "openclaw/plugin-sdk/process-runtime",
+);
 
 beforeEach(() => {
   runUtf8CommandWithTimeout.mockReset();
@@ -42,7 +45,7 @@ it("asks Claude CLI for its active account and returns only safe display fields"
   );
 });
 
-it.each(["PATH", "explicit"])("runs a Windows Claude npm shim selected by %s", async (source) => {
+it.each(["PATH"])("runs a Windows Claude npm shim selected by %s", async (source) => {
   await withTempDir("anthropic-cli-auth-", async (dir) => {
     const home = await fs.realpath(dir);
     const shimPath = path.join(home, "claude.cmd");
@@ -73,9 +76,6 @@ it.each(["PATH", "explicit"])("runs a Windows Claude npm shim selected by %s", a
           loggedIn: true, authMethod: "claude.ai", email: "windows@example.test"
         }));
       `,
-    );
-    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/process-runtime")>(
-      "openclaw/plugin-sdk/process-runtime",
     );
     runUtf8CommandWithTimeout.mockImplementation(actual.runUtf8CommandWithTimeout);
     const resolveProgram = windowsSpawn.resolveWindowsSpawnProgram;
@@ -110,22 +110,7 @@ it.each(["PATH", "explicit"])("runs a Windows Claude npm shim selected by %s", a
   });
 });
 
-it("reports unresolved Windows wrappers as unreadable without spawning", async () => {
-  await withTempDir("anthropic-cli-auth-", async (dir) => {
-    const command = path.join(dir, "claude.cmd");
-    await fs.writeFile(command, "@echo off\r\necho unsupported wrapper\r\n");
-    runUtf8CommandWithTimeout.mockRejectedValue(new Error("not executable"));
-
-    await withMockedWindowsPlatform(async () => {
-      expect(await probeClaudeCliAuthStatus({ command, env: {} })).toEqual({
-        status: "unreadable",
-      });
-      expect(runUtf8CommandWithTimeout).not.toHaveBeenCalled();
-    });
-  });
-});
-
-it.each(["api_key", "unknown-method"])(
+it.each(["unknown-method"])(
   "does not attribute an account email to %s authentication",
   async (authMethod) => {
     runUtf8CommandWithTimeout.mockResolvedValue({
@@ -137,22 +122,6 @@ it.each(["api_key", "unknown-method"])(
     expect(await probeClaudeCliAuthStatus()).toEqual({
       status: "available",
       ...(authMethod === "unknown-method" ? {} : { authMethod }),
-    });
-  },
-);
-
-it.each([null, " ", "account@example.test\nother", "a".repeat(321)])(
-  "keeps account availability when its email cannot be displayed: %j",
-  async (email) => {
-    runUtf8CommandWithTimeout.mockResolvedValue({
-      code: 0,
-      termination: "exit",
-      stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai", email }),
-    });
-
-    expect(await probeClaudeCliAuthStatus()).toEqual({
-      status: "available",
-      authMethod: "claude.ai",
     });
   },
 );

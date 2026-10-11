@@ -11,6 +11,7 @@ import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.j
 import {
   registerBundledHealthChecks,
   resolveBundledHealthCheckPluginStateMode,
+  resolveCodexHealthApi,
 } from "./bundled-health-checks.js";
 import { runDoctorLintChecks, selectUpdateReadinessChecks } from "./doctor-lint-flow.js";
 import {
@@ -395,6 +396,9 @@ describe("registerBundledHealthChecks", () => {
   };
 
   it("continues Doctor when an implicit Codex preference has no installed owner", () => {
+    expect(resolveCodexHealthApi({ cfg: implicitCodexConfig, cwd: workspaceDir })).toEqual({
+      status: "not-configured",
+    });
     registerBundledHealthChecks({ cfg: implicitCodexConfig, cwd: workspaceDir });
 
     expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();

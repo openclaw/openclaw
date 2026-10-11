@@ -5,6 +5,7 @@ import {
   bindInheritedNativeProcessOwner,
   bindInheritedProcessLineageFds,
 } from "../process/supervisor/inherited-process-lineage.js";
+import { isOwnedProcessGroupGone } from "../process/supervisor/service-child-group-ownership.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import {
@@ -129,7 +130,14 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
     },
     terminateOwnedTree: () => {
       // Anchored applications share their owner's group; direct workers may lead their own.
-      signalProcessTree(process.pid, "SIGKILL");
+      if (process.platform !== "darwin") {
+        // Linux reads its group from procfs and keeps PID signaling where group signals are denied.
+        signalProcessTree(process.pid, "SIGKILL");
+        return;
+      }
+      // Exec relays start parent-loss cleanup only after this process dies, so decide by
+      // syscall: Darwin's ps census can stall past their cleanup budget.
+      process.kill(isOwnedProcessGroupGone(process.pid) ? process.pid : -process.pid, "SIGKILL");
     },
     dispose: () => {
       if (disposed) {
@@ -161,6 +169,8 @@ export async function runWorkerProcess(
     browserRuntime?: WorkerBrowserRuntime;
   } = {},
 ): Promise<void> {
+  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+  await initializeSqliteRuntimeCapabilities();
   // Stdout belongs to the worker result; diagnostics stay on stderr through process shutdown.
   routeLogsToStderr();
   enableConsoleCapture();

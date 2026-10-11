@@ -1,3 +1,4 @@
+import type { ChannelsStatusResult } from "@openclaw/gateway-client/browser";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   ArtifactSummary as ProtocolArtifactSummary,
@@ -8,12 +9,13 @@ import type {
   ErrorShape,
   SessionsFilesListResult as ProtocolSessionsFilesListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.js";
+import type { CronListPageResult } from "../../../src/cron/service/list-page-types.js";
+import type { CronStatusSummary } from "../../../src/cron/service/state.js";
+import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import type {
   GatewaySessionRow as GatewayWireSessionRow,
   GatewaySessionsDefaults as GatewayWireSessionsDefaults,
@@ -110,71 +112,8 @@ export type WhatsAppStatus = {
   lastError?: string | null;
 };
 
-type ChannelProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-};
-
-type ChannelStatus<Probe = ChannelProbe> = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  probe?: Probe | null;
-  lastProbeAt?: number | null;
-};
-
-type TelegramProbe = ChannelProbe & {
-  bot?: { id?: number | null; username?: string | null } | null;
-  webhook?: { url?: string | null; hasCustomCert?: boolean | null } | null;
-};
-
-export type TelegramStatus = ChannelStatus<TelegramProbe> & {
-  tokenSource?: string | null;
-  mode?: string | null;
-};
-
-type DiscordProbe = ChannelProbe & {
-  bot?: { id?: string | null; username?: string | null } | null;
-};
-
-export type DiscordStatus = ChannelStatus<DiscordProbe> & {
-  tokenSource?: string | null;
-};
-
-export type GoogleChatStatus = ChannelStatus & {
-  credentialSource?: string | null;
-  audienceType?: string | null;
-  audience?: string | null;
-  webhookPath?: string | null;
-  webhookUrl?: string | null;
-};
-
-type SlackIdentity = {
-  id?: string | null;
-  name?: string | null;
-};
-
-type SlackProbe = ChannelProbe & {
-  bot?: SlackIdentity | null;
-  team?: SlackIdentity | null;
-};
-
-export type SlackStatus = ChannelStatus<SlackProbe> & {
-  botTokenSource?: string | null;
-  appTokenSource?: string | null;
-};
-
-export type SignalStatus = ChannelStatus<ChannelProbe & { version?: string | null }> & {
-  baseUrl: string;
-};
-
-export type IMessageStatus = ChannelStatus<Pick<ChannelProbe, "ok" | "error">> & {
-  cliPath?: string | null;
-  dbPath?: string | null;
+export type ChannelStatus = Omit<ChannelAccountSnapshot, "accountId" | "probe"> & {
+  probe?: { ok?: boolean; status?: number | string | null; error?: string | null } | null;
 };
 
 export type NostrProfile = {
@@ -290,23 +229,13 @@ export type CronRunsStatusFilter = NonNullable<CronRunsParams["status"]>;
 export type CronSortDir = NonNullable<CronListParams["sortDir"]>;
 export type CronPayload = ProtocolCronJob["payload"];
 
-export type CronStatus = {
-  enabled: boolean;
-  triggersEnabled: boolean;
-  jobs: number;
-  nextWakeAtMs?: number | null;
-};
+export type CronStatus = Pick<CronStatusSummary, "enabled" | "triggersEnabled" | "jobs"> &
+  Partial<Pick<CronStatusSummary, "nextWakeAtMs">>;
 
 export type { CronServiceRunResult as CronRunResult } from "../../../src/cron/service-contract.js";
 
-export type CronJobsListResult<Row = ProtocolCronJob> = {
+export type CronJobsListResult<Row = ProtocolCronJob> = Omit<CronListPageResult, "jobs"> & {
   jobs: Row[];
-  snapshotRevision: string;
-  total: number;
-  limit: number;
-  offset: number;
-  nextOffset: number | null;
-  hasMore: boolean;
 };
 
 export type CronRunsResult = {
@@ -332,7 +261,7 @@ export type {
   ModelAuthStatusProvider,
   ModelAuthStatusProfile,
   ModelAuthStatusResult,
-} from "../../../src/gateway/server-methods/models-auth-status.js";
+} from "../../../src/gateway/server-methods/models-auth-status.types.js";
 export type ProviderLoginOption = NonNullable<
   NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["loginOptions"]
 >[number];

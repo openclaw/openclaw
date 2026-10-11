@@ -63,7 +63,7 @@ describe("forced worker environment destruction", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placementStore.markWorkspaceResultPending(claim);
+    await placementStore.markWorkspaceResultPending(claim);
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -71,7 +71,7 @@ describe("forced worker environment destruction", () => {
       placementGeneration: active.generation,
     };
     const appliedManifestRef = harness.reconciledManifestRef;
-    placementStore.beginWorkspaceReconciliation(owner, {
+    await placementStore.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "a".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -82,8 +82,8 @@ describe("forced worker environment destruction", () => {
       basePackSha256: createHash("sha256").update("").digest("hex"),
       basePack: Buffer.alloc(0),
     });
-    placementStore.updateWorkspaceBaseManifest({ claim, manifestRef: appliedManifestRef });
-    expect(placementStore.loadWorkspaceReconciliation(owner)?.appliedManifestRef).toBe(
+    await placementStore.updateWorkspaceBaseManifest({ claim, manifestRef: appliedManifestRef });
+    expect((await placementStore.loadWorkspaceReconciliation(owner))?.appliedManifestRef).toBe(
       appliedManifestRef,
     );
 
@@ -105,8 +105,8 @@ describe("forced worker environment destruction", () => {
       turnClaim: null,
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
-    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
   });
 
   it.each([
@@ -150,7 +150,7 @@ describe("forced worker environment destruction", () => {
       ownerEpoch: active.activeOwnerEpoch,
       placementGeneration: active.generation,
     };
-    placementStore.beginWorkspaceReconciliation(owner, {
+    await placementStore.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "e".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -165,7 +165,7 @@ describe("forced worker environment destruction", () => {
     await expect(
       harness.service.forceDestroyEnvironment(active.environmentId),
     ).resolves.toMatchObject({ state: "destroying" });
-    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toEqual([owner]);
     vi.mocked(harness.environments.destroy).mockClear();
 
     await harness.service.reconcileActive(active.environmentId);
@@ -318,8 +318,8 @@ describe("forced destruction across Gateway restart", () => {
         state: "draining",
         turnClaim: null,
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
-      expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
       expect.soft(support.testState.store.get(environmentId)).toMatchObject({
         destroyRequestedAtMs: support.testState.nowMs,
         lastError: FORCED_WORKER_ABANDONMENT_ERROR,
@@ -354,7 +354,7 @@ describe("forced destruction across Gateway restart", () => {
         recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
         workspaceBaseManifestRef: active.workspaceBaseManifestRef,
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(destroy).toHaveBeenCalledOnce();
       expect(restartedService.get(environmentId)?.state).toBe("destroyed");
     },

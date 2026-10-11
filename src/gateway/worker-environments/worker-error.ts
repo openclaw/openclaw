@@ -33,7 +33,7 @@ export function boundedWorkerErrorWithCode(error: unknown, maxChars = 1_024): st
 
 /** Preserve provider classification inside the existing bounded inference error text. */
 export function formatWorkerInferenceError(error: unknown): string {
-  const snapshot = projectDiagnosticValue(error);
+  const snapshot = projectDiagnosticValue(error, { omitField: (key) => key === "stack" });
   const projected = projectProviderError(snapshot);
   const record = asOptionalRecord(snapshot);
   const response = asOptionalRecord(record?.response);
