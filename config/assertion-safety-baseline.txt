@@ -2810,7 +2810,6 @@ ui/src/pages/plugin/logbook-view.ts	1
 ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
-ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	4
 ui/src/pages/usage/view-overview.ts	2
 ui/src/pages/usage/view.ts	5

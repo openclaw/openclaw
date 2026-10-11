@@ -1576,7 +1576,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     [
       "ui/src/components/config-form.shared.ts",
       "ui/src/lib/plugins/index.ts",
-      "ui/src/pages/plugins/plugins-page.ts",
+      "ui/src/pages/plugins/plugins-page.tsx",
     ],
   ),
   pageWatch(
