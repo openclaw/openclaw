@@ -359,5 +359,6 @@ describe("session suggestion store", () => {
     });
     expect(resolved).toEqual({ ...suggestion, state: "accepted" });
     expect(await listSessionSuggestions(scope)).toEqual([resolved]);
+    expect(await listSessionSuggestions(scope, { pendingOnly: true })).toEqual([]);
   });
 });
