@@ -761,9 +761,13 @@ facts from the actor's replica. Message payload hydration, admitted-user role
 validation, and cold or off-path history retain bounded reads; transcript metadata
 does not stand in for message contents.
 
-Host admission retains the snapshot already detached by the worker message port
-for private receipt comparison. Mutable policy callbacks receive their own copy;
-transaction and commit grants still recheck live authority in their original order.
+Host admission carries the session entry and physical/version identity rather
+than transcript indexes, retry keys, or context membership. Mutable policy callbacks
+receive their own copy; full snapshots stay in read results and committed receipts.
+An append shares the actor's transaction admission and final commit grant. Explicit
+fresh-message and pending-input checks retain their effect boundaries; the final
+grant rechecks live authority and the append's current custody facts before COMMIT.
+FIFO, refusal, timeout, stored data, and update behavior are unchanged.
 
 A cold actor read hydrates its entry, participants, membership, pending-input
 custody, and transcript metadata in one autocommit statement. A cold phase
@@ -1004,6 +1008,15 @@ migrations are complete. Outside writers must use the Gateway or hold exclusive
 ownership while it is stopped. Schemas, stored bytes, retention, and update
 behavior are unchanged; published updaters need no migration for these
 process-local facts.
+
+Transcript projection readers carry generation, raw sequence, mutation time, and
+cold-state facts through their existing synchronous read snapshot. Bounded context
+consumers reuse those facts for watermark and hot-state reads; managed native writes,
+rollback, and the end of the snapshot retire them. Activity recap selection, ancestry,
+and byte-bounded pages share that same snapshot rather than reopening it for each
+step. The SQL projections that exclude large payloads remain in the database.
+These facts do not replace live permission or replay-admission checks. No schema,
+retention, stored bytes, or update behavior changes.
 
 ### Approval, placement, and workspace receipts
 

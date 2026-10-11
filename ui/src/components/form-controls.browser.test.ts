@@ -662,16 +662,9 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         await setFixture(
           page,
           `<div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
-            <div class="sidebar-brand">
-              <div class="sidebar-brand__actions">
-                <button
-                  class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
-                ></button>
-                <button
-                  class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
-                ></button>
-              </div>
-            </div>
+            <nav class="sidebar-rail">
+              <button class="sidebar-rail__button sidebar-brand__desktop-control sidebar-brand__search"></button>
+            </nav>
           </div>`,
           `class="${nativeClass}"`,
           `<meta name="viewport" content="width=device-width, initial-scale=1.0" />`,
@@ -686,13 +679,10 @@ describeBrowserLayout("form controls and app chrome styles", () => {
             return getComputedStyle(node).display;
           };
           return {
-            collapse: read(".sidebar-brand__collapse"),
             search: read(".sidebar-brand__search"),
           };
         });
 
-        // The drawer has no collapsed state, so the collapse toggle always goes.
-        expect(display.collapse).toBe("none");
         // Merged chat chrome hides the topbar, leaving the drawer as the only
         // surface that can carry search. Everywhere else - including every native
         // host, which never merges - the topbar keeps its own, so a drawer copy
