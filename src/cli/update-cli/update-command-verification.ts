@@ -428,7 +428,7 @@ export async function verifyUpdatedGateway(
       code: health.waitOutcome ?? "restart-unhealthy",
       message:
         health.probeError ??
-        `Gateway did not settle${health.startupPhase ? `; startup phase: ${health.startupPhase}` : "."}`,
+        `Gateway readiness was not verified; service status: ${health.runtime.status ?? "unknown"}${health.startupPhase ? `; startup phase: ${health.startupPhase}` : ""}. Check ${formatCliCommand("openclaw gateway status --deep", params.serviceEnv)}.`,
     });
   }
   recordVerificationStep(

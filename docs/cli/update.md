@@ -601,6 +601,44 @@ This handoff works only when the installed updater already supports it. An older
 updater that refuses before staging cannot use a newer candidate's judgment;
 follow the recovery guidance for that installed release first.
 
+## Runtime retention failures
+
+**Fix now:** `host-owned-plugin-link` means a dependency symlink reaches
+OpenClaw-owned files that the updater cannot safely retain as an independent
+plugin dependency. Retention protects the running updater and recovery workers
+when package replacement removes the old files. Do not skip this check.
+
+Inspect the link and target in the local failure output. Keep the source files
+and recovery backups. For a current installation, ask the plugin maintainer to
+replace the private host-file dependency with `openclaw/plugin-sdk/*` imports or
+a separately packaged dependency. If the link is unexpected, run
+`openclaw triage` with the same profile, service account, state, and configuration
+to diagnose its owner before moving or removing anything.
+
+Older installed updaters may instead encounter the historical package-backup or
+retired-workspace cases described above. The installed updater performs
+retention before replacement: selecting a corrected candidate cannot repair
+that first step. Only move an identified inactive historical backup link; do not
+move an active or unresolved update's backup or delete its source checkout.
+
+After repairing the link, retry the update. Use the report's verification and
+recovery results to determine whether the previous Gateway is still serving;
+a retention refusal alone does not establish service health or restoration.
+
+## Gateway recovery verification failures
+
+**Fix now:** a stopped service or failed readiness check means the update did not
+verify a serving Gateway. Check `openclaw gateway status --deep` using the same
+profile and account. The report identifies observed service status, version
+mismatches, readiness failures, and plugin or channel errors when available.
+A readiness deadline without those facts does not identify the startup cause.
+
+Keep recovery backups and inspect the restart log printed by the updater.
+Follow its recovery instructions; if it says restarting is unsafe, keep the
+Gateway stopped and run `openclaw triage` to repair the installation. Do not
+restore code alone after state migration. If the report says the Gateway is
+still starting, check its progress instead of repeatedly restarting it.
+
 ## Automation and SSH
 
 For an authorized update on another host, use the target installation's owning

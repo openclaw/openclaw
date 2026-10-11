@@ -24,6 +24,7 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
 import * as temporaryArtifacts from "./temp-artifact-cleanup.js";
 import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { type RetainUpdateRuntime, withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 
@@ -457,11 +458,18 @@ it.each([".git", "extensions/retired", "extensions/linked-residue"])(
     if (directory !== "extensions/retired") {
       await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
     }
-    await expect(
-      withRetainedUpdateRuntime(pathToFileURL(path.join(root, "dist/updater.mjs")).href, (retain) =>
-        retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} }),
-      ),
-    ).rejects.toThrow(`Cannot privately copy host-owned plugin link ${link} -> ${target}`);
+    const failure = await withRetainedUpdateRuntime(
+      pathToFileURL(path.join(root, "dist/updater.mjs")).href,
+      (retain) => retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} }),
+    ).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      code: "host-owned-plugin-link",
+      message: expect.stringContaining(`${link} -> ${target}`),
+    });
+    expect(createUpdateErrorFact("updater-runtime-retention", failure)).toMatchObject({
+      check: "updater-runtime-retention",
+      code: "host-owned-plugin-link",
+    });
     expect(await readFile(marker, "utf8")).toBe("unrelated checkout data");
   },
 );
