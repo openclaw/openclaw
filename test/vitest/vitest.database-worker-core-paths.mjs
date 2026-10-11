@@ -59,6 +59,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db-existing-write.test.ts",
   "src/cli/admin-state-owner.process.test.ts",
   "src/cli/claws-cli.state-owner.test.ts",
+  "src/cli/gateway-cli/run-loop.state-ownership.test.ts",
   "src/pairing/pairing-store.test.ts",
   "src/pairing/pairing-store.worker.test.ts",
   "src/plugin-sdk/channel-pairing.store.test.ts",
