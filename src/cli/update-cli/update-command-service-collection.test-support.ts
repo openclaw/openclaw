@@ -89,13 +89,18 @@ export function registerServiceCollectionTests() {
           },
           stop: vi.fn(async () => {
             running = false;
-            if (revoked) {
-              params.opts.run!.interrupted = true;
-            }
           }),
         });
         vi.spyOn(services, "resolveGatewayService").mockReturnValue(service);
-        mocks.maybeStopService.mockImplementation(maybeStopManagedServiceBeforeMutableUpdate);
+        mocks.maybeStopService.mockImplementation(
+          async (...args: Parameters<typeof maybeStopManagedServiceBeforeMutableUpdate>) => {
+            const stopped = await maybeStopManagedServiceBeforeMutableUpdate(...args);
+            if (revoked && stopped.stopped) {
+              params.opts.run!.interrupted = true;
+            }
+            return stopped;
+          },
+        );
         vi.spyOn(verification, "verifyPreviousManagedGatewayForUpdate").mockImplementation(
           async (options) => {
             options.assertCurrent?.();
@@ -116,6 +121,7 @@ export function registerServiceCollectionTests() {
             return executeMutableUpdate(await bindExecutionGuards(params));
           });
           expect(service.stop, JSON.stringify(execution?.result)).toHaveBeenCalledOnce();
+          expect(running).toBe(false);
           expect(execution?.preManagedServiceStop).toMatchObject({ stopped: true, running: true });
           if (revoked) {
             expect(execution?.result).toMatchObject({
