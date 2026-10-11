@@ -1,4 +1,5 @@
 // Continuation settlement tests cover status delivery and child-terminal handoff.
+import "./dispatch-from-config.shared.test-harness.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import {

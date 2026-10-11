@@ -1,4 +1,5 @@
 // Tests dispatch-from-config reply dispatch integration and final payload routing.
+import "./dispatch-from-config.shared.test-harness.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";

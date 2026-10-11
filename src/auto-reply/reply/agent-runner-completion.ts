@@ -53,7 +53,7 @@ export async function withAgentTurnCompletion<T>(
       sessionKey,
       writer,
       assertCurrent,
-      publish: (entry) => params.publish(entry),
+      publish: (published) => params.publish(published),
     },
     consume,
   );

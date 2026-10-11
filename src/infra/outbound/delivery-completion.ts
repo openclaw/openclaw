@@ -15,7 +15,6 @@ import type {
   PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -29,7 +28,7 @@ import {
   projectPendingFinalDeliverySettlement,
   type PendingFinalDeliverySettlementInput,
 } from "../../config/sessions/session-pending-final-settlement.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -268,44 +267,19 @@ export async function settlePendingFinalDelivery(
       preserveActivity: options.preserveActivity,
       workerGuard: {},
     };
-    if (claim) {
-      await patchSessionEntryCore(
-        scope,
-        (entry) => {
-          if (!hasCurrentClaim(entry)) {
-            return null;
-          }
-          const projected = projectPendingFinalDeliverySettlement(entry, settlement, evidence);
-          settled = projected.state;
-          wakeRecovery = projected.wakeRecovery;
-          return projected.patch;
-        },
-        patchOptions,
-      );
-    } else {
-      let committed = false;
-      const entry = await applySessionEntryOperation(
-        scope,
-        { kind: "pending-final-settle", settlement },
-        {
-          ...patchOptions,
-          onCommitted(current) {
-            const delivery = current.pendingFinalDelivery?.deliveries?.find(
-              ({ id }) => id === settlement.deliveryId,
-            );
-            if (!delivery) {
-              throw new Error("Pending final settlement omitted its committed delivery");
-            }
-            committed = true;
-            settled = delivery.state;
-            wakeRecovery = settled !== "queued" && current.abortedLastRun === true;
-          },
-        },
-      );
-      if (!committed && entry) {
-        settled = projectPendingFinalDeliverySettlement(entry, settlement).state;
-      }
-    }
+    await patchSessionEntryCore(
+      scope,
+      (entry) => {
+        if (!hasCurrentClaim(entry)) {
+          return null;
+        }
+        const projected = projectPendingFinalDeliverySettlement(entry, settlement, evidence);
+        settled = projected.state;
+        wakeRecovery = projected.wakeRecovery;
+        return projected.patch;
+      },
+      patchOptions,
+    );
   }
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =

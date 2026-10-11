@@ -1,3 +1,4 @@
+import "./dispatch-from-config.shared.test-harness.js";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
