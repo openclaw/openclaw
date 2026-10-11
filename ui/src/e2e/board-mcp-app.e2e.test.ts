@@ -90,7 +90,7 @@ function appViewPayload() {
 
 async function waitForMountedApp(page: Page): Promise<void> {
   await page.waitForFunction(
-    () => Boolean(document.querySelector("mcp-app-view")?.shadowRoot?.querySelector("iframe")),
+    () => Boolean(document.querySelector("mcp-app-view")?.querySelector("iframe")),
     undefined,
     { timeout: 15_000 },
   );
@@ -124,7 +124,7 @@ async function captureBoardIdentity(page: Page): Promise<void> {
     const board = surface?.querySelector("openclaw-board-view");
     const cell = board?.querySelector("openclaw-board-widget-cell");
     const appView = cell?.querySelector("mcp-app-view");
-    const iframe = appView?.shadowRoot?.querySelector("iframe");
+    const iframe = appView?.querySelector("iframe");
     if (!surface || !board || !cell || !appView || !iframe) {
       throw new Error("Board MCP App identity is incomplete");
     }
@@ -145,7 +145,7 @@ async function readBoardIdentity(page: Page) {
     const board = surface?.querySelector("openclaw-board-view");
     const cell = board?.querySelector("openclaw-board-widget-cell");
     const appView = cell?.querySelector("mcp-app-view");
-    const iframe = appView?.shadowRoot?.querySelector("iframe");
+    const iframe = appView?.querySelector("iframe");
     return {
       connected: [stored.surface, stored.board, stored.cell, stored.appView, stored.iframe].every(
         (element) => element.isConnected,
@@ -299,7 +299,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       const widgetElement = document.querySelector<HTMLElement>('[data-test-id="board-widget"]');
       const frame = document
         .querySelector("mcp-app-view")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+        ?.querySelector<HTMLIFrameElement>("iframe");
       if (!widgetElement || !frame) {
         throw new Error("dashboard MCP App frame is missing");
       }
@@ -489,7 +489,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       page.evaluate(() => {
         const board = document.querySelector("openclaw-board-view");
         const body = board?.querySelector(".board-widget__body");
-        const frame = board?.querySelector("mcp-app-view")?.shadowRoot?.querySelector("iframe");
+        const frame = board?.querySelector("mcp-app-view")?.querySelector("iframe");
         if (!board || !body || !frame) {
           throw new Error("Dashboard MCP App layout is unavailable");
         }

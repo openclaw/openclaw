@@ -15,7 +15,7 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
+import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import {
   captureAgentRunProviderReview,
   readAgentRunProviderReview,
@@ -104,7 +104,7 @@ it("keeps embedded completion pending until its incognito pause fences the next 
         },
       });
       // This is the production capture path, with no CLI-specific context binding.
-      const captured = captureAgentRunTerminalWriteContext(runId);
+      const captured = captureAgentRunTerminalPersistence(runId).writeContext;
       if (!captured) {
         throw new Error("Embedded terminal persistence was not retained");
       }

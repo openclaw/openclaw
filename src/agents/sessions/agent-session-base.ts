@@ -329,6 +329,7 @@ export abstract class AgentSessionBase {
   ): Promise<void> {
     if (event.type === "agent_start") {
       this.lastAssistantEntryId = undefined;
+      this.turnIndex = 0;
     }
 
     // Retire the exact queued display entry before publishing message_start.
@@ -340,8 +341,12 @@ export abstract class AgentSessionBase {
     const sourceSlots =
       event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
     let messageChanged = false;
-    if (event.type !== "message_update" || this.currentExtensionRunner.hasHandlers(event.type)) {
+    if (this.currentExtensionRunner.hasHandlers(event.type)) {
       messageChanged = await this.emitExtensionEvent(event);
+    }
+    // Turn numbering belongs to the session, including turns with no extension listeners.
+    if (event.type === "turn_end") {
+      this.turnIndex++;
     }
     // Extensions can replace the final result. Protect listeners before publishing it.
     messageChanged = prepareToolResult() || messageChanged;
@@ -452,12 +457,7 @@ export abstract class AgentSessionBase {
   }
 
   private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
-    if (event.type === "agent_start") {
-      this.turnIndex = 0;
-      await this.currentExtensionRunner.emit({ type: "agent_start" });
-    } else if (event.type === "agent_end") {
-      await this.currentExtensionRunner.emit({ type: "agent_end", messages: event.messages });
-    } else if (event.type === "turn_start") {
+    if (event.type === "turn_start") {
       await this.currentExtensionRunner.emit({
         type: "turn_start",
         turnIndex: this.turnIndex,
@@ -469,18 +469,6 @@ export abstract class AgentSessionBase {
         turnIndex: this.turnIndex,
         message: event.message,
         toolResults: event.toolResults,
-      });
-      this.turnIndex++;
-    } else if (event.type === "message_start") {
-      await this.currentExtensionRunner.emit({
-        type: "message_start",
-        message: event.message,
-      });
-    } else if (event.type === "message_update") {
-      await this.currentExtensionRunner.emit({
-        type: "message_update",
-        message: event.message,
-        assistantMessageEvent: event.assistantMessageEvent,
       });
     } else if (event.type === "message_end") {
       const replacement = await this.currentExtensionRunner.emitMessageEnd({
@@ -514,6 +502,8 @@ export abstract class AgentSessionBase {
         result: event.result,
         isError: event.isError,
       });
+    } else {
+      await this.currentExtensionRunner.emit({ ...event });
     }
     return false;
   }

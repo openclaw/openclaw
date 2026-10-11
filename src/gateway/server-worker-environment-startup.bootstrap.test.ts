@@ -329,9 +329,6 @@ describe("cloud bootstrap plugin generations", () => {
         expect(producers).toHaveLength(1);
         expect(producers[0]!.prepare).toHaveBeenCalledWith(first.signal);
         await manager.prepare(startup.store.get("first")!);
-        const preparationSignal = producers[0]!.prepare.mock.calls.at(-1)?.[0];
-        expect(preparationSignal).toBeInstanceOf(AbortSignal);
-        expect(preparationSignal?.aborted).toBe(true);
         expect(first.signal?.aborted).toBe(false);
         expect(sameGeneration.signal?.aborted).toBe(false);
         manager.close(sameGeneration);

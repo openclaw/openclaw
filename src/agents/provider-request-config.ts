@@ -270,22 +270,21 @@ function resolveTlsOverride(tls: ProviderRequestTlsOverride | undefined) {
   if (tls.insecureSkipVerify === true) {
     throw new Error(FORBIDDEN_INSECURE_TLS_MESSAGE);
   }
-  const ca = tls.ca?.trim();
-  const cert = tls.cert?.trim();
-  const key = tls.key?.trim();
-  const passphrase = tls.passphrase?.trim();
-  const serverName = tls.serverName?.trim();
+  const keys = ["ca", "cert", "key", "passphrase", "serverName"] as const;
+  const fields: Partial<Record<(typeof keys)[number], string | undefined>> = {};
+  for (const key of keys) {
+    const value = tls[key]?.trim();
+    if (value) {
+      fields[key] = value;
+    }
+  }
   const rejectUnauthorized = tls.insecureSkipVerify === false ? true : undefined;
-  if (!ca && !cert && !key && !passphrase && !serverName && rejectUnauthorized === undefined) {
+  if (Object.keys(fields).length === 0 && rejectUnauthorized === undefined) {
     return { configured: false } as const;
   }
   return {
     configured: true,
-    ...(ca ? { ca } : {}),
-    ...(cert ? { cert } : {}),
-    ...(key ? { key } : {}),
-    ...(passphrase ? { passphrase } : {}),
-    ...(serverName ? { serverName } : {}),
+    ...fields,
     ...(rejectUnauthorized !== undefined ? { rejectUnauthorized } : {}),
   } as const;
 }

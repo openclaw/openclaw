@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { updateUserGitHubConnection } from "../state/user-github-connections.js";
+import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import {
   callPersonalPublicationRpc,

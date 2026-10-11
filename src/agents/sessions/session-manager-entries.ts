@@ -5,6 +5,7 @@ import type { ImageContent, TextContent } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
@@ -198,12 +199,14 @@ export class SessionManagerEntries extends SessionManagerAppend {
 
   async appendLeafControlAsync(params: LeafControlSelection): Promise<SessionLeafControl> {
     const captured = { ...params };
-    return await withSessionManagerWrite(this, async (admission) => {
+    return await withSessionManagerAppend(this, async (admission) => {
       this.assertTranscriptWriteActive();
       this.validateLeafControl(captured);
       if (
         !admission ||
-        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) && "db" in admission.database)
+        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
+          !("actor" in admission) &&
+          "db" in admission.database)
       ) {
         return this.appendLeafControlSync(captured);
       }

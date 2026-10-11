@@ -101,9 +101,6 @@ export function mutateLocalWorkspaceProjection(
     localWorkspacePublication.stageDeletions(db, [id]);
     return undefined;
   }
-  if (!Number.isSafeInteger(current.revision + 1)) {
-    throw new Error("Local workspace revision exhausted");
-  }
   const updated = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
