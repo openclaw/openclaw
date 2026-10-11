@@ -1120,7 +1120,6 @@
 ["extensions/msteams/src/approval-card-submit.test.ts","openclaw/plugin-sdk/approval-gateway-runtime","3f06e20ac80627fd216972c45c4a7f277193429674830283dce0c6483019eb03",1]
 ["extensions/msteams/src/attachments.test.ts","openclaw/plugin-sdk/media-runtime","b221f31ed3264121e7ff9e70e99ece51d4686d114c8886ca3471e86edef02ef6",1]
 ["extensions/msteams/src/attachments/graph.test.ts","../runtime.js","9bafc5d82de0fb429fa2a5035cf224ae733e9eda8d69aecb4c1c5815bf996e3a",1]
-["extensions/msteams/src/attachments/graph.test.ts","./download.js","81d2368a92fb7f45c310179ad8d508248e9abeaee1293fec31b652f6e306da46",1]
 ["extensions/msteams/src/attachments/graph.test.ts","./remote-media.js","a136b9e610abbb8640aa2ad4824d169c90f247931a624b2641974bd4e6d7e7e4",1]
 ["extensions/msteams/src/attachments/graph.test.ts","openclaw/plugin-sdk/ssrf-runtime","e353c0fd5c76fa60603a25d3360fb39c400582b71b8450be06db2e00b09155fb",1]
 ["extensions/msteams/src/attachments/remote-media.test.ts","openclaw/plugin-sdk/media-runtime","b221f31ed3264121e7ff9e70e99ece51d4686d114c8886ca3471e86edef02ef6",1]

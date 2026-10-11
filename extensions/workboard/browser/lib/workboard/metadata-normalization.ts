@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { definedFields } from "../../../src/record-fields.js";
 import { normalizeAutomation } from "./metadata-contract-normalization.ts";
 import {
   WORKBOARD_ATTEMPT_STATUSES,
@@ -36,17 +37,8 @@ function tolerantArray<T>(schema: z.ZodType<T>) {
     .catch(undefined);
 }
 
-function omitUndefinedFields<T extends Record<string, unknown>>(value: T): T {
-  for (const key of Object.keys(value)) {
-    if (value[key] === undefined) {
-      delete value[key];
-    }
-  }
-  return value;
-}
-
 function sparseObject<Shape extends z.ZodRawShape>(shape: Shape) {
-  return z.object(shape).transform(omitUndefinedFields);
+  return z.object(shape).transform(definedFields);
 }
 
 const diagnosticActionSchema = z.object({
@@ -241,7 +233,7 @@ const workboardMetadataSchema = z
     failureCount: optionalNumberSchema,
   })
   .transform((value): WorkboardMetadata | undefined => {
-    const metadata = omitUndefinedFields(value);
+    const metadata = definedFields(value);
     return Object.keys(metadata).length ? metadata : undefined;
   });
 

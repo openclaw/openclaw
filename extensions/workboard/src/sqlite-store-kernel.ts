@@ -27,9 +27,9 @@ import type {
   WorkboardPersistence,
   WorkboardSubscriptionStore,
 } from "./persistence-types.js";
+import { definedFields } from "./record-fields.js";
 import {
   blobToBase64,
-  definedFields,
   jsonValue,
   loadCardChildRows,
   numberValue,
