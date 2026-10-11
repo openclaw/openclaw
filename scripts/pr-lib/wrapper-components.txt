@@ -1292,6 +1292,7 @@ src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts
+src/plugins/compat/skill-command-discovery-record.ts
 src/plugins/compat/skill-proposal-hooks-record.ts
 src/plugins/compat/tts-preferences-record.ts
 src/plugins/compat/watched-sessions.ts
