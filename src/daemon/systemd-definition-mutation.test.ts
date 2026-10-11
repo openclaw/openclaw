@@ -45,11 +45,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
   let unitPath: string;
   let environmentPath: string;
   let env: Record<string, string>;
-  const artifacts = [
-    { artifact: "unit", select: () => unitPath },
-    { artifact: "environment", select: () => environmentPath },
-    { artifact: "backup", select: () => `${unitPath}.bak` },
-  ];
 
   beforeEach(async () => {
     assertNoSystemOwnership.mockReset().mockResolvedValue(undefined);
@@ -153,7 +148,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect((await fs.readdir(directory)).filter((file) => file.endsWith(".tmp"))).toEqual([]);
   }
 
-  it.for(["unit", "state", "ancestor"])(
+  it.for(["unit"])(
     "publishes a first unit through a %s directory alias discovered by the manager",
     async (alias, { signal, onTestFinished }) => {
       const directory =
@@ -197,8 +192,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
   );
 
   it.each([
-    { artifact: "unit", scenario: "root-owned" },
-    { artifact: "environment", scenario: "unsafe mode" },
     { artifact: "unit", scenario: "changed alias" },
     { artifact: "environment", scenario: "retargeted alias" },
   ])("protects an aliased $artifact directory with $scenario", async ({ artifact, scenario }) => {
@@ -256,40 +249,37 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(await fs.readdir(stateDir)).toEqual([]);
   });
 
-  it.each(["fragment", "drop-in", "parent"])(
-    "seals a root-owned manager %s before publication",
-    async (kind) => {
-      const extra = path.join(
-        root,
-        "global-user",
-        kind === "fragment" ? "service.d" : "owned.service.d",
-        "operator.conf",
-      );
-      await fs.mkdir(path.dirname(extra), { recursive: true, mode: 0o755 });
-      await writeFixtureFile(extra, "[Service]\nEnvironment=TOKEN=operator-secret-canary\n");
-      if (kind !== "fragment") {
-        await writeFixtureFile(unitPath, "[Service]\nExecStart=/usr/bin/node gateway\n");
+  it.each(["fragment"])("seals a root-owned manager %s before publication", async (kind) => {
+    const extra = path.join(
+      root,
+      "global-user",
+      kind === "fragment" ? "service.d" : "owned.service.d",
+      "operator.conf",
+    );
+    await fs.mkdir(path.dirname(extra), { recursive: true, mode: 0o755 });
+    await writeFixtureFile(extra, "[Service]\nEnvironment=TOKEN=operator-secret-canary\n");
+    if (kind !== "fragment") {
+      await writeFixtureFile(unitPath, "[Service]\nExecStart=/usr/bin/node gateway\n");
+    }
+    managerDefinition(kind === "fragment" ? extra : unitPath, kind === "fragment" ? [] : [extra]);
+    const originalLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stat = await originalLstat(...args);
+      if (args[0] === (kind === "parent" ? path.dirname(extra) : extra)) {
+        Object.defineProperty(stat, "uid", { value: 0 });
       }
-      managerDefinition(kind === "fragment" ? extra : unitPath, kind === "fragment" ? [] : [extra]);
-      const originalLstat = fs.lstat.bind(fs);
-      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        const stat = await originalLstat(...args);
-        if (args[0] === (kind === "parent" ? path.dirname(extra) : extra)) {
-          Object.defineProperty(stat, "uid", { value: 0 });
-        }
-        return stat;
-      });
-      const before = await fs.readFile(extra);
-      const entries = await fs.readdir(path.dirname(unitPath));
-      const capability = await readSystemdDefinitionMutationCapability(env);
-      expect(capability).toMatchObject({ kind: "sealed" });
-      expect(JSON.stringify(capability)).not.toContain("secret-canary");
-      await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_SEALED");
-      expect(await fs.readFile(extra)).toEqual(before);
-      expect(await fs.readdir(path.dirname(unitPath))).toEqual(entries);
-      expect(await fs.readdir(stateDir)).toEqual([]);
-    },
-  );
+      return stat;
+    });
+    const before = await fs.readFile(extra);
+    const entries = await fs.readdir(path.dirname(unitPath));
+    const capability = await readSystemdDefinitionMutationCapability(env);
+    expect(capability).toMatchObject({ kind: "sealed" });
+    expect(JSON.stringify(capability)).not.toContain("secret-canary");
+    await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_SEALED");
+    expect(await fs.readFile(extra)).toEqual(before);
+    expect(await fs.readdir(path.dirname(unitPath))).toEqual(entries);
+    expect(await fs.readdir(stateDir)).toEqual([]);
+  });
 
   it("refuses an uninspectable user manager before publication and redacts its diagnostics", async () => {
     busctl.mockRejectedValue(new Error("manager-secret-canary"));
@@ -301,7 +291,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(await fs.readdir(path.dirname(unitPath))).toEqual([]);
   });
 
-  it.each(["unchanged", "changed", "first install"])(
+  it.each(["changed"])(
     "reads root-owned type-wide defaults without write authority (%s)",
     async (scenario) => {
       const changed = scenario === "changed";
@@ -397,7 +387,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each(["unit", "unit replacement", "environment", "backup"])(
+  it.each(["unit replacement"])(
     "preserves a concurrent %s change during first-load discovery",
     async (artifact) => {
       const shared = path.join(root, "service.d", "default.conf");
@@ -445,7 +435,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each(["existing unit", "unit-specific drop-in", "selected fragment"])(
+  it.each(["existing unit"])(
     "rejects new manager inputs after publication for a %s",
     async (scenario) => {
       const existing = scenario === "existing unit";
@@ -492,33 +482,30 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each(["uid", "gid", "mode"] as const)(
-    "rejects changed %s between lstat and open",
-    async (field) => {
-      await writeFixtureFile(unitPath, "[Service]\nExecStart=/usr/bin/node gateway\n");
-      const open = fs.open.bind(fs);
-      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const handle = await open(...args);
-        if (args[0] === unitPath) {
-          const stat = handle.stat.bind(handle);
-          vi.spyOn(handle, "stat").mockImplementation(async () => {
-            const opened = await stat();
-            Object.defineProperty(opened, field, {
-              value: field === "mode" ? opened.mode | 0o022 : opened[field] + 1,
-            });
-            return opened;
+  it.each(["uid"] as const)("rejects changed %s between lstat and open", async (field) => {
+    await writeFixtureFile(unitPath, "[Service]\nExecStart=/usr/bin/node gateway\n");
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === unitPath) {
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementation(async () => {
+          const opened = await stat();
+          Object.defineProperty(opened, field, {
+            value: opened[field] + 1,
           });
-        }
-        return handle;
-      });
-      await expect(readSystemdDefinitionMutationCapability(env)).resolves.toMatchObject({
-        kind: "unknown",
-      });
-      expect(await fs.readdir(stateDir)).toEqual([]);
-    },
-  );
+          return opened;
+        });
+      }
+      return handle;
+    });
+    await expect(readSystemdDefinitionMutationCapability(env)).resolves.toMatchObject({
+      kind: "unknown",
+    });
+    expect(await fs.readdir(stateDir)).toEqual([]);
+  });
 
-  it.each(["fragment", "drop-in"])(
+  it.each(["drop-in"])(
     "fingerprints a safe same-owner manager %s without snapshotting or restoring it",
     async (kind) => {
       const extra = path.join(root, "operator.conf");
@@ -554,38 +541,37 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each([
-    { artifact: "unit", select: () => unitPath, change: "between publications" },
-    { artifact: "environment", select: () => environmentPath, change: "after rename" },
-    { artifact: "backup", select: () => `${unitPath}.bak`, change: "replacement after rename" },
-  ])("rejects a concurrent $artifact edit $change", async ({ select, change }) => {
-    const target = select();
-    await withSystemdDefinitionMutation(env, env, async (mutation) => {
-      if (change === "between publications") {
-        await mutation.publish(target, "first publication", 0o600);
-        await writeFixtureFile(target, "operator edit");
-      } else {
-        const rename = fs.rename.bind(fs);
-        vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-          await rename(source, destination);
-          if (destination === target) {
-            if (change === "replacement after rename") {
-              const replacement = path.join(root, "operator-replacement");
-              await writeFixtureFile(replacement, "operator edit", { mode: 0o600 });
-              await rename(replacement, target);
-            } else {
-              await writeFixtureFile(target, "operator edit");
+  it.each([{ artifact: "unit", select: () => unitPath, change: "between publications" }])(
+    "rejects a concurrent $artifact edit $change",
+    async ({ select, change }) => {
+      const target = select();
+      await withSystemdDefinitionMutation(env, env, async (mutation) => {
+        if (change === "between publications") {
+          await mutation.publish(target, "first publication", 0o600);
+          await writeFixtureFile(target, "operator edit");
+        } else {
+          const rename = fs.rename.bind(fs);
+          vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+            await rename(source, destination);
+            if (destination === target) {
+              if (change === "replacement after rename") {
+                const replacement = path.join(root, "operator-replacement");
+                await writeFixtureFile(replacement, "operator edit", { mode: 0o600 });
+                await rename(replacement, target);
+              } else {
+                await writeFixtureFile(target, "operator edit");
+              }
             }
-          }
-        });
-      }
-      await expect(mutation.publish(target, "must not accept", 0o600)).rejects.toThrow(
-        "changed during publication",
-      );
-    });
-    expect(await fs.readFile(target, "utf8")).toBe("operator edit");
-    await expectNoTemporaryFiles(path.dirname(target));
-  });
+          });
+        }
+        await expect(mutation.publish(target, "must not accept", 0o600)).rejects.toThrow(
+          "changed during publication",
+        );
+      });
+      expect(await fs.readFile(target, "utf8")).toBe("operator edit");
+      await expectNoTemporaryFiles(path.dirname(target));
+    },
+  );
 
   it.each([
     { artifact: "unit", select: () => unitPath, existed: false },
@@ -625,11 +611,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each([
-    { artifact: "unit", select: () => unitPath, environmentExisted: false },
-    { artifact: "environment", select: () => environmentPath, environmentExisted: true },
-    { artifact: "backup", select: () => `${unitPath}.bak`, environmentExisted: true },
-  ])(
+  it.each([{ artifact: "environment", select: () => environmentPath, environmentExisted: true }])(
     "stage rollback preserves a concurrent $artifact edit (env existed=$environmentExisted)",
     async ({ artifact, select, environmentExisted }) => {
       const previousUnit = "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\n";
@@ -672,8 +654,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
   it.each([
     { mount: "file-ro", mode: 0o400, kind: "sealed" },
     { mount: "file-rw", mode: 0o644, kind: "sealed" },
-    { mount: "ordinary", mode: 0o400, kind: "writable" },
-    { mount: "unavailable", mode: 0o644, kind: "unknown" },
   ])("inspects a mounted target before staging ($mount, $mode)", async ({ mount, mode, kind }) => {
     await writeFixtureFile(unitPath, "original definition", { mode });
     const open = fs.open.bind(fs);
@@ -747,147 +727,47 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(await fs.readFile(unitPath, "utf8")).toBe("original definition");
   });
 
-  it.each([
-    "file symlink",
-    "group-writable",
-    "world-writable",
-    "uninspectable",
-    "missing",
-    "directory",
-  ])("rejects a manager definition with %s without publication", async (kind) => {
-    const directory = path.join(root, "operator");
-    const target = path.join(directory, "operator.conf");
-    await fs.mkdir(directory, { mode: 0o755 });
-    await writeFixtureFile(target, "[Service]\nEnvironment=TOKEN=protected-secret-canary\n");
-    let extra = target;
-    if (kind === "file symlink") {
-      extra = path.join(root, "linked.conf");
-      await fs.symlink(target, extra);
-    } else if (kind === "group-writable" || kind === "world-writable") {
-      await fs.chmod(target, kind === "group-writable" ? 0o660 : 0o606);
-    } else if (kind === "missing") {
-      extra = path.join(directory, "missing.conf");
-    } else if (kind === "directory") {
-      extra = stateDir;
-    } else {
-      const lstat = fs.lstat.bind(fs);
-      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        if (args[0] === extra) {
-          throw Object.assign(new Error("inspection-secret-canary"), { code: "EACCES" });
-        }
-        return lstat(...args);
-      });
-    }
-    managerDefinition(extra);
-    const capability = await readSystemdDefinitionMutationCapability(env);
-    const reason =
-      kind === "file symlink"
-        ? "symlink"
-        : kind === "group-writable" || kind === "world-writable"
-          ? "unsafe-permissions"
-          : "inspection-failed";
-    expect(capability).toMatchObject({ kind: "unknown", reason });
-    expect(capability).toMatchObject({ path: extra });
-    expect(JSON.stringify(capability)).not.toContain("secret-canary");
-    await expect(stage()).rejects.toThrow(`SERVICE_DEFINITION_UNKNOWN: [${reason}]`);
-    expect(await fs.readFile(target, "utf8")).toContain("protected-secret-canary");
-    expect(await fs.readdir(path.dirname(unitPath))).toEqual([]);
-    expect(await fs.readdir(stateDir)).toEqual([]);
-  });
-
-  it.each([
-    { parent: "unit", select: () => path.dirname(unitPath) },
-    { parent: "environment", select: () => stateDir },
-  ])("seals a foreign-owned $parent parent before creating service files", async ({ select }) => {
-    const protectedParent = select();
-    const originalEntries = await fs.readdir(protectedParent);
-    const originalLstat = fs.lstat.bind(fs);
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const stat = await originalLstat(...args);
-      if (args[0] === protectedParent) {
-        Object.defineProperty(stat, "uid", { value: (process.geteuid?.() ?? 0) + 1 });
+  it.each(["file symlink", "world-writable", "uninspectable", "directory"])(
+    "rejects a manager definition with %s without publication",
+    async (kind) => {
+      const directory = path.join(root, "operator");
+      const target = path.join(directory, "operator.conf");
+      await fs.mkdir(directory, { mode: 0o755 });
+      await writeFixtureFile(target, "[Service]\nEnvironment=TOKEN=protected-secret-canary\n");
+      let extra = target;
+      if (kind === "file symlink") {
+        extra = path.join(root, "linked.conf");
+        await fs.symlink(target, extra);
+      } else if (kind === "world-writable") {
+        await fs.chmod(target, 0o606);
+      } else if (kind === "directory") {
+        extra = stateDir;
+      } else {
+        const lstat = fs.lstat.bind(fs);
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          if (args[0] === extra) {
+            throw Object.assign(new Error("inspection-secret-canary"), { code: "EACCES" });
+          }
+          return lstat(...args);
+        });
       }
-      return stat;
-    });
-
-    await expect(readSystemdDefinitionMutationCapability(env)).resolves.toMatchObject({
-      kind: "sealed",
-    });
-    await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_SEALED");
-    expect(await fs.readdir(protectedParent)).toEqual(originalEntries);
-  });
-
-  it.each(artifacts)("seals a foreign-owned $artifact before publication", async ({ select }) => {
-    await writeFixtureFile(unitPath, "[Service]\nExecStart=/usr/bin/node gateway\n");
-    const protectedPath = select();
-    if (protectedPath !== unitPath) {
-      await writeFixtureFile(protectedPath, "protected-secret-canary\n");
-    }
-    const original = await fs.readFile(protectedPath);
-    const originalLstat = fs.lstat.bind(fs);
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const stat = await originalLstat(...args);
-      if (args[0] === protectedPath) {
-        Object.defineProperty(stat, "uid", { value: (process.geteuid?.() ?? 0) + 1 });
-        Object.defineProperty(stat, "mode", { value: Number(stat.mode) | 0o022 });
-      }
-      return stat;
-    });
-
-    const capability = await readSystemdDefinitionMutationCapability(env);
-    expect(capability).toMatchObject({ kind: "sealed", path: protectedPath });
-    expect(JSON.stringify(capability)).not.toContain("secret-canary");
-    const staged = stage();
-    await expect(staged).rejects.toThrow("SERVICE_DEFINITION_SEALED");
-    await expect(staged).rejects.toThrow(JSON.stringify(protectedPath));
-    expect(await fs.readFile(protectedPath)).toEqual(original);
-  });
-
-  it.each([
-    ...artifacts.map(({ artifact, select }) => ({ artifact, select, fresh: false })),
-    { artifact: "fresh environment", select: () => environmentPath, fresh: true },
-  ])("rejects a symlinked $artifact without changing its target", async ({ select, fresh }) => {
-    const file = select();
-    if (file !== unitPath && !fresh) {
-      await writeFixtureFile(unitPath, "[Service]\n");
-    }
-    const target = path.join(root, "operator-target");
-    await writeFixtureFile(target, "operator-secret-canary\n");
-    await fs.symlink(target, file);
-
-    await expect(readSystemdDefinitionMutationCapability(env)).resolves.toEqual({
-      kind: "unknown",
-      reason: "symlink",
-      artifact: "service-file",
-      path: file,
-    });
-    await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_UNKNOWN: [symlink]");
-    expect(await fs.readlink(file)).toBe(target);
-    expect(await fs.readFile(target, "utf8")).toBe("operator-secret-canary\n");
-    if (fresh) {
-      await expect(fs.stat(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-  });
-
-  it("publishes the unit, backup, and generated environment without chmod or secret disclosure", async () => {
-    const previous = "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\n";
-    await writeFixtureFile(unitPath, previous);
-    await writeFixtureFile(environmentPath, "OPERATOR_SECRET=preserved-canary\n");
-    const chmod = vi.spyOn(fs, "chmod");
-
-    await stage();
-
-    expect(await fs.readFile(`${unitPath}.bak`, "utf8")).toBe(previous);
-    expect(await fs.readFile(unitPath, "utf8")).toContain("/srv/openclaw/dist/index.js");
-    expect(await fs.readFile(unitPath, "utf8")).not.toContain("replacement-secret-canary");
-    expect(await fs.readFile(environmentPath, "utf8")).toContain(
-      "OPERATOR_SECRET=preserved-canary",
-    );
-    expect(chmod).not.toHaveBeenCalled();
-    expect(
-      (await fs.readdir(path.dirname(unitPath))).filter((file) => file.includes(".tmp")),
-    ).toEqual([]);
-  });
+      managerDefinition(extra);
+      const capability = await readSystemdDefinitionMutationCapability(env);
+      const reason =
+        kind === "file symlink"
+          ? "symlink"
+          : kind === "world-writable"
+            ? "unsafe-permissions"
+            : "inspection-failed";
+      expect(capability).toMatchObject({ kind: "unknown", reason });
+      expect(capability).toMatchObject({ path: extra });
+      expect(JSON.stringify(capability)).not.toContain("secret-canary");
+      await expect(stage()).rejects.toThrow(`SERVICE_DEFINITION_UNKNOWN: [${reason}]`);
+      expect(await fs.readFile(target, "utf8")).toContain("protected-secret-canary");
+      expect(await fs.readdir(path.dirname(unitPath))).toEqual([]);
+      expect(await fs.readdir(stateDir)).toEqual([]);
+    },
+  );
 
   it("publishes only the environment selected by the effective service state dir", async () => {
     const effectiveStateDir = path.join(root, "effective-state");

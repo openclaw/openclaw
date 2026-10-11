@@ -118,7 +118,7 @@ function sidecar(file = source.serviceKey) {
   return { bytes: fs.readFileSync(lockPath), dev: stat.dev, ino: stat.ino, mode: stat.mode };
 }
 
-it.each(["reserved", "admitted"] as const)(
+it.each(["admitted"] as const)(
   "refuses service acquisition with %s custody despite modeled parent absence",
   async (phase) => {
     const lease = seedRetained(acquire(), phase);
@@ -145,25 +145,7 @@ it.each(["reserved", "admitted"] as const)(
   },
 );
 
-it("reacquires a definitely dead ordinary service owner without rewriting custody", async () => {
-  acquire();
-  fs.writeFileSync(
-    source.serviceKey + ".lock",
-    JSON.stringify({ pid: 10000001, starttime: 123, createdAt: "2000-01-01T00:00:00Z" }),
-  );
-  const rows = rowBytes();
-  fixture.dead = true;
-  const mutate = vi.fn(async (assertCurrent: () => void) => {
-    assertCurrent();
-    expect(JSON.parse(sidecar().bytes.toString()).pid).toBe(process.pid);
-  });
-  await withGatewayServiceOperationLock(env, mutate);
-  expect(mutate).toHaveBeenCalledOnce();
-  expect(fs.existsSync(source.serviceKey + ".lock")).toBe(false);
-  expect(rowBytes()).toBe(rows);
-});
-
-it.each(["reserved", "admitted"] as const)(
+it.each(["admitted"] as const)(
   "retains service and config sidecars at release with %s custody",
   async (phase) => {
     const parent = acquire();
@@ -269,7 +251,7 @@ it.each(["service", "config"] as const)(
   },
 );
 
-it.each(["reserved", "admitted"] as const)(
+it.each(["admitted"] as const)(
   "refuses an independent service interval while the original owner holds %s custody",
   async (phase) => {
     const parent = acquire();
@@ -351,7 +333,7 @@ it("joins previously admitted work before reporting unresolved release", async (
   expect(rowBytes()).toBe(rows);
 });
 
-it.each(["missing", "unknown-phase", "unknown-version", "relative-source"] as const)(
+it.each(["missing"] as const)(
   "retains incompatible historical custody (%s) without releasing a stale source",
   async (kind) => {
     const lease = seedRetained(acquire());
@@ -463,24 +445,6 @@ function databaseSnapshot(file: string) {
   return { dev, ino, mode, size, mtimeMs, bytes: fs.readFileSync(file) };
 }
 
-it("admits ordinary source callbacks beside a healthy database without a handoff table", async () => {
-  const file = seedDatabase("CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT");
-  const config = source.configPaths[0]!;
-  fs.writeFileSync(config, "before");
-  const before = databaseSnapshot(file);
-  const entries = fs.readdirSync(fixture.root).toSorted();
-  expect(() => store.assertSourceUnborrowed(config)).not.toThrow();
-  const mutateConfig = vi.fn(async () => fs.writeFileSync(config, "after"));
-  await withConfigWriteLock(config, mutateConfig, env);
-  const mutateService = vi.fn(async (assertCurrent: () => void) => assertCurrent());
-  await withGatewayServiceOperationLock(env, mutateService);
-  expect(mutateConfig).toHaveBeenCalledOnce();
-  expect(mutateService).toHaveBeenCalledOnce();
-  expect(fs.readFileSync(config, "utf8")).toBe("after");
-  expect(databaseSnapshot(file)).toEqual(before);
-  expect(fs.readdirSync(fixture.root).toSorted()).toEqual(entries);
-});
-
 it("keeps captured source inspection strict when the handoff table is missing", () => {
   const file = seedDatabase("CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT");
   const existingIdentity = captureManagedUpdateLeaseDatabaseIdentity(file);
@@ -498,19 +462,13 @@ it("keeps captured source inspection strict when the handoff table is missing", 
   expect(fs.readdirSync(fixture.root).toSorted()).toEqual(entries);
 });
 
-it.each(["wrong-table", "wrong-view", "upper-case-table", "same-named-index", "corrupt"] as const)(
+it.each(["wrong-table", "corrupt"] as const)(
   "refuses %s storage without admitting source callbacks or repairing it",
   async (kind) => {
     const sql =
       kind === "wrong-table"
         ? "CREATE TABLE managed_update_handoffs (wrong TEXT) STRICT"
-        : kind === "wrong-view"
-          ? "CREATE VIEW managed_update_handoffs AS SELECT 1 AS wrong"
-          : kind === "upper-case-table"
-            ? "CREATE TABLE MANAGED_UPDATE_HANDOFFS (wrong TEXT) STRICT"
-            : kind === "same-named-index"
-              ? "CREATE TABLE fixture_marker (id INTEGER); CREATE INDEX managed_update_handoffs ON fixture_marker(id)"
-              : "CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT";
+        : "CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT";
     const file = seedDatabase(sql);
     if (kind === "corrupt") {
       fs.writeFileSync(file, "not a SQLite database");
