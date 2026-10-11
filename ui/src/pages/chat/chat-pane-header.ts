@@ -120,8 +120,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     changes: () => this.headerWorkspace?.onOpenDiff?.(),
     files: () => this.headerWorkspace?.onToggleCollapsed(),
     companion: () => this.requestSessionRail("toggle"),
-    subagents: () => this.requestSubagentsPanel("toggle"),
-    processes: () => this.requestBackgroundPanel("processes", "toggle"),
   };
   private readonly onHeaderBoardSelect = (value: string) => this.headerBoardMenu?.onSelect(value);
 
@@ -377,7 +375,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
               icon: subagents ? icons.bot : icons.terminal,
               active: subagents ? subagentsVisible : processesVisible,
-              onActivate: callbacks[slot],
+              // Keep the selected intent if a live batch opens the panel while the menu hides.
+              onActivate: () =>
+                this.requestBackgroundPanel(
+                  slot,
+                  (subagents ? subagentsVisible : processesVisible) ? "close" : "open",
+                ),
             });
           }
         }

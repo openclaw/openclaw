@@ -1,5 +1,4 @@
 import type { Locator, Page } from "playwright";
-import { expect } from "vitest";
 import {
   closeChatLayoutMenu,
   openChatLayoutMenu,
@@ -44,23 +43,23 @@ export async function openChatSidePanelType(page: Page | Locator, label: string)
     return;
   }
   if (panel?.slot === "subagents" && content) {
-    await expect
-      .poll(
-        async () => {
-          if (await content.isVisible()) {
-            await closeChatLayoutMenu(page);
-            return true;
-          }
-          const menu = await openChatLayoutMenu(page);
-          await menu
-            .getByRole("menuitemcheckbox", { name: panel.action, exact: true })
-            .setChecked(true);
-          await closeChatLayoutMenu(page);
-          return content.isVisible();
-        },
-        { timeout: 10_000, message: "Subagents panel did not open" },
-      )
-      .toBe(true);
+    const menu = await openChatLayoutMenu(page);
+    await menu
+      .getByRole("menuitemcheckbox", { name: panel.action, exact: true })
+      .evaluate((item) => {
+        // Hydration can auto-open Subagents while Playwright waits for a pointer click.
+        // Read and activate together so an open request cannot become a close request.
+        const checkbox = item as HTMLElement & { checked: boolean };
+        const visiblePanel = checkbox
+          .closest("openclaw-chat-pane")
+          ?.querySelector<HTMLElement>('[data-panel-slot="subagents"]:not([hidden])');
+        const visible = visiblePanel && visiblePanel.getClientRects().length > 0;
+        if (!visible && !checkbox.checked) {
+          checkbox.click();
+        }
+      });
+    await closeChatLayoutMenu(page);
+    await content.waitFor({ state: "visible" });
     return;
   }
   await selectChatLayoutAction(page, panel?.action ?? label);

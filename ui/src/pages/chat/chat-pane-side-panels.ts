@@ -198,13 +198,15 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
 
   protected requestBackgroundPanel(
     slot: "subagents" | "processes",
-    intent: "open" | "toggle",
+    intent: "open" | "close" | "toggle",
   ): void {
     const state = this.state;
     if (!state) {
       return;
     }
-    const closing = intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, slot);
+    const closing =
+      intent === "close" ||
+      (intent === "toggle" && isSidebarSlotVisible(state.sidebarLayout, slot));
     if (!closing && this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX) {
       // The panel is about to replace the view this control is in; the region,
       // which may not have loaded yet, carries focus across from it.

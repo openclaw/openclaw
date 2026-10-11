@@ -96,8 +96,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
     it("closes Layout before changing its contents and restores focus on selection and Escape", async () => {
       const { userEvent } = await import("vitest/browser");
       const observations: Array<{ open: boolean; focused: boolean }> = [];
-      let fixture: ReturnType<typeof mountChatPaneHeader>;
-      fixture = mountChatPaneHeader(containers, {
+      const fixture: ReturnType<typeof mountChatPaneHeader> = mountChatPaneHeader(containers, {
         sidebarLayout: openSlot({ columns: [] }, "subagents"),
         onToggleSidePanel: () => {
           const menu = fixture.container.querySelector(".chat-pane__layout-menu")!;
@@ -126,7 +125,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         await selectChatLayoutAction(
           {
             container: fixture.container,
-            click: (element) => page.elementLocator(element).click(),
+            click: (element: HTMLElement) => page.elementLocator(element).click(),
           },
           label,
         );
