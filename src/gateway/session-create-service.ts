@@ -98,7 +98,11 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
-import { finalizeSessionCreateTarget, readSessionCreateTarget } from "./session-create-target.js";
+import {
+  finalizeSessionCreateTarget,
+  readRequestedSessionCreateTarget,
+  readSessionCreateTarget,
+} from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
   prepareGatewaySessionLifecycleTargets,
@@ -117,10 +121,7 @@ import {
   sessionCreationFailure,
   unavailableSessionRequest,
 } from "./session-request-error.js";
-import {
-  loadGatewaySessionEntryReadOnlyInWorker,
-  resolveGatewaySessionStoreTargetInWorker,
-} from "./session-utils-store-worker.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
@@ -226,13 +227,7 @@ export async function createGatewaySession(
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return invalidSessionRequest("trusted plugin session owner is not authorized");
   }
-  const explicitTarget = explicitTargetKey
-    ? await loadGatewaySessionEntryReadOnlyInWorker({
-        cfg: params.cfg,
-        key: explicitTargetKey,
-        agentId,
-      })
-    : undefined;
+  const explicitTarget = await readRequestedSessionCreateTarget(params, agentId, explicitTargetKey);
   const initialTargetEntry = explicitTarget?.entry;
   if (
     explicitTargetKey &&
