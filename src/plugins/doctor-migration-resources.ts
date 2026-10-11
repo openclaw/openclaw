@@ -39,7 +39,7 @@ export async function preparePluginDoctorMigrationResources(
         params.warnings.push({
           kind: "undeclared-migration-resources",
           pluginId,
-          message: `${pluginId} migration declares no data resources; its private state is not in the recovery set`,
+          message: `${pluginId} migration recovery coverage is unknown: no backup inventory was declared. Ask the plugin maintainer to declare collectBackupResources before relying on automatic rollback. See https://docs.openclaw.ai/cli/doctor/state-migrations#plugin-migration-recovery-coverage`,
         });
       }
       continue;
