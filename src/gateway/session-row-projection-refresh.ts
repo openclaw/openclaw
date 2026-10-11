@@ -27,7 +27,6 @@ export function createSessionRowRefresh(
       topologyDirty: boolean;
       registryPrepared: boolean;
     };
-    databaseRevision: () => number;
     env: NodeJS.ProcessEnv;
     runAsOwner: <T>(operation: () => T) => T;
     lookup: (query: records.Lookup) => records.Row | undefined;
@@ -38,7 +37,6 @@ export function createSessionRowRefresh(
     membership: { prepare: () => Promise<void>; needsPreparation: boolean };
   },
 ) {
-  const revision = () => (owner.state().disposed ? undefined : owner.databaseRevision());
   const materializer = createSessionRowMaterializer({
     ...owner,
     isActive: () => !owner.state().disposed,
@@ -178,7 +176,7 @@ export function createSessionRowRefresh(
         rows: owner.rows,
         dirty: owner.dirty,
         selected,
-        revision,
+        isActive: () => !owner.state().disposed,
         prepareRegistryFacts: owner.prepareRegistryFacts,
         cfg: owner.state().cfg,
         env: owner.env,
@@ -435,11 +433,6 @@ export function createSessionRowRefresh(
         releaseExactRead(id, read);
       }
       queuedExactReads.clear();
-    },
-    assertExactRowsPrepared(this: void, queries: readonly records.Lookup[]) {
-      if (pendingExactRows(queries).size > 0) {
-        throw new Error("Session row facts changed before the prepared read; retry the request");
-      }
     },
   };
 }

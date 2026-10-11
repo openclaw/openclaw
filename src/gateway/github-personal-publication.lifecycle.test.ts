@@ -34,8 +34,8 @@ import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
+  preparePersonalPublicationFixtureAction,
 } from "./github-personal-publication.test-support.js";
-import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 
 function holdReceiptDeletion(afterPreparation?: () => Promise<void>) {
   const waiting = createDeferredCore();
@@ -109,10 +109,7 @@ describe("personal publication session lifecycle", () => {
   async function publishReceipt() {
     const { owner, client, context, coordinator } = fixture;
     const session = await persistPublicationTestSession();
-    const action = preparePersonalGitHubSessionAction(
-      { client, context },
-      { sessionKey: SESSION_KEY },
-    );
+    const action = await preparePersonalPublicationFixtureAction({ client, context });
     const published = await coordinator.requestPersonalForSession(request(), action);
     const receipt = readPersonalGitHubPublication(owner, { requestId: published.requestId });
     expect(receipt?.status).toBe("published");
@@ -298,10 +295,7 @@ describe("personal publication session lifecycle", () => {
     const lateReceipt = createDeferredCore<string>();
     const { waiting, release, restore } = holdReceiptDeletion(async () => {
       expect(session.read()).toEqual(original);
-      const lateAction = preparePersonalGitHubSessionAction(
-        { client, context },
-        { sessionKey: SESSION_KEY },
-      );
+      const lateAction = await preparePersonalPublicationFixtureAction({ client, context });
       const late = await coordinator.requestPersonalForSession(
         { ...request(), idempotencyKey: "direct-receipt-late-original" },
         lateAction,
@@ -342,10 +336,7 @@ describe("personal publication session lifecycle", () => {
         { agentId: "main", storePath: session.storePath, sessionKey: SESSION_KEY },
         successor,
       );
-      const successorAction = preparePersonalGitHubSessionAction(
-        { client, context },
-        { sessionKey: SESSION_KEY },
-      );
+      const successorAction = await preparePersonalPublicationFixtureAction({ client, context });
       const published = await coordinator.requestPersonalForSession(
         { ...request(), idempotencyKey: "direct-receipt-successor" },
         successorAction,

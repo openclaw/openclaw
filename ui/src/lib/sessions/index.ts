@@ -253,27 +253,24 @@ export function createSessionCapability(
         revision,
         agentId,
       );
-      const sources = roster.observations.observeReadRows(
-        admitted?.sessions ?? [],
-        revision,
-        agentId,
-      );
+      roster.observations.observeReadRows(admitted?.sessions ?? [], revision, agentId);
+      for (const row of admitted?.sessions ?? []) {
+        mutations.observeArchiveRead(row);
+      }
       const projected = permissions.reconcileList(admitted, revision, agentId);
       roster.observations.inherit(projected, admitted);
       if (!projected) {
         return projected;
       }
-      const sessions = roster.observations.projectRows(projected.sessions);
-      sessions.forEach((row, index) => {
-        const source = sources[index];
-        if (source) {
-          mutations.observePendingFields(
-            source.row,
-            source.select(row, optimisticSessionRowFields),
-            agentId,
-          );
-        }
-      });
+      for (const row of admitted?.sessions ?? []) {
+        mutations.observePendingFields(
+          row,
+          row.rowMode
+            ? optimisticSessionRowFields.filter((field) => Object.hasOwn(row, field))
+            : optimisticSessionRowFields,
+          agentId,
+        );
+      }
       return projected;
     },
     onCanonicalList(result, requestRevision, agentId, observed) {
@@ -393,7 +390,6 @@ export function createSessionCapability(
     createSessionReconciliation({
       readState: () => state,
       publish,
-      canonicalListRevision: () => canonicalListRevision,
       connection,
       snapshot: () => gateway.snapshot,
       permissions,

@@ -41,9 +41,10 @@ import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 import { CronCliError, type CronCliJobMatch } from "./cron-cli-error.js";
 
 export async function assertCronCliJobSpec(job: Parameters<typeof assertSupportedJobSpec>[0]) {
-  const { assertSupportedJobSpec } = await import("../../cron/service/jobs-validation.js");
+  const { assertSupportedJobSpec: assertJobSpec } =
+    await import("../../cron/service/jobs-validation.js");
   try {
-    assertSupportedJobSpec(job);
+    assertJobSpec(job);
   } catch (error) {
     throw new CronCliError(error instanceof Error ? error.message : String(error));
   }
