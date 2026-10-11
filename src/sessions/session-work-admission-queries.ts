@@ -1,4 +1,3 @@
-import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
 import {
   matchesAgentWorkAdmission,
   type AgentWorkAdmissionIdentity,
@@ -21,7 +20,6 @@ type ReleasableSessionWorkAdmission = Pick<
   HandoffSessionWorkAdmission,
   "interrupt" | "interrupted"
 > & {
-  lifecycleGeneration: string;
   run?: SessionWorkRun;
   agent?: AgentWorkAdmissionIdentity;
   phase: "pending" | "acquired";
@@ -65,7 +63,6 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
     const current = currentAdmissions();
     const isCurrent = (admission: T) =>
       !admission.interrupted &&
-      admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
       identities.some((identity) => admissionsByIdentity.get(identity)?.has(admission));
     const admissions = collectSessionWorkAdmissions(
       identities,

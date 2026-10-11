@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
-import { startCronReceiptAuthorityHost } from "../cron/store/receipt-authority-owner.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
@@ -68,7 +67,6 @@ it.for(["journal replaced", "lease expired"] as const)(
             foreign.close();
           }
         });
-      startCronReceiptAuthorityHost();
       try {
         let failure: unknown;
         await withAgentDeletion(

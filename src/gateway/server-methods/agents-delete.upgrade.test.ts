@@ -16,11 +16,6 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { CronService } from "../../cron/service.js";
-import {
-  beginCronReceiptAuthorityClose,
-  drainCronReceiptAuthority,
-  startCronReceiptAuthorityHost,
-} from "../../cron/store/receipt-authority-owner.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db.js";
@@ -123,7 +118,6 @@ it.for([true, false])(
         let scheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
         let cron: CronService | undefined;
         const startRecoveryOwner = () => {
-          startCronReceiptAuthorityHost();
           scheduler = createTestGatewayScheduler();
           cron = new CronService({
             scheduler,
@@ -142,8 +136,6 @@ it.for([true, false])(
           cron?.stop();
           await cron?.waitForIdle();
           await scheduler?.stop();
-          beginCronReceiptAuthorityClose();
-          await drainCronReceiptAuthority();
           await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
           cron = undefined;
           scheduler = undefined;
@@ -199,7 +191,6 @@ it.for([true, false])(
         try {
           await readScope.run(async () => {
             signal.throwIfAborted();
-            startCronReceiptAuthorityHost();
             const maintenance = await beginDoctorMaintenance({
               root: null,
               options: { repair: true, nonInteractive: true },

@@ -76,6 +76,7 @@ it("fences unseen agent sessions and joins exact admitted work without blocking 
       pendingStarted.resolve();
       await releasePending.promise;
     },
+    revalidateAllowed: () => {},
   });
   const reason = new Error("agent deletion began");
   const pendingOutcome = expect(pending).rejects.toBe(reason);

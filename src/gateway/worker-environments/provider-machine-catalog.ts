@@ -79,9 +79,8 @@ export function createWorkerMachineCatalog(
     if (!catalog) {
       return undefined;
     }
-    const provider = options.resolveProvider(catalog.providerId);
     const machines = normalizeWorkerMachineOptions(
-      await provider?.listMachineOptions?.(catalog.settings),
+      await catalog.provider?.listMachineOptions?.(catalog.settings),
     );
     if (!isDeepStrictEqual(catalog.machines, machines)) {
       catalog.machines = machines;
@@ -95,9 +94,8 @@ export function createWorkerMachineCatalog(
     if (!catalog) {
       return undefined;
     }
-    const provider = options.resolveProvider(catalog.providerId);
     const systems = normalizeWorkerOperatingSystems(
-      await provider?.listOperatingSystems?.(catalog.settings),
+      await catalog.provider?.listOperatingSystems?.(catalog.settings),
     );
     if (!isDeepStrictEqual(catalog.systems, systems)) {
       catalog.systems = systems;

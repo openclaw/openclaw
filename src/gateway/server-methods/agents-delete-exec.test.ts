@@ -20,7 +20,6 @@ import {
 } from "../../agents/bash-tools.exec-runtime.test-support.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { CronService } from "../../cron/service.js";
-import { startCronReceiptAuthorityHost } from "../../cron/store/receipt-authority-owner.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import type { SpawnInput } from "../../process/supervisor/types.js";
 import { readAgentDeletionJournalAsync } from "../../state/agent-deletion-journal.js";
@@ -144,7 +143,6 @@ it("drains an independent agent service through exit while preserving another ag
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    startCronReceiptAuthorityHost();
     const deleting = deleteGatewayAgent(
       "doomed",
       true,

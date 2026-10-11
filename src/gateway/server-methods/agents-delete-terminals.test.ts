@@ -5,7 +5,6 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { getRuntimeConfig } from "../../config/config.js";
 import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { CronService } from "../../cron/service.js";
-import { startCronReceiptAuthorityHost } from "../../cron/store/receipt-authority-owner.js";
 import { readAgentDeletionJournalAsync } from "../../state/agent-deletion-journal.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -94,7 +93,6 @@ it("keeps deletion draining until every connection terminal exits, without touch
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    startCronReceiptAuthorityHost();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const terminals = new TerminalSessionManager({
       emit: () => {},

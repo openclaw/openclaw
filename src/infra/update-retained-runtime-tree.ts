@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { collectPluginSafetyInspectedFiles } from "../plugins/plugin-safety-inspected-files.js";
+import { sameFileMutationMetadata } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { copyUpdateCandidatePluginFileBytes } from "./update-candidate-plugin-file.js";
@@ -49,10 +50,12 @@ export async function linkUpdateCandidatePluginTrees(
   const { privateRoot, candidateRoot, hostLinks, relocations, destinationFor } = targets;
   const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
     await params.onProgress?.();
-    assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
+    const current = await fs.lstat(entry.path, { bigint: true });
+    assertUpdateCandidatePluginEntryStat(entry, current);
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
+    return current;
   };
   for (const entry of plan.entries) {
     if (path.basename(entry.path) === "openclaw.plugin.json") {
@@ -83,7 +86,9 @@ export async function linkUpdateCandidatePluginTrees(
     const root = await (destinationRoot ??= openRoot(privateRoot));
     await copyUpdateCandidatePluginFileBytes({ entry, privateRoot, destination }, root, {
       assertBeforeMutation: params.assertCurrent,
-      assertAfterCopy: () => assertEntry(entry),
+      assertAfterCopy: async () => {
+        await assertEntry(entry);
+      },
     });
     const relocate = resolveRuntimeFileRelocator(destination);
     if (relocate) {
@@ -111,7 +116,7 @@ export async function linkUpdateCandidatePluginTrees(
   const counts = { linked: 0, copied: 0 };
   const directories: Array<Extract<UpdateCandidatePluginEntry, { kind: "directory" }>> = [];
   const materialize = async (entry: UpdateCandidatePluginEntry) => {
-    await assertEntry(entry);
+    const admitted = await assertEntry(entry);
     const destination = destinationFor(entry.path);
     const directory = entry.kind === "directory" ? destination : path.dirname(destination);
     // A file may precede its parent's inventory entry; reuse only completed creation.
@@ -158,13 +163,16 @@ export async function linkUpdateCandidatePluginTrees(
         if (
           !linked.isFile() ||
           linked.dev.toString() !== entry.dev ||
-          linked.ino.toString() !== entry.ino
+          linked.ino.toString() !== entry.ino ||
+          !sameFileMutationMetadata(admitted, linked)
         ) {
           throw new Error(
             `Retained runtime entry does not reference its inventoried file: ${entry.path}`,
           );
         }
-        assertUpdateCandidatePluginEntryStat(entry, linked);
+        // Our link changes ctime without changing bytes. Accept that change;
+        // concurrent equal-size writes restoring mtime during this await are
+        // outside this retention check. Later aliases still validate inventory.
         counts.linked += 1;
       }
     }

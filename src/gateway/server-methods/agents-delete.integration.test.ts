@@ -33,7 +33,6 @@ import type {
 } from "../../config/sessions/session-native-binding.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CronService } from "../../cron/service.js";
-import { startCronReceiptAuthorityHost } from "../../cron/store/receipt-authority-owner.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-store.js";
@@ -672,7 +671,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             }
           }
           resetConfigRuntimeState();
-          startCronReceiptAuthorityHost();
           if (scenario === "restart-draining") {
             await resumeAgentDeletions(context, AbortSignal.abort());
             const scope = { agentId, env: state.env, sessionKey };

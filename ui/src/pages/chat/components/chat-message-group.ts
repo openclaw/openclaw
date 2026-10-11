@@ -3,6 +3,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { groupToolCalls, type ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import { icons } from "../../../components/icons.ts";
 import { personActivityLink, renderPersonName } from "../../../components/person-activity-link.ts";
+import { t } from "../../../i18n/index.ts";
 import type { MessageGroup, ToolCard } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
@@ -67,7 +68,7 @@ import {
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary, renderToolReviewOutcome } from "./chat-tool-outcome-summary.ts";
-import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+import { renderChatBubbleDots, renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
 
@@ -280,7 +281,7 @@ export function renderActivityGroup(
             <div class="chat-group-messages">${content}</div>
           </div>
         `;
-  if (soleStep) {
+  if (soleStep && !opts.bubbleMode) {
     // The step is the disclosure: keep the body's bounded scroll and file owner.
     return frame(html`
       <div
@@ -292,9 +293,10 @@ export function renderActivityGroup(
       </div>
     `);
   }
+  const compact = opts.bubbleMode && !activityExpanded;
   const content = html`
     <div
-      class="chat-activity-group ${activityExpanded ? "is-open" : ""}"
+      class="chat-activity-group ${activityExpanded ? "is-open" : ""} ${compact ? "chat-activity-group--bubble" : ""}"
       data-file-session-key=${firstGroup.senderSession?.sessionKey ?? nothing}
     >
       <button
@@ -302,47 +304,55 @@ export function renderActivityGroup(
         type="button"
         aria-expanded=${String(activityExpanded)}
         aria-controls=${activityBodyId}
+        aria-label=${compact ? t("chat.view.activityDetails") : nothing}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
         @click=${() => opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded)}
       >
-        ${activityHeadline(
-          JSON.stringify([opts.sessionKey, opts.connectionEpoch, opts.activityRunId]),
-          headline,
-          groupSummaryLabel,
-          currentActivity,
-          opts.pluginToolIcons,
-          describeToolGroup(visibleActivity)
-            .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
-            .map(({ label }) => label),
-        )}
-        ${renderToolReviewOutcome(reviewOutcome, approvalReviews[0]?.label)}
         ${
-          activityExpanded
-            ? nothing
-            : renderToolOutcomeSummary(
-                cards.filter((card) => card.callId && visibleCalls.has(card.callId)),
-                true,
-                visibleActivity,
-              )
+          compact
+            ? renderChatBubbleDots(currentActivity.length > 0)
+            : html`${activityHeadline(
+                  JSON.stringify([opts.sessionKey, opts.connectionEpoch, opts.activityRunId]),
+                  headline,
+                  groupSummaryLabel,
+                  currentActivity,
+                  opts.pluginToolIcons,
+                  describeToolGroup(visibleActivity)
+                    .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
+                    .map(({ label }) => label),
+                )}
+                ${renderToolReviewOutcome(reviewOutcome, approvalReviews[0]?.label)}
+                ${
+                  activityExpanded
+                    ? nothing
+                    : renderToolOutcomeSummary(
+                        cards.filter((card) => card.callId && visibleCalls.has(card.callId)),
+                        true,
+                        visibleActivity,
+                      )
+                }
+                <span class="chat-tool-row__chevron" aria-hidden="true"
+                  >${icons.chevronRight}</span
+                >`
         }
-        <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
         ${activityExpanded ? renderMessages() : nothing}
       </div>
-      ${renderBrowserTabPreviews(groups, opts)}
+      ${opts.bubbleMode && !activityExpanded ? nothing : renderBrowserTabPreviews(groups, opts)}
     </div>
   `;
   return frame(content);
 }
 
-function isActivityMessageGroup(group: MessageGroup): boolean {
+function isActivityMessageGroup(group: MessageGroup, bubbleMode = false): boolean {
   if (normalizeRoleForGrouping(group.role) !== "tool") {
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
   return (
+    bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
     cards.some((card) => readToolApprovalReviews(card.details).length > 0)
@@ -376,7 +386,7 @@ function resolveFileLinkOwnerOptions(group: MessageGroup, options: RenderMessage
 
 export function renderMessageGroupContent(group: MessageGroup, options: RenderMessageGroupOptions) {
   const opts = resolveFileLinkOwnerOptions(group, options);
-  if (isActivityMessageGroup(group)) {
+  if (isActivityMessageGroup(group, opts.bubbleMode)) {
     return renderActivityGroup([group], opts, "continuation");
   }
   const messageOptions = { ...opts, isForwarded: hasForwardedSource(group) };
@@ -490,7 +500,7 @@ export function renderMessageGroup(group: MessageGroup, options: RenderMessageGr
     return nothing;
   }
 
-  if (isActivityMessageGroup(group)) {
+  if (isActivityMessageGroup(group, opts.bubbleMode)) {
     return renderActivityGroup([group], opts);
   }
 
