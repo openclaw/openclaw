@@ -4463,17 +4463,28 @@ history worker, with foreground priority and row-generation checks before
 publication. The host evaluates fallback notices using its current runtime plugin
 aliases; configuration and model policy do not travel to the read worker.
 
+Targeted Memory transcript notifications queue session identities directly. The
+indexing owner resolves their corpus and forgetting tombstones once when the
+queued sync runs, then uses that same snapshot for archive selection and indexing.
+An append or forgetting operation committed while the notification waits is
+therefore included without an earlier duplicate corpus read. Full startup scans,
+custom-store selection, archive cleanup, and forgetting semantics are unchanged.
+
 List pages wait for current selection metadata, then materialize their selected
 rows. Concurrent pages share bounded exact-row preparation; an admitted background
 batch may finish, and the remaining display drain resumes after those requests
 release their priority. Catalog-only replacement
 reuses complete accepted database facts for live resident rows while rebuilding
 their selected model presentation, without another worker transfer. Stored-data, configuration,
-physical-store, and lifecycle invalidations revoke those facts. Transcript updates
-revoke watermarks immediately even inside a coalesced presentation window. Cold
-archives retain no complete snapshot; exact archive reads remain bounded by the
-existing materialization cache. Schema, persisted data, and update behavior are
-unchanged.
+physical-store, and lifecycle invalidations revoke those facts. Entry-only receipts
+retain Board and transcript facts for the same session lifecycle; ACP and workspace
+facts remain reusable while their bindings are unchanged. Canonical transcript
+receipts replace the retained watermark before observers run, so summary freshness
+does not require another row read. Unmatched transcript notifications invalidate
+the watermark and use the existing bounded refresh. Summary-free streams keep
+their coalesced presentation window. Cold archives retain no complete snapshot;
+exact archive reads remain bounded by the existing materialization cache. Schema,
+persisted data, and update behavior are unchanged.
 
 Durable keyed RPCs prepare only their selected dirty or archived rows through the
 worker before synchronous presentation; placement waits recheck that preparation.
