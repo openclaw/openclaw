@@ -325,9 +325,8 @@ export function registerReplyCompactionCases({
           }
           const result = await run();
           expect(order).toEqual(native ? ["attempt"] : ["client-compaction", "attempt"]);
-          if (attemptError !== undefined) {
-            throw attemptError;
-          }
+          // Surface the embedded attempt's own failure before asserting its output.
+          expect(attemptError).toBeUndefined();
           expect(result).toMatchObject({ text: "done" });
           if (native) {
             expect(state.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
