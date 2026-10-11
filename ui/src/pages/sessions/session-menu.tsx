@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { html } from "lit";
+import { createMemo } from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -26,9 +26,44 @@ import {
 } from "../../lib/sessions/session-menu-navigation.ts";
 import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
 
+type SessionMenuElement = HTMLElementTagNameMap["openclaw-session-menu"];
+type SessionMenuProperties = Pick<
+  SessionMenuElement,
+  | "session"
+  | "compact"
+  | "anchor"
+  | "trigger"
+  | "disabled"
+  | "navigationAllowed"
+  | "copyMarkdownAllowed"
+  | "splitAllowed"
+  | "actionDisabledReasons"
+  | "forkDisabled"
+  | "forkFromLastCompleted"
+  | "archiveAllowed"
+  | "deleteAllowed"
+  | "cloudWorkerStopAllowed"
+  | "groups"
+  | "currentOwner"
+  | "work"
+  | "pluginActions"
+  | "onClose"
+  | "onAction"
+>;
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-session-menu": HTMLAttributes<SessionMenuElement> & {
+        [Key in keyof SessionMenuProperties as `prop:${Key}`]: SessionMenuProperties[Key];
+      };
+    }
+  }
+}
+
 type SessionsPageMenuAction = Exclude<SessionMenuAction, { kind: "snooze" | "wake" }>;
 
-export function renderSessionManagementMenu(params: {
+export type SessionsPageMenuProps = {
   context: ApplicationContext;
   row: GatewaySessionRow;
   menu: { key: string; sessionId?: string; x: number; y: number };
@@ -38,25 +73,21 @@ export function renderSessionManagementMenu(params: {
   work: SessionMenuWork | null;
   onClose: () => void;
   onAction: (action: SessionsPageMenuAction) => void;
-}) {
-  const { context, row } = params;
-  const gateway = context.gateway.snapshot;
-  const mainKey = resolveUiConfiguredMainKey({
-    agentsList: context.agents.state.agentsList,
-    hello: gateway.hello,
-  });
-  const archiveAllowed = canArchiveSessionRow(row, mainKey);
-  const deleteAllowed = canDeleteSessionRows([row], mainKey);
-  const cloudWorkerStopAction = resolveCloudWorkerStopAction(row.placement);
-  const cloudWorkerStopAllowed = Boolean(
-    cloudWorkerStopAction &&
-    (!cloudWorkerStopAction.blocksActiveRun || row.hasActiveRun !== true) &&
-    isGatewayMethodAdvertised(gateway, cloudWorkerStopAction.method) === true,
-  );
-  const pinnable = isPinnableUiSessionRow(row);
-  return html`
-    <openclaw-session-menu
-      .session=${{
+};
+
+export function SessionManagementMenu(props: SessionsPageMenuProps) {
+  const state = createMemo(() => {
+    const context = props.context;
+    const row = props.row;
+    const gateway = context.gateway.snapshot;
+    const mainKey = resolveUiConfiguredMainKey({
+      agentsList: context.agents.state.agentsList,
+      hello: gateway.hello,
+    });
+    const cloudWorkerStopAction = resolveCloudWorkerStopAction(row.placement);
+    const pinnable = isPinnableUiSessionRow(row);
+    return {
+      session: {
         label: normalizeOptionalString(row.label) ?? row.key,
         target: { key: row.key, agentId: row.agentId },
         sessionId: normalizeOptionalString(row.sessionId) ?? null,
@@ -87,37 +118,53 @@ export function renderSessionManagementMenu(params: {
         icon: normalizeOptionalString(row.icon) ?? null,
         color: normalizeOptionalString(row.color) ?? null,
         categoryClearReturnsToGroups: false,
-      }}
-      .compact=${isMobileNavLayout()}
-      .anchor=${params.menu}
-      .trigger=${params.trigger}
-      .disabled=${params.disabled}
-      .navigationAllowed=${true}
-      .copyMarkdownAllowed=${canCopySessionMarkdown(gateway)}
-      .splitAllowed=${false}
-      .actionDisabledReasons=${sessionMenuReasons({
+      },
+      compact: isMobileNavLayout(),
+      copyMarkdownAllowed: canCopySessionMarkdown(gateway),
+      actionDisabledReasons: sessionMenuReasons({
         snapshot: gateway,
         session: { ...row, pinnable },
         cloudWorkerStopAction,
-      })}
-      .forkDisabled=${row.modelSelectionLocked === true}
-      .forkFromLastCompleted=${row.hasActiveRun === true}
-      .archiveAllowed=${archiveAllowed}
-      .deleteAllowed=${deleteAllowed}
-      .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
-      .groups=${params.groups}
-      .currentOwner=${row.owner?.actor ?? null}
-      .work=${params.work}
-      .pluginActions=${pluginSessionMenuActions(context.plugins, row)}
-      .onClose=${params.onClose}
-      .onAction=${(action: SessionMenuAction) => {
+      }),
+      archiveAllowed: canArchiveSessionRow(row, mainKey),
+      deleteAllowed: canDeleteSessionRows([row], mainKey),
+      cloudWorkerStopAllowed: Boolean(
+        cloudWorkerStopAction &&
+        (!cloudWorkerStopAction.blocksActiveRun || row.hasActiveRun !== true) &&
+        isGatewayMethodAdvertised(gateway, cloudWorkerStopAction.method) === true,
+      ),
+      pluginActions: pluginSessionMenuActions(context.plugins, row),
+    };
+  });
+  return (
+    <openclaw-session-menu
+      prop:session={state().session}
+      prop:compact={state().compact}
+      prop:anchor={props.menu}
+      prop:trigger={props.trigger}
+      prop:disabled={props.disabled}
+      prop:navigationAllowed={true}
+      prop:copyMarkdownAllowed={state().copyMarkdownAllowed}
+      prop:splitAllowed={false}
+      prop:actionDisabledReasons={state().actionDisabledReasons}
+      prop:forkDisabled={props.row.modelSelectionLocked === true}
+      prop:forkFromLastCompleted={props.row.hasActiveRun === true}
+      prop:archiveAllowed={state().archiveAllowed}
+      prop:deleteAllowed={state().deleteAllowed}
+      prop:cloudWorkerStopAllowed={state().cloudWorkerStopAllowed}
+      prop:groups={props.groups}
+      prop:currentOwner={props.row.owner?.actor ?? null}
+      prop:work={props.work}
+      prop:pluginActions={state().pluginActions}
+      prop:onClose={() => props.onClose()}
+      prop:onAction={(action: SessionMenuAction) => {
         // Snooze controls belong to the sidebar; the page retains its existing action contract.
         if (action.kind !== "snooze" && action.kind !== "wake") {
-          params.onAction(action);
+          props.onAction(action);
         }
       }}
-    ></openclaw-session-menu>
-  `;
+    />
+  );
 }
 
 /** Consume navigation here; the caller owns the remaining management actions. */

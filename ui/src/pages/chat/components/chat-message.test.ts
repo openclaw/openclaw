@@ -3004,7 +3004,7 @@ describe("grouped chat rendering", () => {
     });
     expect(widget).toMatchObject({ allowScripts: true });
 
-    renderAssistantMessage(message, { ...options, embedSandboxMode: "strict" });
+    renderAssistantMessage(structuredClone(message), { ...options, embedSandboxMode: "strict" });
     expect(view.querySelector("openclaw-canvas-widget-view")).toBe(widget);
     expect(widget).toMatchObject({ allowScripts: false });
     expect(view.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();

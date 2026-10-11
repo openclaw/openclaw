@@ -176,7 +176,7 @@ export function MessageGroupContent(props: {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
     <Show
-      when={!isActivityMessageGroup(props.group)}
+      when={!isActivityMessageGroup(props.group, options().bubbleMode)}
       fallback={
         <ActivityGroup groups={[props.group]} options={options()} presentation="continuation" />
       }
@@ -559,7 +559,7 @@ export function MessageGroup(props: {
         }
       >
         <Show
-          when={!isActivityMessageGroup(props.group)}
+          when={!isActivityMessageGroup(props.group, options().bubbleMode)}
           fallback={
             <ActivityGroup groups={[props.group]} options={options()} presentation="standalone" />
           }

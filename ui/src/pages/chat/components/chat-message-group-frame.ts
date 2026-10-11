@@ -63,12 +63,13 @@ export function prepareGroupMessage(
   return { item, source, actions: details };
 }
 
-export function isActivityMessageGroup(group: MessageGroupData): boolean {
+export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = false): boolean {
   if (normalizeRoleForGrouping(group.role) !== "tool") {
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
   return (
+    bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
     cards.some((card) => readToolApprovalReviews(card.details).length > 0)
@@ -192,12 +193,11 @@ export function prepareMessageGroupFrame(
     normalizedRole === "user" &&
     avatarPlacement === "gutter" &&
     (isPeerGroup || Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown));
-  const hasAvatar = Boolean(
+  const hasAvatar =
     showAvatar &&
     !isTurnBlock &&
     avatarPlacement === "gutter" &&
-    (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false),
-  );
+    (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false);
   const holdsReplyRow = replyLine.state !== "hidden" && hasAvatar;
   return {
     group,

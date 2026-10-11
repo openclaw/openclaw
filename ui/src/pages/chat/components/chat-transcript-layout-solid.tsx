@@ -1,5 +1,15 @@
 import { render, type JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onCleanup, runWithOwner, Show, untrack } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  runWithOwner,
+  Show,
+  Switch,
+  untrack,
+} from "solid-js";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
@@ -10,11 +20,39 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
-import { MessageGroup } from "./chat-message-group-view.tsx";
-import { StreamGroup } from "./chat-message-stream-view.tsx";
+import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
+import { StreamGroup, WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import type { TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
-import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
+import {
+  GuardedTranscriptItem,
+  type NativeTranscriptView,
+} from "./chat-transcript-render-guard.ts";
+
+function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
+  return (
+    <Switch>
+      <Match when={props.value.kind === "group" ? props.value : undefined}>
+        {(view) => <MessageGroup group={view().group} options={view().options} />}
+      </Match>
+      <Match when={props.value.kind === "activity" ? props.value : undefined}>
+        {(view) => (
+          <ActivityGroup
+            groups={view().groups}
+            options={view().options}
+            presentation={view().presentation}
+          />
+        )}
+      </Match>
+      <Match when={props.value.kind === "stream" ? props.value : undefined}>
+        {(view) => <StreamGroup parts={view().parts} options={view().options} />}
+      </Match>
+      <Match when={props.value.kind === "work" ? props.value : undefined}>
+        {(view) => <WorkGroupSummary item={view().item} options={view().options} />}
+      </Match>
+    </Switch>
+  );
+}
 
 function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
   const dependencies = createMemo(() => props.value.dependencies, {
@@ -24,26 +62,14 @@ function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
     dependencies();
     return untrack(() => props.value);
   });
-  const content = createMemo(() =>
-    current().stream || current().legacy || current().group ? undefined : untrack(current().render),
-  );
   return (
     <Show
-      when={current().stream}
+      when={current().native}
       fallback={
-        <Show
-          when={current().group}
-          fallback={
-            <Show when={current().legacy} fallback={content}>
-              {(legacy) => <LitContent value={untrack(legacy())} />}
-            </Show>
-          }
-        >
-          {(group) => <MessageGroup group={group().group} options={group().options} />}
-        </Show>
+        <Show when={current().legacy}>{(legacy) => <LitContent value={untrack(legacy())} />}</Show>
       }
     >
-      {(stream) => <StreamGroup parts={stream().parts} options={stream().options} />}
+      {(view) => <NativeRow value={view()} />}
     </Show>
   );
 }

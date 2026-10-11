@@ -15,6 +15,7 @@ import {
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import {
   emptyLegacyContent as litNothing,
   LitContent,
@@ -23,6 +24,7 @@ import {
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { activityHeadline, selectActivityHeadline } from "./chat-activity-headline.ts";
+import { ChatBubbleDots } from "./chat-bubble-activity-view.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import {
   renderBrowserTabPreviews,
@@ -214,23 +216,27 @@ function ActivityGroupBody(props: {
 }) {
   const state = () => props.state;
   const overrides = createMemo(() => props.state.toolCardOverrides);
+  const soleStep = () => state().soleStep && !props.options.bubbleMode;
+  const compact = () => Boolean(props.options.bubbleMode && !state().activityExpanded);
   return (
     <div
       class={[
         "chat-activity-group",
         {
-          "chat-activity-group--step": state().soleStep,
-          "is-open": !state().soleStep && state().activityExpanded,
+          "chat-activity-group--step": soleStep(),
+          "chat-activity-group--bubble": compact(),
+          "is-open": !soleStep() && state().activityExpanded,
         },
       ]}
       data-file-session-key={state().firstGroup.senderSession?.sessionKey ?? undefined}
     >
-      <Show when={!state().soleStep}>
+      <Show when={!soleStep()}>
         <button
           class="chat-inline-disclosure chat-activity-group__summary"
           type="button"
           aria-expanded={String(state().activityExpanded)}
           aria-controls={state().activityBodyId}
+          aria-label={compact() ? t("chat.view.activityDetails") : undefined}
           onPointerEnter={syncToolDisclosureOverflow}
           onFocus={syncToolDisclosureOverflow}
           onClick={() =>
@@ -240,54 +246,61 @@ function ActivityGroupBody(props: {
             )
           }
         >
-          <LitContent
-            value={activityHeadline(
-              JSON.stringify([
-                props.options.sessionKey,
-                props.options.connectionEpoch,
-                props.options.activityRunId,
-              ]),
-              state().headline,
-              state().groupSummaryLabel,
-              state().currentActivity,
-              props.options.pluginToolIcons,
-              describeToolGroup(state().visibleActivity)
-                .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
-                .map(({ label }) => label),
-            )}
-          />
-          <LitContent
-            value={renderToolReviewOutcome(
-              state().reviewOutcome,
-              state().approvalReviews[0]?.label,
-            )}
-          />
-          <Show when={!state().activityExpanded}>
+          <Show
+            when={!compact()}
+            fallback={<ChatBubbleDots working={state().currentActivity.length > 0} />}
+          >
             <LitContent
-              value={renderToolOutcomeSummary(
-                state().cards.filter(
-                  (card) => card.callId && state().visibleCalls.has(card.callId),
-                ),
-                true,
-                state().visibleActivity,
+              value={activityHeadline(
+                JSON.stringify([
+                  props.options.sessionKey,
+                  props.options.connectionEpoch,
+                  props.options.activityRunId,
+                ]),
+                state().headline,
+                state().groupSummaryLabel,
+                state().currentActivity,
+                props.options.pluginToolIcons,
+                describeToolGroup(state().visibleActivity)
+                  .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
+                  .map(({ label }) => label),
               )}
             />
+            <LitContent
+              value={renderToolReviewOutcome(
+                state().reviewOutcome,
+                state().approvalReviews[0]?.label,
+              )}
+            />
+            <Show when={!state().activityExpanded}>
+              <LitContent
+                value={renderToolOutcomeSummary(
+                  state().cards.filter(
+                    (card) => card.callId && state().visibleCalls.has(card.callId),
+                  ),
+                  true,
+                  state().visibleActivity,
+                )}
+              />
+            </Show>
+            <span class="chat-tool-row__chevron" aria-hidden="true">
+              <Icon name="chevronRight" />
+            </span>
           </Show>
-          <span class="chat-tool-row__chevron" aria-hidden="true">
-            <Icon name="chevronRight" />
-          </span>
         </button>
       </Show>
       <div
         class="chat-activity-group__body"
-        id={state().soleStep ? undefined : state().activityBodyId}
-        hidden={!state().soleStep && !state().activityExpanded}
+        id={soleStep() ? undefined : state().activityBodyId}
+        hidden={!soleStep() && !state().activityExpanded}
       >
-        <Show when={state().soleStep || state().activityExpanded}>
+        <Show when={soleStep() || state().activityExpanded}>
           {(_visible) => props.renderEntries(overrides)}
         </Show>
       </div>
-      <LitContent value={renderBrowserTabPreviews(props.groups, props.options)} />
+      <Show when={!props.options.bubbleMode || state().activityExpanded}>
+        <LitContent value={renderBrowserTabPreviews(props.groups, props.options)} />
+      </Show>
     </div>
   );
 }

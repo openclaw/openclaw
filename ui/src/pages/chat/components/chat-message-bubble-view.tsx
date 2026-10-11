@@ -28,6 +28,7 @@ import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import "../../../components/person-reference.ts";
+import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
@@ -84,6 +85,7 @@ export type GroupedMessageOptions = {
   agentId?: string;
   duplicateCount?: number;
   showReasoning: boolean;
+  bubbleMode?: boolean;
   showToolCalls?: boolean;
   runActive?: boolean;
   asyncQuestions?: AsyncQuestionPresentation;
@@ -339,7 +341,7 @@ function AssistantViews(props: ContentProps) {
   };
   return (
     <Show when={props.state().sourceRole === "assistant"}>
-      <For each={props.state().assistantViewBlocks} keyed={(block) => block}>
+      <For each={props.state().assistantViewBlocks} keyed={false}>
         {(block) => (
           <div class="chat-tool-card__widget-host">
             <LitContent
@@ -459,6 +461,27 @@ function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | un
   );
 }
 
+function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
+  const content = (
+    <MarkdownText
+      class="chat-thinking"
+      content={toSanitizedMarkdownHtml(props.state().reasoningMarkdown ?? "", {
+        codeBlockInteraction: "interactive",
+      })}
+    />
+  );
+  return (
+    <Show when={props.options.bubbleMode} fallback={content}>
+      <ChatBubbleActivity
+        label={t("chat.view.activityDetails")}
+        working={props.options.isStreaming}
+      >
+        {content}
+      </ChatBubbleActivity>
+    </Show>
+  );
+}
+
 function BubbleContents(props: ContentProps) {
   const previewCount = createMemo(() => props.state().videoPreviews.length);
   const previews = createMemo(() =>
@@ -510,12 +533,7 @@ function BubbleContents(props: ContentProps) {
         <AssistantViews {...props} />
       </Show>
       <Show when={props.state().reasoningMarkdown}>
-        <MarkdownText
-          class="chat-thinking"
-          content={toSanitizedMarkdownHtml(props.state().reasoningMarkdown!, {
-            codeBlockInteraction: "interactive",
-          })}
-        />
+        <MessageReasoning state={props.state} options={props.options} />
       </Show>
       <Show when={!props.state().isStandaloneToolMessage}>
         <AssistantViews {...props} />

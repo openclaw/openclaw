@@ -25,6 +25,7 @@ import {
 } from "../../../lit/solid-content.tsx";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
+import { ChatBubbleActivity, ChatBubbleDots } from "./chat-bubble-activity-view.tsx";
 import { renderSolidGroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
   prepareChatMessageRender,
@@ -83,6 +84,7 @@ type StreamMessageOptions = Pick<
 export type StreamGroupOptions = StreamMessageOptions & {
   resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
+  bubbleMode?: boolean;
   entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -184,6 +186,7 @@ function NonstreamPart(props: {
   const content = createMemo(() => {
     if (props.part.kind === "reading-indicator") {
       return renderChatWorkingIndicator(props.part, {
+        bubbleMode: props.options.bubbleMode,
         mascot: props.options.branding?.mascot,
         workingIndicator: props.options.branding?.workingIndicator,
         workingPhrases: props.options.branding?.workingPhrases,
@@ -277,6 +280,14 @@ function StreamingMessage(props: {
     currentEntryRef?.(element);
   };
   onCleanup(() => currentEntryRef?.(undefined));
+  const thinking = (
+    <MarkdownText
+      class="chat-thinking"
+      content={toSanitizedMarkdownHtml(`_Reasoning:_\n\n${part().thinking ?? ""}`, {
+        codeBlockInteraction: "interactive",
+      })}
+    />
+  );
   return (
     <div
       class={["chat-bubble", { streaming: part().isStreaming }]}
@@ -286,12 +297,11 @@ function StreamingMessage(props: {
       ref={entryRef}
     >
       <Show when={part().thinking}>
-        <MarkdownText
-          class="chat-thinking"
-          content={toSanitizedMarkdownHtml(`_Reasoning:_\n\n${part().thinking}`, {
-            codeBlockInteraction: "interactive",
-          })}
-        />
+        <Show when={props.options.bubbleMode} fallback={thinking}>
+          <ChatBubbleActivity label={t("chat.view.activityDetails")} working={part().isStreaming}>
+            {thinking}
+          </ChatBubbleActivity>
+        </Show>
       </Show>
       <Show when={prepared().displayMarkdown}>
         <MarkdownText
@@ -381,6 +391,7 @@ type WorkGroupSummaryOptions = {
   onToggle: () => void;
   presentation?: "standalone" | "continuation";
   browserTabPreviews?: unknown;
+  bubbleMode?: boolean;
 };
 
 function prepareWorkGroupSummary(item: WorkGroupSummaryItem) {
@@ -438,47 +449,66 @@ function WorkGroupSummaryBody(props: {
   summary: ReturnType<typeof prepareWorkGroupSummary>;
   options: WorkGroupSummaryOptions;
 }) {
+  const compact = () => props.options.bubbleMode && !props.options.expanded;
   return (
-    <div class={["chat-activity-group chat-work-group", { "is-open": props.options.expanded }]}>
+    <div
+      class={[
+        "chat-activity-group chat-work-group",
+        {
+          "is-open": props.options.expanded,
+          "chat-activity-group--bubble": compact(),
+        },
+      ]}
+    >
       <button
         class="chat-inline-disclosure chat-activity-group__summary"
         type="button"
         aria-expanded={String(props.options.expanded)}
+        aria-label={compact() ? t("chat.view.activityDetails") : undefined}
         onPointerEnter={syncToolDisclosureOverflow}
         onFocus={syncToolDisclosureOverflow}
         onClick={() => props.options.onToggle()}
       >
-        <span class="chat-tool-disclosure__content">
-          <span class="chat-activity-group__label">{props.summary.label}</span>
-        </span>
-        <Show when={props.options.expanded && props.summary.total > 0}>
-          <span class="chat-work-group__total">
-            {"·\n                "}
-            {t(`chat.workRun.toolCalls${props.summary.total === 1 ? "One" : "Many"}`, {
-              count: String(props.summary.total),
-            })}
-          </span>
+        <Show
+          when={compact()}
+          fallback={
+            <>
+              <span class="chat-tool-disclosure__content">
+                <span class="chat-activity-group__label">{props.summary.label}</span>
+              </span>
+              <Show when={props.options.expanded && props.summary.total > 0}>
+                <span class="chat-work-group__total">
+                  {"·\n                "}
+                  {t(`chat.workRun.toolCalls${props.summary.total === 1 ? "One" : "Many"}`, {
+                    count: String(props.summary.total),
+                  })}
+                </span>
+              </Show>
+              <For each={props.summary.outcomes} keyed={(outcome) => outcome.kind}>
+                {(outcome) => (
+                  <span class="chat-activity-group__outcome muted">
+                    {"· "}
+                    {outcome().label}
+                  </span>
+                )}
+              </For>
+              <Show when={props.summary.toolOutcomes !== litNothing}>
+                <span class="chat-work-group__outcomes">
+                  {"· "}
+                  <LitContent value={props.summary.toolOutcomes} />
+                </span>
+              </Show>
+              <span class="chat-tool-row__chevron" aria-hidden="true">
+                <Icon name="chevronRight" />
+              </span>
+            </>
+          }
+        >
+          <ChatBubbleDots />
         </Show>
-        <For each={props.summary.outcomes} keyed={(outcome) => outcome.kind}>
-          {(outcome) => (
-            <span class="chat-activity-group__outcome muted">
-              {"· "}
-              {outcome().label}
-            </span>
-          )}
-        </For>
-        <Show when={props.summary.toolOutcomes !== litNothing}>
-          <span class="chat-work-group__outcomes">
-            {"· "}
-            <LitContent value={props.summary.toolOutcomes} />
-          </span>
-        </Show>
-        <span class="chat-tool-row__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
-        </span>
       </button>
       <div class="chat-work-group__separator" aria-hidden="true" />
-      <Show when={!props.options.expanded}>
+      <Show when={!props.options.expanded && !props.options.bubbleMode}>
         <LitContent value={props.options.browserTabPreviews} />
       </Show>
     </div>

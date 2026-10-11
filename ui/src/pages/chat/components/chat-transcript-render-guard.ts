@@ -1,22 +1,23 @@
-import type { JSX } from "@solidjs/web";
-import { untrack } from "solid-js";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
-import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
-import type { StreamGroupOptions, StreamGroupPart } from "./chat-message-stream.ts";
+import type { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
+import type { StreamGroup, WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import type { ChatThreadState } from "./chat-thread-interactions.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 
+export type NativeTranscriptView =
+  | ({ kind: "group" } & Parameters<typeof MessageGroup>[0])
+  | ({ kind: "activity" } & Parameters<typeof ActivityGroup>[0])
+  | ({ kind: "stream" } & Parameters<typeof StreamGroup>[0])
+  | ({ kind: "work" } & Parameters<typeof WorkGroupSummary>[0]);
+
 /** The keyed virtual row owns the dependency memo and its rendered content. */
 export class GuardedTranscriptItem {
   constructor(
     readonly dependencies: readonly unknown[],
-    readonly render: () => JSX.Element,
-    readonly stream?: { parts: StreamGroupPart[]; options: StreamGroupOptions },
+    readonly native: NativeTranscriptView | undefined,
     readonly legacy?: () => unknown,
-    readonly group?: { group: MessageGroup; options: NativeMessageGroupOptions },
   ) {}
 }
 
@@ -59,17 +60,13 @@ export function guardChatRenderItems(
   state: ChatThreadState,
   // Reply sources and live status can change without replacing the row itself.
   presentationDependencies: (item: ChatRenderItem) => readonly unknown[],
-  render: (item: ChatRenderItem) => JSX.Element,
-  streamFor?: (item: ChatRenderItem) => GuardedTranscriptItem["stream"],
+  nativeFor: (item: ChatRenderItem) => NativeTranscriptView | undefined,
   legacyFor?: (item: ChatRenderItem) => GuardedTranscriptItem["legacy"],
-  groupFor?: (item: ChatRenderItem) => GuardedTranscriptItem["group"],
 ) {
   return (item: ChatRenderItem) =>
     new GuardedTranscriptItem(
       [...itemDependencies(item), state.transcriptRenderContext, ...presentationDependencies(item)],
-      () => untrack(() => render(item)),
-      streamFor?.(item),
+      nativeFor(item),
       legacyFor?.(item),
-      groupFor?.(item),
     );
 }

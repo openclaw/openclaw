@@ -1,5 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
