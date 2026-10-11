@@ -332,7 +332,7 @@ agent.
 
 Databases created before per-agent ownership have no reliable row provenance.
 On upgrade, `openclaw doctor --fix` assigns those legacy rows once to the
-configured default agent. Runtime access fails closed until that migration has
+configured default agent. Runtime access is blocked until that migration has
 completed; other agents never inherit the old shared rows.
 
 `storageOptions` accepts string key/value pairs for LanceDB storage backends

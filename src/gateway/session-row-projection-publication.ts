@@ -1,3 +1,4 @@
+import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   pluginStatePublication,
@@ -129,28 +130,35 @@ export function createSessionRowPublication(owner: {
     if (prepared && !prepared.entry && !prepared.sharing) {
       return;
     }
-    const previousFacts = row.retainedDatabaseFacts;
+    const previousFacts = row.retainedDatabaseFacts ?? row.pendingDatabaseFacts;
     const committed = prepared?.projection;
     const entry = prepared?.entry;
     const sameSession =
       entry &&
       previousFacts?.entry.sessionId === entry.sessionId &&
       previousFacts.entry.lifecycleRevision === entry.lifecycleRevision;
+    const projection =
+      committed ??
+      (change.scope === "session-entry" &&
+      sameSession &&
+      (!readSessionActivitySummary(entry) || previousFacts.activitySummaryWatermark)
+        ? previousFacts
+        : undefined);
     const sameRuntimeOwner =
       sameSession &&
       previousFacts.entry.agentHarnessId === entry.agentHarnessId &&
       previousFacts.entry.modelSelectionLocked === entry.modelSelectionLocked &&
       previousFacts.entry.pluginOwnerId === entry.pluginOwnerId &&
       previousFacts.entry.previousSessionId === entry.previousSessionId;
-    // Agent receipts certify only their own store. Shared facets keep their independent
-    // publication lifetime; a changed binding requires preparation by that owner.
+    // Entry-only writes preserve Board/transcript facts. Shared facets retain their
+    // independent lifetime; a changed binding requires preparation by that owner.
     const databaseFacts: records.RetainedSessionRowDatabaseFacts | undefined =
-      entry && committed && !change.factsInvalidated
+      entry && projection && !change.factsInvalidated
         ? {
             sessionKey: row.key,
             entry,
-            hasBoard: committed.hasBoard,
-            activitySummaryWatermark: committed.activitySummaryWatermark,
+            hasBoard: projection.hasBoard,
+            activitySummaryWatermark: projection.activitySummaryWatermark,
             runtimeOwnership: sameRuntimeOwner ? previousFacts.runtimeOwnership : undefined,
             runtimeOwnershipDependencies: sameRuntimeOwner
               ? previousFacts.runtimeOwnershipDependencies
@@ -188,7 +196,7 @@ export function createSessionRowPublication(owner: {
       }
       return;
     }
-    records.invalidateDatabaseFacts(row);
+    records.invalidateDatabaseFacts(row, databaseFacts);
     if (
       !prepared &&
       !change.factsInvalidated &&
@@ -274,6 +282,7 @@ export function subscribeSessionRowPublications({
   revisions,
   advanceRevision,
   ensureMaterialized,
+  publishTranscript,
   invalidateMembership,
   mark,
   mutateGeneration,
@@ -286,6 +295,7 @@ export function subscribeSessionRowPublications({
   >;
   advanceRevision: () => void;
   ensureMaterialized: () => Promise<void>;
+  publishTranscript: Parameters<typeof sessionChanges.subscribeFacts>[0];
   invalidateMembership: Parameters<typeof sessionChanges.subscribeFacts>[0];
   mark: Parameters<typeof sessionChanges.subscribeProjection>[0];
   mutateGeneration: Parameters<typeof onSessionIdentityMutation>[0];
@@ -324,6 +334,7 @@ export function subscribeSessionRowPublications({
         queueMicrotask(() => void ensureMaterialized().catch(() => {}));
       }
     }),
+    sessionChanges.subscribeFacts(publishTranscript),
     sessionChanges.subscribeFacts(invalidateMembership),
     sessionChanges.subscribeProjection(mark),
     // Participant writers publish facts before their display-only lifecycle notice.

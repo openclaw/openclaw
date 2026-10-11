@@ -719,7 +719,6 @@ extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	3
 extensions/qa-lab/src/mantis/crabbox-runtime.ts	2
 extensions/qa-lab/src/mantis/discord-smoke.runtime.ts	3
 extensions/qa-lab/src/mantis/run.runtime.ts	1
-extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts	1
 extensions/qa-lab/src/mantis/visual-task.runtime.ts	2
 extensions/qa-lab/src/manual-lane.runtime.ts	2
 extensions/qa-lab/src/model-catalog.runtime.ts	2
@@ -1678,7 +1677,6 @@ src/cli/native-hook-relay-cli.ts	1
 src/cli/nodes-cli/register.pairing.ts	2
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2
-src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
 src/cli/plugins-authoring-command.ts	4
@@ -1855,7 +1853,7 @@ src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
-src/config/sessions/session-accessor.sqlite-transcript-store.ts	2
+src/config/sessions/session-accessor.sqlite-transcript-store.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-write.ts	2
 src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
 src/config/sessions/session-accessor.transcript-range.ts	3
@@ -1922,8 +1920,6 @@ src/daemon/systemd-exec.ts	2
 src/daemon/systemd-install.ts	1
 src/daemon/systemd-lifecycle.ts	2
 src/daemon/systemd-runtime.ts	1
-src/entry.compile-cache.ts	2
-src/entry.respawn.ts	1
 src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	3
 src/flows/doctor-health-contributions-final.ts	1

@@ -25,7 +25,7 @@ into the root OpenClaw package.
 
 ## What the migration does automatically
 
-Matrix migration runs when you run [`openclaw doctor --fix`](/gateway/doctor). The supported sync-cache JSON import retains its client-start fallback. Credential-file import is Doctor-only; runtime reads only canonical SQLite credential state.
+Matrix migration runs when you run [`openclaw doctor --fix`](/gateway/doctor). The supported sync-cache JSON import retains its client-start fallback. Credential-file import is Doctor-only; runtime reads only the current SQLite credential state.
 
 Doctor migration covers:
 
