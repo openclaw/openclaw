@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -112,6 +113,8 @@ async function resolveCronSessionWorkspace(params: {
     spawnedBy: entry.spawnedBy,
     workspaceDir: entry.spawnedWorkspaceDir,
     cwd: entry.spawnedCwd,
+    execHost: entry.execHost,
+    runtimeBackendId: resolveSessionModelRef(params.cfg, entry, params.agentId).provider,
   });
   const requestedCwd = normalizeOptionalString(entry.spawnedCwd);
   if (

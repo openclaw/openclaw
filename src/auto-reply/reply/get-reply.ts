@@ -15,7 +15,7 @@ import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { resolveSessionEntryIngressWorkspace } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
 import {
@@ -978,11 +978,7 @@ export async function getReplyFromConfig(
     const stagingSessionEntry =
       sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
     const stagingWorkspaceDir =
-      resolveIngressWorkspaceOverrideForSessionRun({
-        spawnedBy: stagingSessionEntry.spawnedBy,
-        workspaceDir: stagingSessionEntry.spawnedWorkspaceDir,
-        cwd: stagingSessionEntry.spawnedCwd,
-      }) ?? workspaceDir;
+      resolveSessionEntryIngressWorkspace(stagingSessionEntry, runProvider) ?? workspaceDir;
     // Private library selections change the sandbox isolation identity. Resolve
     // the current selection before staging so the attachment and admitted run
     // select the same SSH runtime, even when a prior snapshot needs refreshing.
