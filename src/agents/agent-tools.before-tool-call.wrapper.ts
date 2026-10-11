@@ -40,10 +40,7 @@ import {
   summarizeToolParams,
   startToolExecutionLiveness,
 } from "./agent-tools.before-tool-call.diagnostics.js";
-import {
-  consumeFinalClientVoiceToolConfirmation,
-  runBeforeToolCallHook,
-} from "./agent-tools.before-tool-call.policy.js";
+import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
@@ -219,13 +216,7 @@ export function recordStructuredReplayTrustForToolCall(
     return;
   }
   recordStructuredReplaySafeToolCall(toolCallId, runId);
-  while (structuredReplaySafeToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
-    const oldest = structuredReplaySafeToolCallIds.values().next().value;
-    if (!oldest) {
-      break;
-    }
-    structuredReplaySafeToolCallIds.delete(oldest);
-  }
+  pruneTrackedToolCallIds(structuredReplaySafeToolCallIds);
 }
 
 const preExecutionBlockedToolResults = new WeakSet<object>();
@@ -477,22 +468,6 @@ export function wrapToolWithBeforeToolCallHook(
         }
         onImplementationStart = decision.start;
       }
-      // A voice grant binds the post-finalizer execution shape. Consume it only
-      // after steering can no longer suppress the prepared call.
-      const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
-        toolCallId,
-        toolName,
-        toolKind: hookMetadata?.toolKind,
-        params: executeParams,
-        ctx,
-      });
-      if (!voiceConfirmation.allowed) {
-        return await blockToolCall({
-          reason: voiceConfirmation.reason,
-          deniedReason: "client-voice-confirmation",
-          toolParams: executeParams,
-        });
-      }
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
       signal?.throwIfAborted();
@@ -695,11 +670,15 @@ function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string):
     return;
   }
   preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
-  while (preExecutionBlockedToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
-    const oldest = preExecutionBlockedToolCallIds.values().next().value;
+  pruneTrackedToolCallIds(preExecutionBlockedToolCallIds);
+}
+
+function pruneTrackedToolCallIds(ids: Set<string>): void {
+  while (ids.size > MAX_TRACKED_ADJUSTED_PARAMS) {
+    const oldest = ids.values().next().value;
     if (!oldest) {
       break;
     }
-    preExecutionBlockedToolCallIds.delete(oldest);
+    ids.delete(oldest);
   }
 }

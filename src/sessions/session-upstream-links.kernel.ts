@@ -133,7 +133,7 @@ const upstreamLinkQuery = createSqliteQueryCache((db) => {
         .where("session_key", "=", key.sessionKey)
         .where("agent_id", "=", key.agentId),
     );
-    if (revision && getSqliteReadOperationRevision(db) === revision) {
+    if (revision) {
       retained = { ...key, revision, row };
     }
     return row;

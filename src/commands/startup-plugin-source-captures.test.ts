@@ -23,7 +23,6 @@ vi.mock("./config-preflight-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./config-preflight-snapshot.js")>()),
   readConfigPreflightSnapshot: mocks.read,
   readAdmittedConfigSnapshot: mocks.read,
-  assertPreflightConfigUnchanged: vi.fn(),
 }));
 vi.mock("../infra/sqlite-readonly-worker.js", () => ({
   withSqliteReadOnlyWorkerScope: (run: () => unknown) => run(),

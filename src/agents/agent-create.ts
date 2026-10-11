@@ -495,11 +495,6 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           const workspaceDir =
             explicitWorkspace ?? resolveAgentWorkspaceDir(currentConfig, agentId);
           const agentDir = explicitAgentDir ?? resolveAgentDir(currentConfig, agentId);
-          const materializeInjectedMain =
-            existingIndex >= 0 &&
-            isBootstrapMain &&
-            isInjectedBootstrapMainEntry(existingEntry) &&
-            !context.snapshot.exists;
           const creationBase = bootstrappingFirstAgent
             ? {
                 ...currentConfig,
@@ -509,17 +504,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
                 },
               }
             : (params.stagedConfig?.config ?? currentConfig);
-          let nextConfig =
-            existingIndex < 0 || materializeInjectedMain
-              ? applyAgentConfig(creationBase, {
-                  agentId,
-                  name: safeName,
-                  workspace: workspaceDir,
-                  agentDir,
-                  model,
-                  identity,
-                })
-              : creationBase;
+          let nextConfig = applyAgentConfig(creationBase, {
+            agentId,
+            name: safeName,
+            workspace: workspaceDir,
+            agentDir,
+            model,
+            identity,
+          });
           if (params.entry || template) {
             const list = listAgentEntries(nextConfig);
             const index = findAgentEntryIndex(list, agentId);

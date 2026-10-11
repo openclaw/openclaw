@@ -378,21 +378,29 @@ export function parseArgs(argv: string[]) {
 export function run(
   command: string,
   args: string[],
-  options: { capture?: boolean; cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { capture?: boolean | "echo"; cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
     env: options.env ? { ...process.env, ...options.env } : process.env,
-    maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES,
+    ...(options.capture === "echo" ? {} : { maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES }),
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
+  if (options.capture === "echo") {
+    if (result.stdout) {
+      process.stdout.write(result.stdout);
+    }
+    if (result.stderr) {
+      process.stderr.write(result.stderr);
+    }
+  }
   if (result.status !== 0) {
     throw new Error(
       `${command} ${args.join(" ")} failed with ${result.status ?? result.signal}\n${result.stderr ?? ""}`,
     );
   }
-  return result.stdout ?? "";
+  return `${result.stdout ?? ""}${options.capture === "echo" ? (result.stderr ?? "") : ""}`;
 }
 
 function readJson(path: string, label: string) {
@@ -1313,27 +1321,6 @@ async function resolveRunArtifact(
   return artifact;
 }
 
-function runAndEcho(command: string, args: string[]) {
-  const result = spawnSync(command, args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.stdout) {
-    process.stdout.write(result.stdout);
-  }
-  if (result.stderr) {
-    process.stderr.write(result.stderr);
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      `${command} ${args.join(" ")} failed with ${result.status ?? result.signal}\n${
-        result.stderr ?? ""
-      }`,
-    );
-  }
-  return `${result.stdout ?? ""}${result.stderr ?? ""}`;
-}
-
 function runLocalGeneratedCheckIfNeeded(options: ReturnType<typeof parseArgs>): LocalCheckResult {
   if (options.skipLocalGeneratedCheck) {
     return { status: "skipped", reason: "operator skipped --skip-local-generated-check" };
@@ -1431,7 +1418,7 @@ function dispatchWorkflow(
   for (const [key, value] of Object.entries(fields)) {
     args.push("-f", `${key}=${String(value)}`);
   }
-  return requireRunIdFromDispatchOutput(runAndEcho("gh", args), workflowFile);
+  return requireRunIdFromDispatchOutput(run("gh", args, { capture: "echo" }), workflowFile);
 }
 
 async function runInfo(repo: string, runId: string) {

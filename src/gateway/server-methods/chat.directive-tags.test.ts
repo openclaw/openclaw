@@ -4847,10 +4847,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 
-  it("persists a Gateway user turn under the durable owner when its loaded key is stale", async () => {
-    createFixturePaths("openclaw-chat-send-stale-transcript-owner-");
-    const canonicalSessionKey = "agent:main:canonical-transcript-owner";
-    const staleSessionKey = "agent:main:stale-transcript-owner";
+  it("persists a Gateway user turn under the canonical owner of a requested alias", async () => {
+    createFixturePaths("openclaw-chat-send-aliased-transcript-owner-");
+    const canonicalSessionKey = "agent:main:main";
+    const requestedSessionKey = "main";
     await replaceSessionEntry(
       {
         agentId: "main",
@@ -4861,9 +4861,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     mockState.finalText = "ok";
     await createChatRequestFixture().send({
-      idempotencyKey: "idem-stale-transcript-owner",
+      idempotencyKey: "idem-aliased-transcript-owner",
       message: "keep this Gateway turn",
-      sessionKey: staleSessionKey,
+      sessionKey: requestedSessionKey,
       requestParams: { sessionId: mockState.sessionId },
       expectBroadcast: false,
     });
@@ -4883,17 +4883,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         }),
       }),
     );
-    expect(
-      loadSqliteSessionEntry({
-        agentId: "main",
-        sessionKey: staleSessionKey,
-        storePath: mockState.storePath,
-      }),
-    ).toBeUndefined();
+    expect(mockState.loadSessionEntryCalls).toContainEqual({
+      rawKey: canonicalSessionKey,
+      opts: { agentId: "main" },
+    });
     expect(findUserUpdate()?.target).toEqual({
       agentId: "main",
       sessionId: mockState.sessionId,
-      sessionKey: staleSessionKey,
+      sessionKey: canonicalSessionKey,
       storePath: mockState.storePath,
     });
   });

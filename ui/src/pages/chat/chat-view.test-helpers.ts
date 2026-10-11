@@ -7,6 +7,8 @@ import {
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { resetChatViewState } from "./chat-view-state.ts";
 import { renderChat } from "./chat-view.ts";
 import {
   prepareChatMessageRender,
@@ -210,7 +212,7 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
 }
 
 export function renderChatView(overrides: Partial<ChatProps> = {}) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   onTestFinished(() => {
     render(nothing, container);
   });
@@ -316,7 +318,7 @@ export function createReactiveDraftHarness({
   let draft = "";
   let currentOverrides = overrides;
   let active = true;
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   onTestFinished(() => {
     active = false;
     render(nothing, container);
@@ -355,5 +357,54 @@ export function createSlashRerenderHarness() {
       return renderCurrent();
     },
     renderCurrent,
+  };
+}
+
+export function createReplyPane(paneId: string, draft: string, quote: string) {
+  const container = createComposerContainer();
+  const host: Pick<ChatProps, "draft" | "replyTarget"> = {
+    draft,
+    replyTarget: { messageId: `${paneId}-message`, text: quote, senderLabel: "User" },
+  };
+  const onSend = vi.fn();
+  const onAbort = vi.fn();
+  const onDraftChange = vi.fn((next: string) => {
+    host.draft = next;
+  });
+  const onRequestUpdate = vi.fn(() => redraw());
+  const onClearReply = vi.fn(() => {
+    host.replyTarget = null;
+    redraw();
+  });
+  function redraw() {
+    renderChatInto(container, {
+      paneId,
+      sessionKey: `agent:main:${paneId}`,
+      draft: host.draft,
+      getDraft: () => host.draft,
+      replyTarget: host.replyTarget,
+      canAbort: true,
+      runActive: true,
+      onDraftChange,
+      onRequestUpdate,
+      onClearReply,
+      onSend,
+      onAbort,
+    });
+  }
+  return {
+    container,
+    host,
+    redraw,
+    onDraftChange,
+    onRequestUpdate,
+    onClearReply,
+    onSend,
+    onAbort,
+    dispose: () => {
+      render(null, container);
+      container.remove();
+      resetChatViewState(paneId, container);
+    },
   };
 }

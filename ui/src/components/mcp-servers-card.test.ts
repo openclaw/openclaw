@@ -18,8 +18,9 @@ import {
   createApplicationGateway,
   type ApplicationContextProvider,
 } from "../test-helpers/application-context.ts";
-import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./mcp-servers-card.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush, waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
+import "./mcp-servers-card.tsx";
 
 type McpServersCard = HTMLElementTagNameMap["openclaw-mcp-servers-card"];
 type ConfigPatchBuilder = Parameters<RuntimeConfigCapability["patchFromSnapshot"]>[0];
@@ -131,8 +132,8 @@ async function mountCard(
   const provider = createApplicationContextProvider(context);
   const card = document.createElement("openclaw-mcp-servers-card");
   card.pluginsHref = "/settings/plugins";
-  provider.append(card);
   document.body.append(provider);
+  mountSolid(() => card, { container: provider });
   await card.updateComplete;
   await waitForFast(() => expect(harness.ensureLoaded).toHaveBeenCalled());
   await card.updateComplete;
@@ -214,7 +215,7 @@ describe("openclaw-mcp-servers-card", () => {
   });
 
   it("starts the selected connector and keeps a usable link when the popup is blocked", async () => {
-    const { card, request, open } = await mountLoginCard();
+    const { card, request, open, connection } = await mountLoginCard();
     request
       .mockResolvedValueOnce({ done: false, status: "running" })
       .mockResolvedValueOnce(browserStep)
@@ -246,6 +247,14 @@ describe("openclaw-mcp-servers-card", () => {
     expect(link.textContent).toContain("Open sign-in");
     expect(link.target).toBe("_blank");
     expect(open).toHaveBeenCalledWith(loginUrl, "_blank", "noopener,noreferrer");
+
+    connection.publish({
+      ...connection.gateway.snapshot,
+      lastError: "Unrelated connection notice",
+    });
+    flush();
+    expect(card.querySelector(".wizard-step__external-link")).toBe(link);
+    expect(request.mock.calls.some(([method]) => method === "wizard.cancel")).toBe(false);
 
     actionButton(card, "Cancel").click();
     await waitForFast(() => expect(card.querySelector("openclaw-modal-dialog")).toBeNull());

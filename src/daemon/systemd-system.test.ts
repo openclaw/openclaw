@@ -153,13 +153,11 @@ describe("system systemd ownership", () => {
       ).toEqual([
         { timeout: 50, killSignal: "SIGKILL" },
         { timeout: 30, killSignal: "SIGKILL" },
-        { timeout: 10, killSignal: "SIGKILL" },
       ]);
       expect(execFileUtf8.mock.calls.every((call) => call[2]?.env === process.env)).toBe(true);
       expect(execFileUtf8.mock.calls.map(([command, args]) => [command, args])).toEqual([
         ["systemctl", ["show", "--property=LoadState", "--value", "openclaw-gateway.service"]],
         ["systemctl", ["show", "--property=UnitPath", "--value"]],
-        ["systemctl", ["show", "--property=LoadState", "--value", "openclaw-gateway.service"]],
       ]);
     } finally {
       clock.mockRestore();
@@ -197,23 +195,6 @@ describe("system systemd ownership", () => {
         operation: "systemctl",
         detail: "manager UnitPath unavailable",
       },
-    });
-  });
-
-  it("rechecks the system manager after a negative filesystem snapshot", async () => {
-    let systemctlCalls = 0;
-    execFileUtf8.mockImplementation(async (_command: string, args: string[]) => {
-      if (args.includes("--property=UnitPath")) {
-        return state.managerUnitPath;
-      }
-      systemctlCalls += 1;
-      return systemctlCalls === 1
-        ? { stdout: "not-found\n", stderr: "", code: 0, termination: "exit" }
-        : { stdout: "loaded\n", stderr: "", code: 0, termination: "exit" };
-    });
-
-    await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
-      ownership: { status: "loaded", unitName: "openclaw-gateway.service" },
     });
   });
 

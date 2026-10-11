@@ -6,9 +6,10 @@ import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "../pages/apps/apps-page.ts";
-import { McpAppCatalog } from "./mcp-app-catalog.ts";
+import "./mcp-app-catalog.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
-import { McpAppResources } from "./mcp-app-resources.ts";
+import "./mcp-app-resources.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -61,6 +62,23 @@ function discoveryContext(request: ReturnType<typeof vi.fn>) {
   };
 }
 
+const providers = new WeakMap<HTMLElement, HTMLElement>();
+function provide(element: HTMLElement, context: unknown) {
+  // SAFETY: fixtures supply precisely the capabilities exercised by these catalog flows.
+  const provider = createApplicationContextProvider(context as ApplicationContext);
+  provider.append(element);
+  providers.set(element, provider);
+}
+function appendElement(element: HTMLElement) {
+  const provider = providers.get(element);
+  if (provider) {
+    provider.append(element);
+    document.body.append(provider);
+  } else {
+    document.body.append(element);
+  }
+}
+
 describe("app launch catalog", () => {
   it("shares pending discovery and retires it once for a config publication", async () => {
     const previous = createDeferred<McpAppDiscoverResult>();
@@ -72,17 +90,17 @@ describe("app launch catalog", () => {
       .mockReturnValueOnce(current.promise)
       .mockReturnValueOnce(remounted.promise);
     const { context, events } = discoveryContext(request);
-    const sidebar = new McpAppCatalog();
+    const sidebar = document.createElement("openclaw-mcp-app-catalog");
     sidebar.surface = "sidebar";
-    const thread = new McpAppCatalog();
+    const thread = document.createElement("openclaw-mcp-app-catalog");
     thread.surface = "thread";
-    const resources = new McpAppResources();
+    const resources = document.createElement("openclaw-mcp-app-resources");
     const elements = [sidebar, thread, resources];
     for (const element of elements) {
       element.sessionKey = "agent:main:one";
       element.agentId = "main";
-      Reflect.set(element, "context", context);
-      document.body.append(element);
+      provide(element, context);
+      appendElement(element);
       await element.updateComplete;
     }
     expect(request).toHaveBeenCalledExactlyOnceWith("mcp.app.discover", {
@@ -100,7 +118,7 @@ describe("app launch catalog", () => {
     for (const element of elements) {
       await element.updateComplete;
     }
-    expect(sidebar.textContent).toContain("Library");
+    await waitForSolid(() => expect(sidebar.textContent).toContain("Library"));
     expect(thread.querySelector("button")).not.toBeNull();
     expect(resources.querySelector("button")).not.toBeNull();
 
@@ -109,14 +127,14 @@ describe("app launch catalog", () => {
     for (const element of elements) {
       await element.updateComplete;
     }
-    expect(sidebar.textContent).toContain("Library");
+    await waitForSolid(() => expect(sidebar.textContent).toContain("Library"));
     expect(resources.querySelector("button")).not.toBeNull();
 
     sidebar.remove();
-    document.body.append(sidebar);
-    sidebar.requestUpdate();
+    await Promise.resolve();
+    appendElement(sidebar);
     await sidebar.updateComplete;
-    expect(request).toHaveBeenCalledTimes(3);
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     remounted.resolve({ servers: [] });
     await remounted.promise;
     await sidebar.updateComplete;
@@ -134,23 +152,27 @@ describe("app launch catalog", () => {
       .mockReturnValueOnce(background.promise)
       .mockReturnValueOnce(retry.promise);
     const { context } = discoveryContext(request);
-    const catalog = new McpAppCatalog();
+    const catalog = document.createElement("openclaw-mcp-app-catalog");
     catalog.sessionKey = "agent:main:one";
-    Reflect.set(catalog, "context", context);
-    document.body.append(catalog);
+    provide(catalog, context);
+    appendElement(catalog);
     await catalog.updateComplete;
     await catalog.updateComplete;
     failed.reject(new Error("Discovery unavailable"));
     await failed.promise.catch(() => {});
     await catalog.updateComplete;
     await catalog.updateComplete;
-    expect(catalog.querySelector('[role="alert"]')?.textContent).toContain("Discovery unavailable");
+    await waitForSolid(() =>
+      expect(catalog.querySelector('[role="alert"]')?.textContent).toContain(
+        "Discovery unavailable",
+      ),
+    );
 
-    const sibling = new McpAppCatalog();
+    const sibling = document.createElement("openclaw-mcp-app-catalog");
     sibling.surface = "sidebar";
     sibling.sessionKey = catalog.sessionKey;
-    Reflect.set(sibling, "context", context);
-    document.body.append(sibling);
+    provide(sibling, context);
+    appendElement(sibling);
     await sibling.updateComplete;
     expect(request).toHaveBeenCalledTimes(2);
     catalog.querySelector<HTMLButtonElement>('[role="alert"] + button')!.click();
@@ -159,11 +181,11 @@ describe("app launch catalog", () => {
     await retry.promise;
     await catalog.updateComplete;
     await catalog.updateComplete;
-    expect(catalog.textContent).toContain("Library");
+    await waitForSolid(() => expect(catalog.textContent).toContain("Library"));
     background.resolve({ servers: [] });
     await background.promise;
     await sibling.updateComplete;
-    expect(catalog.textContent).toContain("Library");
+    await waitForSolid(() => expect(catalog.textContent).toContain("Library"));
   });
 
   it("discovers again after creating a session while an earlier lookup is pending", async () => {
@@ -183,18 +205,18 @@ describe("app launch catalog", () => {
         state: { error: null },
       },
     };
-    const sidebar = new McpAppCatalog();
+    const sidebar = document.createElement("openclaw-mcp-app-catalog");
     sidebar.surface = "sidebar";
     sidebar.sessionKey = "agent:main:one";
-    Reflect.set(sidebar, "context", context);
-    document.body.append(sidebar);
+    provide(sidebar, context);
+    appendElement(sidebar);
     await sidebar.updateComplete;
     expect(request).toHaveBeenCalledOnce();
 
-    const apps = new McpAppCatalog();
+    const apps = document.createElement("openclaw-mcp-app-catalog");
     apps.sessionKey = sidebar.sessionKey;
-    Reflect.set(apps, "context", context);
-    document.body.append(apps);
+    provide(apps, context);
+    appendElement(apps);
     await apps.updateComplete;
     await apps.updateComplete;
     expect(createResult).toHaveBeenCalledOnce();
@@ -204,14 +226,14 @@ describe("app launch catalog", () => {
     current.resolve(result);
     await current.promise;
     await apps.updateComplete;
-    expect(apps.textContent).toContain("Library");
+    await waitForSolid(() => expect(apps.textContent).toContain("Library"));
 
     previous.reject(new Error("The requested session is unavailable"));
     await previous.promise.catch(() => {});
     await sidebar.updateComplete;
     await apps.updateComplete;
     expect(apps.querySelector('[role="alert"]')).toBeNull();
-    expect(apps.textContent).toContain("Library");
+    await waitForSolid(() => expect(apps.textContent).toContain("Library"));
   });
 
   it.each([false, true])(
@@ -259,7 +281,9 @@ describe("app launch catalog", () => {
       provider.append(element);
       document.body.append(provider);
       await element.updateComplete;
-      const catalog = element.querySelector<McpAppCatalog>("openclaw-mcp-app-catalog")!;
+      const catalog = element.querySelector<HTMLElementTagNameMap["openclaw-mcp-app-catalog"]>(
+        "openclaw-mcp-app-catalog",
+      )!;
       await catalog.updateComplete;
       await catalog.updateComplete;
       await catalog.updateComplete;
@@ -276,7 +300,7 @@ describe("app launch catalog", () => {
         agentId: "main",
       });
       await element.updateComplete;
-      expect(element.textContent).toContain("Library");
+      await waitForSolid(() => expect(element.textContent).toContain("Library"));
       expect(element.querySelector('[role="alert"]')).toBeNull();
       for (const listener of configChanged) {
         listener({ event: "config.changed" });
@@ -296,9 +320,9 @@ describe("app launch catalog", () => {
     const read = createDeferred<McpAppDiscoverResult>();
     const request = vi.fn().mockReturnValueOnce(read.promise).mockResolvedValue({});
     const navigate = vi.fn();
-    const element = new McpAppCatalog();
+    const element = document.createElement("openclaw-mcp-app-catalog");
     element.sessionKey = "agent:main:one";
-    Reflect.set(element, "context", {
+    provide(element, {
       gateway: {
         snapshot: {
           client: { request },
@@ -318,7 +342,7 @@ describe("app launch catalog", () => {
       basePath: "",
       navigate,
     });
-    document.body.append(element);
+    appendElement(element);
     await element.updateComplete;
     read.resolve({ servers: [], onboarding: [{ pluginId: "parts", title: "Parts plugin" }] });
     await read.promise;
@@ -337,17 +361,17 @@ describe("app launch catalog", () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
       ),
     });
-    expect(navigate).toHaveBeenCalledWith("chat", expect.any(Object));
+    await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.any(Object)));
     expect(element.querySelector('[role="alert"]')).toBeNull();
   });
   it.each(["sidebar", "thread", "file"] as const)(
     "hides unsupported %s controls after empty discovery",
     async (surface) => {
       const read = createDeferred<McpAppDiscoverResult>();
-      const element = new McpAppCatalog();
+      const element = document.createElement("openclaw-mcp-app-catalog");
       element.surface = surface;
       element.sessionKey = "agent:main:empty";
-      Reflect.set(element, "context", {
+      provide(element, {
         gateway: {
           snapshot: {
             client: { request: () => read.promise },
@@ -360,7 +384,7 @@ describe("app launch catalog", () => {
         },
         agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
       });
-      document.body.append(element);
+      appendElement(element);
       await element.updateComplete;
       read.resolve({ servers: [], onboarding: [] });
       await read.promise;
@@ -373,9 +397,9 @@ describe("app launch catalog", () => {
     const first = createDeferred<McpAppDiscoverResult>();
     const second = createDeferred<McpAppDiscoverResult>();
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    const element = new McpAppCatalog();
+    const element = document.createElement("openclaw-mcp-app-catalog");
     element.surface = "sidebar";
-    Reflect.set(element, "context", {
+    provide(element, {
       gateway: {
         snapshot: {
           client: { request },
@@ -389,7 +413,7 @@ describe("app launch catalog", () => {
       agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
     });
     element.sessionKey = "agent:main:one";
-    document.body.append(element);
+    appendElement(element);
     await element.updateComplete;
     element.sessionKey = "agent:main:two";
     await element.updateComplete;
@@ -417,15 +441,15 @@ describe("app launch catalog", () => {
       subscribe: () => () => {},
       subscribeEvents: () => () => {},
     };
-    const element = new McpAppCatalog();
-    Reflect.set(element, "context", {
+    const element = document.createElement("openclaw-mcp-app-catalog");
+    provide(element, {
       gateway,
       agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
     });
     element.surface = "thread";
     element.sessionKey = "agent:main:one";
     element.agentId = "main";
-    document.body.append(element);
+    appendElement(element);
     await element.updateComplete;
     read.resolve(result);
     await read.promise;
