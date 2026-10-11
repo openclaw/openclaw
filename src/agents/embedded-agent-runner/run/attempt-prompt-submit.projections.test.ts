@@ -8,6 +8,7 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import type { Context } from "../../../llm/types.js";
+import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnInput,
@@ -424,6 +425,95 @@ describe("durable model prompt projection at provider dispatch", () => {
       );
     });
   });
+
+  it.each([
+    { body: "plain", nested: false, hook: false },
+    { body: "forwarded inter-session", nested: true, hook: false },
+    { body: "redacted hook", nested: false, hook: true },
+  ])(
+    "replays an inter-session turn with its stored provenance envelope: $body body",
+    async ({ nested, hook }) => {
+      await withOpenClawTestState({ label: "inter-session-model-prompt" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:inter-session-model-prompt",
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+          sessionEntry: { sessionId, updatedAt: 1 },
+          ...(hook ? { config: { logging: { redactPatterns: ["hidden"] } } } : {}),
+        };
+        await upsertSessionEntryCore(target, target.sessionEntry);
+        const provenance = {
+          kind: "inter_session" as const,
+          sourceSessionKey: "agent:main:parent",
+          sourceTool: "sessions_send",
+        };
+        const task = "Continue the delegated task.";
+        const body = nested
+          ? annotateInterSessionPromptText(task, {
+              kind: "inter_session",
+              sourceSessionKey: "agent:main:origin",
+              sourceTool: "sessions_send",
+            })
+          : task;
+        const annotated = annotateInterSessionPromptText(body, provenance);
+        const recorder = createUserTurnTranscriptRecorder({
+          input: {
+            text: annotated,
+            timestamp: 1,
+            idempotencyKey: "inter-session:user",
+            provenance,
+          },
+          target,
+        });
+        await recorder.persistApproved();
+        const manager = await SessionManager.openAsync(target, state.workspaceDir);
+        const { session } = await createTestSession({ sessionManager: manager });
+        const convert = session.agent.convertToLlm;
+        session.agent.convertToLlm = (messages) =>
+          convert(normalizeMessagesForLlmBoundary(messages));
+        const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
+        streamMocks.streamSimple.mockImplementation((model, context) => {
+          requests.push(buildOpenAIResponsesParams(model, context, undefined));
+          return createAssistantResultStream(
+            createAssistant(model, [{ type: "text", text: "done" }]),
+          );
+        });
+
+        // The active turn sends the routed body; its provenance travels in runtime context.
+        await submitEmbeddedAttemptPrompt({
+          ...createBaseInput(),
+          activeSession: session,
+          attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+          transcriptPrompt: annotated,
+          modelPrompt: hook ? `hook before hidden\n\n${body}` : body,
+          prependContext: undefined,
+          appendContext: undefined,
+          getUserTranscriptContexts: () => [],
+          withTranscriptWrite: (write) => write(),
+          promptActiveSession: async (_prompt, options) => {
+            options?.preflightResult?.(true);
+            await session.agent.continue();
+          },
+        });
+        session.agent.state.messages = [
+          ...manager.buildSessionContext().messages,
+          { role: "user", content: "next turn", timestamp: 2 },
+        ];
+        await session.agent.continue();
+
+        expect(requests).toHaveLength(2);
+        // The request-local prompt keeps the capture-time redaction policy.
+        expect(JSON.stringify(requests[0])).toContain(task);
+        expect(JSON.stringify(requests[0])).not.toContain("hidden");
+        // History keeps the stored safety envelope once the transient carrier is gone.
+        expect(JSON.stringify(requests[1])).toContain("sourceSession=agent:main:parent");
+        expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
+          "modelPromptProjection",
+        );
+      });
+    },
+  );
 });
 
 describe("tool-result projection persistence at dispatch", () => {

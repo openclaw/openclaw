@@ -445,15 +445,22 @@ export function installModelPromptProjection(params: {
                 }));
         if (text !== undefined && (frozen !== undefined || text !== firstText)) {
           const captureProjection = params.recorder?.captureModelPromptProjection;
-          // A fallback retry can change the prompt after the turn already reached a provider
-          // unprojected. Its text stays request-local; history keeps the bytes first sent.
-          const sentUnprojected =
+          // Request-local text crosses the provider boundary under the recorder's redaction
+          // but never becomes the replayed history:
+          // - a fallback retry after the turn already reached a provider unprojected keeps
+          //   history on the bytes first sent;
+          // - a prompt that drops the stored inter-session envelope keeps history replaying
+          //   that source-provenance safety text once its transient carrier is gone. Compare
+          //   whole stored text, not the body prefix: a forwarded body may carry its own.
+          const requestLocal =
             frozen === undefined &&
-            params.recorder !== undefined &&
-            getUserTurnTranscriptAdmissionOwner(params.recorder)?.sentToProvider() === true;
-          if (frozen === undefined && captureProjection && !sentUnprojected) {
+            ((params.recorder !== undefined &&
+              getUserTurnTranscriptAdmissionOwner(params.recorder)?.sentToProvider() === true) ||
+              (firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE) === true &&
+                !text.includes(firstText)));
+          if (frozen === undefined && captureProjection) {
             const pendingText = text;
-            const capture = () => captureProjection(pendingText, assertCurrent);
+            const capture = () => captureProjection(pendingText, assertCurrent, { requestLocal });
             const captured = await (params.withTranscriptWrite
               ? params.withTranscriptWrite(capture)
               : capture());
@@ -476,7 +483,7 @@ export function installModelPromptProjection(params: {
             promptMessages = messages.map((message) =>
               message === target ? projectedTarget : message,
             );
-            if (agent.state && !sentUnprojected) {
+            if (agent.state && !requestLocal) {
               agent.state.messages = agent.state.messages.map((message) =>
                 message === target ? projectedTarget : message,
               );

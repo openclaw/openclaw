@@ -229,10 +229,14 @@ export type UserTurnTranscriptRecorder = {
   /** Confirms exact-run steering provenance after transcript commitment is proven. */
   confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
-  /** Freeze model-facing text on the canonical user record before its first provider dispatch. */
+  /**
+   * Freeze model-facing text on the canonical user record before its first provider dispatch.
+   * `requestLocal` applies the same redaction but leaves the stored record unchanged.
+   */
   captureModelPromptProjection?: (
     text: string,
     assertCurrent: () => void,
+    options?: { requestLocal?: boolean },
   ) => Promise<PersistedUserTurnMessage>;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   /** Persistence and `waitForRuntimePersistence` settle the handler's write and reject on its failure. */

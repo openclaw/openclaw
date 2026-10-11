@@ -53,6 +53,7 @@ export async function capturePersistedModelPromptProjection(params: {
   admission: UserTurnTranscriptAdmissionReceipt;
   message: PersistedUserTurnMessage;
   text: string;
+  requestLocal?: boolean;
   config?: OpenClawConfig;
   assertCurrent: () => void;
   assertWritable: () => void;
@@ -63,6 +64,14 @@ export async function capturePersistedModelPromptProjection(params: {
 }): Promise<PersistedUserTurnMessage> {
   params.assertCurrent();
   const text = redactTranscriptText(params.text, params.config);
+  const projected = (candidate: PersistedUserTurnMessage): PersistedUserTurnMessage => ({
+    ...candidate,
+    __openclaw: { ...candidate["__openclaw"], modelPromptProjection: { version: 1, text } },
+  });
+  // Request-local text crosses the provider boundary under the same redaction, never durably.
+  if (params.requestLocal) {
+    return projected(params.message);
+  }
   const requireMatchingProjection = (candidate: PersistedUserTurnMessage) => {
     const existing = readModelPromptProjection(candidate);
     if (existing !== undefined && existing !== text) {
@@ -88,13 +97,7 @@ export async function capturePersistedModelPromptProjection(params: {
       captured = candidate;
       return undefined;
     }
-    return {
-      ...candidate,
-      __openclaw: {
-        ...candidate["__openclaw"],
-        modelPromptProjection: { version: 1, text },
-      },
-    };
+    return projected(candidate);
   });
   params.assertCurrent();
   if (!rewritten) {
