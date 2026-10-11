@@ -43,6 +43,7 @@ import {
   preferStreamedClaudeTextOverResult,
   readCliUsage,
   readGeminiCliStreamJsonError,
+  isClaudeStopHookFeedbackRecord,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
 import { appendCliResultText } from "./cli-output-results.js";
@@ -279,6 +280,28 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     const attributedParentToolUseId = readClaudeAttributedSubagentProgressId(parsed);
     if (attributedParentToolUseId) {
       params.onAttributedSubagentProgress?.(attributedParentToolUseId);
+    }
+    // A Stop-hook bounce is a hard segment boundary: the refused draft before
+    // the record must stop being a candidate to outrank the result envelope.
+    // Without this, a rewrite routed through a tool makes the next message a
+    // tool-split boundary, which reconnects the rejected draft to the
+    // correction and delivers both. The reset happens after the rejected
+    // message's stop and before the rewrite's first delta, so it never cuts
+    // into the correction itself.
+    if (
+      claudeStreamJson &&
+      !isClaudeSubagentRecord(parsed) &&
+      isClaudeStopHookFeedbackRecord(parsed)
+    ) {
+      finishTaggedReasoningMessage();
+      if (classifyClaudeCommentary) {
+        flushPendingClaudeText("assistant");
+      }
+      segmentStart = currentMessageStart = preserveFrom = assistantText.length;
+      sawToolUseSinceText = false;
+      pendingMessageSeparator = false;
+      previousMessageHadToolUse = false;
+      currentMessageHadToolUse = false;
     }
     if (
       claudeStreamJson &&
