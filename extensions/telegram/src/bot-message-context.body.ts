@@ -2,7 +2,6 @@ import {
   buildMentionRegexes,
   classifyChannelInboundEvent,
   formatMediaPlaceholderText,
-  formatLocationText,
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
@@ -40,8 +39,8 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   buildSenderName,
-  extractTelegramLocation,
   getTelegramTextParts,
+  resolveTelegramNonTextBody,
   hasLeadingBotCommandAddressedToOtherBot,
   hasBotMentionInText,
   hasBotMention,
@@ -192,15 +191,17 @@ export async function resolveTelegramInboundBody(params: {
     formattedStickerDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${cachedStickerDescription}`;
   }
 
-  const locationData = extractTelegramLocation(msg);
-  const locationText = locationData ? formatLocationText(locationData) : undefined;
+  const nonTextBody = resolveTelegramNonTextBody(msg);
   const rawText = renderTelegramTextEntities(
     messageTextParts.text,
     messageTextParts.entities,
   ).trim();
   const richText = resolveTelegramRichMessageText(msg);
-  const hasUserText = Boolean(rawText || locationText);
-  let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
+  // Dice stays out of this flag on purpose: its only consumer is the audio preflight
+  // below, and a Bot API message carries either `dice` or `voice`/`audio`, never both,
+  // so adding it here could not change any decision.
+  const hasUserText = Boolean(rawText || nonTextBody?.kind === "location");
+  let rawBody = [rawText, nonTextBody?.text].filter(Boolean).join("\n").trim();
   if (!rawBody) {
     rawBody = richText ?? resolveTelegramRichMessagePlaceholder(msg) ?? "";
   }
@@ -424,6 +425,6 @@ export async function resolveTelegramInboundBody(params: {
     nativeCommandBody,
     ...(audioTranscribedMediaIndex !== undefined ? { audioTranscribedMediaIndex } : {}),
     stickerCacheHit,
-    locationData: locationData ?? undefined,
+    locationData: nonTextBody?.kind === "location" ? nonTextBody.location : undefined,
   };
 }
