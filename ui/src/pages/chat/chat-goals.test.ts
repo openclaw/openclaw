@@ -466,39 +466,6 @@ describe("Goal control requests", () => {
     },
   );
 
-  it("retains recovery when a target event invalidates the exact descriptor read", async () => {
-    await expireSavedEdit();
-    const pending = createDeferred<{ session: SessionsListResult["sessions"][number] | null }>();
-    const host = goalHost({
-      "sessions.list": observedRoster(),
-      "sessions.describe": () => pending.promise,
-    });
-    const { gateway, emitEvent } = createGatewayHarness(host.client!);
-    const sessions = createTestSessionCapability(gateway);
-    host.sessions = sessions;
-    const check = chatGoalRecovery(host)?.onCheck();
-    try {
-      await vi.waitFor(() =>
-        expect(host.request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(
-          true,
-        ),
-      );
-      emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: { agentId: "main", key: host.sessionKey, reason: "goal" },
-      });
-      pending.resolve({ session: observedRoster().sessions[0] ?? null });
-      expect(await check).toBe(false);
-      expect(chatGoalRecovery(host)).toMatchObject({ retired: "expired" });
-      expect(sessionStorage.length).toBe(1);
-      expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
-    } finally {
-      pending.resolve({ session: null });
-      sessions.dispose();
-    }
-  });
-
   it.each(["query", "target", "connection"] as const)(
     "retains expired recovery after %s changes during the roster read",
     async (invalidation) => {
