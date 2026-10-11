@@ -53,7 +53,7 @@ class ProviderSignInDialogTest {
 
   @Test
   fun openSignInPageOpensUppercaseHttps() {
-    assertEquals(listOf("HTTPS://example.com/login"), openedUrls("HTTPS://example.com/login"))
+    assertEquals(listOf("https://example.com/login"), openedUrls("HTTPS://example.com/login"))
   }
 
   @Test

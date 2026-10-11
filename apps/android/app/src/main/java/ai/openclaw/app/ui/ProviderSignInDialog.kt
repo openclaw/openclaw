@@ -4,7 +4,7 @@ import ai.openclaw.app.ProviderAuthController
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.providerDisplayName
-import ai.openclaw.app.ui.chat.isSafeMarkdownLinkDestination
+import ai.openclaw.app.ui.chat.browserSafeUrl
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -142,7 +142,7 @@ internal fun ProviderSignInDialog(
             SelectionContainer { Text(code, style = ClawTheme.type.title) }
           }
           // Wizard pages are browser URLs. Other schemes become Android intents.
-          it["externalUrl"]?.jsonPrimitive?.content?.takeIf(::isSafeMarkdownLinkDestination)?.let { url ->
+          it["externalUrl"]?.jsonPrimitive?.content?.let(::browserSafeUrl)?.let { url ->
             TextButton(onClick = { uriHandler.openUri(url) }) { Text(nativeString("Open sign-in page")) }
           }
           if (it["executor"]?.jsonPrimitive?.content == "gateway") {
