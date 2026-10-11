@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import * as memoryRuntime from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
@@ -11,11 +13,104 @@ import * as knnSubprocess from "./manager-search-knn-subprocess.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
+
 describe("memory search provenance enrichment", () => {
   const fixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
+
+  it.each([false, true])(
+    "refreshes same-text origins without embeddings (batch=%s)",
+    async (batchEnabled) => {
+      const content =
+        "- Keep the amber notebook. <!-- trigger: amber notebook --> <!-- project: fixture/project -->\n";
+      await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), content);
+      let originClass: "agent" | "untrusted" = "agent";
+      const provenance = () => ({ fileHash: hashText(content), originClass, observedAt: 1 });
+      const read = vi
+        .spyOn(memoryRuntime, "readMemoryArtifactProvenance")
+        .mockImplementation(async ({ relativePath }) =>
+          relativePath === "MEMORY.md" ? provenance() : undefined,
+        );
+      const list = vi
+        .spyOn(memoryRuntime, "listMemoryArtifactProvenance")
+        .mockImplementation(async () => [{ relativePath: "MEMORY.md", provenance: provenance() }]);
+      const config = fixture.createConfig({
+        provider: batchEnabled ? "batch-wide-test" : "gemini",
+        batchEnabled,
+        cacheEnabled: false,
+        vectorEnabled: false,
+        sources: ["memory"],
+      });
+      try {
+        const baseline = await fixture.getFreshManager(config);
+        await baseline.sync({ reason: "session-start" });
+        expect(baseline.status().batch?.enabled).toBe(batchEnabled);
+        expect(
+          await baseline.listTriggerCandidates({ activeProjectKeys: ["fixture/project"] }),
+        ).toHaveLength(1);
+        const beforeDb = memoryIndexFixtureWriter(baseline);
+        const query =
+          "SELECT id, text, embedding, updated_at FROM memory_index_chunks WHERE path = 'MEMORY.md'";
+        const before = beforeDb.prepare(query).all();
+        const beforeProvenance = beforeDb
+          .prepare(
+            "SELECT session_kind, observed_at, supersedes_key FROM memory_index_chunk_provenance WHERE chunk_id IN (SELECT id FROM memory_index_chunks WHERE path = 'MEMORY.md')",
+          )
+          .all();
+        const embeddingCalls = fixture.provider.embedBatchCalls;
+        const batchCalls = fixture.provider.providerRuntimeBatchCalls.length;
+        await baseline.close();
+
+        // The artifact-record owner can reclassify a real replacement without
+        // changing final text; the separate core-tool proof covers that producer.
+        originClass = "untrusted";
+        read.mockClear();
+        list.mockClear();
+        const manager = await fixture.getFreshManager(config);
+        await manager.sync({ reason: "session-start" });
+        const results = await manager.search("amber notebook", { lexicalOnly: true, minScore: 0 });
+        expect(results.find((result) => result.path === "MEMORY.md")?.provenance?.originClass).toBe(
+          "untrusted",
+        );
+        expect(
+          await manager.listTriggerCandidates({ activeProjectKeys: ["fixture/project"] }),
+        ).toEqual([]);
+        expect(
+          await manager.listCuratedProjectCandidates({ activeProjectKeys: ["fixture/project"] }),
+        ).toEqual([]);
+        expect(fixture.provider.embedBatchCalls).toBe(embeddingCalls);
+        expect(fixture.provider.providerRuntimeBatchCalls).toHaveLength(batchCalls);
+        expect(list).toHaveBeenCalledOnce();
+        expect(read).toHaveBeenCalledTimes(1);
+        const db = memoryIndexFixtureWriter(manager);
+        expect(db.prepare(query).all()).toEqual(before);
+        expect(
+          db
+            .prepare(
+              "SELECT session_kind, observed_at, supersedes_key FROM memory_index_chunk_provenance WHERE chunk_id IN (SELECT id FROM memory_index_chunks WHERE path = 'MEMORY.md')",
+            )
+            .all(),
+        ).toEqual(beforeProvenance);
+
+        // A subsequent unchanged scan reads source origins in bulk and writes none.
+        await manager.close();
+        read.mockClear();
+        list.mockClear();
+        const unchanged = await fixture.getFreshManager(config);
+        await unchanged.sync({ reason: "session-start" });
+        expect(list).toHaveBeenCalledOnce();
+        expect(read).not.toHaveBeenCalled();
+        expect(fixture.provider.embedBatchCalls).toBe(embeddingCalls);
+        expect(fixture.provider.providerRuntimeBatchCalls).toHaveLength(batchCalls);
+      } finally {
+        read.mockRestore();
+        list.mockRestore();
+      }
+    },
+  );
 
   it.each([
     { name: "body keywords", query: "violet", vector: false },

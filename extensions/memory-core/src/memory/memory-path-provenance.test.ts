@@ -18,6 +18,35 @@ afterEach(() => {
 });
 
 describe("memory path provenance", () => {
+  it("uses batched provenance under the remote read's canonical path without per-file lookups", async () => {
+    const artifactProvenance = new Map([
+      [
+        "memory/tainted.md",
+        { fileHash: "0".repeat(64), originClass: "untrusted" as const, observedAt: 1 },
+      ],
+    ]);
+    vi.mocked(readMemoryArtifactProvenance).mockClear();
+    await expect(
+      resolveMemoryPathClassification({
+        absolutePath: "/gateway/decoy/MEMORY.md",
+        source: "memory",
+        workspaceDir: "/remote/workspace",
+        readSource: { canonicalRelativePath: "memory/tainted.md" },
+        artifactProvenance,
+      }),
+    ).resolves.toEqual({ curatedRoot: false, originClass: "untrusted" });
+    await expect(
+      resolveMemoryPathClassification({
+        absolutePath: "/gateway/decoy/USER.md",
+        source: "memory",
+        workspaceDir: "/remote/workspace",
+        readSource: { canonicalRelativePath: "USER.md" },
+        artifactProvenance,
+      }),
+    ).resolves.toEqual({ curatedRoot: true, originClass: "agent" });
+    expect(readMemoryArtifactProvenance).not.toHaveBeenCalled();
+  });
+
   it("classifies loaded remote sources without probing Gateway-local decoys", async () => {
     const workspaceDir = tempDirs.make("remote-memory-provenance-");
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Gateway decoy");

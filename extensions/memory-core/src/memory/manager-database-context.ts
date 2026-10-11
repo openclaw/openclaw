@@ -625,6 +625,19 @@ export class MemoryIndexDatabase {
     );
   }
 
+  refreshSourceOrigin(
+    input: MemoryPublicationOperations["source.refreshOrigin"]["input"],
+    assertCurrent: () => void,
+    prepare: () => Promise<boolean>,
+  ) {
+    return this.withSourceMutation(() =>
+      this.retryPublication(
+        () => this.executePublication({ type: "source.refreshOrigin", input }, assertCurrent),
+        prepare,
+      ),
+    );
+  }
+
   async updateIndexStructure<Key extends "vector.ensure" | "vector.retireLegacy">(
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,

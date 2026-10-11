@@ -4,6 +4,7 @@ import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-rei
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
 import type { MemorySourceIndexHeader } from "./manager-source-index-kernel.js";
+import type { refreshMemorySourceOrigin } from "./manager-source-origin.worker.js";
 import type {
   loadMemorySourceFileState,
   refreshMemorySessionSourceState,
@@ -54,6 +55,10 @@ export type MemoryPublicationOperations = {
   };
   "source.refresh": {
     input: Parameters<typeof refreshMemorySessionSourceState>[1];
+    output: MemoryPublicationResult<boolean>;
+  };
+  "source.refreshOrigin": {
+    input: Parameters<typeof refreshMemorySourceOrigin>[1];
     output: MemoryPublicationResult<boolean>;
   };
   "source.state": {

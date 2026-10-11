@@ -6,12 +6,17 @@ import {
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
+  hashText,
   runWithConcurrency,
+  type MemoryFileEntry,
+  type MemoryEntryProvenance,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
+import { readMemoryIndexSource } from "./manager-index-source.js";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import {
   isMemorySessionIndexable,
@@ -26,6 +31,7 @@ import type {
   MemorySourceSyncPlan,
   MemorySyncProgressState,
 } from "./manager-sync-base.js";
+import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 
 const SOURCE_SYNC_YIELD_INTERVAL_MS = 12;
 const SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES = 128;
@@ -136,7 +142,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const existingRows = await this.database.readSourceState({
       source: "memory",
     });
-    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
+    const existingByPath = new Map(existingRows.map((row) => [row.path, row]));
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
@@ -148,11 +154,77 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     }
 
     const deleteStaleRows = () => this.deleteStaleSourceFiles("memory", existingRows, activePaths);
+    const unchanged = (entry: MemoryFileEntry) =>
+      !params.needsFullReindex && existingByPath.get(entry.path)?.hash === entry.hash;
+    const reusablePaths = fileEntries
+      .filter((entry) => unchanged(entry) && entry.kind !== "multimodal")
+      .map((entry) => entry.path);
+    const originsByPath = new Map(
+      (reusablePaths.length > 0
+        ? await this.database.readSourceState({
+            source: "memory",
+            paths: reusablePaths,
+            includeOrigin: true,
+          })
+        : []
+      ).map((row) => [row.path, row]),
+    );
+    // Source provenance is independent of the text hash. Read this workspace's
+    // records once; unchanged files must not each query the provenance store.
+    const artifactProvenance = new Map(
+      (reusablePaths.length > 0
+        ? await listMemoryArtifactProvenance({ workspaceDir: this.workspaceDir })
+        : []
+      ).map(({ relativePath, provenance }) => [relativePath, provenance]),
+    );
+    const reuseSource = async (entry: MemoryFileEntry): Promise<boolean> => {
+      if (!unchanged(entry)) {
+        return false;
+      }
+      // Non-Markdown sources have no artifact-write provenance to refresh.
+      if (entry.kind === "multimodal") {
+        return true;
+      }
+      const indexed = originsByPath.get(entry.path);
+      if (indexed?.hash !== entry.hash) {
+        return false;
+      }
+      if (!indexed.hasChunks) {
+        return true;
+      }
+      if (!indexed.origin) {
+        return false;
+      }
+      const classification = this.memoryFiles
+        ? (
+            await readMemoryIndexSource({
+              absolutePath: entry.absPath,
+              source: "memory",
+              workspaceDir: this.workspaceDir,
+              memoryFiles: this.memoryFiles,
+              artifactProvenance,
+            })
+          )?.pathClassification
+        : await resolveMemoryPathClassification({
+            absolutePath: entry.absPath,
+            source: "memory",
+            workspaceDir: this.workspaceDir,
+            artifactProvenance,
+          });
+      if (!classification) {
+        this.dirty = true;
+        return true;
+      }
+      if (indexed.origin !== classification.originClass) {
+        await this.refreshMemorySourceOrigin(entry, classification.originClass);
+      }
+      return true;
+    };
 
     if (this.batch.enabled) {
       const indexItems: MemoryIndexWorkItem[] = [];
       for (const entry of fileEntries) {
-        if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+        if (await reuseSource(entry)) {
           this.advanceSyncProgress(params.progress);
           continue;
         }
@@ -164,7 +236,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       await this.indexQueuedFiles(indexItems, params.progress);
     } else {
       const tasks = fileEntries.map((entry) => async () => {
-        if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+        if (await reuseSource(entry)) {
           this.advanceSyncProgress(params.progress);
           return;
         }
@@ -176,6 +248,42 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
 
     await deleteStaleRows();
     return undefined;
+  }
+
+  private async refreshMemorySourceOrigin(
+    entry: MemoryFileEntry,
+    originClass: MemoryEntryProvenance["originClass"],
+  ): Promise<void> {
+    await withMemoryWorkspaceLock(this.workspaceDir, async () => {
+      const database = this.database;
+      const assertCurrent = () => {
+        this.memoryFiles?.assertCurrent();
+        if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
+          throw new Error("Memory source owner changed before origin refresh");
+        }
+      };
+      const input = { path: entry.path, expectedHash: entry.hash, originClass };
+      const refreshed = await database.refreshSourceOrigin(input, assertCurrent, async () => {
+        const current = await readMemoryIndexSource({
+          absolutePath: entry.absPath,
+          source: "memory",
+          workspaceDir: this.workspaceDir,
+          memoryFiles: this.memoryFiles,
+        });
+        if (!current || hashText(current.content) !== entry.hash) {
+          this.dirty = true;
+          return false;
+        }
+        input.originClass = current.pathClassification.originClass;
+        assertCurrent();
+        return true;
+      });
+      if (refreshed === false) {
+        throw new MemoryIndexRevisionConflictError(
+          `Memory source ${entry.path} changed during origin refresh; retry incremental sync.`,
+        );
+      }
+    });
   }
 
   protected override async syncArchiveFiles(params: {
