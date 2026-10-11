@@ -18,7 +18,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolvePersonalGitHubOwner } from "../state/user-github-connections.js";
 import { createGitHubPublicationExecutionEffects } from "./github-publication-execution-effects.js";
-import { projectGitHubPublicationResult } from "./github-publication-store.js";
+import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 
 export type PersonalGitHubPublicationRow = DB["github_personal_publication_requests"];
 const table = "github_personal_publication_requests";

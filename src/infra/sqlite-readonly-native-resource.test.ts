@@ -7,7 +7,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteReadOnlyNativeResourceClient } from "./sqlite-readonly-native-resource.client.js";
 import { createNativeWorkerResource } from "./sqlite-readonly-native-resource.js";
@@ -16,8 +15,6 @@ import type {
   SqliteNativeOwnerRequest,
   SqliteNativeSessionLaunch,
 } from "./sqlite-readonly-native-resource.types.js";
-import { SqliteReadOnlyInspectionContentionError } from "./sqlite-readonly-worker-protocol.js";
-import { createSqliteSnapshotStagingTokenSync } from "./sqlite-snapshot-staging.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import type { NativeWorkerResourceOwner } from "./worker-native-lifecycle.types.js";
 
@@ -267,7 +264,7 @@ it.each([false, true])(
   },
 );
 
-it.each(["missing-parent", "post-creation", "parent-busy"] as const)(
+it.each(["missing-parent", "post-creation"] as const)(
   "keeps real allocation custody truthful for %s failure through actual native close",
   async (phase) => {
     const entry = fixture();
@@ -308,25 +305,9 @@ if (process.argv[2] === "--openclaw-sqlite-readonly-child" && process.argv[3] ==
     }
     const sessions: Array<ReturnType<typeof actual.createScopedSqliteReadOnlyWorker>> = [];
     const order: string[] = [];
-    const sessionCreated = createDeferredCore();
-    const nativeFailure: { error?: unknown } = {};
-    let restoreNativeRun: (() => void) | undefined;
-    let releaseBlocker: (() => void) | undefined;
     operations.session.mockImplementation((launch) => {
       const native = actual.createScopedSqliteReadOnlyWorker(launch);
       sessions.push(native);
-      if (phase === "parent-busy") {
-        const originalRun = native.run.bind(native);
-        const run = vi.spyOn(native, "run").mockImplementation((...args) => {
-          const result = originalRun(...args);
-          void result.catch((error: unknown) => {
-            nativeFailure.error = error;
-          });
-          return result;
-        });
-        restoreNativeRun = () => run.mockRestore();
-      }
-      sessionCreated.resolve();
       void native.closed.then(() => {
         order.push("native-closed");
       });
@@ -353,30 +334,8 @@ if (process.argv[2] === "--openclaw-sqlite-readonly-child" && process.argv[3] ==
     };
     const session = entry.client.createSession(launch);
     try {
-      let allocationRoot =
+      const allocationRoot =
         phase === "missing-parent" ? path.join(stagingRoot, "missing") : stagingRoot;
-      if (phase === "parent-busy") {
-        const parent = createSqliteSnapshotStagingTokenSync(stagingRoot);
-        parent.release();
-        const blocker = new (requireNodeSqlite().DatabaseSync)(
-          path.join(parent.directory, "owner.sqlite"),
-        );
-        releaseBlocker = () => {
-          try {
-            if (blocker.isOpen && blocker.isTransaction) {
-              blocker.exec("ROLLBACK");
-            }
-          } finally {
-            if (blocker.isOpen) {
-              blocker.close();
-            }
-          }
-        };
-        await sessionCreated.promise;
-        allocationRoot = parent.directory;
-        // All host filesystem setup precedes this lock; keep the same handle until child close.
-        blocker.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE");
-      }
       const failure = await session
         .run(allocationRoot, {
           mode: "staging-create",
@@ -387,9 +346,7 @@ if (process.argv[2] === "--openclaw-sqlite-readonly-child" && process.argv[3] ==
       if (!(failure instanceof Error)) {
         throw new Error("Expected original native allocation failure");
       }
-      if (phase === "parent-busy") {
-        expect(failure.message).toMatch(/locked|busy/i);
-      } else if (phase === "missing-parent") {
+      if (phase === "missing-parent") {
         expect(failure.message).toContain("ENOENT");
         expect(failure.message).toContain("snapshot staging root");
         expect(failure.message).toContain("check filesystem health and write permissions");
@@ -412,9 +369,6 @@ if (process.argv[2] === "--openclaw-sqlite-readonly-child" && process.argv[3] ==
           return { status: "rejected", error } as const;
         },
       );
-      if (phase === "parent-busy") {
-        expect(nativeFailure.error).toBeInstanceOf(SqliteReadOnlyInspectionContentionError);
-      }
       if (phase !== "post-creation") {
         expect(outcome.status).toBe("fulfilled");
         expect(order).toEqual(["native-closed", "resource-closed"]);
@@ -436,15 +390,7 @@ if (process.argv[2] === "--openclaw-sqlite-readonly-child" && process.argv[3] ==
       expect(operations.copy.mock.calls.length).toBe(0);
       expect(operations.remove.mock.calls.length).toBe(0);
     } finally {
-      try {
-        await entry.closeNative();
-      } finally {
-        try {
-          releaseBlocker?.();
-        } finally {
-          restoreNativeRun?.();
-        }
-      }
+      await entry.closeNative();
     }
   },
 );

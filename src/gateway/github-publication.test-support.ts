@@ -30,7 +30,7 @@ import {
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import {
-  captureGitHubPublicationRequester,
+  prepareGitHubPublicationRequesterV2,
   type GitHubPublicationRequester,
 } from "./github-publication-requester.js";
 import { createGitHubPublicationRuntime as createRuntime } from "./github-publication-runtime.js";
@@ -193,7 +193,7 @@ export async function createGitHubPublicationRequesterFixture(params: {
     getCommittedRuntimeConfig: params.getCommittedRuntimeConfig ?? currentGitHubPublicationConfig,
   };
   const session = { sessionKey: params.sessionKey, agentId: params.agentId };
-  const captured = await captureGitHubPublicationRequester({ client, context }, session);
+  const captured = await prepareGitHubPublicationRequesterV2({ client, context }, session);
   onTestFinished(captured.release);
   return { ...captured, client, context, session };
 }

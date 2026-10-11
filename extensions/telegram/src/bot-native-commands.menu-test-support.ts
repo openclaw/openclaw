@@ -95,11 +95,10 @@ export function createNativeCommandTestParams(
       async () => [],
     ) as TelegramNativeCommandDeps["readChannelAllowFromStore"],
     prepareSkillCommandsForAgents,
-    syncTelegramMenuCommands: vi.fn(({ bot, commandsToRegister }) => {
-      if (commandsToRegister.length === 0) {
-        return undefined;
+    syncTelegramMenuCommands: vi.fn(async ({ bot, commandsToRegister }) => {
+      if (commandsToRegister.length > 0) {
+        await bot.api.setMyCommands(commandsToRegister);
       }
-      return bot.api.setMyCommands(commandsToRegister);
     }) as TelegramNativeCommandDeps["syncTelegramMenuCommands"],
     sendMessageTelegram: vi.fn(async () => ({ messageId: "999", chatId: "100" })),
   };

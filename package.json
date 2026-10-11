@@ -1695,6 +1695,7 @@
     "build:ci-artifacts": "node --import ./scripts/tsx.mjs scripts/build-all.mts ciArtifacts",
     "build:docker": "pnpm plugins:assets:build && node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node --import ./scripts/tsx.mjs scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/build-stamp.mts && node --import ./scripts/tsx.mjs scripts/runtime-postbuild-stamp.mts && pnpm plugins:assets:copy && node --import ./scripts/tsx.mjs scripts/write-build-info.ts && node --import ./scripts/tsx.mjs scripts/write-cli-startup-metadata.ts",
     "build:package": "node --import ./scripts/tsx.mjs scripts/build-all.mts package",
+    "build:runtime": "node --import ./scripts/tsx.mjs scripts/build-all.mts runtime",
     "build:plugin-sdk:dts": "node --import ./scripts/tsx.mjs scripts/write-plugin-sdk-entry-dts.ts",
     "build:plugin-sdk:strict-smoke": "node --import ./scripts/tsx.mjs scripts/build-all.mts pluginSdkStrictSmoke",
     "build:strict-smoke": "node --import ./scripts/tsx.mjs scripts/build-all.mts strictSmoke",

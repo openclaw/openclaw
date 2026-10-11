@@ -22,7 +22,7 @@ import {
 } from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
-import { captureGitHubPublicationRequester } from "../github-publication-requester.js";
+import { prepareGitHubPublicationRequesterV2 } from "../github-publication-requester.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -213,7 +213,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         sessionKey: loaded.canonicalKey,
         agentId: caller?.agentId ?? loaded.agentId,
       };
-      const admitted = await captureGitHubPublicationRequester(options, session);
+      const admitted = await prepareGitHubPublicationRequesterV2(options, session);
       try {
         const result = await coordinator.requestForSession({
           ...params,

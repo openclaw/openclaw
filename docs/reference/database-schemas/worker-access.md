@@ -283,8 +283,9 @@ The private SQLite SDK's `openOpenClawAgentSqliteWorkerStoreV2` captures the
 existing agent executor without opening a host writer. Its required live
 authority remains bound through preparation, transaction, commit, and close;
 explicit preparation can create storage, while existing-only commands preserve
-absence. Memory Core sends lineage-origin, standing-intent, and Forget commands
-through that owner.
+absence. Memory Core sends vector/schema, metadata, lineage-origin,
+standing-intent, and Forget commands through that owner. Its published host
+reader is physically read-only and retires with the agent lifecycle.
 Logbook and Workboard already keep native SQL inside their worker backends.
 
 Released raw SQLite and opaque approval callbacks remain named native
