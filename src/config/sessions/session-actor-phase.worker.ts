@@ -18,6 +18,7 @@ import type {
 } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { reduceSessionActorEntry } from "./session-actor-reducers.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import { applySessionTranscriptEvent } from "./session-message-rewrite.worker.js";
 import { projectPendingFinalDeliverySettlement } from "./session-pending-final-settlement.js";
@@ -111,12 +112,12 @@ export function applySessionActorPhase(
   const turn = (input: SessionTurnPlan) => {
     if (
       input.sessionKey !== sessionKey ||
-      input.agentId !== database.agentId ||
       input.options.expectedSessionId !==
         (state.hot.entry?.sessionId ?? input.options.initialSessionEntry?.sessionId)
     ) {
       throw new Error("Session actor turn changed its captured target");
     }
+    assertCanonicalSessionKeyWrite(sessionKey, input.agentId);
     const committed = applySessionTurn(
       input,
       context,

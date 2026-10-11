@@ -488,7 +488,6 @@ const remoteCatalogPublication = configuredRefresh.createRemoteCatalogPublicatio
   ...preparedModelRuntimeLeaseContext,
   publicationQueue,
   replyDispatchPublication,
-  getEpoch: () => refreshRequestEpoch,
   getCancellationSignal: () => refreshCancellation.signal,
   // Catalog adoption also waits for a degraded startup's final publication.
   getPendingReplacement: () =>

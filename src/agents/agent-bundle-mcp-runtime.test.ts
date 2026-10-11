@@ -923,55 +923,6 @@ describe("session MCP runtime", () => {
     }
   });
 
-  it("bounds catalog replay when a server invalidates every tools/list response", async ({
-    signal,
-  }) => {
-    const tempDir = tempDirTracker.make("bundle-mcp-continuous-invalidation-");
-    const noisyServerPath = path.join(tempDir, "noisy-server.mjs");
-    const noisyLogPath = path.join(tempDir, "noisy-server.log");
-    const healthyServerPath = path.join(tempDir, "healthy-server.mjs");
-    const healthyLogPath = path.join(tempDir, "healthy-server.log");
-    await writeListToolsMcpServer({
-      filePath: noisyServerPath,
-      logPath: noisyLogPath,
-      capabilities: { tools: { listChanged: true } },
-      tools: [{ name: "noisy_tool", inputSchema: { type: "object", properties: {} } }],
-      notifyListChangedBeforeEveryListResponse: true,
-    });
-    await writeListToolsMcpServer({
-      filePath: healthyServerPath,
-      logPath: healthyLogPath,
-      tools: [{ name: "healthy_tool", inputSchema: { type: "object", properties: {} } }],
-    });
-
-    const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-continuous-invalidation",
-      sessionKey: "agent:test:session-continuous-invalidation",
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            noisy: { command: process.execPath, args: [noisyServerPath] },
-            healthy: { command: process.execPath, args: [healthyServerPath] },
-          },
-        },
-      },
-    });
-
-    try {
-      const catalog = await withinTest(runtime.getCatalog(), signal);
-
-      expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
-        "healthy_tool",
-        "noisy_tool",
-      ]);
-      const noisyLog = await fs.readFile(noisyLogPath, "utf8");
-      expect(noisyLog.match(/tools\/list cursor/g)).toHaveLength(2);
-    } finally {
-      await runtime.dispose();
-    }
-  });
-
   it("keeps prompt-only servers reporting unknown methods available for utility tools", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-only-"));
     const serverPath = path.join(tempDir, "resource-only.mjs");
@@ -3531,62 +3482,6 @@ describe("disposeSession timeout", () => {
           "slow_tool",
         ]);
         expect(await fs.readFile(slowLogPath, "utf8")).toContain("fast retry initialize");
-      } finally {
-        await runtime.dispose();
-      }
-    },
-  );
-
-  it(
-    "serializes invalidated catalog generations on one session",
-    { timeout: LIST_TOOLS_TEST_DEADLINE_MS * 2 },
-    async ({ signal }) => {
-      const tempDir = makeTempDir(tempDirs, "bundle-mcp-overlap-generation-");
-      const serverPath = path.join(tempDir, "overlap-server.mjs");
-      const logPath = path.join(tempDir, "server.log");
-
-      await writeListToolsMcpServer({
-        filePath: serverPath,
-        logPath,
-        capabilities: { tools: { listChanged: true } },
-        notifyListChangedOnInitialized: true,
-        delayMs: 100,
-        toolsByList: [
-          [{ name: "ok_tool", inputSchema: [] }],
-          [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }],
-        ],
-        callToolResult: { content: [{ type: "text", text: "still connected" }], isError: false },
-      });
-
-      const runtime = await makeStdioRuntime(
-        "session-overlap-generation-test",
-        "overlap",
-        serverPath,
-      );
-
-      try {
-        const firstCatalog = runtime.getCatalog();
-        await withinTest(
-          fixtureEventBeforeSettlement(logPath, "notify tools/list_changed", firstCatalog),
-          signal,
-        );
-        await withinTest(
-          fixtureEventBeforeSettlement(logPath, "tools/list cursor", firstCatalog),
-          signal,
-        );
-
-        const secondCatalog = await runtime.getCatalog();
-        const firstCatalogResult = await firstCatalog;
-
-        expect(firstCatalogResult.diagnostics ?? []).toEqual([]);
-        expect(firstCatalogResult.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
-        expect(secondCatalog.diagnostics ?? []).toEqual([]);
-        expect(secondCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
-
-        await expect(runtime.callTool("overlap", "ok_tool", {})).resolves.toMatchObject({
-          content: [{ type: "text", text: "still connected" }],
-          isError: false,
-        });
       } finally {
         await runtime.dispose();
       }

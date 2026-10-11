@@ -1323,7 +1323,7 @@ src/agents/fallback-skip-cache.ts	1
 src/agents/fast-mode.ts	1
 src/agents/harness/builtin-openclaw.ts	2
 src/agents/harness/context-engine-lifecycle.ts	3
-src/agents/harness/context-engine-turn-outbox.ts	3
+src/agents/harness/context-engine-turn-outbox.ts	1
 src/agents/harness/gateway-question.ts	4
 src/agents/harness/hook-helpers.ts	1
 src/agents/harness/lifecycle-hook-helpers.ts	1
@@ -2779,8 +2779,6 @@ ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	2
 ui/src/pages/chat/components/chat-voice-activity.ts	1
-ui/src/pages/chat/components/session-diff-menus.ts	1
-ui/src/pages/chat/components/session-diff-panel.ts	1
 ui/src/pages/chat/components/widget-card.ts	3
 ui/src/pages/chat/components/widget-export.ts	1
 ui/src/pages/chat/composer-dictation.ts	1
