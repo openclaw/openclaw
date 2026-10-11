@@ -7293,7 +7293,6 @@
 ["src/gateway/server-maintenance.test.ts","../infra/device-bootstrap.js","1fadad973eb379bb15713ed3593470a01c638687dd9f2a9d3fe0a753cf013904",1]
 ["src/gateway/server-methods.authorization.test.ts","../state/user-profile-email.js","d0f969c2fc1ea7ea324217e56412047ff1479422377ef8e00cdbf56ba6f745aa",1]
 ["src/gateway/server-methods/agent.create-event.test.ts","../../commands/agent.js","75a2facd598f646dff198541e1bf4881d52d8a6b442bf7ff4217524c19dd9556",1]
-["src/gateway/server-methods/agent.create-event.test.ts","../../config/config.js","21e80adb93849850f4c7b6c9f29d381ffd751918660653c24314b15e7db04977",1]
 ["src/gateway/server-methods/agent.create-event.test.ts","../../runtime.js","c23efe4bad492c9a6c67196d735052b135a65419723c1f29a8b10a07f7b84dea",1]
 ["src/gateway/server-methods/agent.deleted-agent.test.ts","../../commands/agent.js","8e299b38d44e2dba403f8ef45b465b7a8e10d7f68e9619743fe323b3ae401c6d",1]
 ["src/gateway/server-methods/agent.deleted-agent.test.ts","../session-reset-service.js","1d1cbec45a681813627aaf5ed826539ea9c3cc43bafab6b72523077f1564577f",1]
