@@ -3,12 +3,10 @@ import type { TalkClientCreateResult } from "../../../../packages/gateway-protoc
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import type { BoundedSerialQueue } from "../../../shared/bounded-serial-queue.js";
-import type { RealtimeVoiceAgentControlResult } from "../../../talk/agent-run-control.js";
 import type { ClientVoiceSessionSource } from "../../../talk/client-voice-session-source.js";
 import type { createClientVoiceTranscriptReadiness } from "../../../talk/client-voice-transcript-readiness.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "../../../talk/provider-internal.js";
 import type {
-  RealtimeVoiceAudioClearReason,
   RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBrowserAudioContract,
   RealtimeVoiceProviderConfig,
@@ -24,6 +22,7 @@ import type { TalkAgentConsultAuthority } from "../client-gateway-control.js";
 import type { TalkClientRunAuthority } from "../client-run-authority.js";
 import type { PreparedTalkSessionTarget } from "../session-target.types.js";
 import type { RelayAudioCompleteness, RelayAudioOutput } from "./audio-completeness.js";
+import type { TalkRealtimeRelayEventData } from "./event.types.js";
 import type { RelayToolCallLedger } from "./tool-call-ledger.js";
 
 export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -33,54 +32,7 @@ export const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 
 export const noFallbackRelayOutputFlush = () => {};
 
-export type TalkRealtimeRelayEventData =
-  | { type: "ready" }
-  | { type: "responseStarted"; turnId: string }
-  | { type: "inputAudio"; byteLength: number }
-  | {
-      type: "audio";
-      audioBase64: string;
-      itemId?: string;
-      responseId?: string;
-    }
-  | { type: "audioStarted"; outputId: number }
-  | {
-      type: "audioDone";
-      itemId?: string;
-      responseId?: string;
-      status?: "completed" | "cancelled" | "failed" | "incomplete";
-    }
-  | { type: "clear"; reason?: RealtimeVoiceAudioClearReason }
-  | { type: "mark"; markName: string }
-  | {
-      type: "transcript";
-      role: "user" | "assistant";
-      text: string;
-      final: boolean;
-      textMode?: "snapshot";
-      transcriptId?: string;
-    }
-  | {
-      type: "toolCall";
-      itemId: string;
-      callId: string;
-      name: string;
-      args: unknown;
-      forced?: boolean;
-    }
-  | { type: "toolCallCancelled"; callId: string }
-  | { type: "toolResult"; callId: string }
-  | { type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
-  | {
-      type: "error";
-      message: string;
-      code?: "realtime_unavailable";
-      provider?: string;
-      model?: string;
-      transport?: "gateway-relay";
-      phase?: string;
-    }
-  | { type: "close"; reason: "completed" | "error" };
+export type { TalkRealtimeRelayEventData } from "./event.types.js";
 
 export type TalkRealtimeRelayEventPayload = TalkRealtimeRelayEventData & {
   relaySessionId: string;

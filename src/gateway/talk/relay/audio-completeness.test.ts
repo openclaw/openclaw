@@ -150,7 +150,6 @@ describe("buffered relay audio completeness", () => {
   });
 });
 
-
 it("retires a slow audio-completeness consumer before it can receive a completed marker", async () => {
   vi.useFakeTimers();
   let request: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -200,7 +199,11 @@ it("retires a slow audio-completeness consumer before it can receive a completed
   activeRelaySessions.set(session.relaySessionId, client.connId);
   await Promise.resolve();
   try {
-    request!.onEvent?.({ direction: "server", type: "response.created", responseId: "response-slow" });
+    request!.onEvent?.({
+      direction: "server",
+      type: "response.created",
+      responseId: "response-slow",
+    });
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
     request!.onAudio(Buffer.alloc(960));
 

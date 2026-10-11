@@ -1,4 +1,4 @@
-import type { TalkRealtimeRelayEventData } from "./state.js";
+import type { TalkRealtimeRelayEventData } from "./event.types.js";
 
 type AudioStatus = "completed" | "cancelled" | "failed" | "incomplete";
 export type RelayAudioOutput = {
