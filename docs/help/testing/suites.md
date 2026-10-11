@@ -534,6 +534,8 @@ These are "real pipeline" regressions without real providers:
 The prompt-cache fixture drives ten turns through the real embedded agent
 pipeline, transcript store, and provider serializers. It activates the root
 plugin registry and advertises its tools directly with tool search disabled.
+It also compares retained user-envelope digests before provider serialization,
+covering timestamps, idempotency keys, and metadata that wire serializers omit.
 Five tool results are individually truncated to about 16,000 characters each;
 together they exceed the 65,536-character aggregate budget. The intended
 invariant is that already-sent result bytes remain frozen under that pressure,
