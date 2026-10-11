@@ -87,7 +87,9 @@ export async function readSessionCreateTarget(
   expectedSessionId: string | undefined,
   lifecycleIdentities: readonly string[],
 ): Promise<Result<InternalSessionEntry | undefined, ErrorShape>> {
-  const assertRoutingCurrent = captureSessionMutationRouting(params.cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(params.cfg, undefined, [
+    { agentId: target.agentId, sessionKey: target.canonicalKey },
+  ]);
   const assertCurrent = () => {
     params.commitGuard?.();
     assertRoutingCurrent(params.getCurrentConfig?.() ?? params.cfg);

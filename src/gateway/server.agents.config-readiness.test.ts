@@ -249,6 +249,68 @@ it("publishes agent mutations before acknowledging immediate session and roster 
           }
           expect(getRuntimeConfig().agents?.entries?.[agentId]).toBeUndefined();
 
+          const peer = await connectGatewayClient({
+            url: `ws://127.0.0.1:${claim.port}`,
+            token,
+            scopes: ["operator.admin", "operator.read", "operator.write"],
+          });
+          try {
+            await withinTest(
+              Promise.all(
+                [client, peer].map(async (operator, index) => {
+                  const otherOperator = index === 0 ? peer : client;
+                  for (let round = 0; round < 4; round += 1) {
+                    const overlapAgentId = `overlap-${index}-${round}`;
+                    await expect(
+                      operator.request("agents.create", {
+                        name: overlapAgentId,
+                        workspace: path.join(state.home, overlapAgentId),
+                      }),
+                    ).resolves.toMatchObject({ agentId: overlapAgentId });
+                    await expect(
+                      operator.request("sessions.create", {
+                        agentId: "main",
+                        key: `agent:main:${overlapAgentId}`,
+                      }),
+                    ).resolves.toMatchObject({ key: `agent:main:${overlapAgentId}` });
+                    const deletion = { agentId: overlapAgentId, deleteFiles: false };
+                    if (round === 0) {
+                      const results = await Promise.allSettled([
+                        operator.request("agents.delete", deletion),
+                        otherOperator.request("agents.delete", deletion),
+                      ]);
+                      expect(results).toEqual(
+                        expect.arrayContaining([
+                          {
+                            status: "fulfilled",
+                            value: expect.objectContaining({ ok: true, agentId: overlapAgentId }),
+                          },
+                          {
+                            status: "rejected",
+                            reason: expect.objectContaining({
+                              code: "INVALID_REQUEST",
+                              message: `agent "${overlapAgentId}" not found`,
+                            }),
+                          },
+                        ]),
+                      );
+                    } else {
+                      await expect(
+                        operator.request("agents.delete", deletion),
+                      ).resolves.toMatchObject({
+                        ok: true,
+                        agentId: overlapAgentId,
+                      });
+                    }
+                  }
+                }),
+              ),
+              signal,
+            );
+          } finally {
+            await disconnectGatewayClient(peer);
+          }
+
           assert.isDefined(reloadScheduler);
           const clock = createGatewaySchedulerClock();
           const scheduler = createTestGatewayScheduler(clock.clock);

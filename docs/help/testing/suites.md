@@ -538,6 +538,7 @@ These are "real pipeline" regressions without real providers:
 - Gateway agent admission (real Gateway with a mock OpenAI provider): `src/gateway/gateway.test.ts` (case: "accepts a gateway agent request over ws and returns a run id"; checks acceptance, a run ID, and an abort response).
 - Gateway wizard (WS `wizard.start`/`wizard.next`, writes config + auth enforced): `src/gateway/gateway.test.ts` (case: "runs wizard over ws and writes auth token config")
 - Prompt/KV-cache request prefixes: `src/agents/embedded-agent-runner.prompt-cache.test.ts` drives admitted agent turns against capturing mock providers for Anthropic Messages, Claude in-history system messages, OpenAI Chat Completions, and OpenAI Responses.
+- User replay and failed-attempt persistence: `src/agents/embedded-agent-runner/run/attempt-prompt-submit.projections.test.ts`, `src/agents/session-tool-result-guard.transcript-events.test.ts`, and `src/agents/sessions/agent-session-responses-eof.test.ts` exercise recorded user content, append-only errors, and retry/reopen prefixes at their owning boundaries.
 - Gateway chat, completion, and restart prefixes: `src/gateway/gateway.prompt-cache.test.ts` uses authenticated `chat.send`, a real `sessions_spawn` child and its completion, an in-process Gateway server stop/start, and another `chat.send` in the same session. It compares the parent conversation's requests and nonempty cache keys separately from the child's requests.
 
 The prompt-cache fixture drives ten turns through the real embedded agent
@@ -559,10 +560,10 @@ captures a turn while its reconnect is blocked, steers the sixth turn, and
 reopens durable runner state before the seventh. Turn eight assembles and replays
 a synthetic typed subagent completion event; it does not spawn a subagent or
 prove announcement delivery or authorization. The channel-derived history limit
-crosses on turn nine. Captures include system, tools, history, and cache identity.
-Prefix comparisons permit only the declared first-image cleanup on turn five
-and the exact history-prefix removal on turn nine. Cleanup replaces only image
-blocks with the documented marker; adjacent text remains exact. At the pruning
+crosses on turn nine. The Responses route also exercises a partial assistant
+error followed by a new turn. Captures include system, tools, history, and cache
+identity. Prefix comparisons permit only the exact history-prefix removal on
+turn nine; previously sent image blocks remain unchanged. At the pruning
 boundary, legacy Chat Completions relocates the same runtime facts from the
 retired first user to the retained first user. Legacy Messages can refresh its
 identified transient runtime context, including date facts and announcements.

@@ -11,7 +11,7 @@ The Gateway store, capabilities, `lib/sessions/*` (reconciler, provenance, refre
 - `projectSource(source, contract)` reads through to the synchronous owner, shares one upstream subscription across observers, releases it when the last observer leaves, and binds disposal to the creating Solid owner.
 - Every adapter declares its equality contract. Mutable snapshots use `"revision"` (every owner notification publishes, including same-object mutations). Value comparators are only for immutable values. Never copy a mutable snapshot into a second writable store.
 - Changing a connection, agent, session, or query means `replaceSource()` with a **new scope object**. Never mutate a scope in place.
-- `projectEvents()` keeps synchronous, ordered delivery with duplicates and no replay. Invalidations, confirmations, handoffs, and Gateway events stay events, not latest-value signals.
+- Subscribe to event owners directly. Invalidations, confirmations, handoffs, and Gateway events stay events, not latest-value signals; preserve the owner's ordering, replay, and completion contract.
 - `useApplication()` (from `lib/reactive/context.ts`) returns the same capability object Lit consumers get. Providing it never transfers ownership.
 - One projection per owner and scope. If you need data an owner doesn't publish, extend the owner, not the view.
 

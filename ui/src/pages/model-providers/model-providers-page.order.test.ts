@@ -7,7 +7,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusProfile, WizardNextResult } from "../../api/types.ts";
-import type { ConfigPatchAck } from "../../lib/config/config-gateway-operations.ts";
+import type { ConfigPatchAck } from "../../lib/config/config-draft-model.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import {

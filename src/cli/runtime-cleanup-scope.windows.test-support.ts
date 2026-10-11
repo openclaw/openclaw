@@ -4,6 +4,11 @@ import { writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "../infra/runtime-worker-url.js";
+import { windowsProcessJobRetentionEntrypoint } from "./cli-entrypoint.test-support.js";
+import {
   retainCliProcessJobUntilExit,
   withCliCommandCleanup,
   withCliProcessScope,
@@ -31,6 +36,7 @@ if (role === "launcher") {
     retainWindowsProcessJobUntilExit({});
     await withCliProcessScope(retainCliProcessJobUntilExit);
   } else if (ownership === "legacy-worker") {
+    const retainedJobModule = resolveRuntimeWorkerUrl(windowsProcessJobRetentionEntrypoint);
     const worker = new Worker(
       `const { parentPort, workerData } = require("node:worker_threads");
        import(workerData).then(({ retainWindowsProcessJobUntilExit }) => {
@@ -39,10 +45,8 @@ if (role === "launcher") {
        });`,
       {
         eval: true,
-        workerData: new URL(
-          "../process/supervisor/service-child-windows-job-native.ts",
-          import.meta.url,
-        ).href,
+        execArgv: resolveRuntimeWorkerThreadExecArgv(retainedJobModule),
+        workerData: retainedJobModule.href,
       },
     );
     const [[message], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);

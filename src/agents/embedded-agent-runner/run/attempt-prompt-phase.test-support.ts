@@ -298,7 +298,6 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     preparedStreamRuntime: {
       cache: {},
       history: {
-        contextEngineAssemblySucceeded: false,
         contextEnginePromptAuthority: "assembled",
       },
       promptActiveSession: vi.fn(),

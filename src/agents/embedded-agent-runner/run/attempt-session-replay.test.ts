@@ -1,4 +1,5 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createFailureMessage } from "../../../../packages/agent-core/src/turn-interruption.js";
 import {
   loadTranscriptEventsSync,
@@ -39,6 +40,37 @@ import * as persistedReplay from "./pre-persisted-user-turn.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
+
+function expectCapturedCurrentUserPrefix(
+  before: ReturnType<typeof loadTranscriptEventsSync>,
+  after: ReturnType<typeof loadTranscriptEventsSync>,
+  fixture: Parameters<Parameters<typeof withInterruptedTurn>[1]>[0],
+) {
+  const admission = fixture.attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  assert(admission, "Expected the replayed current user's admission");
+  const index = before.findIndex((entry) => isRecord(entry) && entry.id === admission.entryId);
+  const current = before[index];
+  assert(isRecord(current) && isRecord(current.message), "Expected the admitted user entry");
+  expect(current.message).toMatchObject({
+    role: "user",
+    content: fixture.attempt.prompt,
+    idempotencyKey: `${fixture.attempt.runId}:user`,
+  });
+  // First dispatch records this projection even when the admitted text is unchanged.
+  // Every prior entry and every other field on this exact user remain byte-identical.
+  expect(after.slice(0, before.length)).toEqual(
+    before.with(index, {
+      ...current,
+      message: {
+        ...current.message,
+        __openclaw: {
+          ...(isRecord(current.message["__openclaw"]) ? current.message["__openclaw"] : {}),
+          modelPromptProjection: { version: 1, text: fixture.attempt.prompt },
+        },
+      },
+    }),
+  );
+}
 
 describe("context engine bootstrap", () => {
   it("bootstraps the context engine under the admitted user turn's read fence", async () => {
@@ -224,7 +256,7 @@ describe("interrupted canonical user replay", () => {
             }
             expect(session.getLastAssistantText()).toBe("Continued from completed work");
             const after = loadTranscriptEventsSync(fixture.target);
-            expect(after.slice(0, before.length)).toEqual(before);
+            expectCapturedCurrentUserPrefix(before, after, fixture);
             if (oversizedMetadata) {
               expect(
                 after.filter(
@@ -311,8 +343,10 @@ describe("interrupted canonical user replay", () => {
                 JSON.stringify(context.messages).includes(queuedText),
               ),
             ).toBe(true);
-            expect(loadTranscriptEventsSync(fixture.target).slice(0, before.length)).toEqual(
+            expectCapturedCurrentUserPrefix(
               before,
+              loadTranscriptEventsSync(fixture.target),
+              fixture,
             );
             for (const [, context] of streamMocks.streamSimple.mock.calls) {
               expect(
@@ -371,8 +405,10 @@ describe("interrupted canonical user replay", () => {
               );
               expect(users).toHaveLength(1);
               expect(users[0]?.content).toContainEqual(image);
-              expect(loadTranscriptEventsSync(fixture.target).slice(0, before.length)).toEqual(
+              expectCapturedCurrentUserPrefix(
                 before,
+                loadTranscriptEventsSync(fixture.target),
+                fixture,
               );
               expect(
                 SessionManager.open(fixture.target)

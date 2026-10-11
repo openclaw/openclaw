@@ -537,22 +537,22 @@ describe("admitted lazy session writer", () => {
   });
 
   it.each([false])(
-    "settles one terminal error after attempt teardown (existing=%s)",
+    "preserves one committed terminal error through attempt teardown (existing=%s)",
     async (existing) => {
       await withInitialWriter(
-        async ({ manager, promptState, runParams, target }) => {
+        async ({ manager, promptState, target }) => {
           manager.appendMessage(userMessage);
-          const owner = createAssistantErrorTranscript({ runId: runParams.runId });
+          const owner = createAssistantErrorTranscript();
           installSessionToolResultGuard(manager, { assistantErrorTranscript: owner });
           manager.appendMessage(makeAgentAssistantMessage({ content: [], stopReason: "error" }));
           expect(
             SessionManager.open(target)
               .getBranch()
               .filter((entry) => entry.type === "message"),
-          ).toHaveLength(1);
+          ).toHaveLength(2);
           return async () => {
             await promptState[Symbol.asyncDispose]();
-            await owner.settle(true);
+            owner.settle(true);
             expect(
               SessionManager.open(target)
                 .getBranch()
