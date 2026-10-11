@@ -277,7 +277,7 @@ function trackSchemaChanges(
       owner.isolatedTempTables.has(table),
     );
     if ((dataChange && !temporaryWrite) || mainSchemaChange) {
-      beginSqliteDatabaseWrite(database);
+      beginSqliteDatabaseWrite(database, mainSchemaChange || owner.nativeDepth > 0);
     }
     owner.nativeDepth += 1;
     const finishAdmissions = beginSqliteDatabaseAdmissionOperation(database);
@@ -292,10 +292,8 @@ function trackSchemaChanges(
     }
     return {
       expire: () => {
-        if (iterator) {
-          if (owner.iteratorFacts) {
-            invalidate(owner);
-          }
+        if (iterator && owner.iteratorFacts) {
+          invalidate(owner);
         }
       },
       stepped: () => {
@@ -398,7 +396,8 @@ function trackSchemaChanges(
           succeeded,
           openingMutationRevision,
         );
-        if (owner.nativeDepth === 0 && !database.isTransaction) {
+        // A parked read cursor cannot retain custody of a settled sibling statement's write.
+        if (owner.mutationDepth === 0 && !database.isTransaction) {
           finishSqliteDatabaseWrite(database);
         }
         // A control batch may open a transaction and read before returning, even on error.

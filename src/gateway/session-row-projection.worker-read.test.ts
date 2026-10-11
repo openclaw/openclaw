@@ -155,10 +155,16 @@ it.each([{ workMs: 20, rowCount: 65 }])(
           try {
             for (const [index, { scope, entry }] of entries.entries()) {
               replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: `latest-${index}` });
+              sessionChanges.emit({
+                ...scope,
+                storePath: projection.capture({ agentId: scope.agentId, key: scope.sessionKey })!
+                  .storeTarget.storePath,
+                factsInvalidated: true,
+              });
             }
             expect(projection.dirtyRowCount).toBe(rowCount);
             const published = publications;
-            expect(published).toBe(rowCount);
+            expect(published).toBe(rowCount * 2);
             // Each commit accepts its prepared entry before the worker refreshes database facts.
             expect(accepting).toBe(rowCount);
             expect(acceptance).toEqual([]);
@@ -248,6 +254,12 @@ it.each([
             { agentId: query.agentId, sessionKey: query.key },
             { ...entry, updatedAt: 2, label: "Committed" },
           );
+          sessionChanges.emit({
+            agentId: query.agentId,
+            sessionKey: query.key,
+            storePath: projection.capture(query)!.storeTarget.storePath,
+            factsInvalidated: true,
+          });
         }
         const selected = rows[0]!;
         const describe = () =>
@@ -689,11 +701,25 @@ it.each([
           return reply;
         });
         replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Fresh stored label" });
+        sessionChanges.emit({
+          ...scope,
+          storePath: projection.capture({ agentId: scope.agentId, key: scope.sessionKey })!
+            .storeTarget.storePath,
+          factsInvalidated: true,
+        });
         if (change === "captured sibling row") {
           replaceSessionEntrySync(unrelated, {
             sessionId: "unrelated",
             updatedAt: 0,
             label: "Previous sibling",
+          });
+          sessionChanges.emit({
+            ...unrelated,
+            storePath: projection.capture({
+              agentId: unrelated.agentId,
+              key: unrelated.sessionKey,
+            })!.storeTarget.storePath,
+            factsInvalidated: true,
           });
         }
         reading = listSessions({ client, context, request });

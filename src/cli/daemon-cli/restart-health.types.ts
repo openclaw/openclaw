@@ -44,6 +44,7 @@ export type GatewayRestartSnapshot = {
   unavailablePlugins?: UnavailablePluginHealthSummary[];
   channelProbeErrors?: Array<{ id: string; error: string }>;
   channelProbeTimeouts?: Array<{ id: string; error: string }>;
+  channelRuntimeWarnings?: Array<{ id: string; error: string }>;
   expectedVersion?: string;
   versionMismatch?: {
     expected: string;

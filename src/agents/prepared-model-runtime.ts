@@ -125,6 +125,7 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
       config: {},
     }),
   getPendingReplacement: () => getAdmissionReplacement()?.promise,
+  isStartupPending: () => pendingModelRuntimeReplacement?.degraded === true,
   ensureReady: (params) => ensureGatewayPreparedModelRuntimeReady(params),
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
@@ -487,7 +488,6 @@ const remoteCatalogPublication = configuredRefresh.createRemoteCatalogPublicatio
   ...preparedModelRuntimeLeaseContext,
   publicationQueue,
   replyDispatchPublication,
-  getEpoch: () => refreshRequestEpoch,
   getCancellationSignal: () => refreshCancellation.signal,
   // Catalog adoption also waits for a degraded startup's final publication.
   getPendingReplacement: () =>

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openEditor } from "../../../lib/editor-links.ts";
 import {
   clearNativeGatewayTestState,
@@ -9,6 +9,7 @@ import {
 } from "../../../test-helpers/native-gateways.ts";
 import "./chat-detail-panel.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 
 type DetailPanel = HTMLElement & {
   content: unknown;
@@ -23,7 +24,13 @@ type DetailPanel = HTMLElement & {
   canvasPluginSurfaceUrl: string;
 };
 
+let container: HTMLElement;
+beforeEach(() => {
+  container = createChatSidebarContainer();
+  document.body.append(container);
+});
 afterEach(() => {
+  container.remove();
   vi.unstubAllGlobals();
 });
 
@@ -70,7 +77,7 @@ describe("file sidebar editor locality", () => {
       content: "const answer = 42;",
     };
     vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
 
     expect(panel.querySelector('[aria-label="Open in editor"]')).not.toBeNull();
@@ -89,7 +96,7 @@ describe("file sidebar editor locality", () => {
       content: "const answer = 42;",
     };
     vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
     expect(panel.querySelector('[aria-label="Open in editor"]')).not.toBeNull();
 
@@ -116,7 +123,7 @@ describe("markdown sidebar", () => {
       testCase.kind === "markdown"
         ? { kind: "markdown", content: "Rendered summary", rawText: source }
         : { kind: "file", path: "notes.md", name: "notes.md", language: "md", content: source };
-    document.body.append(panel);
+    container.append(panel);
     const schedule = vi.spyOn(globalThis, "setTimeout");
     try {
       await panel.updateComplete;
@@ -180,7 +187,7 @@ describe("markdown sidebar", () => {
         fileLinkSessionKey: sessionKey,
       };
       panel.onOpenWorkspaceFile = onOpenWorkspaceFile;
-      document.body.append(panel);
+      container.append(panel);
       await panel.updateComplete;
 
       panel.querySelector<HTMLAnchorElement>("a.markdown-file-link")?.click();
@@ -199,7 +206,7 @@ describe("markdown sidebar", () => {
   ] as const)("renders %s", async (_name, markdown, expected) => {
     const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
     panel.content = { kind: "markdown", content: markdown };
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
 
     expect(panel.querySelector(".sidebar-markdown-reader")?.getAttribute("dir")).toBe(expected);
@@ -212,7 +219,7 @@ describe("markdown sidebar", () => {
     const onOpenWorkspaceFile = vi.fn();
     panel.content = { kind: "markdown", content: "See `ui/src/pages/chat/chat-view.ts:362`" };
     panel.onOpenWorkspaceFile = onOpenWorkspaceFile;
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
 
     const link = panel.querySelector<HTMLAnchorElement>("a.markdown-file-link");
@@ -236,7 +243,7 @@ describe("markdown sidebar", () => {
     const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
     panel.content = { kind: "markdown", content: `Open \`${sessionKey}\`` };
     panel.onOpenSessionLink = onOpenSessionLink;
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
 
     const link = panel.querySelector<HTMLAnchorElement>("a.markdown-session-link");
@@ -263,7 +270,7 @@ describe("markdown sidebar", () => {
       panel.basePath = "/control";
       panel.content = { kind: "markdown", content: `[Open session](${href})` };
       panel.onOpenSessionLink = onOpenSessionLink;
-      document.body.append(panel);
+      container.append(panel);
       await panel.updateComplete;
 
       const link = panel.querySelector<HTMLAnchorElement>(`a[href^="${window.location.origin}"]`);
@@ -287,7 +294,7 @@ describe("markdown sidebar", () => {
     const onOpenImage = vi.fn();
     panel.content = { kind: "markdown", content: "![Preview](data:image/png;base64,cG5n)" };
     panel.onOpenImage = onOpenImage;
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
 
     panel.querySelector<HTMLButtonElement>(".markdown-inline-image-button")?.click();
@@ -302,7 +309,7 @@ describe("markdown sidebar", () => {
       kind: "markdown",
       content: "![Preview](data:image/png;base64,cG5n)",
     };
-    document.body.append(fallbackPanel);
+    container.append(fallbackPanel);
     await fallbackPanel.updateComplete;
     expect(fallbackPanel.querySelector(".markdown-inline-image-button")).toBeNull();
     fallbackPanel.remove();
@@ -317,7 +324,7 @@ describe("markdown sidebar", () => {
       src: "data:image/png;base64,cG5n",
     };
     panel.onOpenImage = onOpenImage;
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
 
     panel.querySelector<HTMLButtonElement>(".chat-tool-card__preview-image-button")?.click();
@@ -334,7 +341,7 @@ describe("markdown sidebar", () => {
       title: "Artifact preview",
       src: "data:image/png;base64,cG5n",
     };
-    document.body.append(fallbackPanel);
+    container.append(fallbackPanel);
     await fallbackPanel.updateComplete;
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
     fallbackPanel
@@ -364,7 +371,7 @@ describe("markdown sidebar", () => {
       width: 9,
       height: 16,
     };
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
@@ -387,7 +394,7 @@ describe("markdown sidebar", () => {
       src: "data:audio/wav;base64,UklGRg==",
       mimeType: "audio/wav",
     };
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
 
     const player = panel.querySelector("openclaw-chat-audio-player");
@@ -411,7 +418,7 @@ describe("markdown sidebar", () => {
         src,
         mimeType,
       };
-      document.body.append(panel);
+      container.append(panel);
       await panel.updateComplete;
 
       expect(panel.querySelector("iframe, table, audio, video")).toBeNull();
@@ -444,7 +451,7 @@ describe("markdown sidebar", () => {
       const panel = Object.assign(document.createElement("openclaw-chat-detail-panel"), {
         content,
       });
-      document.body.append(panel);
+      container.append(panel);
       await vi.waitFor(() => expect(panel.querySelector('[role="status"]')).not.toBeNull());
       const presentation = panel.querySelector('[role="status"]');
       const header = panel.querySelector(".chat-assistant-attachment-card__header");
@@ -471,7 +478,7 @@ describe("markdown sidebar", () => {
       expect(next.hasAttribute("data-preview")).toBe(false);
       panel.remove();
       next.dispatchEvent(new Event("load"));
-      document.body.append(panel);
+      container.append(panel);
       expect(next.getAttribute("data-preview")).toBe("ready");
       panel.remove();
     },
@@ -496,7 +503,7 @@ describe("markdown sidebar", () => {
         src,
         mimeType,
       };
-      document.body.append(panel);
+      container.append(panel);
       await panel.updateComplete;
 
       expect(panel.querySelector(".sidebar-attachment-preview__image")).toBeNull();
@@ -520,7 +527,7 @@ describe("markdown sidebar", () => {
       entryUrl: "https://canvas.example/previews/preview-1",
       sandbox: "scripts",
     };
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
 
     expect(panel.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
@@ -549,7 +556,7 @@ describe("file sidebar clipboard feedback", () => {
       content: "const answer = 42;",
     };
     vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
     return panel;
   }
@@ -705,7 +712,7 @@ describe("file sidebar clipboard feedback", () => {
     await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("Copied!"));
 
     panel.remove();
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
 
     expect(findCopyButton(panel, label)).toBe(button);
@@ -729,7 +736,7 @@ describe("file sidebar clipboard feedback", () => {
 
     button.click();
     panel.remove();
-    document.body.append(panel);
+    container.append(panel);
     await panel.updateComplete;
     finishCopy();
     await Promise.resolve();

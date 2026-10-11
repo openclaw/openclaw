@@ -10,11 +10,15 @@ import type {
   GatewayServiceInstallArgs,
 } from "../../daemon/service-types.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
-import { createCliRuntimeCapture } from "../test-runtime-capture.js";
+import { ExitError } from "../../runtime.js";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
 
-const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
-  createCliRuntimeCapture();
+const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } = await vi.hoisted(
+  async () => {
+    const { createCliRuntimeCapture } = await import("../test-runtime-capture.js");
+    return createCliRuntimeCapture();
+  },
+);
 const service = vi.hoisted(() => ({
   label: "LaunchAgent",
   loadedText: "loaded",
@@ -26,7 +30,10 @@ const service = vi.hoisted(() => ({
 }));
 
 vi.mock("../../daemon/service.js", () => ({ resolveGatewayService: () => service }));
-vi.mock("../../runtime.js", () => ({ defaultRuntime }));
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  defaultRuntime,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let originalArgv: string[];
@@ -125,4 +132,61 @@ afterEach(() => {
   vi.unstubAllEnvs();
   clearConfigCache();
   clearRuntimeConfigSnapshot();
+});
+
+describe("registered gateway install --force wrapper selection", () => {
+  it.each(["blank-wrapper", "missing-replacement-runtime"] as const)(
+    "reports %s only once with an exiting runtime",
+    async (reason) => {
+      if (reason === "missing-replacement-runtime") {
+        service.readCommand.mockResolvedValue({
+          programArguments: ["/opt/prior/node", entrypoint, "gateway"],
+        });
+        vi.spyOn(runtimePaths, "resolveRecordedDaemonRuntime").mockResolvedValue({
+          status: "unsupported",
+          runtime: "node",
+          path: "/opt/prior/node",
+          version: "20.0.0",
+          sqliteVersion: "3.53.4",
+          nodeSharedSqlite: false,
+          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+        });
+        vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(undefined);
+      }
+      defaultRuntime.exit.mockClear();
+      const exit = new ExitError(1);
+      await defaultRuntime.exit.withImplementation(
+        () => {
+          throw exit;
+        },
+        async () => {
+          const program = new Command().name("openclaw");
+          addGatewayServiceCommands(program.command("gateway"));
+          await expect(
+            program.parseAsync(
+              [
+                "gateway",
+                "install",
+                "--force",
+                "--json",
+                ...(reason === "blank-wrapper" ? ["--wrapper", " "] : ["--runtime", "node"]),
+              ],
+              { from: "user" },
+            ),
+          ).rejects.toBe(exit);
+        },
+      );
+      expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(runtimeLogs).toHaveLength(1);
+      expect(JSON.parse(runtimeLogs[0]!)).toMatchObject({
+        ok: false,
+        action: "install",
+        error:
+          reason === "blank-wrapper"
+            ? "Invalid --wrapper"
+            : expect.stringContaining("No supported Node runtime is available."),
+      });
+      expect(service.install).not.toHaveBeenCalled();
+    },
+  );
 });

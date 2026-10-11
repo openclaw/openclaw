@@ -191,14 +191,16 @@ describe("worker placement move destination", () => {
               async () => commit().placement,
             );
           } else if (action === "dispatch") {
-            await createGatewayWorkerPlacementLocalDispatchBarrier(options)({
-              sessionId,
-              sessionKey,
-              agentId,
-              executionMode: "remote-exec",
-              authorize: assertAuthority,
-              startDispatch: async () => commit().placement,
-            });
+            await expect(
+              createGatewayWorkerPlacementLocalDispatchBarrier(options)({
+                sessionId,
+                sessionKey,
+                agentId,
+                executionMode: "remote-exec",
+                authorize: assertAuthority,
+                startDispatch: async () => commit().placement,
+              }),
+            ).rejects.toThrow("is busy with active work");
           } else {
             await createGatewayWorkerPlacementMoveBarrier({
               ...options,
@@ -219,19 +221,21 @@ describe("worker placement move destination", () => {
           expect(effects).toEqual(
             action === "required"
               ? ["commit"]
-              : [
-                  "commit",
-                  "revoke",
-                  "interrupt",
-                  ...(action === "abandon" ? [] : ["claims released"]),
-                ],
+              : action === "dispatch"
+                ? []
+                : [
+                    "commit",
+                    "revoke",
+                    "interrupt",
+                    ...(action === "abandon" ? [] : ["claims released"]),
+                  ],
           );
           release.resolve();
           await blocker;
           expect(await results).toEqual([
             { status: "fulfilled", value: "main" },
             { status: "fulfilled", value: "legacy-main" },
-            action === "required"
+            action === "required" || action === "dispatch"
               ? { status: "fulfilled", value: "research" }
               : {
                   status: "rejected",

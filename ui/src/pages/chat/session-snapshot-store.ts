@@ -25,11 +25,14 @@ import {
   openSessionSnapshotDatabase,
   readStoredChatSnapshotRecord,
   resetSessionSnapshotDatabase,
+  SIDEBAR_SNAPSHOT_STORE_NAME,
 } from "./session-snapshot-database.ts";
 import {
   snapshotStoreGeneration,
+  sidebarSnapshotInvalidationMatches,
   subscribeSnapshotInvalidation,
   type SessionSnapshotInvalidationReason,
+  type SnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
 import { deleteStoredChatSnapshot } from "./session-snapshot-invalidation.ts";
 import {
@@ -109,6 +112,13 @@ const metadataSchema = z
   })
   .strict();
 type SessionSnapshotMetadata = z.infer<typeof metadataSchema>;
+const sidebarRecordSchema = metadataSchema.omit({ weight: true }).extend({
+  projectionVersion: z.literal(1),
+  model: z.unknown(),
+});
+type SidebarRecord = z.infer<typeof sidebarRecordSchema>;
+const sidebarRecordBytes = (record: SidebarRecord) =>
+  new TextEncoder().encode(JSON.stringify(record)).byteLength;
 type PreparedSnapshotRecord = {
   record: SessionSnapshotRecord;
   metadata: SessionSnapshotMetadata;
@@ -256,6 +266,63 @@ async function writeSnapshotRecords(
   }
 }
 
+async function accessSidebarSnapshot<Model>(
+  key: string,
+  validate: (value: unknown) => Model | null,
+  isCurrent: () => boolean,
+  incoming?: SidebarRecord,
+): Promise<Model | null> {
+  const database = await openSessionSnapshotDatabase();
+  if (!database) {
+    return null;
+  }
+  try {
+    if (!isCurrent()) {
+      return null;
+    }
+    const transaction = database.transaction(SIDEBAR_SNAPSHOT_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME);
+    const records = sidebarRecordSchema.array().parse(await requestResult(store.getAll()));
+    if (!isCurrent()) {
+      await transactionComplete(transaction);
+      return null;
+    }
+    const retained = records.filter((record) => record.sessionKey !== incoming?.sessionKey);
+    if (incoming) {
+      retained.push(incoming);
+      store.put(incoming);
+    }
+    let bytes = 0;
+    let result: Model | null = null;
+    for (const [index, record] of retained.toSorted((a, b) => b.savedAt - a.savedAt).entries()) {
+      const admitted = validate(record.model);
+      if (admitted === null) {
+        throw new Error("sidebar projection shape mismatch");
+      }
+      bytes += sidebarRecordBytes(record);
+      if (
+        index >= 8 ||
+        bytes > 512 * 1024 ||
+        Date.now() - record.savedAt > 30 * 24 * 60 * 60 * 1000
+      ) {
+        store.delete(record.sessionKey);
+      } else if (record.sessionKey === key) {
+        result = admitted;
+      }
+    }
+    await transactionComplete(transaction);
+    return isCurrent() ? result : null;
+  } catch (error) {
+    debugSnapshotStore("resetting cache after sidebar projection failure", error);
+    if (isCurrent()) {
+      await resetSessionSnapshotDatabase(database);
+    }
+    return null;
+  } finally {
+    database.close();
+  }
+}
+
 export class SessionSnapshotStore implements ChatCacheObserver {
   private connected = false;
   private readonly pending = new Map<string, PendingSessionState>();
@@ -279,6 +346,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   disconnect(): void {
     this.connected = false;
+    this.forgetSidebar({});
     void this.flush().finally(() => {
       if (!this.connected) {
         activeStores.delete(this);
@@ -292,6 +360,67 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     this.revisions.set(sessionKey, revision);
     return () =>
       generation === snapshotStoreGeneration && revision === (this.revisions.get(sessionKey) ?? 0);
+  }
+
+  async readSidebar<Model>(
+    key: string,
+    validate: (value: unknown) => Model | null,
+  ): Promise<Model | null> {
+    if (!this.connected) {
+      return null;
+    }
+    const isCurrent = this.captureReadScope(key);
+    await this.writeChain;
+    return accessSidebarSnapshot(key, validate, () => this.connected && isCurrent());
+  }
+
+  async writeSidebar<Model>(
+    key: string,
+    model: Model,
+    validate: (value: unknown) => Model | null,
+  ): Promise<boolean> {
+    if (!this.connected || !key.startsWith("scope:[") || !key.includes("\u0000sidebar:")) {
+      return false;
+    }
+    const isCurrent = this.captureReadScope(key);
+    try {
+      const admitted = validate(model);
+      if (admitted === null) {
+        return false;
+      }
+      const record: SidebarRecord = {
+        sessionKey: key,
+        savedAt: Date.now(),
+        projectionVersion: 1,
+        model: structuredClone(admitted),
+      };
+      if (sidebarRecordBytes(record) > 512 * 1024) {
+        return false;
+      }
+      let written = false;
+      this.writeChain = this.writeChain.then(async () => {
+        written =
+          (await accessSidebarSnapshot(
+            key,
+            validate,
+            () => this.connected && isCurrent(),
+            record,
+          )) !== null;
+      });
+      await this.writeChain;
+      return written;
+    } catch (error) {
+      debugSnapshotStore("sidebar projection could not be cached", error);
+      return false;
+    }
+  }
+
+  forgetSidebar(invalidation: SnapshotInvalidation): void {
+    for (const key of this.revisions.keys()) {
+      if (key.includes("\u0000sidebar:") && sidebarSnapshotInvalidationMatches(key, invalidation)) {
+        this.forget(key);
+      }
+    }
   }
 
   async read(
@@ -471,8 +600,10 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 }
 
-subscribeSnapshotInvalidation(async ({ sessionKey, scopePrefix }) => {
+subscribeSnapshotInvalidation(async (invalidation) => {
+  const { sessionKey, scopePrefix } = invalidation;
   for (const store of activeStores) {
+    store.forgetSidebar(invalidation);
     if (scopePrefix) {
       store.forgetScope(scopePrefix);
     } else if (sessionKey) {

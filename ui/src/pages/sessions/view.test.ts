@@ -1,18 +1,23 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
-import { buildMultiResult, buildProps, buildResult } from "./view.test-support.ts";
-import { renderSessions } from "./view.ts";
+import {
+  disposeSessionView,
+  disposeSessionViews,
+  renderSessionsView,
+  buildMultiResult,
+  buildProps,
+  buildResult,
+} from "./view.test-support.tsx";
 
 function renderView(
   result: Parameters<typeof buildProps>[0],
   overrides: Partial<ReturnType<typeof buildProps>>,
   container: HTMLElement,
 ) {
-  render(renderSessions({ ...buildProps(result), ...overrides }), container);
+  renderSessionsView({ ...buildProps(result), ...overrides }, container);
 }
 
 function readSessionDetailStats(container: ParentNode): Map<string, string> {
@@ -29,6 +34,8 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 }
 
 const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
+
+afterEach(disposeSessionViews);
 
 describe("sessions view", () => {
   it("identifies agents on plain chat sessions in a mixed-agent list", async () => {
@@ -99,40 +106,62 @@ describe("sessions view", () => {
       ]);
     } finally {
       clock.mockRestore();
-      render(null, container);
+      disposeSessionView(container);
     }
   });
 
   it("makes every session sort header a keyboard-accessible button", async () => {
     const container = document.createElement("div");
-    const onSortChange = vi.fn();
-    renderView(buildMultiResult([]), { onSortChange }, container);
-    await Promise.resolve();
-
-    for (const [label, column] of [
-      ["Key", "key"],
-      ["Kind", "kind"],
-      ["Updated", "updated"],
-      ["Tokens", "tokens"],
-    ] as const) {
-      const header = [...container.querySelectorAll<HTMLTableCellElement>("thead th")].find(
-        (cell) => cell.textContent?.trim() === label,
-      );
-      const button = header?.querySelector("button");
-
-      expect(button, `${label} must be a native keyboard-accessible button`).toBeInstanceOf(
-        HTMLButtonElement,
-      );
-      expect(button?.type).toBe("button");
-      expect(header?.getAttribute("aria-sort")).toBe(column === "updated" ? "descending" : null);
-      const initialCallCount = onSortChange.mock.calls.length;
-      button?.click();
-      expect(onSortChange).toHaveBeenCalledTimes(initialCallCount + 1);
-      expect(onSortChange).toHaveBeenLastCalledWith(column, column === "updated" ? "asc" : "desc");
-
-      header?.click();
-      expect(onSortChange).toHaveBeenCalledTimes(initialCallCount + 2);
-      expect(onSortChange).toHaveBeenLastCalledWith(column, column === "updated" ? "asc" : "desc");
+    const result = buildMultiResult([]);
+    const onSortChange = vi.fn(
+      (sortColumn: "key" | "kind" | "updated" | "tokens", sortDir: "asc" | "desc") => {
+        renderView(result, { sortColumn, sortDir, onSortChange }, container);
+      },
+    );
+    document.body.append(container);
+    try {
+      for (const [label, column] of [
+        ["Key", "key"],
+        ["Kind", "kind"],
+        ["Updated", "updated"],
+        ["Tokens", "tokens"],
+      ] as const) {
+        renderView(result, { onSortChange }, container);
+        await Promise.resolve();
+        const header = [...container.querySelectorAll<HTMLTableCellElement>("thead th")].find(
+          (cell) => cell.textContent?.trim() === label,
+        );
+        const button = header?.querySelector("button");
+        expect(button, `${label} must be a native keyboard-accessible button`).toBeInstanceOf(
+          HTMLButtonElement,
+        );
+        expect(button?.type).toBe("button");
+        expect(header?.getAttribute("aria-sort")).toBe(column === "updated" ? "descending" : null);
+        const initialCallCount = onSortChange.mock.calls.length;
+        const firstDirection = column === "updated" ? "asc" : "desc";
+        button!.focus();
+        button!.click();
+        expect(onSortChange).toHaveBeenCalledTimes(initialCallCount + 1);
+        expect(onSortChange).toHaveBeenLastCalledWith(column, firstDirection);
+        const refreshed = [...container.querySelectorAll<HTMLTableCellElement>("thead th")].find(
+          (cell) => cell.textContent?.trim() === label,
+        );
+        expect(refreshed).toBe(header);
+        expect(refreshed?.querySelector("button")).toBe(button);
+        expect(document.activeElement).toBe(button);
+        expect(header?.getAttribute("aria-sort")).toBe(
+          firstDirection === "asc" ? "ascending" : "descending",
+        );
+        header!.click();
+        expect(onSortChange).toHaveBeenCalledTimes(initialCallCount + 2);
+        expect(onSortChange).toHaveBeenLastCalledWith(
+          column,
+          firstDirection === "asc" ? "desc" : "asc",
+        );
+        expect(document.activeElement).toBe(button);
+      }
+    } finally {
+      container.remove();
     }
   });
 
@@ -542,11 +571,13 @@ describe("sessions view", () => {
       ["settings-status", "settings-status--danger"],
       ["settings-status", "settings-status--ok"],
     ]);
-    expect(
-      badges.map(
-        (badge) => (badge.parentElement as (HTMLElement & { content: string }) | null)?.content,
-      ),
-    ).toEqual(["Status: Queued", "Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
+    expect(badges.map((badge) => badge.closest("openclaw-tooltip")?.content)).toEqual([
+      "Status: Queued",
+      "Status: Live",
+      "Status: Idle",
+      "Status: Failed",
+      "Status: Done",
+    ]);
   });
 
   it("opens session details from row activation", async () => {
@@ -660,18 +691,15 @@ describe("sessions view", () => {
 
   it("keeps session selects stable and deselects only the current page", async () => {
     const container = document.createElement("div");
-    renderView(
-      buildResult({
-        key: "agent:main:main",
-        kind: "direct",
-        updatedAt: Date.now(),
-        fastMode: true,
-        verboseLevel: "full",
-        reasoningLevel: "custom-mode",
-      }),
-      { expandedSessionKey: "agent:main:main" },
-      container,
-    );
+    const initial = buildResult({
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: Date.now(),
+      fastMode: true,
+      verboseLevel: "full",
+      reasoningLevel: "custom-mode",
+    });
+    renderView(initial, { expandedSessionKey: "agent:main:main" }, container);
     await Promise.resolve();
 
     // Scope to drawer selects; the toolbar also renders a group-by select.
@@ -695,6 +723,25 @@ describe("sessions view", () => {
       "stream",
       "custom-mode",
     ]);
+
+    document.body.append(container);
+    try {
+      fast!.focus();
+      fast!.value = "off";
+      renderView(
+        { ...initial, sessions: [{ ...initial.sessions[0]!, updatedAt: Date.now() + 1 }] },
+        { expandedSessionKey: "agent:main:main" },
+        container,
+      );
+      const refreshed = container.querySelectorAll("tbody select");
+      for (const [index, select] of [...selects].entries()) {
+        expect(refreshed[index]).toBe(select);
+      }
+      expect(document.activeElement).toBe(fast);
+      expect(fast!.value).toBe("off");
+    } finally {
+      container.remove();
+    }
 
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
@@ -1003,5 +1050,5 @@ it("preserves the saved ultrafast override until explicitly changed", async () =
   fast.value = "off";
   fast.dispatchEvent(new Event("change"));
   expect(onPatch).toHaveBeenCalledWith(key, { fastMode: false });
-  render(nothing, container);
+  disposeSessionView(container);
 });

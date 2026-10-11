@@ -10,6 +10,7 @@ import type {
   ControlUiMockGatewayScenario,
   MockGatewayControls,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { chatToolScenes } from "./chat-tool-scenes.ts";
 import {
   fixedTime,
   sessionKey,
@@ -60,6 +61,7 @@ export type Scene = {
   prepare?: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   scrollTo?: string;
   loading?: boolean;
+  serviceWorkers?: "allow" | "block";
 };
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
 function routeScene(route: RouteId): Scene {
@@ -132,8 +134,55 @@ const loadingRoutes: Array<{ route: RouteId; method: string; ready: string }> = 
     ready: "#settings-profile-identity .settings-loading-skeleton",
   },
 ];
+const configuredMcpServers = {
+  mcp: {
+    servers: {
+      docs: { url: "https://mcp.example.com/mcp" },
+      workspace: { command: "node", args: ["workspace-tools.mjs"] },
+    },
+  },
+};
 export const scenes: Scene[] = [
+  ...chatToolScenes,
   ...APP_ROUTE_IDS.map(routeScene),
+  {
+    ...routeScene("mcp"),
+    id: "mcp-configured",
+    label: "MCP: local and remote servers",
+    ready: ".mcp-server-row",
+    scenario: {
+      methodResponses: {
+        "config.get": {
+          config: configuredMcpServers,
+          raw: JSON.stringify(configuredMcpServers),
+          hash: "parity-mcp-config",
+          valid: true,
+          issues: [],
+        },
+      },
+    },
+  },
+  ...["status", "setup", "pat"].map((state): Scene =>
+    Object.assign(routeScene("profile"), {
+      id: `github-connections-${state}`,
+      label: `GitHub connections: ${state}`,
+      ready: "#settings-profile-github-connections .settings-row",
+      scrollTo: "#settings-profile-github-connections",
+      prepare: async (page: Page) => {
+        const connections = page.locator("#settings-profile-github-connections");
+        if (state !== "status") {
+          await connections
+            .getByRole("button", { name: "Change System GitHub", exact: true })
+            .click();
+          await connections.locator("[data-github-setup]").waitFor();
+        }
+        if (state === "pat") {
+          await connections.getByRole("button", { name: "Use a PAT instead", exact: true }).click();
+          await connections.getByRole("textbox", { name: "Author Name", exact: true }).waitFor();
+        }
+      },
+    }),
+  ),
   ...loadingRoutes.map(({ route, method, ready }): Scene =>
     Object.assign(routeScene(route), {
       id: `${route}-loading`,

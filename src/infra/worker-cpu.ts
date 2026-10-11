@@ -1,3 +1,4 @@
+import "../../worker-heap-flag.mjs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MessagePort, Worker } from "node:worker_threads";
@@ -9,6 +10,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import "./worker-ancestry.js";
 import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
 
@@ -67,7 +69,10 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
 });
 
 export function createCpuTrackedWorker(...args: ConstructorParameters<typeof Worker>): Worker {
-  const worker = new Worker(...args);
+  const worker = runWithMainThreadTask(
+    `worker:${workerScriptName(args[0], args[1]?.eval)}`,
+    () => new Worker(...args),
+  );
   trackNativeWorkerForCpu(worker, args[0], args[1]?.eval);
   return worker;
 }

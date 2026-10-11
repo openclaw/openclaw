@@ -1,15 +1,13 @@
-import {
-  registerSessionBindingAdapterV2,
-  unregisterSessionBindingAdapter,
-  type SessionBindingAdapterV2,
-  type SessionBindingRecord,
-} from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createAccountScopedBindingAdapterV2,
   projectThreadBindingRecord,
+  registerSessionBindingAdapterV2,
+  unregisterSessionBindingAdapter,
+  type SessionBindingAdapterV2,
+  type SessionBindingRecord,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import {
   normalizeDiscordBindingChannelId,

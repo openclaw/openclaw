@@ -6,6 +6,7 @@ import type { GatewayStoredSessionTargets } from "../config/sessions/combined-st
 import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionTitleFields } from "../config/sessions/session-history-read.types.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
+import type { SessionTranscriptAuthority } from "../config/sessions/session-transcript-authority.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type {
   InternalSessionEntry as SessionEntry,
@@ -90,6 +91,8 @@ export type Row = {
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
   /** Presentation retains certified facets until their owner publishes or the row is demoted. */
   retainedDatabaseFacts?: RetainedSessionRowDatabaseFacts;
+  /** Exact committed transcript receipt; notifications cannot advance its watermark. */
+  transcriptAuthority?: SessionTranscriptAuthority;
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
   preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
@@ -247,6 +250,13 @@ export function invalidateDatabaseFacts(row: Row, retained?: RetainedSessionRowD
   row.pendingDatabaseFacts = undefined;
   row.retainedDatabaseFacts = retained;
   row.preparedAcpMeta = retained?.acpMeta;
+  if (
+    !retained ||
+    retained.activitySummaryWatermark?.generation !== row.transcriptAuthority?.generation ||
+    retained.activitySummaryWatermark?.maxSeq !== row.transcriptAuthority?.rawSeq
+  ) {
+    row.transcriptAuthority = undefined;
+  }
   row.preparedRuntimeOwnership = retained?.runtimeOwnership;
   row.runtimeOwnershipDependencies = retained?.runtimeOwnershipDependencies;
 }
@@ -358,6 +368,7 @@ export function renewGeneration(row: Row): Row {
     storedEntry: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
+    transcriptAuthority: undefined,
     preparedAcpMeta: undefined,
     preparedRuntimeOwnership: undefined,
     runtimeOwnershipDependencies: undefined,
@@ -600,6 +611,7 @@ export function dematerialize(row: Row): Row {
     facts: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
+    transcriptAuthority: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
@@ -704,6 +716,7 @@ export function acquireSessionRowEntry(params: {
         : undefined,
     ...(generation !== row.generation
       ? {
+          transcriptAuthority: undefined,
           lastMessagePreview: undefined,
           fallbackModel: undefined,
           materialized: undefined,

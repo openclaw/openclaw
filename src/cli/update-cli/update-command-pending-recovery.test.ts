@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
@@ -29,9 +28,11 @@ import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as triage from "../../infra/update-triage.js";
 import * as installedPlugins from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as stateOwnership from "../../state/openclaw-state-ownership.js";
 import { resolveProfileStateDir } from "../profile-utils.js";
+import { registerSignalExitGate, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import * as updateShared from "./shared.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import * as updateConfig from "./update-command-config.js";
@@ -583,11 +584,8 @@ it.each([false, true])(
     const run = f.opts.run!;
     const before = materialSnapshot(f.root);
     const listeners = process.listeners("SIGINT");
-    const exited = createDeferred();
-    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-      exited.resolve();
-      return undefined as never;
-    });
+    const previousExitCode = process.exitCode;
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     const suspend = vi
       .spyOn(scheduledTasks, "suspendScheduledTaskAutoStartForUpdate")
       .mockResolvedValue(true);
@@ -599,6 +597,19 @@ it.each([false, true])(
     }
     const signal = process.listeners("SIGINT").find((listener) => !listeners.includes(listener));
     expect(signal).toBeDefined();
+    const siblingFinished = createDeferredCore();
+    const unregisterSibling = registerSignalExitGate(siblingFinished.promise);
+    const retired = createDeferredCore();
+    const removeListener = process.off.bind(process);
+    // Bun removes native signal listeners without emitting EventEmitter.removeListener.
+    // Observe the real removal effect, preserving its implementation and return value.
+    const off = vi.spyOn(process, "off").mockImplementation((event, listener) => {
+      const result = removeListener(event, listener);
+      if (event === "SIGBREAK" && listener === signal) {
+        retired.resolve();
+      }
+      return result;
+    });
     const cause = new UpdateCommandRecoveryPendingError("Database rollback could not finish");
     try {
       signal!("SIGINT");
@@ -611,15 +622,29 @@ it.each([false, true])(
           },
         ),
       ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure", cause });
-      // Assert retirement before awaiting exit, so a leaked gate fails immediately.
+      // Unwind releases its own gate without awaiting the still-pending sibling.
+      expect(process.listeners("SIGINT")).toContain(signal);
+      signal!("SIGINT");
+      expect(process.listeners("SIGINT")).toContain(signal);
+      siblingFinished.resolve();
+      expect(await waitForCliSignalExit()).toBe(130);
+      // Shared drain completion precedes this owner's status publication and retirement.
+      // Observe removal of its last signal listener instead of flushing microtasks.
+      await retired.promise;
       expect(process.listeners("SIGINT")).toEqual(listeners);
-      await exited.promise;
-      expect(exit).toHaveBeenCalledWith(130);
+      expect(process.exitCode).toBe(130);
+      expect(exit).not.toHaveBeenCalled();
       expect(suspend).toHaveBeenCalledOnce();
       expect(resume).not.toHaveBeenCalled();
       expect(materialSnapshot(f.root)).toEqual(before);
     } finally {
+      siblingFinished.resolve();
+      unregisterSibling();
       await recovery.complete(false, { preserveState: true });
+      await waitForCliSignalExit();
+      await retired.promise;
+      off.mockRestore();
+      process.exitCode = previousExitCode;
     }
   },
 );

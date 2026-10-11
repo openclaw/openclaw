@@ -101,6 +101,25 @@ export function runServiceChildGroupAnchor(): void {
     });
   };
 
+  const finish = (code: number) => {
+    process.exitCode = code;
+    process.stdin.destroy();
+    const disconnect = () => {
+      // end() flushes the receipt; destroy() also releases the readable socket.
+      control?.off("close", disconnect);
+      control?.destroy();
+      if (process.connected) {
+        process.disconnect?.();
+      }
+    };
+    if (control && !control.destroyed) {
+      control.once("close", disconnect);
+      control.end(disconnect);
+    } else {
+      disconnect();
+    }
+  };
+
   const closeAuthority = async (
     reason: Extract<ServiceChildAnchorMessage, { type: "closing" }>["reason"],
     hardKill: boolean,
@@ -129,7 +148,7 @@ export function runServiceChildGroupAnchor(): void {
         retirementReady.promise,
         delay(Math.max(0, deadline - Date.now())).then(() => false),
       ]);
-      control?.end(() => process.exit(acknowledged ? 0 : 1));
+      finish(acknowledged ? 0 : 1);
       return;
     }
     state = "closed";
@@ -165,7 +184,7 @@ export function runServiceChildGroupAnchor(): void {
       process.kill(0, "SIGKILL");
       return;
     }
-    control?.end(() => process.exit(0));
+    finish(0);
   };
 
   const closeInheritedLineage = () => {
@@ -419,7 +438,8 @@ export function runServiceChildGroupAnchor(): void {
   const startCommand = async (next: ServiceChildStart) => {
     const controlFd = next.controlFd;
     if (controlFd === undefined) {
-      process.exitCode = 1;
+      state = "closed";
+      finish(1);
       return;
     }
     start = next;
@@ -697,7 +717,9 @@ export function runServiceChildGroupAnchor(): void {
         raw.acknowledgeClosing !== undefined &&
         raw.acknowledgeClosing !== true
       ) {
-        process.exit(1);
+        state = "closed";
+        finish(1);
+        return;
       }
       void startCommand(message);
     } else if (message.type === "parent-loss" && message.generation === start?.generation) {

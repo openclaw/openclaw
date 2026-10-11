@@ -512,7 +512,7 @@ export function closeOpenClawAgentDatabaseByPath(
   return true;
 }
 
-export type OpenClawAgentDatabaseWorkerCloseResult = {
+type OpenClawAgentDatabaseWorkerCloseResult = {
   errors: Error[];
   settled: boolean;
 };

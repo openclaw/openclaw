@@ -118,6 +118,10 @@ The browser plugin starts its helper processes with the Bun executable that runs
 
 ## Bun-only installs
 
+The [Bun installer](/install/bun#bun-only-global-install) resolves and verifies the
+OpenClaw release’s fork pin without requiring Node. Node remains the default
+installer runtime; select `--runtime bun` explicitly.
+
 Trusted Bun-only global installs on macOS and Linux install an `openclaw` shell
 launcher in Bun's existing global bin directory (`bun pm bin -g`). It records the
 absolute Bun executable from `OPENCLAW_PACKAGE_BUN_LAUNCHER` and the installed

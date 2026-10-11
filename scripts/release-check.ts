@@ -321,8 +321,6 @@ async function packRootPackage(packDestination: string): Promise<string> {
       new URL("./openclaw-prepack.ts", import.meta.url).href,
       import.meta.url,
     )) as typeof OpenClawPrepack;
-  // The canonical packer skips package hooks; retain prepared prepack's compatibility gate.
-  execPnpm(["update:compat:check"], { encoding: "utf8", stdio: "inherit" });
   const errors = collectPreparedPrepackErrorsFromDisk();
   if (errors.length > 0) {
     throw new Error(

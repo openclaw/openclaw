@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
@@ -31,7 +30,6 @@ import {
   type WorkerSessionTurnClaimFacts,
 } from "./placement-record.js";
 import {
-  capturePlacementAuthorityChange,
   captureWorkspaceResultChange,
   captureWorkspaceResultPostimage,
 } from "./placement-turn-authority.receipt.js";
@@ -63,8 +61,6 @@ function notifyRevoked(claim: RetainedClaim): void {
 function closeOwner(owner: PlacementAuthorityOwner): void {
   owner.active = false;
   owner.pending.clear();
-  owner.settlementListeners.forEach((listener) => listener());
-  owner.settlementListeners.clear();
   owner.published.clear();
   owner.tools.clear();
   owner.workspaceResults.clear();
@@ -100,13 +96,11 @@ function ownerFor(identity: DatabasePathIdentity): PlacementAuthorityOwner {
   }
   const owner: PlacementAuthorityOwner = {
     identity,
-    incarnation: randomUUID(),
     active: true,
     claims: new Map(),
     observations: new Map(),
     placementReaders: new Map(),
     pending: new Set(),
-    settlementListeners: new Set(),
     sequence: 0,
     published: new Map(),
     tools: new Map(),
@@ -157,7 +151,6 @@ function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): vo
 
 function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, sequence: number): void {
   owner.pending.delete(change);
-  owner.settlementListeners.forEach((listener) => listener());
   if (!owner.active) {
     return;
   }
@@ -312,7 +305,7 @@ function observePlacementAuthority(pathname: string, sessionId?: string) {
   return capturePlacementObservation(pathname, sessionId).authority;
 }
 
-/** Refresh only unconsumed reads; retained observations and uncertain writes stay fenced. */
+/** A concurrent placement mutation fails this read; the caller can retry it. */
 export async function preparePlacementAuthorityRead<T>(
   pathname: string,
   sessionId: string | undefined,
@@ -367,14 +360,13 @@ export async function prepareSessionPlacementRead(
 
 function stageChange(db: DatabaseSync, change: ClaimChange): void {
   const owner = ownerFor(requireOpenClawStateDatabaseIdentity({ db }));
-  const committedChange = capturePlacementAuthorityChange(owner, change);
   if (
     !stageSqliteTransactionState(db, {
       stage() {
         owner.pending.add(change);
       },
       commit() {
-        commitChange(owner, committedChange(), ++owner.sequence);
+        commitChange(owner, change, ++owner.sequence);
       },
       invalidate: () => closeOwner(owner),
       prepareObservers() {
@@ -384,7 +376,6 @@ function stageChange(db: DatabaseSync, change: ClaimChange): void {
       },
       rollback() {
         owner.pending.delete(change);
-        owner.settlementListeners.forEach((listener) => listener());
         prunePublication(owner, change.sessionId);
         try {
           assertTransactionUsable(db);
@@ -577,7 +568,7 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
     }
   };
   const publish = () => {
-    commitChange(owner, capturePlacementAuthorityChange(owner, change)(), sequence);
+    commitChange(owner, change, sequence);
     for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
       notifyRevoked(retained);
     }
@@ -587,7 +578,6 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
     rollback: () =>
       settle(() => {
         owner.pending.delete(change);
-        owner.settlementListeners.forEach((listener) => listener());
         prunePublication(owner, change.sessionId);
       }),
     invalidate: () =>

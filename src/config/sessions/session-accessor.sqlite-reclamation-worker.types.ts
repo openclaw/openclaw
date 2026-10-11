@@ -23,7 +23,7 @@ export type SqliteReclamationExistingSource = Pick<
 > & {
   birthtime?: string;
 };
-export type SqliteReclamationPreparedSource = Omit<
+type SqliteReclamationPreparedSource = Omit<
   ReturnType<typeof readOpenClawAgentDatabaseIdentity>,
   "identity"
 > & { identity: string };
