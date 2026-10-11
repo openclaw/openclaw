@@ -349,8 +349,12 @@ export function validateFullReleaseValidationEvidence({
         publicationSourceJson(sourceAdmission.publicationSelection) !==
           publicationSourceJson(selected))
     ) {
+      const windowsRemediation =
+        selected?.windowsNodeTag && !sourceAdmission.publicationSelection?.windowsNodeTag
+          ? " Remove --windows-node-tag when reusing this FRV and attach Windows afterward via windows-node-release.yml, or obtain new FRV evidence admitted with Windows selected."
+          : "";
       throw new Error(
-        "New-contract nonpublish or differently selected evidence cannot prepare publication.",
+        `New-contract nonpublish or differently selected evidence cannot prepare publication.${windowsRemediation}`,
       );
     }
     if (expectedCoreNpmPublication) {
