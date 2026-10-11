@@ -143,6 +143,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     queue: ChatQueueItem[];
     initialTurnId?: string;
     pendingInputs?: ChatPendingInputsPage["items"];
+    chatBubbleMode?: boolean;
     showThinking: boolean;
     showToolCalls: boolean;
     persistCommentary?: boolean;

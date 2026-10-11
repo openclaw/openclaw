@@ -706,7 +706,7 @@ suite.define(() => {
             .locator('wa-dropdown-item[slot="submenu"] .session-menu__text')
             .allTextContents(),
         )
-        .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
+        .toEqual(["Reasoning", "Tool calls", "Keep commentary", "Speech bubbles"]);
       const reasoning = viewDropdown.getByRole("menuitemcheckbox", { name: "Reasoning" });
       await expect.poll(() => reasoning.isVisible()).toBe(true);
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");

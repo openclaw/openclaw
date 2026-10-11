@@ -96,6 +96,7 @@ export function createIncognitoSessionActorFactory(params: {
     async acquire(requestedTarget, requestedLifetime) {
       assertOutsideGrant();
       assertBorrowed();
+      requestedLifetime.assertAdmission?.();
       requestedLifetime.assertCurrent();
       const target = structuredClone(requestedTarget);
       if (!isDeepStrictEqual(target.database, identity)) {
@@ -111,6 +112,7 @@ export function createIncognitoSessionActorFactory(params: {
         import("../config/sessions/session-actor-replica.js"),
       ]);
       assertBorrowed();
+      requestedLifetime.assertAdmission?.();
       requestedLifetime.assertCurrent();
       const assertActorCurrent = () => {
         assertBorrowed();
@@ -132,7 +134,11 @@ export function createIncognitoSessionActorFactory(params: {
       };
       const actor = createSessionActor({
         target,
-        lifetime: { assertCurrent: assertActorCurrent, assertReadable: assertActorReadable },
+        lifetime: {
+          assertAdmission: () => requestedLifetime.assertAdmission?.(),
+          assertCurrent: assertActorCurrent,
+          assertReadable: assertActorReadable,
+        },
         replica: createSessionActorReplica({
           target: { sessionKey, database: identity },
           lifetime,
@@ -260,7 +266,7 @@ export function createIncognitoSessionActorFactory(params: {
             if (value && "kind" in value) {
               if (value.kind === "session-turn") {
                 value.projectionNeedsReconcile = false;
-              } else {
+              } else if (value.kind === "metadata" || value.kind === "message") {
                 markReady(value);
               }
             } else if (value && "inputId" in value) {
