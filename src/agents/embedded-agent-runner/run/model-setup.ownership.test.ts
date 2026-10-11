@@ -4,10 +4,11 @@ import {
 } from "@openclaw/ai/transports";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import { withAgentTurnCompletion } from "../../../auto-reply/reply/agent-runner-completion.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
 import { bindReplyOperationDatabaseAdmission } from "../../../auto-reply/reply/reply-turn-database-admission.js";
-import { persistSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
+import { prepareSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../../config/sessions.js";
 import {
   loadSessionEntryReadOnly,
@@ -502,17 +503,42 @@ describe("model chat and native model ownership", () => {
 
   it("keeps model and plugin ownership across usage writes and subsequent turns", async () => {
     const fixture = await createFixture();
-    const sessionStore = { [fixture.target.sessionKey]: fixture.entry };
     for (const observation of [undefined, "codex", "openclaw"]) {
       if (observation) {
-        await persistSessionUsageUpdate({
-          ...fixture.target,
-          sessionStore,
+        const prepared = prepareSessionUsageUpdate({
           cfg: fixture.runParams.config,
           modelUsed: "fixture-model",
           providerUsed: "openai",
           agentHarnessId: observation,
         });
+        const operation = createReplyOperation({
+          sessionId: fixture.entry.sessionId,
+          sessionKey: fixture.target.sessionKey,
+          resetTriggered: false,
+        });
+        operation.setPhase("running");
+        try {
+          await withAgentTurnCompletion(
+            {
+              ...fixture.target,
+              entry: loadSessionEntryReadOnly(fixture.target),
+              operation,
+              publish() {},
+            },
+            async (completion) => {
+              if (!completion || !prepared) {
+                throw new Error("Missing usage completion owner");
+              }
+              completion.patch((entry) => ({
+                kind: "usage",
+                update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },
+                updatedAt: Date.now(),
+              }));
+            },
+          );
+        } finally {
+          operation.complete();
+        }
       }
       const entry = loadSessionEntryReadOnly(fixture.target);
       expect(entry).toMatchObject({
@@ -523,9 +549,6 @@ describe("model chat and native model ownership", () => {
         modelSelectionLocked: true,
       });
       expect(entry?.agentHarnessId).toBe(observation);
-      const committedEntry = sessionStore[fixture.target.sessionKey];
-      expect(committedEntry).toBeDefined();
-      expect(committedEntry?.agentHarnessId).toBe(observation);
       fixture.runParams.agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
         provider: "openai",
         entry,

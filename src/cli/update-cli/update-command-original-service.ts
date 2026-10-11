@@ -257,7 +257,7 @@ export async function observeOriginalManagedServiceRuntime(
     }
     if (hasGatewayServiceDefinitionOverrides(state.command) || state.command.reloadPending) {
       throw new Error(
-        "Original service has overrides that cannot be restored by the canonical writer.",
+        "Original service has overrides that cannot be restored by the service writer.",
       );
     }
     const definition = {

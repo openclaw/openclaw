@@ -266,8 +266,16 @@ describe("renderPanelTabStrip", () => {
     const onActivate = vi.fn();
     const onSelect = vi.fn();
     const onClose = vi.fn();
-    const container = await renderStrip({ tabs: [{ ...TAB, onActivate }], onSelect, onClose });
-    const [tab] = renderedTabs(container);
+    const container = await renderStrip({
+      tabs: [
+        { ...TAB, id: "selected", domId: "selected-tab" },
+        { ...TAB, onActivate },
+      ],
+      onSelect,
+      onClose,
+    });
+    await settleTabStrip(container);
+    const [, tab] = renderedTabs(container);
     expect(tab).toBeDefined();
     tab!.click();
     expect(onActivate).toHaveBeenCalledTimes(1);
@@ -279,7 +287,7 @@ describe("renderPanelTabStrip", () => {
     }
     expect(onActivate).toHaveBeenCalledTimes(3);
     tab!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    container.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+    container.querySelector<HTMLButtonElement>(`#${TAB.domId}-close`)!.click();
     expect(onClose).toHaveBeenCalledExactlyOnceWith(TAB.id);
     expect(onActivate).toHaveBeenCalledTimes(3);
     expect(onSelect).not.toHaveBeenCalled();

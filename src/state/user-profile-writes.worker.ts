@@ -80,6 +80,7 @@ type PendingPublication = {
   display: Set<string>;
   profiles: Set<string>;
   identities: Set<string>;
+  retiredGitHubProfileIds: string[];
 };
 
 function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
@@ -141,6 +142,7 @@ export function createUserProfileWriteOperation<Input, Output>(
           display: new Set(),
           profiles: new Set(),
           identities: new Set(),
+          retiredGitHubProfileIds: [],
         };
         pending = current;
         try {
@@ -197,6 +199,7 @@ export function createUserProfileWriteOperation<Input, Output>(
             }),
             after: ids.map((id) => [id, after.get(id)]),
             emailBindings,
+            retiredGitHubProfileIds: current.retiredGitHubProfileIds,
           };
           requestSqliteWorkerOperationAdmission({ stage: "commit", facts: publication });
           deferSqlitePostCommitPublication(db, () => committed.push(publication));
@@ -228,6 +231,7 @@ export function createUserProfileWriteOperation<Input, Output>(
       authority: (...ids) => ids.forEach((id) => pending?.profiles.add(id)),
       identity: (...ids) => ids.forEach((id) => pending?.identities.add(id)),
       publish: (...ids) => ids.forEach((id) => pending?.display.add(id)),
+      retireGitHubProfiles: (ids) => pending?.retiredGitHubProfileIds.push(...ids),
     };
     const owned = { ...options, mutation };
     try {

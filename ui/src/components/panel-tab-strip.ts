@@ -2,12 +2,14 @@ import { css, html, nothing, render as renderLit, type TemplateResult } from "li
 import { Directive, directive, type Part } from "lit/directive.js";
 import type {
   LegacyPanelTabStripParams,
-  PanelTabStripParams,
-  PanelTabStripTab,
+  PanelTabStripParams as BasePanelTabStripParams,
+  PanelTabStripTab as BasePanelTabStripTab,
 } from "./panel-tab-strip-types.ts";
 import "./panel-tab-strip-lit.tsx";
 
-export type { PanelTabStripParams, PanelTabStripTab } from "./panel-tab-strip-types.ts";
+export type PanelTabStripTab = BasePanelTabStripTab<TemplateResult | typeof nothing>;
+export type PanelTabStripParams<T extends PanelTabStripTab = PanelTabStripTab> =
+  BasePanelTabStripParams<T, TemplateResult | typeof nothing>;
 
 type LegacyInputs = Omit<LegacyPanelTabStripParams, "renderContent">;
 
@@ -21,7 +23,7 @@ class RenderHostParamsDirective extends Directive {
     const host = part.options?.host;
     return {
       ...params,
-      renderContent: (value: TemplateResult | undefined, container: HTMLElement) => {
+      renderContent: (value: unknown, container: HTMLElement) => {
         renderLit(value ?? nothing, container, { host });
       },
     };

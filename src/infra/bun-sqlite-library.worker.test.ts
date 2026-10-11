@@ -133,12 +133,14 @@ function setRuntime(bun: boolean, platform: string) {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   previousSelection = Object.getOwnPropertyDescriptor(globalThis, selectionKey);
   previousVersions = Object.getOwnPropertyDescriptor(process, "versions");
   previousPlatform = Object.getOwnPropertyDescriptor(process, "platform");
   Reflect.deleteProperty(globalThis, selectionKey);
   vi.resetModules();
+  // File identity must keep the physical host policy while library selection simulates macOS.
+  await import("./sqlite-worker-identity.js");
   runtime.mainThread = true;
   runtime.environment.clear();
   runtime.selectedPath = undefined;

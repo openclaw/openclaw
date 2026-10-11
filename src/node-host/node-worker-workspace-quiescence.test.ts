@@ -108,6 +108,7 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
     let stdout = "";
     let stderr = "";
     let exitCode = 0;
+    const stdin = new PassThrough();
     const exited = new Error("script exited");
     const pid = child?.pid ?? 9000;
     const writeStderr = (text: string) => {
@@ -133,12 +134,23 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
       },
       pid,
       execPath: process.execPath,
+      stdin,
       stdout: { write: (text: string) => (stdout += text) },
       stderr: { write: writeStderr },
+      disconnect: () => {
+        expect(stdin.destroyed).toBe(true);
+        finish(exitCode);
+      },
       send: (message: unknown) => queueMicrotask(() => child?.emit("message", message)),
       exit: (code: number) => {
         finish(code);
         throw exited;
+      },
+    });
+    Object.defineProperty(guest, "exitCode", {
+      get: () => exitCode,
+      set: (code: number) => {
+        exitCode = code;
       },
     });
     Object.defineProperty(guest, "connected", {

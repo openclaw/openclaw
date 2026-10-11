@@ -102,12 +102,16 @@ export async function readSessionTranscriptAnchorsAsync(
     includeHeader: selection.includeHeader,
     includeWatermark: selection.includeWatermark,
     includeMessagePresence: selection.includeMessagePresence,
+    includeMetadata: selection.includeMetadata,
     contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
     contextAuthority: selection.contextAuthority && structuredClone(selection.contextAuthority),
     replayValidation: selection.replayValidation && { ...selection.replayValidation },
   };
   const empty: SessionTranscriptAnchorFacts = {
     anchors: [],
+    ...(request.includeMetadata
+      ? { metadata: { present: false, observedAt: null, updatedAt: null } }
+      : {}),
     ...(request.replayValidation?.allowInitial ? { replayValidated: "initial" } : {}),
   };
   signal?.throwIfAborted();

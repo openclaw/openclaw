@@ -35,9 +35,9 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
   incomplete, it views the skill and patches the misleading step. After hard
   multi-step work you are likely to repeat, it saves the working procedure,
   patching the skill that covers that kind of task or creating one when none does.
-- **Background review:** after enough model work in a conversation, or right
-  after a turn that used a learned skill, a background run reviews it and saves
-  anything worth keeping. See [Self-learning](/tools/self-learning).
+- **Background review:** after 10 accumulated model iterations in a conversation,
+  a background run reviews it and saves anything worth keeping.
+  See [Self-learning](/tools/self-learning).
 - **`/learn [request]`:** asks the agent to save a skill now, from the current
   conversation or from sources you name. See [`/learn`](#learn).
 - **Learn from history:** the Control UI button opens a normal chat

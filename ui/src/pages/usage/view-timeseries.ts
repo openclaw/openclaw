@@ -266,7 +266,7 @@ export function renderTimeSeriesCompact(
           ${renderSettingsSegmented({
             mode: "buttons",
             variant: "accent",
-            className: "small",
+            class: "small",
             value: mode,
             onChange: callbacks.onTimeSeriesModeChange,
             onReselect: callbacks.onTimeSeriesModeChange,
@@ -280,7 +280,7 @@ export function renderTimeSeriesCompact(
               ? renderSettingsSegmented({
                   mode: "buttons",
                   variant: "accent",
-                  className: "small",
+                  class: "small",
                   value: breakdownMode,
                   onChange: callbacks.onTimeSeriesBreakdownChange,
                   onReselect: callbacks.onTimeSeriesBreakdownChange,

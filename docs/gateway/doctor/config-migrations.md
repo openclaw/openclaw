@@ -14,6 +14,10 @@ Doctor keeps the config from before that hook, reports the failure, and continue
 with the remaining repairs. Warning-only results stay visible without changing
 config. Repair the affected plugin, then run `openclaw doctor --fix` again.
 
+Doctor keeps plugin repair and diagnostic contracts available through later health
+checks and service finalization. It releases its private plugin resources when
+the flow ends, including failed runs.
+
 ## Runtime config migration
 
 Runtime config reads require per-model context budgets and current GitHub Copilot
@@ -27,6 +31,40 @@ Run `openclaw doctor --fix` before starting with these retired keys. Updates app
 the same transforms before candidate config validation, through the existing
 backup and include-aware write flow. Ordinary reads leave the authored values
 untouched so Doctor can report and persist the repair.
+
+## Direct Ollama Cloud routing
+
+Older Cloud-only setup stored hosted Ollama models under `models.providers.ollama`.
+When that provider points to `https://ollama.com`, Doctor moves it to
+`ollama-cloud` and rewrites its model references in agent defaults, model
+allowlists, per-agent settings, heartbeat, utility, subagent and compaction
+models, cron jobs, and session overrides. URL paths and trailing slashes do not
+change the hosted classification. An existing `ollama-cloud` catalog keeps its
+models and gains missing migrated models without duplicates.
+Role model-policy allow and deny rules move together, preserving restrictions.
+
+Localhost, LAN, and custom endpoints stay unchanged, including cloud models
+served through a signed-in local Ollama daemon. Other provider keys also stay
+unchanged. Doctor does not infer hosted routing from a model name.
+
+Both providers use `OLLAMA_API_KEY`, so environment-backed URLs, credentials, and
+SecretRefs keep their authored references without a credential-store migration.
+Doctor leaves saved `ollama` auth profiles untouched; if the key exists only in
+that saved profile, run `openclaw onboard --auth-choice ollama-cloud` to configure
+Cloud authentication.
+
+Migrated model references drop their `@profile` suffix rather than moving an
+account pin across providers. Doctor emits one reminder to re-pin with
+`/model <provider/model>@<profile>` if needed. Saved credentials are not modified.
+
+Run `openclaw doctor --fix` to apply the migration. Updates use the same repair.
+Doctor repairs cron and session
+references through their existing state owners, then backs up and publishes the
+config last. The Cloud provider is already available through the Ollama plugin.
+If interrupted before config publication, the hosted `ollama` entry remains and
+the next Doctor run finishes the idempotent repair. Once config publication
+completes, new local Ollama selections are left alone; Doctor never replays old
+config backups to infer a provider rename.
 
 ## Claude CLI model routing
 

@@ -1,12 +1,10 @@
-import type { nothing, TemplateResult } from "lit";
-
-export type PanelTabStripTab = {
+export type PanelTabStripTab<Content = unknown> = {
   id: string;
   domId: string;
   label: string;
   labelTooltip?: string | null;
   title?: string | null;
-  icon?: TemplateResult | typeof nothing | null;
+  icon?: Content | null;
   statusLabel?: string | null;
   /** Short ownership marker (e.g. "agent") rendered as a pill after the label. */
   badge?: string | null;
@@ -19,7 +17,10 @@ export type PanelTabStripTab = {
   onActivate?: () => void;
 };
 
-export type PanelTabStripParams<T extends PanelTabStripTab = PanelTabStripTab> = {
+export type PanelTabStripParams<
+  T extends PanelTabStripTab = PanelTabStripTab,
+  Content = unknown,
+> = {
   tabs: T[];
   activeId: string | null;
   ariaControls: string | ((tab: T) => string);
@@ -29,22 +30,15 @@ export type PanelTabStripParams<T extends PanelTabStripTab = PanelTabStripTab> =
   newLabel: string;
   newDisabled?: boolean;
   newTabAction?: boolean;
-  newControl?: TemplateResult | typeof nothing;
+  newControl?: Content;
   separateTabs?: boolean;
   onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 };
 
 /** Transitional Lit leaf boundary; undefined clears the owned content. */
-export type PanelTabStripContentRenderer = (
-  value: TemplateResult | undefined,
-  container: HTMLElement,
-) => void;
+export type PanelTabStripContentRenderer = (value: unknown, container: HTMLElement) => void;
 
-export type LegacyPanelTabStripParams = Omit<
-  PanelTabStripParams,
-  "tabs" | "ariaControls" | "newControl"
-> & {
-  tabs: (Omit<PanelTabStripTab, "icon"> & { icon?: TemplateResult; controls: string })[];
-  newControl?: TemplateResult | null;
+export type LegacyPanelTabStripParams = Omit<PanelTabStripParams, "tabs" | "ariaControls"> & {
+  tabs: (PanelTabStripTab & { controls: string })[];
   renderContent: PanelTabStripContentRenderer;
 };

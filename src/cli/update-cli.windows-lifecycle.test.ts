@@ -9,6 +9,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -518,11 +519,7 @@ describe("update-cli", () => {
   it("restores package files without re-enabling Windows autostart after interruption", async () => {
     await fixture.useFileBackedConfig();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const exitCalled = createDeferred();
-    const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      exitCalled.resolve();
-      return undefined as never;
-    });
+    const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     const root = await fixture.mockPackageInstallAtCaseDir("openclaw-update-lifecycle-signal");
     fixture.primeServiceCommand(
       [nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"],
@@ -552,8 +549,9 @@ describe("update-cli", () => {
 
     const priorSigintListeners = new Set(process.listeners("SIGINT"));
     await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
-    await exitCalled.promise;
-    expect(processExitSpy).toHaveBeenCalledWith(130);
+    await expect(waitForCliSignalExit()).resolves.toBe(130);
+    expect(process.exitCode).toBe(130);
+    expect(processExitSpy).not.toHaveBeenCalled();
     expect(resumeScheduledTaskAutoStartAfterUpdate.mock.calls.length).toBe(0);
     await expect(fs.access(path.join(root, "dist", "index.js"))).resolves.toBeUndefined();
     expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
@@ -655,11 +653,7 @@ describe("update-cli", () => {
     async ({ signal, phase }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const processOnSpy = vi.spyOn(process, "on");
-      const exitCalled = createDeferred();
-      const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-        exitCalled.resolve();
-        return undefined as never;
-      });
+      const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
       const gate = createDeferred();
       const entered = createDeferred();
       const gitMutation = vi.fn();
@@ -761,9 +755,9 @@ describe("update-cli", () => {
           { phase: "finished", status: "skipped", reason: "cancelled" },
         ]);
         expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-        await exitCalled.promise;
-        expect(processExitSpy).toHaveBeenCalledWith(130);
-        expect(processExitSpy.mock.calls.every(([code]) => code === 130)).toBe(true);
+        await expect(waitForCliSignalExit()).resolves.toBe(130);
+        expect(process.exitCode).toBe(130);
+        expect(processExitSpy).not.toHaveBeenCalled();
       } finally {
         gate.resolve();
         await updatePromise;

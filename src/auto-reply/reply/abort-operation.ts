@@ -233,18 +233,7 @@ export async function executeFastAbortRequest(
   const { ctx, cfg } = params;
   const { commandSessionKey, targetKey, resolveTargetAgentId } = request;
 
-  const auth = await resolveCommandAuthorizationAsync({
-    ctx,
-    cfg,
-    commandAuthorized: ctx.CommandAuthorized,
-  });
-  if (!auth.isAuthorizedSender) {
-    return { handled: false, aborted: false };
-  }
-
   const agentId = resolveTargetAgentId();
-  const abortKey = targetKey ?? auth.from ?? auth.to;
-  const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
 
   if (targetKey) {
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
@@ -306,13 +295,14 @@ export async function executeFastAbortRequest(
         (key) => [key, prepareTarget(key)] as const,
       ),
     );
+    let authorized = false;
     let aborted = false;
     let activeAbortRejected = false;
     const acpCancellations: Promise<void>[] = [];
     try {
       const { stopped, failed, execAborted } = await stopSubagentsForRequester({
         cfg,
-        requesterSessionKey,
+        requesterSessionKey: targetKey,
         requesterAgentId: agentId,
         requesterSession: resolvedAbortTarget?.sessionId
           ? {
@@ -323,6 +313,16 @@ export async function executeFastAbortRequest(
           : undefined,
         assertCurrent,
         beforeKill: async (sealRootSelection) => {
+          // Capture the selected work before authorization yields to later human turns.
+          const auth = await resolveCommandAuthorizationAsync({
+            ctx,
+            cfg,
+            commandAuthorized: ctx.CommandAuthorized,
+          });
+          authorized = auth.isAuthorizedSender;
+          if (!authorized) {
+            return false;
+          }
           assertCurrent();
           const bindingContext = commandSessionKey
             ? resolveSessionConversationBindingContext(cfg, ctx)
@@ -408,6 +408,9 @@ export async function executeFastAbortRequest(
           return true;
         },
       });
+      if (!authorized) {
+        return { handled: false, aborted: false };
+      }
       aborted ||= execAborted === true;
       const rejectionReason = activeAbortRejected && !aborted ? "finalizing" : undefined;
       if (!rejectionReason) {
@@ -447,6 +450,16 @@ export async function executeFastAbortRequest(
     }
   }
 
+  const auth = await resolveCommandAuthorizationAsync({
+    ctx,
+    cfg,
+    commandAuthorized: ctx.CommandAuthorized,
+  });
+  if (!auth.isAuthorizedSender) {
+    return { handled: false, aborted: false };
+  }
+  const abortKey = auth.from ?? auth.to;
+  const requesterSessionKey = ctx.SessionKey ?? abortKey;
   if (abortKey) {
     setAbortMemory(abortKey, true);
   }

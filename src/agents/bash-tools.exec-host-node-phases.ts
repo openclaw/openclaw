@@ -128,10 +128,7 @@ function hasNodeAllowAlwaysCommandApproval(params: {
   nodeCoverage?: NodeAllowAlwaysCoverage;
 }): boolean {
   const normalizedCommand = params.commandText.trim();
-  if (!normalizedCommand) {
-    return false;
-  }
-  if (params.segments.length === 0) {
+  if (!normalizedCommand || params.segments.length === 0) {
     return false;
   }
   if (
@@ -535,7 +532,6 @@ export async function analyzeNodeApprovalRequirement(params: {
               resolved.allowlist,
             );
             return {
-              command: entry.command,
               allowlistEligible:
                 !preparedShellPayload || entry.command.trim() === preparedShellPayload.trim(),
               exactDurableApprovalSatisfied: hasExactCommandDurableExecApproval({

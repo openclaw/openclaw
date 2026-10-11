@@ -327,6 +327,24 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
             return (
               <>
                 <wa-tab
+                  ref={(element) => {
+                    // Intercept explicit activation before WA's native group listeners.
+                    element.addEventListener("click", (event) => {
+                      if (tab().onActivate) {
+                        event.stopPropagation();
+                        tab().onActivate?.();
+                      }
+                    });
+                    element.addEventListener("keydown", (event) => {
+                      if (tab().onActivate && (event.key === "Enter" || event.key === " ")) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (!event.repeat) {
+                          tab().onActivate?.();
+                        }
+                      }
+                    });
+                  }}
                   id={tab().domId}
                   class={["tabstrip-tab", tab().className]}
                   panel={tab().id}
@@ -336,21 +354,6 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   active={selected()}
                   draggable={draggable() ? "true" : undefined}
                   prop:tabIndex={selected() ? 0 : -1}
-                  onClick={(event: MouseEvent) => {
-                    if (tab().onActivate) {
-                      event.stopPropagation();
-                      tab().onActivate?.();
-                    }
-                  }}
-                  onKeyDown={(event: KeyboardEvent) => {
-                    if (tab().onActivate && (event.key === "Enter" || event.key === " ")) {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      if (!event.repeat) {
-                        tab().onActivate?.();
-                      }
-                    }
-                  }}
                   onAuxClick={(event: MouseEvent) => {
                     if (event.button === 1) {
                       event.preventDefault();

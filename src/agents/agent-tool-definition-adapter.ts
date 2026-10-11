@@ -451,6 +451,7 @@ export function toToolDefinitions(
         { kind: "immediate" }
       >["outcome"];
       const settleImmediate = async (outcome: ImmediateOutcome, dispose: () => void) => {
+        let settled: ImmediateOutcome;
         try {
           const result = await settle(async () => {
             if (outcome.kind === "error") {
@@ -458,22 +459,15 @@ export function toToolDefinitions(
             }
             return outcome.result;
           });
-          return {
-            kind: "immediate" as const,
-            outcome: {
-              kind: "result" as const,
-              result,
-              isError: outcome.kind === "result" && outcome.isError,
-            },
-            dispose,
+          settled = {
+            kind: "result",
+            result,
+            isError: outcome.kind === "result" && outcome.isError,
           };
         } catch (error) {
-          return {
-            kind: "immediate" as const,
-            outcome: { kind: "error" as const, error },
-            dispose,
-          };
+          settled = { kind: "error", error };
         }
+        return { kind: "immediate" as const, outcome: settled, dispose };
       };
       let prepared: Awaited<ReturnType<typeof sourcePreparer>>;
       try {

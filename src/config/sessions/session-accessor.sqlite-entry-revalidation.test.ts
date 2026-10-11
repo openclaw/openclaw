@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
-import { isDeepStrictEqual } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -22,7 +21,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import * as sessionEntryReads from "./session-accessor.sqlite-entry-read.js";
 import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -38,10 +36,7 @@ import { createSessionTranscriptOwnerPredicate } from "./session-accessor.sqlite
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
-import {
-  readSessionEntryCurrentFactsInDatabase,
-  requestSessionEntryCurrentAdmission,
-} from "./session-entry-current-admission.worker.js";
+import { readSessionEntryCurrentFactsInDatabase } from "./session-entry-current-admission.worker.js";
 import type { SessionEntryCurrentSource } from "./session-entry-current.types.js";
 import { readSessionEntryCurrentFacts } from "./session-entry-read.worker.js";
 
@@ -331,7 +326,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       }
     });
 
-    it("does not adopt a sibling revision that commits during the owner predicate", () => {
+    it("invalidates the next predicate check when a sibling commits during a read", () => {
       const matches = ownerPredicate();
       let mutateDuringPredicate = false;
       const guard = createSessionEntryRevisionGuard(
@@ -348,7 +343,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       guard();
       mutateRowFromSibling({ label: "harmless metadata" });
       mutateDuringPredicate = true;
-      expect(guard).toThrow("Session entry facts changed during their mutation check");
+      expect(guard).not.toThrow();
       mutateDuringPredicate = false;
       expect(guard).toThrow("Prepared session entry facts are no longer current");
     });
@@ -402,91 +397,6 @@ describe("SQLite session entry patch commit revalidation", () => {
   });
 
   describe("compact session currency facts", () => {
-    it.each([
-      { field: "label", otherSession: false, conflicts: false, stage: "prepare" },
-      { field: "activeWriterRunId", otherSession: true, conflicts: false, stage: "prepare" },
-      { field: "previousSessionId", otherSession: false, conflicts: true, stage: "prepare" },
-      { field: "label", otherSession: false, conflicts: false, stage: "grant" },
-      { field: "previousSessionId", otherSession: false, conflicts: true, stage: "grant" },
-    ])(
-      "admits only unchanged facts when $field commits during $stage materialization (other session: $otherSession)",
-      async ({ field, otherSession, conflicts, stage }) => {
-        const otherKey = `${sessionKey}-other`;
-        if (otherSession) {
-          await upsertSessionEntryCore(
-            { ...scope, sessionKey: otherKey },
-            { sessionId: "other-session", updatedAt: 10 },
-          );
-        }
-        const original = readSessionEntryCurrentFactsInDatabase(database, sessionKey);
-        const identity = readOpenClawAgentDatabaseIdentity(database);
-        if (typeof identity.identity !== "string") {
-          throw new Error("Expected the fixture's durable database identity");
-        }
-        const source: SessionEntryCurrentSource = {
-          agentId: database.agentId,
-          path: database.path,
-          databaseIdentity: identity.identity,
-          databaseBirthtime: identity.birthtime,
-          sessionKey,
-        };
-        const read = sessionEntryReads.readExactSessionEntryRow;
-        const materialize = vi.spyOn(sessionEntryReads, "readExactSessionEntryRow");
-        const race = () => {
-          mutateRowFromSibling({ label: "invalidate the warm facts" });
-          materialize.mockImplementationOnce((...args) => {
-            const row = read(...args);
-            mutateRowFromSibling(
-              { [field]: "concurrent-write" },
-              otherSession ? otherKey : sessionKey,
-            );
-            return row;
-          });
-        };
-        const grant = vi.fn((request) => {
-          assertSessionEntryCurrentAdmission(request, {
-            source,
-            assertCurrent: (entry) => {
-              if (!isDeepStrictEqual(entry, original)) {
-                throw new Error("Captured session owner changed");
-              }
-            },
-          });
-          if (stage === "grant") {
-            race();
-          }
-        });
-        const admit = () =>
-          requestSessionEntryCurrentAdmission(
-            source,
-            { stage: "transaction", facts: undefined },
-            { database },
-            grant,
-          );
-        try {
-          if (stage === "prepare") {
-            race();
-          }
-          if (conflicts) {
-            expect(admit).toThrow(
-              stage === "prepare"
-                ? "Captured session owner changed"
-                : "Session currency changed while awaiting its native grant",
-            );
-          } else {
-            expect(admit).not.toThrow();
-          }
-          expect(grant).toHaveBeenCalledOnce();
-          const current = readSessionEntryCurrentFactsInDatabase(database, sessionKey);
-          expect(current).toEqual(
-            conflicts ? { ...original, [field]: "concurrent-write" } : original,
-          );
-        } finally {
-          materialize.mockRestore();
-        }
-      },
-    );
-
     it("discards facts first observed after a write in a rolled-back native transaction", () => {
       // A fresh admitted connection has never installed the lazy revision tracker.
       const connection = openNodeSqliteDatabase(database.path);

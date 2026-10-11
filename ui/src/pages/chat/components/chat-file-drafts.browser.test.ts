@@ -9,6 +9,7 @@ import "../../../styles/chat.ts";
 import "./chat-detail-panel.ts";
 import { setFileDraft } from "./chat-file-drafts.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let page: (typeof import("vitest/browser"))["page"];
@@ -37,7 +38,9 @@ const textbox = (name: string) => page.getByRole("textbox", { name, exact: true 
 async function openFile(content: FileContent) {
   const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
   panel.content = content;
-  document.body.append(panel);
+  const container = createChatSidebarContainer();
+  container.append(panel);
+  document.body.append(container);
   await panel.updateComplete;
   return panel;
 }

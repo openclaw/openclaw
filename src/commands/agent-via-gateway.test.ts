@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -326,17 +325,14 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("clamps oversized gateway timeout seconds at the command boundary", async () => {
+  it("lets the Gateway own each attempt budget across fallbacks", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
-
-      await agentCliCommand(
-        { message: "hi", to: "+1555", timeout: String(Number.MAX_SAFE_INTEGER) },
-        runtime,
-      );
-
-      const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
-      expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+      await agentCliCommand({ message: "hi", to: "+1555", timeout: "20" }, runtime);
+      expect(requireFirstCallArg(callGateway, "gateway")).toMatchObject({
+        timeoutMs: null,
+        params: { timeout: 20 },
+      });
     });
   });
 
@@ -1821,9 +1817,9 @@ describe("agentCliCommand", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
-    expect(requireRecord(requireFirstCallArg(callGateway, "gateway"), "request").timeoutMs).toBe(
-      2_147_000_000,
-    );
+    expect(
+      requireRecord(requireFirstCallArg(callGateway, "gateway"), "request").timeoutMs,
+    ).toBeNull();
   });
 
   it("stops dispatch and releases signal listeners when the session module fails to load", async () => {

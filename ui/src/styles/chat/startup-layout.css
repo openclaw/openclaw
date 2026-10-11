@@ -381,8 +381,12 @@
 }
 
 .chat-pane__header-trailing {
+  flex-wrap: wrap;
   flex-shrink: 0;
+  justify-content: flex-end;
+  max-width: 100%;
   margin-left: auto;
+  row-gap: 0;
   justify-self: end;
 }
 

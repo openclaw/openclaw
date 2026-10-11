@@ -1,6 +1,5 @@
 import type { ControlUiFocusTarget } from "@openclaw/session-url-contract";
 import { createMemo } from "@solidjs/signals";
-import type { nothing, TemplateResult } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
@@ -8,16 +7,16 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { BrowserPanelHost } from "./browser-panel.ts";
 import { readBrowserTabTarget } from "./browser-target.ts";
 
-export type BrowserDocumentProps = {
+export type BrowserDocumentViewProps = {
   context: ApplicationContext;
   target: Extract<ControlUiFocusTarget, { kind: "browser" }>;
-  renderEscape: (label: string) => TemplateResult | typeof nothing;
+  renderEscape: (label: string) => unknown;
 };
 
 export function BrowserDocumentContent(props: {
-  value: BrowserDocumentProps | null;
-  renderTemplate: (read: () => TemplateResult | typeof nothing) => HTMLElement;
-  renderConnecting: (status?: string) => TemplateResult;
+  value: BrowserDocumentViewProps | null;
+  renderTemplate: (read: () => unknown) => HTMLElement;
+  renderConnecting: (status?: string) => unknown;
 }) {
   const snapshot = createMemo(() => props.value?.context.gateway.snapshot);
   const connected = createMemo(() => snapshot()?.phase === "connected");

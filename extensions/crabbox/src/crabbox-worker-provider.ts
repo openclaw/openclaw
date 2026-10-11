@@ -345,7 +345,8 @@ export function createCrabboxWorkerProvider(
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
       inspectedParams.deadline = setupDeadline;
-      if (parsed.setup && !(project?.preparation && allocationChoice.kind === "checkpoint")) {
+      // The image key covers the exact setup script, so a fork already carries its results.
+      if (parsed.setup && allocationChoice.kind !== "checkpoint") {
         await runProvisionSetup({
           ...inspectedParams,
           phase: "profile setup",

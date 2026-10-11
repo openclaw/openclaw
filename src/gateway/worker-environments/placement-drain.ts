@@ -2,7 +2,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
-  assertRecordShape,
   isCurrentPlacementTurnClaim,
   normalizeEpoch,
   required,
@@ -67,11 +66,6 @@ export function drainWorkerSessionPlacement(
     nowMs,
   );
   Object.assign(values, turnClaimValues(current.turnClaim));
-  assertRecordShape({
-    ...current,
-    state: "draining",
-    workspaceBaseManifestRef: values.workspace_base_manifest_ref,
-  });
   const result = executeSqliteQuerySync(
     db,
     query(db)

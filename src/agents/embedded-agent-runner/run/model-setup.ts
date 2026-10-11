@@ -109,6 +109,10 @@ async function prepareNativeSessionRuntime(
     });
     try {
       const consume = (current: SessionEntry | undefined, assertReadCurrent: () => void) => {
+        // Only a publication before the synchronous hook may retry its input read.
+        if (changed) {
+          throw new NativeSessionOwnershipReadRaceError();
+        }
         const assertCurrent = () => {
           assertCallerCurrent();
           runParams.abortSignal?.throwIfAborted();
@@ -117,14 +121,11 @@ async function prepareNativeSessionRuntime(
           }
           try {
             assertReadCurrent();
-            if (changed) {
-              throw new NativeSessionOwnershipReadRaceError();
-            }
           } catch (cause) {
-            if (cause instanceof NativeSessionOwnershipReadRaceError) {
-              throw cause;
-            }
             throw new AgentHarnessPreflightError(ownershipChangedMessage, { cause });
+          }
+          if (changed) {
+            throw new AgentHarnessPreflightError(ownershipChangedMessage);
           }
           const expectedWriter = runParams.sessionTarget?.expectedWriterRunId;
           if (

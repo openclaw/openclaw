@@ -5,7 +5,7 @@ sidebarTitle: "Tool Plugins"
 read_when:
   - You want to build a simple OpenClaw plugin that only adds agent tools
   - You want to use defineToolPlugin instead of hand-writing plugin manifest metadata
-  - You need to scaffold, generate, validate, test, or publish a tool-only plugin
+  - You need to create, generate, validate, test, or publish a tool-only plugin
   - You need the plugin tool context's memory audience and currency guards
 ---
 
@@ -40,7 +40,7 @@ npm run plugin:validate
 npm test
 ```
 
-`plugins init` scaffolds:
+`plugins init` creates these starter files:
 
 | File                   | Purpose                                                           |
 | ---------------------- | ----------------------------------------------------------------- |
@@ -66,7 +66,7 @@ Plugin stock-quotes is valid.
 | -------------------- | ------------------ | -------------------------------------- |
 | `--directory <path>` | `<id>`             | Output directory                       |
 | `--name <name>`      | Title-cased `<id>` | Display name                           |
-| `--type <type>`      | `tool`             | Scaffold type: `tool` or `provider`    |
+| `--type <type>`      | `tool`             | Plugin type: `tool` or `provider`      |
 | `--force`            | off                | Overwrite an existing output directory |
 
 ## Write a tool
@@ -554,7 +554,7 @@ which editors surface as migration warnings. To enforce them in CI, enable a
 type-aware rule such as
 [`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated/).
 Oxlint is not type-aware, so it cannot enforce these annotations. The generated
-`plugins init` scaffold therefore does not add a deprecation lint config.
+`plugins init` starter files therefore do not add a deprecation lint config.
 
 `plugins validate` checks that:
 

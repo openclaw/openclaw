@@ -102,7 +102,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
-      "src/gateway/worker-environments/placement-dispatch-store.worker.ts",
+      "src/gateway/worker-environments/placement-lifecycle.worker.ts",
       "src/gateway/worker-environments/placement-turn-claims.worker.ts",
     ],
   })),
@@ -293,6 +293,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",

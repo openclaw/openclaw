@@ -118,6 +118,23 @@ function publication(receipt: Receipt) {
 export const pluginStatePublication = {
   stagePostimage: stagePluginStatePostimage,
   stageDeletions: stagePluginStateDeletions,
+  /** A compound native owner settled these keys without plugin-state postimages. */
+  invalidateEntries(source: SqliteCommitSource, rows: readonly EntryKey[]): void {
+    const keys = rows.map(keyFor);
+    if (keys.length === 0) {
+      return;
+    }
+    publishSqliteCommittedState(
+      publication(
+        createSqliteCommitReceipt<PluginStateRow, SqliteCommitSource>({
+          source,
+          domain: "plugin-state",
+          keys,
+          readFact: () => ({ kind: "unknown" }),
+        }),
+      ),
+    );
+  },
   /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
   subscribeFacts: (listener: (change: PluginStateChange) => void) =>
     registerListener(state.facts, listener),

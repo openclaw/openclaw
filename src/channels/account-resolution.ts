@@ -49,7 +49,7 @@ export async function describeChannelAccount<ResolvedAccount>(params: {
     : config.describeAccount?.(params.account, params.cfg);
 }
 
-export async function resolveChannelDmPolicy<ResolvedAccount>(params: {
+export async function resolvePluginDmPolicy<ResolvedAccount>(params: {
   plugin: Pick<ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>, "security">;
   account: ResolvedAccount;
   cfg: OpenClawConfig;

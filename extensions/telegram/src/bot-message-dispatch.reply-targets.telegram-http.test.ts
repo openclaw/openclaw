@@ -214,6 +214,8 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         await waitForBotApiCall(
           (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
         );
+        // Exercise target reuse after receipt adoption, not rotation during an unresolved send.
+        await Promise.all(draftStreams.map((stream) => stream.waitForInFlight()));
         await options?.onAssistantMessageStart?.();
         await options?.onPartialReply?.({ text: preview, delta: preview });
         await waitForBotApiCall(

@@ -102,6 +102,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
     const activePresenceDemand = presence.current();
     const presenceDeferred = !presenceAdmitted;
     const inventory = store.list();
+    const oldestFirst = inventory.toSorted((a, b) => a.createdAtMs - b.createdAtMs);
     const sources = new Map<string, { record: WorkerEnvironmentRecord; demandAtMs: number }>();
     const activationByGeneration = new Map<string, number>();
     const buildingKeys = new Set<string>();
@@ -371,7 +372,7 @@ export function createPreparedWorkerPool(options: PoolOptions) {
       const work: WorkerEnvironmentRecord[] = [];
       // Builds admitted during an await belong to the next scheduled pass's
       // source snapshot. Existing rows still use live promotion and cleanup state.
-      for (const snapshot of inventory.toSorted((a, b) => a.createdAtMs - b.createdAtMs)) {
+      for (const snapshot of oldestFirst) {
         const record = store.get(snapshot.environmentId);
         if (
           !record ||

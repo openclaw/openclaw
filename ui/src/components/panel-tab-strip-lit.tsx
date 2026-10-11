@@ -1,4 +1,3 @@
-import type { TemplateResult } from "lit";
 import { Show, createEffect, createMemo, onCleanup } from "solid-js";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
@@ -8,10 +7,7 @@ import type {
 } from "./panel-tab-strip-types.ts";
 
 /** The callback owns this leaf's descendants; Solid owns the surrounding tab UI. */
-function LitContent(props: {
-  value: TemplateResult | undefined;
-  renderContent: PanelTabStripContentRenderer;
-}) {
+function LitContent(props: { value: unknown; renderContent: PanelTabStripContentRenderer }) {
   let container!: HTMLSpanElement;
   let renderContent: PanelTabStripContentRenderer | undefined;
   createEffect(

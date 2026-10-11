@@ -16,6 +16,7 @@ import {
   digestWorkerCredentialAuthority,
   encodeWorkerEnvironmentTransferAuthority,
 } from "./store-commit-authority.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { assertShape } from "./store-validation.js";
 import type { WorkerEnvironmentCommitAdmission, WorkerEnvironmentFacts } from "./store.types.js";
 
@@ -52,18 +53,6 @@ function applyNativeOverlay(
   });
 }
 
-function assertEnvironmentShape(record: WorkerEnvironmentRecord): void {
-  assertShape(
-    record.state,
-    record.leaseId,
-    record.nodeDeviceId,
-    record.sshEndpoint,
-    record.desktop,
-    record.bootstrapReceipt,
-    record.attachedSessionIds,
-  );
-}
-
 const ownAdmission = new AsyncLocalStorage<object>();
 function createWorkerEnvironmentProjection() {
   const environments = new Map<string, WorkerEnvironmentRecord>();
@@ -96,7 +85,7 @@ function createWorkerEnvironmentProjection() {
   let reconcilable: WorkerEnvironmentRecord[] | undefined;
   const assertActive = () => {
     if (!active) {
-      throw new Error("Worker environment inventory has closed");
+      throw new WorkerEnvironmentInventoryClosedError();
     }
   };
   const assertReadable = (
@@ -382,7 +371,7 @@ function createWorkerEnvironmentProjection() {
       assertReadable(id, "environment");
       const record = environments.get(id);
       if (record) {
-        assertEnvironmentShape(record);
+        assertShape(record);
       }
       return record;
     },
@@ -427,7 +416,7 @@ function createWorkerEnvironmentProjection() {
       assertActive();
       sorted ??= freezeJsonSnapshot([...environments.values()].toSorted(compare));
       if (!reconcile) {
-        sorted.forEach(assertEnvironmentShape);
+        sorted.forEach(assertShape);
         return sorted;
       }
       reconcilable ??= freezeJsonSnapshot(
@@ -438,7 +427,7 @@ function createWorkerEnvironmentProjection() {
               Buffer.compare(Buffer.from(a.providerId), Buffer.from(b.providerId)) || compare(a, b),
           ),
       );
-      reconcilable.forEach(assertEnvironmentShape);
+      reconcilable.forEach(assertShape);
       return reconcilable;
     },
     hasSessionAttachment(environmentId: string) {

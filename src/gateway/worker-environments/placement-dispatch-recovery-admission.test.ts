@@ -71,7 +71,7 @@ async function git(root: string, ...args: string[]) {
 }
 
 describe("placement recovery session admission with persisted placements", () => {
-  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
+  support.setupWorkerEnvironmentServiceSuite();
   let releaseOwnedWork: (() => Promise<void>) | undefined;
   afterEach(async () => {
     // Release blocked provider work before the service fixture drains on a failed test.

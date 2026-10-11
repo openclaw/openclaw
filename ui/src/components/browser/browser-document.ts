@@ -3,12 +3,16 @@ import { nothing, render, type TemplateResult } from "lit";
 import { createComponent } from "solid-js";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { renderConnectingSplash } from "../loading-skeleton.ts";
-import { BrowserDocumentContent, type BrowserDocumentProps } from "./browser-document.tsx";
+import { BrowserDocumentContent, type BrowserDocumentViewProps } from "./browser-document.tsx";
 
-export { BrowserDocumentContent, type BrowserDocumentProps } from "./browser-document.tsx";
+export { BrowserDocumentContent } from "./browser-document.tsx";
+
+export type BrowserDocumentProps = Omit<BrowserDocumentViewProps, "renderEscape"> & {
+  renderEscape: (label: string) => TemplateResult | typeof nothing;
+};
 
 // The unported app shell owns these template ranges until its rendering cutover.
-function renderTemplate(read: () => TemplateResult | typeof nothing): HTMLElement {
+function renderTemplate(read: () => unknown): HTMLElement {
   const host = document.createElement("span");
   host.style.display = "contents";
   createEffect(read, (template) => {

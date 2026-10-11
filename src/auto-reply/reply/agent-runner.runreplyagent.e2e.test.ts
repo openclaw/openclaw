@@ -1800,9 +1800,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("drains followup queue when an unexpected exception escapes the run path", async () => {
-    const accounting = await import("./session-usage.js");
+    const accounting = await import("./agent-runner-result-accounting.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistSessionUsageUpdate")
+      .spyOn(accounting, "accountAgentTurn")
       .mockRejectedValueOnce(new Error("persist exploded"));
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -1837,9 +1837,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   ])(
     "preserves $label through terminal failure with block streaming disabled",
     async ({ callbackResult, sessionCtx }) => {
-      const accounting = await import("./session-usage.js");
+      const accounting = await import("./agent-runner-result-accounting.js");
       const persistSpy = vi
-        .spyOn(accounting, "persistSessionUsageUpdate")
+        .spyOn(accounting, "accountAgentTurn")
         .mockRejectedValueOnce(new Error("persist exploded"));
       const onPartialReply = vi.fn(async () => callbackResult);
       let observedCallbackResult: boolean | void = undefined;
@@ -1950,9 +1950,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("rethrows after a delivered partial without visible content", async () => {
-    const accounting = await import("./session-usage.js");
+    const accounting = await import("./agent-runner-result-accounting.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistSessionUsageUpdate")
+      .spyOn(accounting, "accountAgentTurn")
       .mockRejectedValueOnce(new Error("persist exploded"));
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -1976,9 +1976,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("rethrows heartbeat failures after a delivered partial", async () => {
-    const accounting = await import("./session-usage.js");
+    const accounting = await import("./agent-runner-result-accounting.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistSessionUsageUpdate")
+      .spyOn(accounting, "accountAgentTurn")
       .mockRejectedValueOnce(new Error("persist exploded"));
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -2027,9 +2027,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   it.each(["reasoning", "commentary"] as const)(
     "reports failure after visible %s-only block streaming",
     async (lane) => {
-      const accounting = await import("./session-usage.js");
+      const accounting = await import("./agent-runner-result-accounting.js");
       const persistSpy = vi
-        .spyOn(accounting, "persistSessionUsageUpdate")
+        .spyOn(accounting, "accountAgentTurn")
         .mockRejectedValueOnce(new Error("persist exploded"));
       const onBlockReply = vi.fn();
       const runState: ReplyOperationRunState = {};
@@ -2401,7 +2401,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       runOverrides: { verboseLevelOverride: "off" },
     });
 
-    await expect(run()).rejects.toThrow("pending final delivery session changed or was deleted");
+    await expect(run()).rejects.toThrow("Terminal accounting session changed");
     const stored = loadSessionEntry({ sessionKey, storePath });
     if (reset) {
       expect(stored).toMatchObject({ sessionId: "session-after-reset" });
@@ -5271,7 +5271,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           activeModel: "deepinfra/moonshotai/Kimi-K2.5",
           reason: "rate limit",
         };
-        expect(sessionEntry.fallbackNotice).toEqual(activeFallback);
+        expect(sessionStore.main.fallbackNotice).toEqual(activeFallback);
         expect(requireStoredSessionEntry(storePath).fallbackNotice).toEqual(activeFallback);
         const second = await run();
         const third = await run();
@@ -5289,7 +5289,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         }
         expect(phases.filter((phase) => phase === "fallback").length).toBe(1);
         expect(phases.filter((phase) => phase === "fallback_cleared").length).toBe(1);
-        expect(sessionEntry.fallbackNotice).toBeUndefined();
+        expect(sessionStore.main.fallbackNotice).toBeUndefined();
         expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
       } finally {
         fallbackSpy.mockRestore();
@@ -5700,7 +5700,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     await run();
 
     const stored = requireStoredSessionEntry(storePath);
-    expect(sessionEntry.fallbackNotice).toBeUndefined();
+    expect(sessionStore.main.fallbackNotice).toBeUndefined();
     expect(stored.fallbackNotice).toBeUndefined();
     expect(stored.modelProvider).toBe("claude-cli");
     expect(stored.model).toBe("claude-opus-4-7");

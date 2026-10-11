@@ -1,5 +1,5 @@
 import {
-  placementTurnOwner,
+  projectPlacementTurnClaim,
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
   type WorkerSessionPlacementRecord,
@@ -61,18 +61,11 @@ function claimForOwnerRevocation(
   if (
     (record?.state !== "active" && record?.state !== "draining") ||
     record.environmentId !== binding.environmentId ||
-    record.activeOwnerEpoch !== binding.ownerEpoch ||
-    !record.turnClaim
+    record.activeOwnerEpoch !== binding.ownerEpoch
   ) {
     return undefined;
   }
-  return {
-    sessionId: record.sessionId,
-    claimId: record.turnClaim.claimId,
-    runId: record.turnClaim.runId,
-    placementGeneration: record.turnClaim.generation,
-    owner: placementTurnOwner(record),
-  };
+  return projectPlacementTurnClaim(record);
 }
 
 export function createWorkerSessionPlacementGate(
@@ -89,7 +82,9 @@ export function createWorkerSessionPlacementGate(
   );
   const validateWorkerTurn = (claim: WorkerSessionTurnClaim) =>
     !recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(claim)) &&
-    store.validateTurnClaim(claim);
+    // Credential issuance precedes owner binding; attached turns already hold live authority.
+    (getWorkerTurnExecutionIdentityCapability(store, claim) !== undefined ||
+      store.validateTurnClaim(claim));
 
   const fenceWorkerTurnForRecovery = (claim: WorkerSessionTurnClaim) => {
     if (claim.owner.kind === "worker") {

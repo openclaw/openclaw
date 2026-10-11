@@ -21,7 +21,10 @@ import { requireNodeSqlite } from "../node-sqlite.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../sqlite-worker-contract.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
-import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
+import {
+  createAccountScopedConversationBindingManager,
+  createAccountScopedConversationBindingManagerV2,
+} from "./account-scoped-conversation-bindings.js";
 import { resolveBoundDeliveryDestination } from "./bound-delivery-router.js";
 import {
   bindCurrentConversationRecordAsync,
@@ -866,6 +869,58 @@ it("commits oversized expiry batches and retires binding coverage before replyin
       expect(events).toEqual(["pending", "unknown", "settled", "reply"]);
     } finally {
       unsubscribe();
+    }
+  });
+});
+
+it("runs the V2 account manager's complete persistence lifecycle in workers", async () => {
+  await withOpenClawTestState({ label: "binding-manager-v2" }, async () => {
+    const manager = createAccountScopedConversationBindingManagerV2({
+      channel: "fixture",
+      accountId: "owner",
+      cfg: { session: { threadBindings: { idleHours: 0, maxAgeHours: 0 } } },
+      stateKey: Symbol("binding-manager-v2"),
+      toStoredTargetKind: (kind) => kind,
+      toSessionBindingTargetKind: (kind) => kind,
+    });
+    openOpenClawStateDatabase();
+    const hostSql = observeHostDataSql();
+    try {
+      const binding = await manager.bindConversationAsync({
+        conversationId: "room",
+        targetSessionKey: "agent:main:managed",
+        targetKind: "session",
+        metadata: { label: "worker-owned" },
+      });
+      expect(binding).toMatchObject({ conversationId: "room", label: "worker-owned" });
+      expect(await manager.getByConversationIdAsync("room")).toEqual(binding);
+      expect(await manager.listBySessionKeyAsync("agent:main:managed")).toEqual([binding]);
+      expect(await manager.touchConversationAsync("room", 123)).toMatchObject({
+        lastActivityAt: 123,
+      });
+      expect(await manager.unbindConversationAsync("room")).toMatchObject({ lastActivityAt: 123 });
+      expect(await manager.getByConversationIdAsync("room")).toBeUndefined();
+      await manager.bindConversationAsync({
+        conversationId: "room",
+        targetSessionKey: "agent:main:managed",
+        targetKind: "session",
+      });
+      expect(await manager.unbindBySessionKeyAsync("agent:main:managed")).toHaveLength(1);
+      expect(await manager.listBySessionKeyAsync("agent:main:managed")).toEqual([]);
+      for (const call of hostSql.calls) {
+        expect(call).not.toHaveBeenCalled();
+      }
+      manager.stop();
+      await expect(
+        manager.bindConversationAsync({
+          conversationId: "closed",
+          targetSessionKey: "agent:main:managed",
+          targetKind: "session",
+        }),
+      ).rejects.toThrow("no longer active");
+    } finally {
+      hostSql.restore();
+      manager.stop();
     }
   });
 });

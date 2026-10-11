@@ -7,6 +7,7 @@ import {
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { renderChat } from "./chat-view.ts";
 import {
   prepareChatMessageRender,
@@ -210,7 +211,7 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
 }
 
 export function renderChatView(overrides: Partial<ChatProps> = {}) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   onTestFinished(() => {
     render(nothing, container);
   });
@@ -316,7 +317,7 @@ export function createReactiveDraftHarness({
   let draft = "";
   let currentOverrides = overrides;
   let active = true;
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   onTestFinished(() => {
     active = false;
     render(nothing, container);

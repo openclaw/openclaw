@@ -54,6 +54,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { hasKind } from "./slots.js";
@@ -344,7 +345,6 @@ export function loadOpenClawPluginsCore(
         preferBuiltPluginArtifacts: options.preferBuiltPluginArtifacts,
       },
       context.registrationConfigKey,
-      loaderCacheIdentity,
     );
     const replacedIds = new Set([
       ...(options.replacePluginIds ?? []),
@@ -607,6 +607,8 @@ export function loadOpenClawPluginsCore(
         );
       }
     }
+    // Presence of this identity also admits immutable private-registry policy caching.
+    getPluginRuntimeLoadContextState(registry)!.loaderCacheIdentity = loaderCacheIdentity;
     if (context.shouldActivate) {
       // Install the complete bundle before hook-runner initialization.
       activatePluginRegistry(

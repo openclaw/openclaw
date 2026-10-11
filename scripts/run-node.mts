@@ -30,8 +30,6 @@ import { hasUnjoinedWork } from "./lib/managed-child-process.mts";
 import { acquireManagedCleanup } from "./lib/managed-cleanup-handoff.mts";
 import { resolveQaCodexApiKeyEnvPatch } from "./lib/qa-codex-auth-env.mts";
 import {
-  captureRunNodeInputState,
-  type RunNodeInputState,
   collectRunNodeBundledPluginBuildEntries,
   hasDirtySourceTree,
   resolveRunNodeInputSignature,
@@ -1446,14 +1444,14 @@ const syncRuntimeArtifacts = async (deps: RunNodeDeps) => {
   return true;
 };
 
-const writeRuntimePostBuildStamp = (deps: RunNodeDeps, inputState: RunNodeInputState | null) => {
+const writeRuntimePostBuildStamp = (deps: RunNodeDeps, inputSignature: string | null) => {
   try {
     writeDistRuntimePostBuildStamp({
       cwd: deps.cwd,
       fs: deps.fs,
       env: deps.env,
       spawnSync: deps.spawnSync,
-      inputState,
+      inputSignature,
     });
     return true;
   } catch (error) {
@@ -1486,12 +1484,12 @@ const syncRuntimeArtifactsAndStamp = async (deps: RunNodeDeps) =>
           return false;
         }
         deps.cancellation.signal.throwIfAborted();
-        const inputState = captureRunNodeInputState(deps, "runtime");
+        const inputSignature = resolveRunNodeInputSignature(deps, "runtime");
         deps.fs.rmSync(deps.runtimePostBuildStampPath, { force: true });
         const synced = await syncRuntimeArtifacts(deps);
         deps.cancellation.signal.throwIfAborted();
         if (synced) {
-          return writeRuntimePostBuildStamp(deps, inputState);
+          return writeRuntimePostBuildStamp(deps, inputSignature);
         }
         return false;
       });

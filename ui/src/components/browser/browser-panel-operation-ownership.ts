@@ -49,8 +49,6 @@ export class BrowserPanelOperationOwnership {
     sessionKey: string;
   };
   private requestedMutation = 0;
-  private requestedSnapshot = 0;
-  private acceptedSnapshot = 0;
   private requestedCapture = 0;
   private requestedInspection = 0;
   private capturePending = false;
@@ -265,12 +263,10 @@ export class BrowserPanelOperationOwnership {
     const invocation: BrowserPanelInvocation = {
       client,
       epoch: this.lifecycleEpoch,
-      id: ++this.requestedSnapshot,
+      id: mutationId,
       mutationId,
       isCurrent: () =>
-        this.isLive(invocation.epoch, client) &&
-        invocation.id === this.requestedSnapshot &&
-        mutationId === this.requestedMutation,
+        this.isLive(invocation.epoch, client) && mutationId === this.requestedMutation,
     };
     return invocation;
   }
@@ -282,12 +278,11 @@ export class BrowserPanelOperationOwnership {
   ): boolean {
     if (
       !this.isLive(invocation.epoch, invocation.client) ||
-      invocation.id < this.acceptedSnapshot ||
       (!invocation.isCurrent() && snapshotTargetId !== currentTargetId)
     ) {
       return false;
     }
-    this.acceptedSnapshot = invocation.id;
+    // Same-tab refreshes are best effort; input still checks the live document at dispatch.
     return true;
   }
 

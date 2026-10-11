@@ -1,7 +1,7 @@
 import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js";
 import type { SessionAdmissionDatabaseClaim } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 import {
   lifecycleAdmissionByOperation,
   type ReplyOperationAdmission,
@@ -16,50 +16,25 @@ export function bindReplyOperationDatabaseAdmission(
 ) {
   let handoff: Promise<void> | undefined;
   let releasing: Promise<void> | undefined;
-  const assertReaderOperation = () => {
+  const assertTransitionActive = () => {
     readerOperation.abortSignal.throwIfAborted();
-    if (
-      releasing ||
-      lifecycleAdmissionByOperation.get(readerOperation) !== operationAdmission ||
-      replyRunRegistry.get(readerOperation.key) !== readerOperation ||
-      readerOperation.key !== params.sessionKey
-    ) {
+    if (releasing || readerOperation.key !== params.sessionKey) {
       throw new SessionWorkStartChangedError("Session reader operation is no longer current");
     }
+    if (readerOperation.result) {
+      throw new SessionWorkStartChangedError("Reply transition is no longer active");
+    }
   };
-  const bindReader = (borrowedReader: ReplyOperationAdmission["reader"]) =>
-    borrowedReader && {
-      ...borrowedReader,
-      assertCurrent: () => {
-        assertReaderOperation();
-        borrowedReader.assertCurrent();
-      },
-      withRead: ((request, assertCallerCurrent, consume) =>
-        borrowedReader.withRead(
-          request,
-          () => {
-            assertReaderOperation();
-            assertCallerCurrent();
-          },
-          consume,
-        )) satisfies typeof borrowedReader.withRead,
-    };
   const operationAdmission: ReplyOperationAdmission = {
     lease,
     databaseIdentity: databaseClaim?.identity,
     databaseClaim,
-    reader: bindReader(databaseClaim && "kind" in databaseClaim ? databaseClaim.reader : undefined),
+    reader: databaseClaim && "kind" in databaseClaim ? databaseClaim.reader : undefined,
     resolveReader() {
-      assertReaderOperation();
+      operationAdmission.reader?.assertCurrent();
       return operationAdmission.reader;
     },
     async afterTransition(transition) {
-      const assertTransitionActive = () => {
-        assertReaderOperation();
-        if (readerOperation.result !== null) {
-          throw new SessionWorkStartChangedError("Reply transition is no longer active");
-        }
-      };
       assertTransitionActive();
       const current = operationAdmission.databaseClaim;
       const prepare =
@@ -67,25 +42,16 @@ export function bindReplyOperationDatabaseAdmission(
       if (!current || !prepare) {
         return;
       }
-      if (handoff) {
-        throw new Error("Session transition admission handoff is already pending");
-      }
       handoff = (async () => {
         const next = await prepare(transition, assertTransitionActive);
-        try {
-          assertTransitionActive();
-          current.assertCurrent();
-          next.assertCurrent();
-        } catch (error) {
+        if (releasing) {
           await next.release();
-          throw error;
+          throw new SessionWorkStartChangedError("Session reader operation is no longer current");
         }
         operationAdmission.databaseClaim = next;
-        operationAdmission.reader = bindReader(next.reader);
-        // Revoke the old view synchronously, then join its accepted work before returning.
+        operationAdmission.reader = next.reader;
         await current.release();
         assertTransitionActive();
-        next.assertCurrent();
       })();
       try {
         await handoff;

@@ -345,8 +345,8 @@ suite.define(() => {
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Resumed progress", { exact: true })
           .waitFor();
-        // A pending snapshot already carrying revision 3 satisfies the hidden event.
-        expect(await gateway.getRequests("progressCard.get")).toHaveLength(pendingSnapshot ? 1 : 2);
+        // One coalesced follow-up reconciles events received during the pending snapshot.
+        expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
       });
     },
   );

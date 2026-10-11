@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { racePromiseWithAbortSignal, waitForAbortSignal } from "../../infra/abort-signal.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type {
   NodeBootstrapArtifact,
@@ -54,15 +54,8 @@ export function createNodeBootstrapArtifactProvider(options: NodeBootstrapArtifa
       if (signal && !consumers.has(signal)) {
         consumers.set(
           signal,
-          new Promise<void>((resolve) => {
-            signal.addEventListener(
-              "abort",
-              () => {
-                consumers.delete(signal);
-                resolve();
-              },
-              { once: true },
-            );
+          waitForAbortSignal(signal).then(() => {
+            consumers.delete(signal);
           }),
         );
       }
