@@ -22,7 +22,10 @@ export function createUiIsolatedVitestConfig(
     includeOpenClawRuntimeSetup: false,
     isolate: true,
     name: "ui-isolated",
-    setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
+    setupFiles: [
+      "ui/src/test-helpers/lit-warnings.setup.ts",
+      "ui/src/test-helpers/github-network.setup.ts",
+    ],
     useNonIsolatedRunner: false,
   });
   return {

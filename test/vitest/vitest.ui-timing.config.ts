@@ -19,7 +19,10 @@ export function createUiTimingVitestConfig(
     intersectIncludeFile: true,
     isolate: true,
     name: "ui-timing",
-    setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
+    setupFiles: [
+      "ui/src/test-helpers/lit-warnings.setup.ts",
+      "ui/src/test-helpers/github-network.setup.ts",
+    ],
   });
   return {
     ...config,

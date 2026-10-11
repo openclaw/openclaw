@@ -89,6 +89,69 @@ For remote-environment proof, invoke `node scripts/crabbox-wrapper.mjs`
 directly. Avoid local `pnpm crabbox:run` in linked worktrees because pnpm may
 reconcile dependencies before the remote wrapper starts.
 
+## GitHub stays offline in ordinary tests
+
+Repository test launchers install a blocking GitHub tripwire before loading test
+configurations. It covers Node fetch, HTTP, TLS and socket entry points, inherited
+workers and subprocesses, native `gh`/Git/HTTP shell commands, and the Chromium
+contexts used by the UI lanes. GitHub.com, GitHubusercontent.com, GHE.com and the
+configured `GH_HOST` are blocked. Children lose ambient GitHub token variables,
+CLI credential-directory overrides and SSH agent/askpass access. Native Git
+children use file-only transport; use local repositories or mocked transports.
+
+Use `pnpm test:live` for deliberately selected live tests. Ordinary test commands
+do not grant GitHub access because a shell exports `LIVE` or
+`OPENCLAW_LIVE_TEST`, a test selects the real home, or a profile exports those
+flags. A temporary script fixture can stand in for `gh`; a native CLI cannot use
+the developer's keychain during an ordinary test. Native curl transfers accept
+only literal HTTP(S) URLs on `127.0.0.1` or `[::1]`, with ambient proxies and
+curl configuration disabled. Native HTTP redirects, configuration-driven
+destinations and unsupported command forms are refused. Chromium proxy settings
+must use Playwright's `proxy` option; raw proxy switches and resolver exclusions
+are refused so redirects cannot override GitHub blocking.
+Node fetch checks every redirected destination before proxy dispatch, preserving
+dispatchers selected by guarded Request construction and cloning. A Request
+created before guard installation needs an explicit dispatcher because its
+private routing cannot be inspected. Direct Undici requests are checked at the
+shared dispatcher before proxy routing. HTTP checks the final request line and
+Host when headers are serialized. Undici iterable headers are materialized once
+so their Host values are checked without consuming the caller's headers twice.
+Client and Pool requests also check their constructor-bound origin before a custom
+connector runs, using the pinned Undici dependency's origin symbol.
+Literal shell-file delegation, including PATH lookup and directory changes, is
+inspected at launch with bounded recursion and directory alternatives.
+Shell-side PATH replacement and removal of the Node preload are refused; pass a
+fixture's environment through the process API so the launcher can guard it.
+Children lose ambient `BASH_ENV`, `ENV`, and imported Bash functions; `ZDOTDIR`
+points to the guard's isolated directory so Zsh cannot fall back to user startup
+files under `HOME`. Login and interactive shell modes, explicit Bash startup-file
+switches, and shell-side reintroduction of these hooks are refused; pass a shell
+fixture as the script being tested. Startup admission includes `argv0`, script interpreter arguments,
+and delegated shells, including `.cmd` and `.bat` source files. Cmd `start`/`call`
+and PowerShell `Start-Process` delegation are refused; use an inspected direct
+child command. PowerShell requires `-NoProfile` before its command or file;
+explicit Cmd invocation requires `/d` before `/c` to suppress AutoRun. A synchronous
+Node preload installs the guard before existing `--require` and `--import` modules
+in children and workers.
+Opaque native programs and dynamically assembled shell code require an external
+egress fence for a strict no-network audit. The tripwire is not an operating-system sandbox.
+
+The tripwire rejects access before dispatch and counts each blocked attempt.
+Unexpected attempts fail the test or enclosing run even when a caller catches
+the rejection. Explicit negative-control scopes in the guard's own tests have a
+separate count. A blocked operation is not proof that a GitHub request happened:
+conservative command refusals and local fixture incompatibilities must be
+classified separately from attempted GitHub traffic.
+
+The enclosing launcher prints bounded totals and attribution after workers join.
+Failures retain their report directory under `.artifacts/github-test-reports/`;
+set `OPENCLAW_TEST_GITHUB_REPORT_DIR` to retain reports beneath another directory,
+including successful negative-control runs. Reports contain transport, test
+identity and a bounded stack, never command arguments, request URLs or tokens.
+For an audit that must continue through all ordinary failures, use
+`OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1 pnpm test` and retain the native
+final receipt. An interrupted invocation is incomplete evidence.
+
 ## Core commands
 
 Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged

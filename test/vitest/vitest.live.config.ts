@@ -18,6 +18,7 @@ export default defineConfig({
   ...base,
   test: {
     ...baseTest,
+    provide: { githubNetwork: "live" },
     // Live suites need immediate provider/gateway progress output rather than
     // Vitest's buffered per-test console capture.
     disableConsoleIntercept: true,

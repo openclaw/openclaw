@@ -122,6 +122,7 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   );
   const { child, completion } = spawnOwnedVitestProcess({
     ...testCommand,
+    githubNetwork: "live",
     options: {
       detached: shouldUseDetachedVitestProcessGroup(),
       env: { ...env, ...testCommand.envOverrides },
