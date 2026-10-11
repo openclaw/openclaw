@@ -570,9 +570,10 @@ suite.define(() => {
         await expect.poll(() => widget.textContent()).toContain("Unavailable");
         expect(await widget.textContent()).not.toContain("50%");
         expect(await widget.textContent()).not.toContain("654 MB");
+        await expect.poll(() => snapshots.textContent()).toContain("Offline");
         await expect
           .poll(() => snapshots.textContent())
-          .toMatch(/Offline\s+Connect to the Gateway/u);
+          .toContain("Connect to the Gateway to refresh diagnostics.");
         expect(await refresh.isDisabled()).toBe(true);
         await expect.poll(() => snapshots.textContent()).toContain("diagnostics-e2e");
         await page.setViewportSize({ height: 844, width: 390 });

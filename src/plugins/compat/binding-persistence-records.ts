@@ -2,6 +2,39 @@ import type { PluginCompatRecord } from "./types.js";
 
 export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
   {
+    code: "conversation-binding-sync-persistence",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-09",
+    warningStarts: "2026-10-09",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Use createAccountScopedConversationBindingManagerV2, registerSessionBindingAdapterV2, and awaited service list/resolve/touch methods. V2 adapters supply a coherent inspection snapshot with its current-source assertion. Legacy synchronous operations preserve completion and expiry semantics until removed in the next Plugin SDK major.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings",
+    surfaces: [
+      "createAccountScopedConversationBindingManager",
+      "createAccountScopedBindingAdapter",
+      "registerSessionBindingAdapter",
+      "SessionBindingService.listBySession",
+      "SessionBindingService.resolveByConversation",
+      "SessionBindingService.touch",
+      "inspectSessionBindingByConversation",
+      "resolveRuntimeConversationBindingRoute",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and one shared runtime warning per plugin and capability family on legacy use",
+    ],
+    tests: [
+      "src/plugin-sdk/state-binding.released-compat.test.ts",
+      "src/infra/outbound/session-binding-service.async-read.test.ts",
+      "src/infra/outbound/current-conversation-bindings.worker.test.ts",
+      "src/infra/outbound/account-scoped-conversation-bindings.test.ts",
+    ],
+    releaseNote:
+      "Bundled conversation bindings await worker-owned mutations and expiry reads. Released synchronous adapters remain compatible; storage formats, retention, and update behavior are unchanged.",
+  },
+  {
     code: "native-session-binding-sync-persistence",
     status: "deprecated",
     owner: "sdk",

@@ -71,7 +71,7 @@ suite.define(() => {
       ]) {
         expect(await row(key).getAttribute("draggable")).toBe("true");
       }
-      await row("plugin:workboard/workboard").dragTo(row("route:cron"), {
+      await row("plugin:workboard/workboard").dragTo(row("plugin:reports/reports/daily"), {
         targetPosition: { x: 18, y: 2 },
       });
       await row("plugin:birdclaw/birdclaw").dragTo(row("plugin:workboard/workboard"), {
@@ -85,23 +85,17 @@ suite.define(() => {
           .locator("[data-sidebar-entry]")
           .evaluateAll((rows) => rows.map((entry) => entry.getAttribute("data-sidebar-entry")));
       const expected = await keys();
-      expect(
-        expected.slice(
-          expected.indexOf("plugin:reports/reports/daily"),
-          expected.indexOf("route:cron") + 1,
-        ),
-      ).toEqual([
+      expect(expected).toEqual([
         "plugin:reports/reports/daily",
         "plugin:birdclaw/birdclaw",
         "plugin:workboard/workboard",
-        "route:cron",
       ]);
-      const reorderWorkboard = row("plugin:workboard/workboard").getByRole("button", {
-        name: "Reorder Workboard",
+      const reorderWorkboard = row("plugin:workboard/workboard").getByRole("link", {
+        name: "Workboard",
         exact: true,
       });
       await reorderWorkboard.focus();
-      await page.keyboard.press("Enter");
+      await page.keyboard.press("Shift+F10");
       await page.getByRole("menuitem", { name: "Move up", exact: true }).press("Enter");
       const movedUp = [...expected];
       const workboardIndex = movedUp.indexOf("plugin:workboard/workboard");
@@ -113,7 +107,7 @@ suite.define(() => {
       await expect
         .poll(() => reorderWorkboard.evaluate((element) => document.activeElement === element))
         .toBe(true);
-      await reorderWorkboard.click();
+      await reorderWorkboard.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Move down", exact: true }).click();
       await expect.poll(keys).toEqual(expected);
 

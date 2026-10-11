@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
@@ -93,7 +93,7 @@ export async function stageCodexCandidate(
     if (appServer.homeScope === "user") {
       return candidate;
     }
-    const store = loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir);
+    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir);
     const existingProfileId = resolveAuthProfileOrder({
       cfg: config,
       store,

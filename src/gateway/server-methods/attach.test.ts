@@ -71,6 +71,10 @@ describe("attach gateway methods", () => {
     expect(body.mcpConfig).toBeTruthy();
     expect(body.env.OPENCLAW_MCP_TOKEN).toBe(body.token);
     expect(Object.keys(body.env)).toEqual(["OPENCLAW_MCP_TOKEN"]);
+    const placeholders = [...JSON.stringify(body.mcpConfig).matchAll(/\$\{([A-Z0-9_]+)\}/gu)].map(
+      (match) => match[1],
+    );
+    expect(new Set(placeholders)).toEqual(new Set(Object.keys(body.env)));
     expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main:attach-method");
   });
 
@@ -127,19 +131,6 @@ describe("attach gateway methods", () => {
     });
   });
 
-  it("returns an attach MCP config whose env placeholders are all supplied", async () => {
-    const respond = vi.fn();
-    await grant(grantOpts("agent:main:attach-method", respond));
-
-    const body = responseCall(respond)[1] as {
-      mcpConfig: unknown;
-      env: Record<string, string>;
-    };
-    const configText = JSON.stringify(body.mcpConfig);
-    const placeholders = [...configText.matchAll(/\$\{([A-Z0-9_]+)\}/gu)].map((match) => match[1]);
-    expect(new Set(placeholders)).toEqual(new Set(Object.keys(body.env)));
-  });
-
   it("attach.revoke removes a grant; missing token is an INVALID_REQUEST", async () => {
     const grantRespond = vi.fn();
     await grant(grantOpts("agent:main:revoke-me", grantRespond));
@@ -191,16 +182,5 @@ describe("attach gateway methods", () => {
       expiresAtMs: number;
     };
     expect(b2.expiresAtMs).toBeGreaterThan(Date.now() + 50 * 60_000);
-  });
-
-  it("attach.revoke treats non-object params as a missing token (INVALID_REQUEST)", async () => {
-    const respond = vi.fn();
-    await revoke({
-      params: null,
-      respond,
-    } as unknown as GatewayRequestHandlerOptions);
-    const [ok, , err] = responseCall(respond);
-    expect(ok).toBe(false);
-    expect((err as { code: string }).code).toBe("INVALID_REQUEST");
   });
 });

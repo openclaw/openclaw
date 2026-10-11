@@ -8,11 +8,11 @@ import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogAccessParams,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import {
   filterNativeModelCatalogScopes,
   selectPreparedModelCatalogInventory,
-} from "./prepared-model-runtime.full-catalog.js";
+} from "./prepared-model-runtime.catalog-publication.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import type {
   PreparedModelCatalogInventory,
   PreparedModelRuntimePluginGeneration,

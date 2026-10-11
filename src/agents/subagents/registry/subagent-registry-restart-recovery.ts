@@ -7,6 +7,7 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
+import { isQuietSubagentRestartContinuation } from "./subagent-recovery-state.js";
 import {
   getSubagentRunsForRequesterSession,
   getSubagentRunsForChildSession,
@@ -98,7 +99,7 @@ export async function recoverInterruptedSubagentRow(
     const lifecycleRunId = sessionEntry?.lifecycleRunId;
     const sessionAgentId = session?.agentId;
     const target = { sessionKey: childSessionKey, sessionId };
-    // A yielded requester can itself be a subagent. Its incoming frozen batch,
+    // A requester can itself be a subagent. Its incoming continuation batch,
     // not the requester's outgoing parent notice, owns this exact saved attempt.
     // This only defers orphan settlement; the wake still owns replay admission,
     // failure/cancellation, and removal of the continuation obligation.
@@ -127,8 +128,11 @@ export async function recoverInterruptedSubagentRow(
         const wake = child.requesterSettleWake;
         return (
           wake?.status === "dispatching" &&
-          wake.requesterYieldBatch === true &&
-          wake.rearmGeneration !== undefined &&
+          ((wake.requesterYieldBatch === true && wake.rearmGeneration !== undefined) ||
+            wake.batchRunIds?.some((id) => {
+              const member = children.get(id);
+              return member !== undefined && isQuietSubagentRestartContinuation(member);
+            })) &&
           isRequesterSettleWakeForRun({
             entry: child,
             runId,
@@ -139,9 +143,13 @@ export async function recoverInterruptedSubagentRow(
           wake.batchRunIds?.every((id) => {
             const member = children.get(id);
             return (
-              member?.expectsCompletionMessage === true &&
+              member !== undefined &&
+              (member.expectsCompletionMessage === true ||
+                isQuietSubagentRestartContinuation(member)) &&
               !member.collect &&
               member.completionRequesterSessionId === sessionId &&
+              (member.completionTarget !== "parent" ||
+                member.completionRequesterLifecycleRevision === lifecycleRevision) &&
               member.requesterStorePath === physicalStorePath &&
               member.requesterAgentId === sessionAgentId &&
               !member.suppressCompletionDelivery &&

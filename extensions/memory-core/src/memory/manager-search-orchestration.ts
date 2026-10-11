@@ -158,7 +158,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       releaseGeneration ??= await acquireMemoryIndexReadGeneration(
         this.settings.store.databasePath,
         opts?.signal,
-        fuseRecallMetadata,
       );
       assertReadOwner();
       preparedKeyword = undefined;
@@ -534,17 +533,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       const vectorResults = vector.results;
 
       if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
+        const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
+        const eligible = applyRetrievalRanking(vectorResults, activeProjects).filter(
+          (entry) => entry.score >= minScore,
+        );
         const decayed = await applyTemporalDecayToHybridResults({
-          results: vectorResults,
+          results: eligible,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
           sessionSourceMtimes: this.loadSourceMtimes("sessions", vectorResults),
           memorySourceMtimes: this.loadSourceMtimes("memory", vectorResults),
         });
-        // Decay and importance can reverse the order returned by vector retrieval.
-        const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
-        return applyRetrievalRanking(decayed, activeProjects)
-          .filter((entry) => entry.score >= minScore)
+        // Recency reorders eligible hits without changing their membership.
+        return decayed
           .toSorted(
             (left, right) =>
               right.score - left.score ||

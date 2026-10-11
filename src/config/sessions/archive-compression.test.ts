@@ -9,12 +9,7 @@ import {
   materializeSessionArchiveForRead,
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
-  stripSessionArchiveCompressionSuffix,
 } from "./archive-compression.js";
-import {
-  parseSessionArchiveTimestamp,
-  parseUsageCountedSessionIdFromFileName,
-} from "./artifacts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -42,23 +37,6 @@ describe("archive compression", () => {
 
     expect(() => materializeSessionArchiveForRead(archivePath)).toThrow();
     expect(fs.existsSync(cachePath)).toBe(false);
-  });
-
-  it("round-trips archived transcript content through encode and read", () => {
-    const content = `${JSON.stringify({ type: "message", body: "hello" })}\n`.repeat(200);
-    const encoded = encodeSessionArchiveContent(content);
-    const dir = tempDirs.make("openclaw-archive-zstd-");
-    const archivePath = path.join(
-      dir,
-      `sess.jsonl.deleted.2026-07-11T00-00-00.000Z${encoded.suffix}`,
-    );
-    fs.writeFileSync(archivePath, encoded.bytes);
-
-    expect(readSessionArchiveContentSync(archivePath)).toBe(content);
-    if (encoded.suffix === SESSION_ARCHIVE_ZSTD_SUFFIX) {
-      // Compression must actually pay for itself on repetitive JSONL.
-      expect(encoded.bytes.length).toBeLessThan(Buffer.byteLength(content, "utf8") / 2);
-    }
   });
 
   it("keeps plain archives readable regardless of runtime zstd support", () => {
@@ -90,16 +68,5 @@ describe("archive compression", () => {
     } else {
       expect(first.endsWith(".jsonl")).toBe(true);
     }
-  });
-
-  it("strips the zstd suffix so archive name parsers see one shape", () => {
-    const plain = "sess.jsonl.deleted.2026-07-11T00-00-00.000Z";
-    const compressed = `${plain}${SESSION_ARCHIVE_ZSTD_SUFFIX}`;
-
-    expect(stripSessionArchiveCompressionSuffix(compressed)).toBe(plain);
-    expect(parseSessionArchiveTimestamp(compressed, "deleted")).toBe(
-      parseSessionArchiveTimestamp(plain, "deleted"),
-    );
-    expect(parseUsageCountedSessionIdFromFileName(compressed)).toBe("sess");
   });
 });

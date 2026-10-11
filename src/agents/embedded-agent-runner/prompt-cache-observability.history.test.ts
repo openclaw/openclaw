@@ -252,6 +252,7 @@ describe("prompt cache history fingerprints", () => {
       };
       const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
       beginOpenAIObservation({ sessionId, messages: [message] });
+      completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
       message[field] = value;
       withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: undefined }, () => {
         expect(beginOpenAIObservation({ sessionId, messages: [message] }).changes).toEqual([
@@ -265,6 +266,16 @@ describe("prompt cache history fingerprints", () => {
         expect.stringContaining(`changed fields: envelope.${label} sessionKey=`),
       );
       expect(JSON.stringify(warn.mock.calls)).not.toContain("private-");
+      completePromptCacheObservation({ sessionId });
+      beginOpenAIObservation({ sessionId, messages: [message] });
+      expect(
+        completePromptCacheObservation({ sessionId, usage: { cacheRead: 2_000 } })?.changes,
+      ).toEqual([
+        {
+          code: "historyRewrite",
+          detail: `message 0 (user) differs from the previous request; history must be append-only; changed fields: envelope.${label}`,
+        },
+      ]);
     },
   );
 
@@ -290,7 +301,7 @@ describe("prompt cache history fingerprints", () => {
     });
   });
 
-  it.each(["compaction", "pruning", "runtimeContextCarrier", "imageCleanup"] as const)(
+  it.each(["compaction", "pruning", "runtimeContextCarrier"] as const)(
     "consumes a declared %s rewrite for exactly one request",
     (reason) => {
       withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
@@ -321,7 +332,7 @@ describe("prompt cache history fingerprints", () => {
     },
   );
 
-  it.each(["compaction", "pruning", "runtimeContextCarrier", "imageCleanup"] as const)(
+  it.each(["compaction", "pruning", "runtimeContextCarrier"] as const)(
     "shares a %s declaration across cache affinities only within the same session key",
     (reason) => {
       withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {

@@ -294,6 +294,7 @@ describe("AppSidebar session mutation feedback", () => {
       selfUser: { id: "profile-ada", name: "Ada" },
       hello: gatewayHelloForMethods(["sessions.assignOwner"], ["operator.write"]),
     });
+    sidebar.setSessionOwnerFilter(null);
     const result = harness.sessions.state.result;
     const row = result?.sessions.find((session) => session.key === "agent:main:a");
     if (!result || !row) {

@@ -15,12 +15,10 @@ import {
   type ProviderAugmentModelCatalogContext,
   type ProviderCatalogContext,
   type ProviderPlugin,
-  type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { coerceSecretRef, isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelDefinitionConfig,
@@ -33,6 +31,7 @@ import {
   normalizeResolvedModel,
   resolveThinkingProfile as resolveOllamaThinkingProfile,
 } from "./provider-policy-api.js";
+import { createOllamaCloudAuthMethod } from "./src/cloud-auth.js";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   OLLAMA_CLOUD_BASE_URL,
@@ -119,15 +118,6 @@ async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<voi
   }
 }
 
-function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
-  return {
-    ...buildOpenAICompatibleReplayPolicy("openai-completions", {
-      sanitizeToolCallIds: false,
-    }),
-    sanitizeToolCallIds: false,
-  };
-}
-
 function matchesOllamaContextOverflowError(errorMessage: string): boolean {
   return (
     /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
@@ -135,7 +125,6 @@ function matchesOllamaContextOverflowError(errorMessage: string): boolean {
   );
 }
 
-const OLLAMA_CLOUD_DEFAULT_MODEL_REF = `${OLLAMA_CLOUD_PROVIDER_ID}/${OLLAMA_CLOUD_DEFAULT_MODELS[0].id}`;
 const OLLAMA_CONFIGURED_SHOW_CONCURRENCY = 4;
 const OLLAMA_CONFIGURED_SHOW_MAX_MODELS = 8;
 
@@ -656,7 +645,13 @@ const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
     },
     buildReplayPolicy: ({ modelApi }) =>
       modelApi === "ollama"
-        ? buildNativeOllamaReplayPolicy()
+        ? {
+            ...buildOpenAICompatibleReplayPolicy("openai-completions", {
+              sanitizeToolCallIds: false,
+              dropReasoningFromHistory: false,
+            }),
+            sanitizeToolCallIds: false,
+          }
         : buildOpenAICompatibleReplayPolicy(modelApi),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: resolveOllamaThinkingProfile,
@@ -700,29 +695,7 @@ export default definePluginEntry({
       label: "Ollama Cloud",
       docsPath: "/providers/ollama",
       envVars: ["OLLAMA_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: OLLAMA_CLOUD_PROVIDER_ID,
-          methodId: "api-key",
-          label: "Ollama Cloud API key",
-          hint: "Hosted models via ollama.com",
-          optionKey: "ollamaCloudApiKey",
-          flagName: "--ollama-cloud-api-key",
-          envVar: "OLLAMA_API_KEY",
-          promptMessage: "Enter Ollama Cloud API key",
-          defaultModel: OLLAMA_CLOUD_DEFAULT_MODEL_REF,
-          noteTitle: "Ollama Cloud",
-          noteMessage: "Manage API keys at https://ollama.com/settings/keys",
-          wizard: {
-            choiceId: "ollama-cloud",
-            choiceLabel: "Ollama Cloud",
-            choiceHint: "Hosted models via ollama.com",
-            groupId: "ollama",
-            groupLabel: "Ollama",
-            groupHint: "Cloud and local open models",
-          },
-        }),
-      ],
+      auth: [createOllamaCloudAuthMethod()],
       catalog: {
         order: "simple",
         run: async (ctx: ProviderCatalogContext) => {

@@ -63,7 +63,6 @@ import { isChatRunWorking, renderChatComposer } from "./components/chat-composer
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
-import "./components/chat-details.ts";
 import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
@@ -425,7 +424,7 @@ export function renderChat(props: ChatProps) {
   // The composer keeps the outbox queue; only the transcript includes the
   // placement initial turn, whose retry action belongs to startup.
   const notices = renderChatComposerNotices(props);
-  // Transcript invalidation replaces its render context; bind submission afterward.
+  // The outer view owns submission callbacks across deferred transcript commits.
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;
   const inputDisplay = selectChatInputDisplay(
@@ -496,7 +495,9 @@ export function renderChat(props: ChatProps) {
       : html`<div
           class="chat-gutter-stack ${props.detailsEnabled ? "chat-gutter-stack--details" : ""}"
         >
-          ${props.detailsEnabled ? html`<div class="chat-gutter-header">${renderChatTopbarNotices(props)}<openclaw-chat-details .props=${props} .presented=${livePresentation(props.transcriptVisible ?? props.progressCardVisibility ?? props.presented ?? true)}></openclaw-chat-details></div>` : nothing}
+          <div class="chat-gutter-header" ?hidden=${!props.detailsEnabled}>
+            ${props.detailsEnabled ? renderChatTopbarNotices(props) : nothing}
+          </div>
           ${taskSuggestionTray}
         </div>`;
   // Keep the affordance mounted so visibility changes can finish their exit transition.
@@ -559,7 +560,7 @@ export function renderChat(props: ChatProps) {
 
   return html`
     <section
-      class="chat"
+      class="chat ${props.chatBubbleMode ? "chat--bubbles" : ""}"
       style=${styleMap(
         props.chatMessageMaxWidth
           ? {

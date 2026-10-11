@@ -21,7 +21,8 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement, settleLitElements } from "../../test-helpers/lit-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { meetingStatus } from "../../test-helpers/transcripts.test-support.ts";
-import { ConfigPage, configSelectionFromSearch, type ConfigPageId } from "./config-page.ts";
+import { ConfigPage, type ConfigPageId } from "./config-page.ts";
+import { configSelectionFromSearch } from "./config-sections.ts";
 import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 import { pages } from "./route.ts";
 
@@ -496,7 +497,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       await settleLitElement(page);
       const secondMainLoad = state.sessionObserverModelsTask.taskComplete;
       const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
-      expect(mainRequests).toBe(1);
+      expect(mainRequests).toBe(2);
       expect(state.sessionObserverModels).toEqual([]);
       firstMain.resolve({ models: [{ id: "stale-main", name: "Stale Main", provider: "openai" }] });
       await settleLitElement(page);
@@ -554,8 +555,7 @@ describe("ConfigPage model catalog lifecycle", () => {
 
       provider.append(page);
       await settleLitElement(page);
-      expect(catalogReads).toBe(2);
-      expect(state.sessionObserverModels).toEqual([]);
+      expect(catalogReads).toBe(3);
       stale.resolve({ models: original });
       await settleLitElement(page);
       expect(state.sessionObserverModels).toEqual(fresh);

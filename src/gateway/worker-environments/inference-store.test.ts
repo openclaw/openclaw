@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { types } from "node:util";
 import { deserialize } from "node:v8";
 import { MessagePort, Worker } from "node:worker_threads";
 import { stableStringify } from "@openclaw/normalization-core";
@@ -292,7 +293,7 @@ describe("worker inference SQLite store", async () => {
             !target &&
             isRecord(request) &&
             request.type === "execute" &&
-            request.input instanceof Uint8Array
+            types.isUint8Array(request.input)
           ) {
             const command: unknown = deserialize(request.input);
             if (isRecord(command) && command.type === "workerInference.begin") {

@@ -371,6 +371,21 @@ describe("Reef SQLite state", () => {
     },
   );
 
+  it("does not generate replacement keys when an identity is bound during the worker write", async () => {
+    const runtime = createRuntime(stateDir);
+    beforeNextStateOperation(runtime, () => bindIdentity(runtime, "existing"));
+
+    await expectReefStateOperationError(
+      generateAndStoreKeys(runtime),
+      "Reef identity @existing on https://reefwire.ai has no canonical keys; restore the original keys before registration",
+    );
+    await expect(loadKeys(runtime)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(loadReefIdentityBinding(runtime)).resolves.toEqual({
+      handle: "existing",
+      relayUrl: "https://reefwire.ai",
+    });
+  });
+
   it.each(["worker", "legacy"] as const)(
     "conditionally releases or finalizes an identity reservation (%s)",
     async (registrationHost) => {
@@ -475,8 +490,8 @@ describe("Reef SQLite state", () => {
     async (method) => {
       const runtime = createRuntime(stateDir);
       const failure = new Error("registration worker unavailable");
-      const open = runtime.state.openKeyedStore;
-      runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => ({
+      const open = runtime.state.openKeyedStoreV2;
+      runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) => ({
         ...open<T>(options),
         [method]: async () => {
           throw failure;
@@ -957,21 +972,28 @@ describe("Reef SQLite state", () => {
     );
   });
 
-  it("evicts completed review decisions before rejecting new pending work", async () => {
+  it("deduplicates concurrent pending reviews and evicts only completed decisions at capacity", async () => {
     const sql = observeHostDataSql();
     const runtime = createRuntime(stateDir);
-    const store = new ReviewApprovalStore(runtime, 2);
+    const store = new ReviewApprovalStore(runtime, 1);
 
     const first = reviewRequest("first", "1".repeat(64));
     const second = reviewRequest("second", "2".repeat(64));
     const third = reviewRequest("third", "3".repeat(64));
 
-    await store.request(first);
+    await expect(Promise.all([store.request(first), store.request(first)])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
     await store.decide(first.approvalDigest, false);
     await store.request(second);
-    await store.request(third);
+    await expectReefStateOperationError(
+      store.request(third),
+      "Reef pending review capacity is exhausted",
+      "ReefReviewCapacityError",
+    );
 
-    await expect(store.list()).resolves.toEqual([second, third]);
+    await expect(store.list()).resolves.toEqual([second]);
     for (const operation of sql.calls) {
       expect(operation).not.toHaveBeenCalled();
     }

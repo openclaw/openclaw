@@ -262,14 +262,12 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                         journal,
                         stagedResult: {
                           ref: reclaimResultRef,
-                          record: (ref) => {
+                          record: (ref, workspaceId) => {
                             assertCurrent();
                             return placements.recordStagedWorkspaceResult(
                               reclaimClaim,
                               ref,
-                              workspace.kind === "repository"
-                                ? workspace.repository.workspaceId
-                                : undefined,
+                              workspaceId,
                               assertCurrent,
                             );
                           },

@@ -74,12 +74,15 @@ type AgentDeletionPathFenceSnapshot = {
   }>;
 };
 
+/** Deletion ownership refusal is distinct from an unhealthy native database. */
+export class AgentDatabaseDeletionRefusedError extends Error {}
+
 function assertAgentDeletionIdentityClaimAllowed(
   claimAgentId: string,
   deletedAgentId: string | undefined,
 ): void {
   if (deletedAgentId && normalizeAgentId(claimAgentId) === normalizeAgentId(deletedAgentId)) {
-    throw new Error(
+    throw new AgentDatabaseDeletionRefusedError(
       `OpenClaw agent database is unavailable while agent ${normalizeAgentId(deletedAgentId)} is deleted.`,
     );
   }
@@ -173,15 +176,6 @@ export function prepareAgentDeletionPathFence(
   };
 }
 
-function journalFenceFingerprint(rows: readonly JournalFenceRow[]): string {
-  return rows
-    .map((row) =>
-      [...journalFenceFields.map((field) => row[field]), row.cleanup_completed].join("\0"),
-    )
-    .toSorted()
-    .join("\n");
-}
-
 /** Refuse database claims beneath paths still owned by an unfinished deletion. */
 export function assertAgentDeletionPathFence(
   state: OpenClawStateDatabase,
@@ -191,12 +185,6 @@ export function assertAgentDeletionPathFence(
   const { rows: journalRows, known } = readAgentDeletionPathFenceRows(database, snapshot.purpose);
   if (!known && journalRows.length === 0) {
     return;
-  }
-  if (
-    journalFenceFingerprint(snapshot.entries.map((entry) => entry.row)) !==
-    journalFenceFingerprint(journalRows)
-  ) {
-    throw new Error("Agent deletion journal changed while preparing a database claim.");
   }
   // Existing foreign leases remain blockers even inside the deletion's cleanup scope.
   const cleanup = snapshot.fenceAgentId
@@ -228,25 +216,27 @@ export function assertAgentDeletionPathFence(
     if (row.cleanup_completed === 1 && row.agent_id === creationAgentId) {
       continue;
     }
+    const entry = snapshot.entries.find((candidate) =>
+      journalFenceFields.every((field) => candidate.row[field] === row[field]),
+    );
+    if (row.cleanup_completed !== 1 && !entry) {
+      throw new AgentDatabaseDeletionRefusedError(
+        "Agent deletion journal changed while preparing a database claim.",
+      );
+    }
     assertAgentDeletionIdentityClaimAllowed(snapshot.claimAgentId, row.agent_id);
     if (row.cleanup_completed === 1) {
       continue;
     }
     // Filesystem canonicalization stays outside the SQLite write transaction; the exact journal
     // row is revalidated here so a concurrent deletion can only make the claim fail closed.
-    const entry = snapshot.entries.find((candidate) =>
-      journalFenceFields.every((field) => candidate.row[field] === row[field]),
-    );
-    if (!entry) {
-      throw new Error("Agent deletion journal changed while preparing a database claim.");
-    }
-    for (const fence of entry.fences) {
+    for (const fence of entry!.fences) {
       const blockedPath = snapshot.targetPaths.find(
         (targetPath) =>
           targetPath === fence.canonicalPath || isPathInside(fence.canonicalPath, targetPath),
       );
       if (blockedPath) {
-        throw new Error(
+        throw new AgentDatabaseDeletionRefusedError(
           `OpenClaw agent database ${blockedPath} is unavailable while agent ${row.agent_id} deletion owns ${fence.path}.`,
         );
       }
@@ -470,24 +460,27 @@ export function completeAgentDeletionJournalInDatabase(
   const id = normalizeAgentId(agentId);
   assertAgentDeletionJournalAvailable(database.db);
   const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-  const result = executeSqliteQuerySync(
+  const completed = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .updateTable("agent_deletion_journal")
       .set({ cleanup_completed: 1 })
       .where("agent_id", "=", id)
-      .where("operation_id", "=", operationId),
+      .where("operation_id", "=", operationId)
+      .returning("database_paths_json"),
   );
-  const completed = Number(result.numAffectedRows ?? 0) > 0;
   // The journal already fences authority. Keep creation history through refusals and
   // partial cleanup, and remove it only when this exact deletion owner completes.
   if (completed) {
-    const journal = readAgentDeletionJournalInDatabase(database, id);
-    resolveAgentDeletionRecoveryHolds(database, id, journal?.databasePaths ?? []);
+    resolveAgentDeletionRecoveryHolds(
+      database,
+      id,
+      parseAgentDeletionDatabasePaths(completed.database_paths_json),
+    );
     deleteAgentProvenanceForAgent(database.db, id);
     sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   }
-  return completed;
+  return completed !== undefined;
 }
 
 /** The caller owns journal authority, transaction admission, and committed publication. */

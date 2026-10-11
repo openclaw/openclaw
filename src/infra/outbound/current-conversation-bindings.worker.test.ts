@@ -21,7 +21,10 @@ import { requireNodeSqlite } from "../node-sqlite.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../sqlite-worker-contract.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
-import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
+import {
+  createAccountScopedConversationBindingManager,
+  createAccountScopedConversationBindingManagerV2,
+} from "./account-scoped-conversation-bindings.js";
 import { resolveBoundDeliveryDestination } from "./bound-delivery-router.js";
 import {
   bindCurrentConversationRecordAsync,
@@ -284,6 +287,7 @@ it("reuses resolved bindings until sync or worker writes publish new facts", asy
     updateCurrentConversationBindingRecord(original.conversation, () => original);
     const resolved = await resolveCurrentConversationBindingRecordAsync(original.conversation);
     expect(resolved).toEqual(original);
+    expect(run).not.toHaveBeenCalled();
     resolved!.metadata!.lastActivityAt = 99;
     run.mockClear();
     expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toEqual(
@@ -293,24 +297,36 @@ it("reuses resolved bindings until sync or worker writes publish new facts", asy
 
     const replacement = { ...original, targetSessionKey: "agent:main:replacement" };
     await bindCurrentConversationRecordAsync({ record: replacement });
+    run.mockClear();
     expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toEqual(
       replacement,
     );
+    expect(run).not.toHaveBeenCalled();
     await touchCurrentConversationBindingRecordAsync({
       conversation: original.conversation,
       bindingId: original.bindingId,
       at: 100,
     });
+    run.mockClear();
     expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toMatchObject(
       {
         metadata: { lastActivityAt: 100 },
       },
     );
+    expect(run).not.toHaveBeenCalled();
+    const sibling = record("sibling");
+    updateCurrentConversationBindingRecord(sibling.conversation, () => sibling);
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toMatchObject(
+      { metadata: { lastActivityAt: 100 } },
+    );
+    expect(run).not.toHaveBeenCalled();
     await removeCurrentConversationBindingsAsync({
       conversation: original.conversation,
       bindingId: original.bindingId,
     });
+    run.mockClear();
     expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toBeNull();
+    expect(run).not.toHaveBeenCalled();
   });
 });
 
@@ -397,76 +413,54 @@ it("keeps account touch bytes identical and rejects a manager shadowed by anothe
   });
 });
 
-it.each([
-  { stage: "transaction", owner: "manager" },
-  { stage: "commit", owner: "registry" },
-] as const)(
-  "joins expiry pruning refused by the actual $owner at $stage without deleting its row",
-  async ({ stage, owner }) => {
-    const previousRegistry = captureActivePluginRegistrySnapshot();
+it("joins expiry pruning refused by the stopped manager without deleting its row", async () => {
+  await withOpenClawTestState({ label: "binding-list-prune-manager" }, async () => {
+    const manager = createAccountScopedConversationBindingManager({
+      channel: "fixture",
+      accountId: "owner",
+      cfg: {},
+      stateKey: Symbol("binding-list-retirement"),
+      toStoredTargetKind: (kind) => kind,
+      toSessionBindingTargetKind: (kind) => kind,
+    });
     try {
-      await withOpenClawTestState({ label: `binding-list-prune-${owner}-${stage}` }, async () => {
-        const manager =
-          owner === "manager"
-            ? createAccountScopedConversationBindingManager({
-                channel: "fixture",
-                accountId: "owner",
-                cfg: {},
-                stateKey: Symbol("binding-list-retirement"),
-                toStoredTargetKind: (kind) => kind,
-                toSessionBindingTargetKind: (kind) => kind,
-              })
-            : undefined;
-        try {
-          const service = getSessionBindingService();
-          const bound = await service.bind({
-            conversation: {
-              channel: owner === "manager" ? "fixture" : INTERNAL_MESSAGE_CHANNEL,
-              accountId: owner === "manager" ? "owner" : "default",
-              conversationId: "expired-list",
-            },
-            targetSessionKey: "agent:main:current",
-            targetKind: "session",
-          });
-          updateCurrentConversationBindingRecord(bound.conversation, () => ({
-            ...bound,
-            expiresAt: 1,
-          }));
-          const { db } = openOpenClawStateDatabase();
-          const query = db.prepare(
-            "SELECT * FROM current_conversation_bindings WHERE binding_id = ?",
-          );
-          const before = query.get(bound.bindingId);
-          expect(before).toBeDefined();
-          let retirements = 0;
-          probe.admission(admission, (request, grant, admit) => {
-            if (request.stage === stage) {
-              retirements += 1;
-              if (manager) {
-                manager.stop();
-              } else {
-                setActivePluginRegistry(createTestRegistry([]));
-              }
-            }
-            admit(request, grant);
-          });
-          await expect(
-            resolveBoundDeliveryDestination({
-              targetSessionKey: bound.targetSessionKey,
-            }),
-          ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
-          expect(retirements).toBe(1);
-          expect(query.get(bound.bindingId)).toEqual(before);
-        } finally {
-          vi.restoreAllMocks();
-          manager?.stop();
-        }
+      const service = getSessionBindingService();
+      const bound = await service.bind({
+        conversation: {
+          channel: "fixture",
+          accountId: "owner",
+          conversationId: "expired-list",
+        },
+        targetSessionKey: "agent:main:current",
+        targetKind: "session",
       });
+      updateCurrentConversationBindingRecord(bound.conversation, () => ({
+        ...bound,
+        expiresAt: 1,
+      }));
+      const { db } = openOpenClawStateDatabase();
+      const query = db.prepare("SELECT * FROM current_conversation_bindings WHERE binding_id = ?");
+      const before = query.get(bound.bindingId);
+      expect(before).toBeDefined();
+      let retirements = 0;
+      probe.admission(admission, (request, grant, admit) => {
+        if (request.stage === "transaction") {
+          retirements += 1;
+          manager.stop();
+        }
+        admit(request, grant);
+      });
+      await expect(
+        resolveBoundDeliveryDestination({ targetSessionKey: bound.targetSessionKey }),
+      ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
+      expect(retirements).toBe(1);
+      expect(query.get(bound.bindingId)).toEqual(before);
     } finally {
-      restoreActivePluginRegistrySnapshot(previousRegistry);
+      vi.restoreAllMocks();
+      manager.stop();
     }
-  },
-);
+  });
+});
 
 it.each(["replaced", "removed", "expired", "malformed"] as const)(
   "refreshes every batched session after a foreign binding is %s before expiry pruning",
@@ -866,6 +860,58 @@ it("commits oversized expiry batches and retires binding coverage before replyin
       expect(events).toEqual(["pending", "unknown", "settled", "reply"]);
     } finally {
       unsubscribe();
+    }
+  });
+});
+
+it("runs the V2 account manager's complete persistence lifecycle in workers", async () => {
+  await withOpenClawTestState({ label: "binding-manager-v2" }, async () => {
+    const manager = createAccountScopedConversationBindingManagerV2({
+      channel: "fixture",
+      accountId: "owner",
+      cfg: { session: { threadBindings: { idleHours: 0, maxAgeHours: 0 } } },
+      stateKey: Symbol("binding-manager-v2"),
+      toStoredTargetKind: (kind) => kind,
+      toSessionBindingTargetKind: (kind) => kind,
+    });
+    openOpenClawStateDatabase();
+    const hostSql = observeHostDataSql();
+    try {
+      const binding = await manager.bindConversationAsync({
+        conversationId: "room",
+        targetSessionKey: "agent:main:managed",
+        targetKind: "session",
+        metadata: { label: "worker-owned" },
+      });
+      expect(binding).toMatchObject({ conversationId: "room", label: "worker-owned" });
+      expect(await manager.getByConversationIdAsync("room")).toEqual(binding);
+      expect(await manager.listBySessionKeyAsync("agent:main:managed")).toEqual([binding]);
+      expect(await manager.touchConversationAsync("room", 123)).toMatchObject({
+        lastActivityAt: 123,
+      });
+      expect(await manager.unbindConversationAsync("room")).toMatchObject({ lastActivityAt: 123 });
+      expect(await manager.getByConversationIdAsync("room")).toBeUndefined();
+      await manager.bindConversationAsync({
+        conversationId: "room",
+        targetSessionKey: "agent:main:managed",
+        targetKind: "session",
+      });
+      expect(await manager.unbindBySessionKeyAsync("agent:main:managed")).toHaveLength(1);
+      expect(await manager.listBySessionKeyAsync("agent:main:managed")).toEqual([]);
+      for (const call of hostSql.calls) {
+        expect(call).not.toHaveBeenCalled();
+      }
+      manager.stop();
+      await expect(
+        manager.bindConversationAsync({
+          conversationId: "closed",
+          targetSessionKey: "agent:main:managed",
+          targetKind: "session",
+        }),
+      ).rejects.toThrow("no longer active");
+    } finally {
+      hostSql.restore();
+      manager.stop();
     }
   });
 });

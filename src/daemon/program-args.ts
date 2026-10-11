@@ -225,6 +225,7 @@ export async function resolveGatewayProgramArguments(params: {
 }
 
 export async function resolveNodeProgramArguments(params: {
+  cliEntrypoint?: string;
   host: string;
   port: number;
   contextPath?: string;

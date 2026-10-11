@@ -38,7 +38,6 @@ import {
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
-import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
 import { readVoiceSessionRecordInTransaction } from "../../../talk/client-voice-session-store.js";
 import * as voiceWriters from "../../../talk/client-voice-session-write.js";
 import * as voiceKernel from "../../../talk/client-voice-session-write.kernel.js";
@@ -77,10 +76,11 @@ import {
 import { talkClientHandlers } from "./client.js";
 import { talkVoiceHandlers } from "./voice.js";
 
-const voiceMocks = vi.hoisted(() => ({ resolveConfiguredRealtimeVoiceProvider: vi.fn() }));
+const voiceMocks = vi.hoisted(() => ({ resolveConfiguredRealtimeVoiceProviderAsync: vi.fn() }));
 vi.mock("../../../talk/provider-resolver.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../talk/provider-resolver.js")>()),
-  resolveConfiguredRealtimeVoiceProvider: voiceMocks.resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync:
+    voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync,
 }));
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const sessionKey = "agent:main:main";
@@ -96,7 +96,7 @@ function configureDelegatedBrowserProvider(
   createBrowserSession: (request: BrowserRequest) => Promise<typeof browserSession>,
 ) {
   const fixture = createDelegatedBrowserProviderFixture(createBrowserSession, tempDir);
-  voiceMocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+  voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
     provider: fixture.provider,
     providerConfig: {},
     capabilities: fixture.provider.capabilities,
@@ -139,7 +139,6 @@ describe("voice creation authority", () => {
       }
       cleanupTalkConnection("conn-close", { warn: vi.fn() });
       clientVoiceSessionTesting.reset();
-      resetClientVoiceConfirmationStateForTest();
       try {
         await cleanupSessionStateForTest({ stateDir: tempDir });
       } finally {
@@ -195,6 +194,45 @@ describe("voice creation authority", () => {
       { sessionId, updatedAt: Date.now() },
     );
   });
+  it("releases transport authority after a same-session replacement closes", async () => {
+    const fixture = configureDelegatedBrowserProvider(async () => browserSession);
+    const releaseSubscription = vi.fn();
+    const lifetime = captureGatewayDeviceRevocation(fixture.context, {}, () => true, undefined, {
+      isCurrent: () => true,
+      subscribe: () => releaseSubscription,
+    });
+    const create = async (voiceSessionId?: string) => {
+      const respond = vi.fn();
+      await invokeCreate({
+        req: { type: "req", id: "replace-voice", method: "talk.client.create" },
+        params: { sessionKey, provider: "openai", ...(voiceSessionId ? { voiceSessionId } : {}) },
+        isWebchatConnect: () => false,
+        respond,
+        context: fixture.context as never,
+        client: fixture.client as never,
+        hasCurrentClientAuthority: lifetime.isCurrent,
+      });
+      expect(respond.mock.lastCall?.[0], respond.mock.lastCall?.[2]?.message).toBe(true);
+      ownedVoiceSessionId = respond.mock.lastCall?.[1].voiceSessionId;
+      return ownedVoiceSessionId;
+    };
+    try {
+      const originalId = await create();
+      expect(originalId).toBeTruthy();
+      expect(await create(originalId)).toBe(originalId);
+      expect(releaseSubscription).not.toHaveBeenCalled();
+      await closeTalkClientGatewayControlSession({
+        voiceSessionId: originalId!,
+        sessionKey,
+        connId: fixture.client.connId,
+      });
+      lifetime.release();
+      expect(releaseSubscription).toHaveBeenCalledOnce();
+    } finally {
+      lifetime.release();
+    }
+  });
+
   it.each([
     { mixed: false, grant: false, revoked: undefined },
     { mixed: false, grant: false, revoked: "foreign" },

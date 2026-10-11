@@ -92,8 +92,16 @@ function normalizeOutputFormat(raw: string | undefined): MusicGenerationOutputFo
   throw new ToolInputError('format must be one of "mp3" or "wav"');
 }
 
-export function createMusicGenerateTool(options?: MediaGenerateToolOptions): AnyAgentTool | null {
-  const context = resolveMediaGenerateToolContext("musicGenerationProviders", options, log);
+export function createMusicGenerateTool(
+  options?: MediaGenerateToolOptions,
+  preparedAvailability?: boolean,
+): AnyAgentTool | null {
+  const context = resolveMediaGenerateToolContext(
+    "musicGenerationProviders",
+    options,
+    log,
+    preparedAvailability,
+  );
   if (!context) {
     return null;
   }

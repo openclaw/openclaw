@@ -19,8 +19,6 @@ import type {
 import type {
   SessionAccessScope,
   SessionEntrySummary,
-  SessionTranscriptInstance,
-  SessionTranscriptInstanceListOptions,
   SessionEntryTargetPatchScope,
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
@@ -40,7 +38,6 @@ import {
   readSessionEntrySelectionSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
 import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
-import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.js";
@@ -56,13 +53,11 @@ import type { SessionEntryListScope, SessionEntryReadScope } from "./session-acc
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
-  readWithCanonicalSessionReaderContinuation,
-  type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import {
   mergeSessionEntryPatch,
-  reduceSessionEntryPatch,
+  projectSessionEntryPatch,
   type SessionEntryPatchOperation,
 } from "./session-entry-patch-operation.js";
 import { captureSessionEntryPatchSource } from "./session-entry-patch-source.js";
@@ -166,37 +161,6 @@ export function withSessionEntryReadOnlyScope<T>(
   }
 }
 
-/** Lists transcript-bearing SQLite sessions, including retained rows from session-id rotation. */
-export function listSessionTranscriptInstances(
-  scope: Omit<SessionEntryListScope, "sessionKeys"> = {},
-  options: SessionTranscriptInstanceListOptions = {},
-  continuation?: CanonicalSessionReaderContinuation,
-): SessionTranscriptInstance[] {
-  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      readWithCanonicalSessionReaderContinuation(database, continuation, () => {
-        const currentEntries =
-          options.sessionId !== undefined || options.sessionIds !== undefined
-            ? undefined
-            : new Map(
-                listSqliteSessionEntriesFromDatabase(database, resolved, {
-                  ...scope,
-                  clone: false,
-                }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-              );
-        return listTranscriptInstancesFromDatabase({
-          currentEntries,
-          database,
-          options,
-          entryProjection: scope.projection,
-        });
-      }),
-    toDatabaseOptions(resolved),
-  );
-  return result.found ? result.value : [];
-}
-
 /** Reads a session activity timestamp from the additive SQLite session store. */
 export function readSessionUpdatedAtCore(scope: SessionAccessScope): number | undefined {
   const resolved = resolveSqliteScope(scope);
@@ -296,11 +260,12 @@ async function patchSessionEntryInScope(
       sessionKey: resolved.sessionKey,
       exact: options.replaceEntry === true,
     },
-    readSnapshot: (database) =>
+    readSnapshot: (database, includeWindowFacts) =>
       readSessionEntrySelectionSnapshot(
         database,
         resolved.sessionKey,
         options.replaceEntry === true,
+        includeWindowFacts,
       ),
     resolved,
     sessionKey: resolved.sessionKey,
@@ -356,7 +321,8 @@ async function patchSessionEntryTargetInScope(
     validateCanonicalKeys: true,
     options,
     selection: { kind: "target", target: scope.target },
-    readSnapshot: (database) => readLifecycleTargetSnapshot(database, scope.target),
+    readSnapshot: (database, includeWindowFacts) =>
+      readLifecycleTargetSnapshot(database, scope.target, { includeWindowFacts }),
     resolved,
     sessionKey: scope.target.canonicalKey,
     storePath:
@@ -402,23 +368,34 @@ async function patchSqliteSessionEntrySnapshot(
     }
     let contextEntry = existing;
     let contextEntryBorrowed = true;
-    const patch =
+    const next =
       typeof params.update !== "function"
-        ? reduceSessionEntryPatch(params.update, writeBase, existing)
-        : await params.update(structuredClone(writeBase), {
-            get existingEntry() {
-              if (contextEntryBorrowed) {
-                contextEntry = contextEntry ? structuredClone(contextEntry) : undefined;
+        ? projectSessionEntryPatch({
+            ...options,
+            existing,
+            writeBase,
+            sessionKey,
+            operation: params.update,
+          })
+        : mergeSessionEntryPatch({
+            ...options,
+            existing,
+            writeBase,
+            sessionKey,
+            patch: await params.update(structuredClone(writeBase), {
+              get existingEntry() {
+                if (contextEntryBorrowed) {
+                  contextEntry = contextEntry ? structuredClone(contextEntry) : undefined;
+                  contextEntryBorrowed = false;
+                }
+                return contextEntry;
+              },
+              set existingEntry(entry) {
+                contextEntry = entry;
                 contextEntryBorrowed = false;
-              }
-              return contextEntry;
-            },
-            set existingEntry(entry) {
-              contextEntry = entry;
-              contextEntryBorrowed = false;
-            },
+              },
+            }),
           });
-    const next = mergeSessionEntryPatch({ ...options, existing, writeBase, patch, sessionKey });
     return {
       selection: params.selection,
       prepared,
@@ -557,7 +534,7 @@ async function patchSqliteSessionEntrySnapshot(
               const mutation = applySessionEntryPatchInDatabase(writeDatabase, {
                 operationLabel: params.operationLabel,
                 validateCanonicalKeys: params.validateCanonicalKeys,
-                readSnapshot: params.readSnapshot,
+                readSnapshot: (current) => params.readSnapshot(current, true),
                 prepared,
                 sessionKey,
                 writeBase,

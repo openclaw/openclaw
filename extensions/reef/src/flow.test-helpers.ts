@@ -3,9 +3,11 @@ import path from "node:path";
 import type {
   OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -65,6 +67,15 @@ export function flowStores(deliveredMaxEntries?: number, reviewsMaxEntries?: num
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: OpenAsyncKeyedStoreOptions,
+    authority?: PluginStateActionAuthority,
+  ) =>
+    createPluginStateKeyedStoreV2ForTests<T>(
+      "reef",
+      { ...options, env: { OPENCLAW_STATE_DIR: stateDir } },
+      authority ?? { assertCurrent() {} },
+    );
   return {
     runtime,
     stateDir,

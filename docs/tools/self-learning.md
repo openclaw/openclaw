@@ -32,10 +32,8 @@ reaches 10 since its last review, a review is queued and the count starts over.
 The count also resets when the foreground turn itself changed a learned skill,
 so work the agent already saved is not reviewed again.
 
-A turn that read or viewed a learned skill also queues a review, whatever the
-count, so a skill that just misled or helped the agent gets a fresh look. The
-same eligibility rules apply, and a turn that changed a learned skill itself
-still skips the review.
+Reading or viewing a learned skill does not queue an extra review; those turns
+count toward the same 10-iteration threshold.
 
 A queued review starts after 30 seconds with no agent or reply run active; later
 activity in the same session restarts that wait. Reviews run one at a time.

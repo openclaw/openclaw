@@ -186,6 +186,8 @@ export type PreparedModelRuntimePublicationOptions = {
   force?: boolean;
   provenance?: PreparedModelRuntimeOwner["provenance"];
   catalogMode?: PreparedModelRuntimeCatalogMode;
+  /** Discovery deadline for this publication only; omitted publications retain the short default. */
+  providerDiscoveryTimeoutMs?: number;
 };
 
 export type PreparedModelRuntimeRefreshOptions = {
@@ -244,7 +246,7 @@ export type PreparedModelCatalogInventory = {
   pluginFingerprint: string;
   nativeSource: string;
   providers: ReadonlyMap<string, PreparedModelCatalogProviderFacts>;
-  discoveryOrigins: readonly { provider: string; profileId?: string }[];
+  discoveryOrigins: NonNullable<ModelCatalogSnapshot["acceptedDiscoveryOrigins"]>;
 };
 
 export type PreparedModelCatalogAcquisitionKind = "provider" | "native";
@@ -296,6 +298,7 @@ export type PreparedModelRuntimeOwner = {
 };
 
 export type PreparedModelRuntimeReplacement = {
+  agentIds?: ReadonlySet<string>;
   degraded?: boolean;
   gateId: PreparedModelRuntimeReplacementGateId;
   promise: Promise<void>;

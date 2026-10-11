@@ -1,0 +1,362 @@
+[
+  {
+    "id": "about-route",
+    "provenance": {
+      "path": "ui/src/pages/about/route.ts",
+      "line": 10
+    },
+    "input": "html`<openclaw-about-page></openclaw-about-page>`",
+    "expected": "<><openclaw-about-page></openclaw-about-page></>"
+  },
+  {
+    "id": "translated-empty-state",
+    "provenance": {
+      "path": "ui/src/pages/about/view.ts",
+      "line": 68
+    },
+    "input": "html`<span class=\"muted\">${t(\"aboutPage.unavailable\")}</span>`",
+    "expected": "<><span class={\"muted\"}>{t(\"aboutPage.unavailable\")}</span></>"
+  },
+  {
+    "id": "nested-format-call",
+    "provenance": {
+      "path": "ui/src/pages/about/view.ts",
+      "line": 82
+    },
+    "input": "html`\n    <time class=\"about-commit__age\" dir=\"auto\" datetime=${commitAt} title=${exact}\n      >${formatRelativeTimestamp(timestamp, { fallback: \"\" })}</time\n    >\n  `",
+    "expected": "<>{\"\\n    \"}<time class={\"about-commit__age\"} dir={\"auto\"} datetime={commitAt} title={exact}>{formatRelativeTimestamp(timestamp, { fallback: \"\" })}</time>{\"\\n  \"}</>"
+  },
+  {
+    "id": "render-helper-child",
+    "provenance": {
+      "path": "ui/src/pages/about/view.ts",
+      "line": 136
+    },
+    "input": "html`<span class=\"about-hero__mark--neutral\" aria-hidden=\"true\"\n              >${renderThemeBrandIcon()}</span\n            >`",
+    "expected": "<><span class={\"about-hero__mark--neutral\"} aria-hidden={\"true\"}>{renderThemeBrandIcon()}</span></>"
+  },
+  {
+    "id": "literal-text-prefix",
+    "provenance": {
+      "path": "ui/src/pages/about/view.ts",
+      "line": 153
+    },
+    "input": "html`<code class=\"about-hero__version\" dir=\"ltr\">v${props.buildInfo.version}</code>`",
+    "expected": "<><code class={\"about-hero__version\"} dir={\"ltr\"}>{\"v\"}{props.buildInfo.version}</code></>"
+  },
+  {
+    "id": "dynamic-title",
+    "provenance": {
+      "path": "ui/src/pages/about/view.ts",
+      "line": 187
+    },
+    "input": "html`<code dir=\"ltr\" title=${props.buildInfo.version}\n                >${props.buildInfo.version}</code\n              >`",
+    "expected": "<><code dir={\"ltr\"} title={props.buildInfo.version}>{props.buildInfo.version}</code></>"
+  },
+  {
+    "id": "multiline-opening-tag",
+    "provenance": {
+      "path": "ui/src/pages/about/view.ts",
+      "line": 211
+    },
+    "input": "html`<time\n                dir=\"auto\"\n                datetime=${props.buildInfo.builtAt}\n                title=${props.buildInfo.builtAt}\n                >${buildDate}</time\n              >`",
+    "expected": "<><time dir={\"auto\"} datetime={props.buildInfo.builtAt} title={props.buildInfo.builtAt}>{buildDate}</time></>"
+  },
+  {
+    "id": "gateway-version",
+    "provenance": {
+      "path": "ui/src/pages/about/view.ts",
+      "line": 235
+    },
+    "input": "html`<code dir=\"ltr\" title=${props.gatewayVersion}>${props.gatewayVersion}</code>`",
+    "expected": "<><code dir={\"ltr\"} title={props.gatewayVersion}>{props.gatewayVersion}</code></>"
+  },
+  {
+    "id": "translated-footer",
+    "provenance": {
+      "path": "ui/src/pages/about/view.ts",
+      "line": 241
+    },
+    "input": "html`<p class=\"about-footer\">${t(\"aboutPage.license\")}</p>`",
+    "expected": "<><p class={\"about-footer\"}>{t(\"aboutPage.license\")}</p></>"
+  },
+  {
+    "id": "debug-route",
+    "provenance": {
+      "path": "ui/src/pages/debug/route.ts",
+      "line": 10
+    },
+    "input": "html`<openclaw-debug-page></openclaw-debug-page>`",
+    "expected": "<><openclaw-debug-page></openclaw-debug-page></>"
+  },
+  {
+    "id": "static-boolean-and-whitespace",
+    "provenance": {
+      "path": "ui/src/pages/debug/view.ts",
+      "line": 202
+    },
+    "input": "html` <option value=\"\" disabled>${t(\"debug.selectMethod\")}</option> `",
+    "expected": "<>{\" \"}<option value={\"\"} disabled>{t(\"debug.selectMethod\")}</option>{\" \"}</>"
+  },
+  {
+    "id": "dynamic-option-value",
+    "provenance": {
+      "path": "ui/src/pages/debug/view.ts",
+      "line": 205
+    },
+    "input": "html`<option value=${m}>${m}</option>`",
+    "expected": "<><option value={m}>{m}</option></>"
+  },
+  {
+    "id": "button-click",
+    "provenance": {
+      "path": "ui/src/pages/debug/view.ts",
+      "line": 225
+    },
+    "input": "html`\n          <button class=\"btn primary\" @click=${props.onCall}>${t(\"common.call\")}</button>\n        `",
+    "expected": "<>{\"\\n          \"}<button class={\"btn primary\"} onClick={props.onCall}>{t(\"common.call\")}</button>{\"\\n        \"}</>"
+  },
+  {
+    "id": "adjacent-expressions",
+    "provenance": {
+      "path": "ui/src/pages/debug/view.ts",
+      "line": 277
+    },
+    "input": "html`${snapshotsSection} ${lanesSection} ${rpcSection} ${modelsSection} ${eventLogSection}`",
+    "expected": "<>{snapshotsSection}{\" \"}{lanesSection}{\" \"}{rpcSection}{\" \"}{modelsSection}{\" \"}{eventLogSection}</>"
+  },
+  {
+    "id": "native-property-and-conditional-options",
+    "provenance": {
+      "path": "ui/src/pages/debug/view.ts",
+      "line": 193
+    },
+    "input": "html`\n          <select\n            class=\"settings-select\"\n            aria-label=${t(\"debug.method\")}\n            .value=${props.callMethod}\n            @change=${(e: Event) => props.onCallMethodChange((e.target as HTMLSelectElement).value)}\n          >\n            ${\n              !props.callMethod\n                ? html` <option value=\"\" disabled>${t(\"debug.selectMethod\")}</option> `\n                : nothing\n            }\n            ${props.methods.map((m) => html`<option value=${m}>${m}</option>`)}\n          </select>\n        `",
+    "expected": "<>{\"\\n          \"}<select class={\"settings-select\"} aria-label={t(\"debug.method\")} value={props.callMethod} onChange={(e: Event) => props.onCallMethodChange((e.target as HTMLSelectElement).value)}>{\"\\n            \"}<Show when={!!(!props.callMethod)} fallback={null}><>{\" \"}<option value={\"\"} disabled>{t(\"debug.selectMethod\")}</option>{\" \"}</></Show>{\"\\n            \"}<For each={props.methods} keyed={false}>{(m) => <><option value={m()}>{m()}</option></>}</For>{\"\\n          \"}</select>{\"\\n        \"}</>"
+  },
+  {
+    "id": "native-textarea-input",
+    "provenance": {
+      "path": "ui/src/pages/debug/view.ts",
+      "line": 212
+    },
+    "input": "html`\n          <textarea\n            class=\"settings-input\"\n            aria-label=${t(\"debug.paramsJson\")}\n            .value=${props.callParams}\n            @input=${(e: Event) =>\n              props.onCallParamsChange((e.target as HTMLTextAreaElement).value)}\n            rows=\"6\"\n          ></textarea>\n        `",
+    "expected": "<>{\"\\n          \"}<textarea class={\"settings-input\"} aria-label={t(\"debug.paramsJson\")} value={props.callParams} onInput={(e: Event) => props.onCallParamsChange((e.target as HTMLTextAreaElement).value)} rows={\"6\"}></textarea>{\"\\n        \"}</>"
+  },
+  {
+    "id": "boolean-disabled-and-show-label",
+    "provenance": {
+      "path": "ui/src/pages/debug/view.ts",
+      "line": 117
+    },
+    "input": "html`\n        <button\n          class=\"btn\"\n          ?disabled=${!props.connected || props.loading}\n          @click=${props.onRefresh}\n        >\n          ${refreshPending ? t(\"common.refreshing\") : t(\"common.refresh\")}\n        </button>\n      `",
+    "expected": "<>{\"\\n        \"}<button class={\"btn\"} disabled={!!(!props.connected || props.loading)} onClick={props.onRefresh}>{\"\\n          \"}<Show when={!!(refreshPending)} fallback={t(\"common.refresh\")}>{t(\"common.refreshing\")}</Show>{\"\\n        \"}</button>{\"\\n      \"}</>"
+  },
+  {
+    "id": "custom-property",
+    "provenance": {
+      "path": "ui/src/components/agent-row-chip.ts",
+      "line": 15
+    },
+    "input": "html`<openclaw-agent-row-chip .agentId=${agentId}></openclaw-agent-row-chip>`",
+    "expected": "<><openclaw-agent-row-chip prop:agentId={agentId}></openclaw-agent-row-chip></>"
+  },
+  {
+    "id": "multiple-custom-properties",
+    "provenance": {
+      "path": "ui/src/components/person-activity-card.ts",
+      "line": 77
+    },
+    "input": "html`<time\n    datetime=${date.toISOString()}\n    title=${date.toLocaleString(i18n.getLocale())}\n    aria-label=${display === \"minute-compact\" ? nothing : date.toLocaleString(i18n.getLocale())}\n    ><openclaw-elapsed-time\n      .startMs=${timestamp}\n      .minimumUnit=${display === \"minute-compact\" ? \"minute\" : \"second\"}\n      .singleUnit=${display === \"single-unit\"}\n    ></openclaw-elapsed-time\n  ></time>`",
+    "expected": "<><time datetime={date.toISOString()} title={date.toLocaleString(i18n.getLocale())} aria-label={display === \"minute-compact\" ? undefined : date.toLocaleString(i18n.getLocale())}><openclaw-elapsed-time prop:startMs={timestamp} prop:minimumUnit={display === \"minute-compact\" ? \"minute\" : \"second\"} prop:singleUnit={display === \"single-unit\"}></openclaw-elapsed-time></time></>"
+  },
+  {
+    "id": "long-static-class",
+    "provenance": {
+      "path": "ui/src/components/person-activity-card.ts",
+      "line": 113
+    },
+    "input": "html`<span\n                      class=\"person-activity-card__session-name person-activity-card__session-name--multiline\"\n                      >${displayName}</span\n                    >`",
+    "expected": "<><span class={\"person-activity-card__session-name person-activity-card__session-name--multiline\"}>{displayName}</span></>"
+  },
+  {
+    "id": "helper-arguments",
+    "provenance": {
+      "path": "ui/src/components/person-activity-card.ts",
+      "line": 142
+    },
+    "input": "html`<span class=\"person-activity-card__session-age\"\n                            >${elapsed(row.updatedAt, \"single-unit\")}</span\n                          >`",
+    "expected": "<><span class={\"person-activity-card__session-age\"}>{elapsed(row.updatedAt, \"single-unit\")}</span></>"
+  },
+  {
+    "id": "translated-session-empty",
+    "provenance": {
+      "path": "ui/src/components/person-activity-card.ts",
+      "line": 152
+    },
+    "input": "html`<p class=\"person-activity-card__muted\">${t(\"presence.card.noRecentSessions\")}</p>`",
+    "expected": "<><p class={\"person-activity-card__muted\"}>{t(\"presence.card.noRecentSessions\")}</p></>"
+  },
+  {
+    "id": "unicode-text",
+    "provenance": {
+      "path": "ui/src/components/person-activity-card.ts",
+      "line": 238
+    },
+    "input": "html` · ${t(activity === \"active\" ? \"presence.active\" : \"presence.idle\")}`",
+    "expected": "<>{\" · \"}{t(activity === \"active\" ? \"presence.active\" : \"presence.idle\")}</>"
+  },
+  {
+    "id": "two-class-tokens",
+    "provenance": {
+      "path": "ui/src/components/person-activity-card.ts",
+      "line": 244
+    },
+    "input": "html`<p class=\"person-activity-card__hint person-activity-card__muted\">${t(\"presence.sharedOwner.hint\")}</p>`",
+    "expected": "<><p class={\"person-activity-card__hint person-activity-card__muted\"}>{t(\"presence.sharedOwner.hint\")}</p></>"
+  },
+  {
+    "id": "map-item",
+    "provenance": {
+      "path": "ui/src/components/person-activity-card.ts",
+      "line": 254
+    },
+    "input": "html`<span>${description}</span>`",
+    "expected": "<><span>{description}</span></>"
+  },
+  {
+    "id": "object-shorthand-argument",
+    "provenance": {
+      "path": "ui/src/components/person-activity-card.ts",
+      "line": 256
+    },
+    "input": "html`<small>${t(\"presence.card.reportedTimeZone\", { zone })}</small>`",
+    "expected": "<><small>{t(\"presence.card.reportedTimeZone\", { zone })}</small></>"
+  },
+  {
+    "id": "adjacent-helper-and-translation",
+    "provenance": {
+      "path": "ui/src/components/person-activity-card.ts",
+      "line": 268
+    },
+    "input": "html`<span>${elapsed(lastActivityAt)} ${t(\"presence.card.ago\")}</span>`",
+    "expected": "<><span>{elapsed(lastActivityAt)}{\" \"}{t(\"presence.card.ago\")}</span></>"
+  },
+  {
+    "id": "two-map-lists",
+    "provenance": {
+      "path": "ui/src/components/person-activity-card.ts",
+      "line": 251
+    },
+    "input": "html`<div>\n                      <dt>${t(\"presence.card.where\")}</dt>\n                      <dd>\n                        ${where.map((description) => html`<span>${description}</span>`)}${zones.map(\n                          (zone) =>\n                            html`<small>${t(\"presence.card.reportedTimeZone\", { zone })}</small>`,\n                        )}\n                      </dd>\n                    </div>`",
+    "expected": "<><div>{\"\\n                      \"}<dt>{t(\"presence.card.where\")}</dt>{\"\\n                      \"}<dd>{\"\\n                        \"}<For each={where} keyed={false}>{(description) => <><span>{description()}</span></>}</For><For each={zones} keyed={false}>{(zone) => <><small>{t(\"presence.card.reportedTimeZone\", { zone: zone() })}</small></>}</For>{\"\\n                      \"}</dd>{\"\\n                    \"}</div></>"
+  },
+  {
+    "id": "style-object",
+    "provenance": {
+      "path": "ui/src/pages/chat/components/chat-transcript-layout.ts",
+      "line": 73
+    },
+    "input": "html`<div aria-hidden=\"true\" style=${styleMap({ height: `${gap}px` })}></div>`",
+    "expected": "<><div aria-hidden={\"true\"} style={{ height: `${gap}px` }}></div></>"
+  },
+  {
+    "id": "translated-column",
+    "provenance": {
+      "path": "ui/src/pages/debug/debug-overlay-loading.ts",
+      "line": 35
+    },
+    "input": "html`<span>${t(`debug.lanes.${column}`)}</span>`",
+    "expected": "<><span>{t(`debug.lanes.${column}`)}</span></>"
+  },
+  {
+    "id": "empty-div",
+    "provenance": {
+      "path": "ui/src/pages/debug/debug-overlay-loading.ts",
+      "line": 39
+    },
+    "input": "html`<div class=\"skeleton debug-overlay__placeholder-line\"></div>`",
+    "expected": "<><div class={\"skeleton debug-overlay__placeholder-line\"}></div></>"
+  },
+  {
+    "id": "dynamic-data-attribute",
+    "provenance": {
+      "path": "ui/src/pages/debug/lane-table.ts",
+      "line": 44
+    },
+    "input": "html`<td data-label=${t(\"debug.lanes.group\")}>${group}</td>`",
+    "expected": "<><td data-label={t(\"debug.lanes.group\")}>{group}</td></>"
+  },
+  {
+    "id": "empty-dynamic-data-cell",
+    "provenance": {
+      "path": "ui/src/pages/debug/lane-table.ts",
+      "line": 65
+    },
+    "input": "html`<td data-label=${t(\"debug.lanes.group\")}></td>`",
+    "expected": "<><td data-label={t(\"debug.lanes.group\")}></td></>"
+  },
+  {
+    "id": "component-property-in-child",
+    "provenance": {
+      "path": "ui/src/components/agent-select.ts",
+      "line": 54
+    },
+    "input": "html`<span class=\"agent-select__badge\">${option.badge}</span>`",
+    "expected": "<><span class={\"agent-select__badge\"}>{option.badge}</span></>"
+  },
+  {
+    "id": "icon-child",
+    "provenance": {
+      "path": "ui/src/components/agent-select.ts",
+      "line": 202
+    },
+    "input": "html`<span class=\"agent-select__option-check\">${icons.check}</span>`",
+    "expected": "<><span class={\"agent-select__option-check\"}>{icons.check}</span></>"
+  },
+  {
+    "id": "semantic-separator",
+    "provenance": {
+      "path": "ui/src/components/agent-select.ts",
+      "line": 214
+    },
+    "input": "html`<div class=\"agent-select__separator\" role=\"separator\"></div>`",
+    "expected": "<><div class={\"agent-select__separator\"} role={\"separator\"}></div></>"
+  },
+  {
+    "id": "svg-path",
+    "provenance": {
+      "path": "ui/src/components/icons-tools.ts",
+      "line": 27
+    },
+    "input": "svg`<path d=\"M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3\" />`",
+    "expected": "<><path d={\"M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3\"} xmlns=\"http://www.w3.org/2000/svg\" /></>"
+  },
+  {
+    "id": "svg-relative-path",
+    "provenance": {
+      "path": "ui/src/components/icons-tools.ts",
+      "line": 30
+    },
+    "input": "svg`<path d=\"m18 15-6-6-6 6\" />`",
+    "expected": "<><path d={\"m18 15-6-6-6 6\"} xmlns=\"http://www.w3.org/2000/svg\" /></>"
+  },
+  {
+    "id": "adjacent-svg-shapes",
+    "provenance": {
+      "path": "ui/src/components/icons-tools.ts",
+      "line": 31
+    },
+    "input": "svg`<polyline points=\"9 10 4 15 9 20\" /><path d=\"M20 4v7a4 4 0 0 1-4 4H4\" />`",
+    "expected": "<><polyline points={\"9 10 4 15 9 20\"} xmlns=\"http://www.w3.org/2000/svg\" /><path d={\"M20 4v7a4 4 0 0 1-4 4H4\"} xmlns=\"http://www.w3.org/2000/svg\" /></>"
+  },
+  {
+    "id": "svg-circle-and-paths",
+    "provenance": {
+      "path": "ui/src/components/icons-tools.ts",
+      "line": 77
+    },
+    "input": "svg` <circle cx=\"12\" cy=\"12\" r=\"10\" />\n    <path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\" />\n    <path d=\"M2 12h20\" />`",
+    "expected": "<>{\" \"}<circle cx={\"12\"} cy={\"12\"} r={\"10\"} xmlns=\"http://www.w3.org/2000/svg\" />{\"\\n    \"}<path d={\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\"} xmlns=\"http://www.w3.org/2000/svg\" />{\"\\n    \"}<path d={\"M2 12h20\"} xmlns=\"http://www.w3.org/2000/svg\" /></>"
+  }
+]

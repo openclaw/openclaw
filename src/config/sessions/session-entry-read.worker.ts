@@ -33,7 +33,6 @@ import {
   readSessionEntryByIdInDatabase,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-exact-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
@@ -66,7 +65,6 @@ import type {
   SessionRuntimeTargetWorkerInput,
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
-import { encodeSessionTranscriptWorkerError } from "./session-history-worker-errors.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
@@ -80,7 +78,7 @@ import {
   type SessionRowFactsWorkerResult,
   type SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
-import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 
 /** Hydrate a newly admitted resident store using the projection lane's native reader. */
 export function readSessionStoreProjection(
@@ -165,57 +163,9 @@ export async function readSessionEntryWorkerRequest(
           }),
     };
   }
+  // Keep the exact-read owner off the lazy reader import graph.
+  const { readSessionEntryResult } = await import("./session-entry-read-result.worker.js");
   return readSessionEntryResult(request);
-}
-
-/** Native writer operations must finish their captured-database reads synchronously. */
-export function readSessionEntryResult(
-  request: SessionEntryReadWorkerInput,
-  capturedDatabase?: OpenClawAgentReadOnlyDatabase,
-): SessionEntryReadWorkerResult {
-  let source: SessionEntryReadWorkerResult["source"];
-  let facts: SessionEntryReadWorkerResult["facts"];
-  const read = loadSessionEntryReadOnlyResultInScope(
-    {
-      ...request.scope,
-      env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-    },
-    request.continuation,
-    (readSource) => {
-      if (typeof readSource.databaseIdentity !== "string") {
-        throw new Error("Private session entry requires its process-held owner");
-      }
-      source = { ...readSource, databaseIdentity: readSource.databaseIdentity };
-    },
-    (database, sessionKey, projection) => {
-      const selected = readExactSessionEntryFactsInDatabase(
-        database,
-        collectSessionEntryLookupKeys(sessionKey),
-        projection,
-      );
-      const captured = captureSessionEntryReadSource(database, undefined);
-      facts = {
-        kind: "session-exact-entries",
-        ...selected,
-        source: captured,
-        databaseIdentity: {
-          ...readOpenClawAgentDatabaseIdentity(database),
-          identity: captured.databaseIdentity,
-        },
-        lifecycleTimestamps: {},
-      };
-      return selected.entries.find((row) => row.sessionKey === sessionKey.trim())?.entry;
-    },
-    capturedDatabase,
-  );
-  if (!read.ok) {
-    const readError = encodeSessionTranscriptWorkerError(read.error);
-    if (!readError || readError.kind === "fence") {
-      throw read.error;
-    }
-    return { kind: "session-entry-read", entry: undefined, source, readError };
-  }
-  return { kind: "session-entry-read", entry: read.value, source, facts };
 }
 
 /** Canonical entry currency reuses parsed facts only at the same native connection revision. */
@@ -421,8 +371,12 @@ export function readExactSessionEntriesWithLifecycle(
             ...(request.expectedIdentity
               ? { source: captureSessionEntryReadSource(database, request.expectedIdentity) }
               : {}),
-            entries: readSelectedSessionEntriesInDatabase(database, request.sessionKeys, {
+            entries: readSelectedSessionEntriesInDatabase(database, request.sessionKeys ?? [], {
               continuation: request.continuation,
+              ...(request.selection?.kind === "label" ? { label: request.selection.label } : {}),
+              ...(request.selection?.kind === "session-id-or-key"
+                ? { sessionIdOrKey: request.selection.sessionIdOrKey }
+                : {}),
             }),
             lifecycleTimestamps: {},
           }

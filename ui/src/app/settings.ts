@@ -11,6 +11,7 @@ import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews } from "../lib/board/settings.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
+import { normalizeChatBubbleSessionKeys } from "../pages/chat/chat-bubble-mode.ts";
 import {
   normalizeSidebarSessionActivePanels,
   normalizeSidebarSessionLayouts,
@@ -236,9 +237,7 @@ export function profileNavigation(
 ): ProfileNavigation | null {
   const entry = asOptionalRecord(parsed?.navigationByProfile?.[profileId]);
   const sidebarEntries = normalizeSidebarEntries(entry?.sidebarEntries);
-  return sidebarEntries
-    ? { sidebarEntries, navigationScope: entry?.navigationScope === "all" ? "all" : "mine" }
-    : null;
+  return sidebarEntries ? { sidebarEntries } : null;
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
@@ -384,7 +383,6 @@ export function loadUiPreferences(
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarAgentsMode: "chip",
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
-    navigationScope: "mine",
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
     pinnedAgentIds: [],
@@ -452,6 +450,10 @@ export function loadUiPreferences(
       chatPersistCommentary: booleanSetting("chatPersistCommentary"),
       chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
       chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
+      chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(parsed.chatBubbleSessionKeys),
+      chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
+        parsed.chatBubbleDisabledSessionKeys,
+      ),
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
@@ -482,11 +484,6 @@ export function loadUiPreferences(
         : (normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
           migratedSidebarEntries ??
           defaults.sidebarEntries),
-      navigationScope: profileId
-        ? (personalNavigation?.navigationScope ?? "mine")
-        : parsed.navigationScope === "all"
-          ? "all"
-          : "mine",
       sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
       showAdvancedSettings: booleanSetting("showAdvancedSettings"),
@@ -530,8 +527,7 @@ export function patchSettings(
   const next = { ...previous, ...patch };
   saveSettings(next, {
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
-    writeNavigation:
-      Object.hasOwn(patch, "sidebarEntries") || Object.hasOwn(patch, "navigationScope"),
+    writeNavigation: Object.hasOwn(patch, "sidebarEntries"),
   });
   settingsChangeListener?.(previous, next);
   return next;
@@ -574,7 +570,7 @@ export function saveSettings(
   }
   const profileId = resolveProfileAppearanceProfileId(next.gatewayUrl);
   const authoredNavigation = options.writeNavigation !== false;
-  const navigation = { sidebarEntries: next.sidebarEntries, navigationScope: next.navigationScope };
+  const navigation = { sidebarEntries: next.sidebarEntries };
   const pendingNavigation = {
     ...(settingsFallback?.key === scopedKey ? settingsFallback.pendingNavigation : null),
     ...(profileId &&
@@ -612,6 +608,10 @@ export function saveSettings(
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
+    chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(next.chatBubbleSessionKeys),
+    chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
+      next.chatBubbleDisabledSessionKeys,
+    ),
     chatSendShortcut: next.chatSendShortcut === "modifier-enter" ? "modifier-enter" : undefined,
     chatFollowUpMode: normalizeChatFollowUpModeOverride(next.chatFollowUpMode),
     catalogOpenTarget: next.catalogOpenTarget === "terminal" ? "terminal" : undefined,
@@ -643,8 +643,6 @@ export function saveSettings(
       : undefined,
     sidebarEntries:
       !profileId && authoredNavigation ? next.sidebarEntries : source?.parsed.sidebarEntries,
-    navigationScope:
-      !profileId && authoredNavigation ? next.navigationScope : source?.parsed.navigationScope,
     navigationByProfile: { ...source?.parsed.navigationByProfile, ...pendingNavigation },
     sidebarLiveActivity: next.sidebarLiveActivity === false ? false : undefined,
     chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth),

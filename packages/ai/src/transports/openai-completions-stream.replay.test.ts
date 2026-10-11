@@ -29,31 +29,10 @@ type CompletionsStreamCreator =
   | StreamFn
   | StreamFunction<"openai-completions", OpenAICompletionsOptions>;
 
-type ReplayTextBlockPhase = "commentary" | "final_answer";
-
-type ReplayTextBlock = {
-  text: string;
-  phase?: ReplayTextBlockPhase;
-};
-
-function replayTextBlockPhase(signature: string | undefined): ReplayTextBlockPhase | undefined {
-  if (!signature) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(signature) as { phase?: string };
-    return parsed.phase === "commentary" || parsed.phase === "final_answer"
-      ? parsed.phase
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function runStreamBlocks(
   createStream: CompletionsStreamCreator,
   caseInput: ReplayCase,
-): Promise<ReplayTextBlock[]> {
+): Promise<string[]> {
   const server = createServer((req, res) => {
     req.setEncoding("utf8");
     req.on("data", () => {});
@@ -91,10 +70,7 @@ async function runStreamBlocks(
     const result = await stream.result();
     return result.content
       .filter((block) => block.type === "text")
-      .map((block) => {
-        const textBlock = block as { type: "text"; text: string; textSignature?: string };
-        return { text: textBlock.text, phase: replayTextBlockPhase(textBlock.textSignature) };
-      });
+      .map((block) => (block as { type: "text"; text: string }).text);
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -107,7 +83,7 @@ async function runStream(
   caseInput: ReplayCase,
 ): Promise<string> {
   const blocks = await runStreamBlocks(createStream, caseInput);
-  return blocks.map((block) => block.text).join("");
+  return blocks.join("");
 }
 
 const replayChunks = (): ReplayChunk[] => [
@@ -399,9 +375,9 @@ describe.each([
 
   it("keeps the delivered final answer identical whether the restated run is suppressed", async () => {
     // The structured reasoning part interrupts the open text block, so the
-    // interrupted run is delivered as commentary and the genuine follow-up as
-    // the final answer. Suppression may only shrink the commentary block by
-    // its duplicate copy; the final answer must stay byte-identical.
+    // interrupted run and the genuine follow-up stay separate blocks.
+    // Suppression may only shrink the interrupted block by its duplicate
+    // copy; the follow-up block must stay byte-identical.
     const chunks = [
       makeCompletionsChunk({ role: "assistant", content: TEXT_A }),
       makeCompletionsChunk({
@@ -423,18 +399,8 @@ describe.each([
       expectedText: `${TEXT_A}${TEXT_A}Additional detail.`,
     });
 
-    expect(suppressed.filter((block) => block.phase === "commentary").map((b) => b.text)).toEqual([
-      TEXT_A,
-    ]);
-    expect(appended.filter((block) => block.phase === "commentary").map((b) => b.text)).toEqual([
-      TEXT_A + TEXT_A,
-    ]);
-    expect(suppressed.filter((block) => block.phase === "final_answer").map((b) => b.text)).toEqual(
-      appended.filter((block) => block.phase === "final_answer").map((b) => b.text),
-    );
-    expect(suppressed.filter((block) => block.phase === "final_answer").map((b) => b.text)).toEqual(
-      ["Additional detail."],
-    );
+    expect(suppressed).toEqual([TEXT_A, "Additional detail."]);
+    expect(appended).toEqual([TEXT_A + TEXT_A, "Additional detail."]);
   });
 
   it("classifies structured content parts of one frame together while enabled", async () => {
@@ -704,17 +670,11 @@ describe("reasoning field transitions across replay guard modes", () => {
       "thinking",
       "text",
     ]);
-    // The deferred plan must materialize Interim. before the seal records the
-    // interrupted-text boundary, or both text blocks end up unphased.
+    // The deferred plan must materialize Interim. as its own text block
+    // before the resumed reasoning field emits, or the two text blocks merge.
     const textBlocks = output.content
       .filter((block) => block.type === "text")
-      .map((block) => block as { text: string; textSignature?: string });
+      .map((block) => block as { text: string });
     expect(textBlocks.map((block) => block.text)).toEqual(["Interim.", "Final."]);
-    expect(textBlocks[0]?.textSignature).toMatch(
-      /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-    );
-    expect(textBlocks[1]?.textSignature).toMatch(
-      /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-    );
   });
 });

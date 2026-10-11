@@ -655,7 +655,7 @@ describe("runDoctorConfigPreflight", () => {
 
             expect(readEventJson()).toBe(originalJson);
             // Preserve the same process: readiness must not suppress plain Doctor.
-            const doctor = await prepareDoctorContext(configPath, {
+            await using doctor = await prepareDoctorContext(configPath, {
               options: { nonInteractive: true },
             });
 

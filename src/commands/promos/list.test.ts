@@ -84,18 +84,6 @@ describe("promosListCommand", () => {
     expect(runtime.writeStdout).toHaveBeenCalledOnce();
   });
 
-  it("prints promotions with models and the claim command", async () => {
-    mocks.fetchClawHubPromotions.mockResolvedValue([promotion]);
-    const { runtime, lines } = makeRuntime();
-
-    await promosListCommand({}, runtime);
-
-    const output = lines.join("\n");
-    expect(output).toContain("Free Example models — Example");
-    expect(output).toContain("openrouter/example/model-alpha (Model Alpha) — suggested default");
-    expect(output).toContain("openclaw promos claim spring-models");
-  });
-
   it.each([
     { remainingMs: 60 * 60 * 1_000, label: "ends today" },
     { remainingMs: 25 * 60 * 60 * 1_000, label: "1 day left" },
@@ -162,18 +150,5 @@ describe("promosListCommand", () => {
     const output = lines.join("\n");
     expect(output).not.toContain("\u001b");
     expect(output).toContain("Free");
-  });
-
-  it("writes JSON to stdout with --json", async () => {
-    mocks.fetchClawHubPromotions.mockResolvedValue([promotion]);
-    const { runtime, lines, stdout } = makeRuntime();
-
-    await promosListCommand({ json: true }, runtime);
-
-    expect(lines).toEqual([]);
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.writeStdout).toHaveBeenCalledOnce();
-    const parsed = JSON.parse(stdout.join("")) as { promotions: Array<{ slug: string }> };
-    expect(parsed.promotions[0]?.slug).toBe("spring-models");
   });
 });

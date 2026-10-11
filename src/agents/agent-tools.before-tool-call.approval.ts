@@ -491,18 +491,19 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     params.result?.params === undefined
       ? undefined
       : cloneHookIsolationValue("before_tool_call", params.result.params);
+  const createDeferredApproval = () => ({
+    approval,
+    toolName: params.toolName,
+    ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+    ...(params.ctx ? { ctx: params.ctx } : {}),
+    baseParams: baseParamsSnapshot,
+    overrideParams: overrideParamsSnapshot,
+  });
   if (params.approvalMode === "defer") {
     return {
       blocked: false,
       params: cloneHookIsolationValue("before_tool_call", baseParamsSnapshot),
-      deferredApproval: {
-        approval,
-        toolName: params.toolName,
-        ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-        ...(params.ctx ? { ctx: params.ctx } : {}),
-        baseParams: baseParamsSnapshot,
-        overrideParams: overrideParamsSnapshot,
-      },
+      deferredApproval: createDeferredApproval(),
     };
   }
   if (params.approvalMode === "report") {
@@ -524,12 +525,7 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     };
   }
   return await requestPluginToolApproval({
-    approval,
-    toolName: params.toolName,
-    ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-    ...(params.ctx ? { ctx: params.ctx } : {}),
+    ...createDeferredApproval(),
     signal: params.signal,
-    baseParams: baseParamsSnapshot,
-    overrideParams: overrideParamsSnapshot,
   });
 }

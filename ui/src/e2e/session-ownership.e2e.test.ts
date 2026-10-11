@@ -180,11 +180,8 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
-    // This scenario intentionally compares sessions beyond the current human's Mine scope.
-    await currentPage
-      .locator(".sidebar-navigation-scope")
-      .getByRole("button", { name: "All", exact: true })
-      .click();
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -202,15 +199,17 @@ suite.define(() => {
       ownerMenu.getByRole("option", { name: "Owners", exact: true }),
     ).toBeVisible();
     await currentPage.keyboard.press("Escape");
-    const ownerSelect = ownerMenu.locator("#sidebar-sessions-owner");
+    const ownerSelect = currentPage.locator("#sidebar-session-owner-title");
     await ownerSelect.click();
-    const ownerRows = ownerMenu.locator('[role="option"][data-value^="owner:"]');
+    const ownerRows = currentPage.locator(
+      '.sidebar-session-owner-filter [role="option"][data-value^="owner:"]',
+    );
     await expectBrowser(ownerRows).toHaveCount(3);
     await expectBrowser(ownerRows.first()).toHaveAttribute("data-value", "owner:profile-patrick");
-    await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
+    await expectBrowser(ownerRows.first()).toContainText("My sessions");
     await captureUiProof(
       suite,
-      ownerMenu.locator(".sidebar-session-filter-panel"),
+      currentPage.locator("openclaw-app-sidebar"),
       "00-people-controls-from-session-owners.png",
       [ownerSelect],
     );
@@ -281,25 +280,21 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("connect")).length)
       .toBeGreaterThan(initialConnections);
     await expectOwnerFilter(beforeReconnect);
-    const reconnectedMenu = await openSidebarSortMenu(currentPage);
-    await openSidebarMenu(currentPage);
-    await expectBrowser(reconnectedMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Ada",
     );
 
     await currentPage.reload();
     // Reload starts a new in-page request log, so no earlier traffic can satisfy this.
     await expectOwnerFilter(0);
-    const reloadedMenu = await openSidebarSortMenu(currentPage);
-    await openSidebarMenu(currentPage);
-    await expectBrowser(reloadedMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Ada",
     );
     await captureSessionOwnerPageProof(
       suite,
-      reloadedMenu.locator(".sidebar-session-filter-panel"),
+      currentPage.locator("openclaw-app-sidebar"),
       "05-owner-filter-restored-after-reload.png",
-      [reloadedMenu.locator("#sidebar-sessions-owner")],
+      [currentPage.locator("#sidebar-session-owner-title")],
     );
   });
 
@@ -315,8 +310,6 @@ suite.define(() => {
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
         "config.get": { config: {}, hash: "owner-filter-fixture" },
-        "users.prefs.get": { status: "ok", entries: { "ui.navigationScope": "mine" } },
-        "users.prefs.set": { status: "ok" },
         "sessions.list": {
           cases: [
             {
@@ -336,18 +329,9 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
-    // This scenario intentionally compares sessions beyond the current human's Mine scope.
-    await currentPage
-      .locator(".sidebar-navigation-scope")
-      .getByRole("button", { name: "All", exact: true })
-      .click();
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
-    const scopeWrite = await gateway.waitForRequest("users.prefs.set");
-    expect(scopeWrite.params).toMatchObject({ entries: { "ui.navigationScope": "all" } });
-    await gateway.setMethodResponse("users.prefs.get", {
-      status: "ok",
-      entries: { "ui.navigationScope": "all" },
-    });
     await chooseSidebarOwner(currentPage, "involving-me");
     await closeSidebarMenu(currentPage);
     await expect
@@ -380,8 +364,7 @@ suite.define(() => {
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);
     await expectBrowser(currentPage.locator('[data-session-key="agent:main:ada"]')).toBeVisible();
-    const filteredMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(filteredMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Involving me",
     );
     await captureSessionOwnerProof(suite, currentPage, "03-involving-me-after-active-event.png");
@@ -396,8 +379,7 @@ suite.define(() => {
       )
       .toBe(true);
     await expectBrowser(currentPage.locator('[data-session-key="agent:main:bob"]')).toHaveCount(0);
-    const restoredMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(restoredMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Involving me",
     );
   });
@@ -431,7 +413,6 @@ suite.define(() => {
     });
     await currentPage.clock.install();
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
-    // All preserves attribution; Mine intentionally omits the redundant self avatar.
     await chooseSidebarOwner(currentPage, "all");
     await closeSidebarMenu(currentPage);
     const row = currentPage.locator('[data-session-key="agent:main:ada"]');
@@ -547,11 +528,8 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
-    // This scenario intentionally compares sessions beyond the current human's Mine scope.
-    await currentPage
-      .locator(".sidebar-navigation-scope")
-      .getByRole("button", { name: "All", exact: true })
-      .click();
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     const ownDraft = currentPage.locator('[data-session-key="agent:main:ada"]');
     const otherDraft = currentPage.locator('[data-session-key="agent:main:bob"]');
     await ownDraft.waitFor();

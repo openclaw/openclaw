@@ -64,7 +64,9 @@ describe("resident profile display and reference catalog", () => {
     expect(fs.existsSync(options.path)).toBe(false);
     const profile = ensureProfileForEmail("appeared@example.test", options);
     expect(isUserProfileCatalogReady(options)).toBe(false);
-    const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    const database = openOpenClawStateDatabase(options);
+    await database.walMaintenance.stop();
+    const native = vi.spyOn(database.db, "prepare");
     const current = await prepareUserProfileCatalog(options);
     releases.push(current.release);
     expect(current.readCurrentIdentity(profile.id)?.profileId).toBe(profile.id);

@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   WorkerProviderError,
@@ -345,7 +346,8 @@ export function createCrabboxWorkerProvider(
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
       inspectedParams.deadline = setupDeadline;
-      if (parsed.setup && !(project?.preparation && allocationChoice.kind === "checkpoint")) {
+      // The image key covers the exact setup script, so a fork already carries its results.
+      if (parsed.setup && allocationChoice.kind !== "checkpoint") {
         await runProvisionSetup({
           ...inspectedParams,
           phase: "profile setup",
@@ -476,7 +478,15 @@ export function createCrabboxWorkerProvider(
       let enrollment: CrabboxWorkerNodeEnrollment;
       let runtimeSetupFailed = false;
       try {
-        if (!project && options?.prepareNodeRuntime) {
+        // A fork of an image captured for this exact runtime already holds it. Enrollment still
+        // verifies the runtime, and the node fetches a missing worker bundle from the Gateway.
+        const forkHasRuntime =
+          allocationChoice.kind === "checkpoint" &&
+          isDeepStrictEqual(
+            await warmImages.checkpointRuntimeIdentity(allocationChoice.checkpointId),
+            nodeRuntimeIdentity,
+          );
+        if (!project && options?.prepareNodeRuntime && !forkHasRuntime) {
           const runtime = await options.prepareNodeRuntime();
           assertCurrent();
           const setup = createCrabboxNodeRuntimeSetup({

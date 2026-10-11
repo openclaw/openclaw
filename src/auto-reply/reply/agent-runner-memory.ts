@@ -19,7 +19,6 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
-import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
@@ -54,7 +53,6 @@ import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routi
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -65,9 +63,13 @@ import {
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
   buildEmbeddedRunExecutionParams,
+  buildModelResolveContext,
   resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
-import type { CompactionNoticePhase } from "./compaction-notice.js";
+import {
+  resolveCompactionCompletionNotice,
+  type CompactionNoticePhase,
+} from "./compaction-notice.js";
 import {
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
@@ -661,16 +663,11 @@ export async function runSessionCompactionIfNeeded(params: {
       followupRun: params.followupRun,
     });
     assertActive();
-    const serverNotice =
-      result.compactionKind === "server-endpoint" &&
-      typeof result.result?.tokensBefore === "number" &&
-      typeof result.result.tokensAfter === "number"
-        ? `🧹 Server-side compaction complete (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
-        : undefined;
-    await notifyCompaction(
-      transcriptByteCompactionLatch ? "context_bounded" : "end",
-      transcriptByteCompactionLatch ? undefined : serverNotice,
+    const notice = resolveCompactionCompletionNotice(
+      result,
+      Boolean(transcriptByteCompactionLatch),
     );
+    await notifyCompaction(notice.phase, notice.text);
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
     const previousSessionId = params.followupRun.run.sessionId;
@@ -977,23 +974,9 @@ export async function runMemoryFlushIfNeeded(params: {
     memorySession,
     memoryAudience: flushMemoryAudience,
     memoryFlushTools,
+    maintenanceRun,
+    sourcePolicySessionKey,
   } = preparedAttempt;
-  const resolveRuntimePolicySessionKey = () =>
-    params.runtimePolicySessionKey ??
-    params.followupRun.run.runtimePolicySessionKey ??
-    params.sessionKey;
-  const sourcePolicySessionKey =
-    resolveRuntimePolicySessionKey() ?? params.followupRun.run.sessionKey;
-  const maintenanceRun = createSessionMaintenanceFollowup({
-    run: params.followupRun.run,
-    sessionEntry: { sessionId: memorySession.sessionId, updatedAt: Date.now() },
-    cfg: params.cfg,
-    sessionKey: memorySession.sessionKey,
-    runtimePolicySessionKey: sourcePolicySessionKey,
-    provider: selection.provider,
-    model: selection.model,
-    auth: params.followupRun.run,
-  }).run;
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
     runId: flushRunId,
     sessionId: memorySession.sessionId,
@@ -1039,6 +1022,17 @@ export async function runMemoryFlushIfNeeded(params: {
     });
     const flushExecution = await runEmbeddedAgentEntry({
       preparedRunAdmission,
+      modelResolve: {
+        prompt: activeMemoryFlushPlan.prompt,
+        cwd: maintenanceRun.cwd,
+        modelSelectionLocked: maintenanceRun.modelSelectionLocked,
+        context: buildModelResolveContext({
+          run: maintenanceRun,
+          sessionCtx: {},
+          hasRepliedRef: undefined,
+          trigger: "memory",
+        }),
+      },
       selection: buildRunEntrySelection(selection, params.followupRun.run),
       identity: {
         runId: flushRunId,
@@ -1049,7 +1043,7 @@ export async function runMemoryFlushIfNeeded(params: {
       },
       harness: {
         workspaceDir: params.followupRun.run.workspaceDir,
-        sessionKey: resolveRuntimePolicySessionKey(),
+        sessionKey: sourcePolicySessionKey,
         preparation: { kind: "direct" },
         resolveRuntimeOverride: (provider) =>
           resolveSessionRuntimeOverrideForProvider({
@@ -1070,7 +1064,7 @@ export async function runMemoryFlushIfNeeded(params: {
           run: params.followupRun.run,
           catalog: params.followupRun.run.thinkingCatalog,
           agentId: params.followupRun.run.agentId,
-          sessionKey: resolveRuntimePolicySessionKey(),
+          sessionKey: sourcePolicySessionKey,
           sessionEntry: entry,
           agentRuntime: sessionRuntimeOverride,
         });
@@ -1110,6 +1104,8 @@ export async function runMemoryFlushIfNeeded(params: {
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+          resolvedModelSelection: runOptions.resolvedModelSelection,
+          modelFallbacksOverride: runOptions.modelFallbacksOverride,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
           abortSignal: deferredLifecycle.signal,
