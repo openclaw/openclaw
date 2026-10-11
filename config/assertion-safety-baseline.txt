@@ -719,7 +719,6 @@ extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	3
 extensions/qa-lab/src/mantis/crabbox-runtime.ts	2
 extensions/qa-lab/src/mantis/discord-smoke.runtime.ts	3
 extensions/qa-lab/src/mantis/run.runtime.ts	1
-extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts	1
 extensions/qa-lab/src/mantis/visual-task.runtime.ts	2
 extensions/qa-lab/src/manual-lane.runtime.ts	2
 extensions/qa-lab/src/model-catalog.runtime.ts	2
@@ -1163,7 +1162,7 @@ src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-bundle-mcp-runtime.ts	3
 src/agents/agent-command-restart-recovery.ts	1
 src/agents/agent-command.ts	1
-src/agents/agent-hooks/compaction-safeguard.ts	11
+src/agents/agent-hooks/compaction-safeguard.ts	9
 src/agents/agent-project-settings-snapshot.ts	5
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-receipt.ts	1
@@ -1678,7 +1677,6 @@ src/cli/native-hook-relay-cli.ts	1
 src/cli/nodes-cli/register.pairing.ts	2
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2
-src/cli/one-shot-exit.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
 src/cli/plugins-authoring-command.ts	4
@@ -1922,8 +1920,6 @@ src/daemon/systemd-exec.ts	2
 src/daemon/systemd-install.ts	1
 src/daemon/systemd-lifecycle.ts	2
 src/daemon/systemd-runtime.ts	1
-src/entry.compile-cache.ts	2
-src/entry.respawn.ts	1
 src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	3
 src/flows/doctor-health-contributions-final.ts	1
@@ -2638,7 +2634,7 @@ src/wizard/setup.post-install-migration.ts	1
 src/wizard/setup.shared.ts	1
 src/wizard/setup.ts	1
 src/worker/inference-stream.runtime.ts	4
-src/worker/launch-descriptor.ts	5
+src/worker/launch-descriptor.ts	1
 src/worker/node-workspace-protocol.ts	1
 src/worker/worker-connection-frames.ts	2
 src/worker/worker-process.ts	1
@@ -2666,16 +2662,7 @@ ui/src/app/startup-settings.ts	1
 ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	1
 ui/src/components/agent-select.ts	2
-ui/src/components/app-sidebar-agent-menu.ts	2
-ui/src/components/app-sidebar-nav-menus.ts	1
-ui/src/components/app-sidebar-render.ts	3
-ui/src/components/app-sidebar-session-catalog-render.ts	4
-ui/src/components/app-sidebar-session-list-render.ts	1
-ui/src/components/app-sidebar-session-menu-renderers.ts	3
 ui/src/components/app-sidebar-session-narration.ts	4
-ui/src/components/app-sidebar-session-row-render.ts	2
-ui/src/components/app-sidebar-session-section-header.ts	6
-ui/src/components/app-sidebar.ts	1
 ui/src/components/app-topbar.ts	1
 ui/src/components/board/board-view.ts	1
 ui/src/components/board/board-widget-cell.ts	1

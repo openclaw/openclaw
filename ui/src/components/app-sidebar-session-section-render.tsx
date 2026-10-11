@@ -377,9 +377,9 @@ export function renderSessionSection(params: {
                       aria-expanded={String(
                         host().sidebarMenus.sessionGroupMenu?.group === group(),
                       )}
-                      onClick={(event: MouseEvent) => {
+                      onClick={(event) => {
                         event.stopPropagation();
-                        const trigger = event.currentTarget as HTMLElement;
+                        const trigger = event.currentTarget;
                         const rect = trigger.getBoundingClientRect();
                         host().sidebarMenus.openSessionGroupMenu(
                           group(),

@@ -251,7 +251,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams): 
       entry: `plugin:${entry.key}`,
       icon:
         entry.value.icon && Object.hasOwn(iconData, entry.value.icon)
-          ? (entry.value.icon as IconName)
+          ? (entry.value.icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
           : ("plug" as const),
       label: entry.value.label,
     })),
@@ -335,9 +335,9 @@ export function renderSidebarPluginNavigationMenu(params: {
           {(action) => {
             const icon =
               action.icon && Object.hasOwn(iconData, action.icon) ? (
+                // SAFETY: The preceding own-key guard admits only keys of iconData.
                 <Icon name={action.icon as IconName} />
-              ) : // SAFETY: only own keys of the shared icon registry are admitted.
-              undefined;
+              ) : undefined;
             return (
               <wa-dropdown-item
                 class={[

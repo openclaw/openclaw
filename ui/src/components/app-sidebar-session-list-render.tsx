@@ -384,7 +384,7 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.E
       onDrop={(event: DragEvent) => host.sessionOrganizer.handleSessionListDrop(event)}
     >
       {host.sidebarAgentsMode === "roster" ? undefined : renderSessionListToolbar(host)}
-      {host.sessionData.sessionsStartingUp ? (
+      {host.sessionData.sessionsStartingUp && !host.sidebarSnapshot ? (
         <div
           class="sidebar-session-empty-hint sidebar-session-empty-hint--startup"
           role="status"

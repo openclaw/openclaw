@@ -404,7 +404,7 @@ function renderCatalogGroup(
         },
         onContextMenu: (event) => {
           event.preventDefault();
-          const header = event.currentTarget as HTMLElement;
+          const header = event.currentTarget;
           const trigger =
             header.querySelector<HTMLElement>("[data-session-catalog-view-menu]") ?? header;
           params.onOpenViewMenu(readCatalog().id, trigger, {
@@ -450,9 +450,9 @@ function renderCatalogGroup(
                 aria-label={t("chat.sidebar.catalogViewOptions")}
                 aria-haspopup="menu"
                 aria-expanded={String(params.viewMenuOpenCatalogId === readCatalog().id)}
-                onClick={(event: MouseEvent) => {
+                onClick={(event) => {
                   event.stopPropagation();
-                  params.onOpenViewMenu(readCatalog().id, event.currentTarget as HTMLElement);
+                  params.onOpenViewMenu(readCatalog().id, event.currentTarget);
                 }}
               >
                 <Icon name="listFilter" />

@@ -40,7 +40,9 @@ import { waitForSolid } from "./solid-settle.ts";
 // out of sidebar client call-order assertions.
 // Sidebar attention is inert in this harness; cover attention rendering in
 // sidebar-attention.test.ts, not app-sidebar cases.
-vi.mock("../components/sidebar-attention.tsx", () => ({ SidebarAttention: () => undefined }));
+vi.mock("../components/sidebar-attention.tsx", () => ({
+  SidebarAttention: () => document.createElement("openclaw-sidebar-attention"),
+}));
 
 export type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
 type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
@@ -281,6 +283,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     get revision() {
       return revision;
     },
+    captureBootRoster: () => null,
     get state() {
       return state;
     },
@@ -547,35 +550,21 @@ export async function mountSidebar(
   return mountSidebarContext(context, _variant);
 }
 
-export async function mountSidebarContext(
-  context: ApplicationContext,
-  _variant: "panel" | "drawer" = "panel",
-  activeRouteId?: RouteId,
-) {
+/** Create the test facade; append its real hostElement to mount it. */
+export async function createSidebarElement(): Promise<SidebarLifecycleState> {
   const { getAppSidebarOwner } = await import("../components/app-sidebar.tsx");
-  const provider = createApplicationContextProvider(context);
   const element = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
-  // General behavioral fixtures model the all-session query contract.
-  element.navigationScope = "all";
-  if (activeRouteId) {
-    element.activeRouteId = activeRouteId;
-  }
-  provider.append(element);
-  document.body.append(provider);
-  await element.updateComplete;
-  await waitForSolid(() => {
-    if (!getAppSidebarOwner(element)) {
-      throw new Error("Sidebar owner is not mounted");
-    }
-  });
   // Test access crosses the production host/owner boundary without copying either.
-  const sidebar = new Proxy(element, {
+  return new Proxy(element, {
     get(target, key) {
       const owner = getAppSidebarOwner(target);
+      if (key === "hostElement") {
+        return target;
+      }
       if (key === "updateComplete") {
         return target.updateComplete.then(() => {
           flush();
-          return owner?.updateComplete ?? true;
+          return getAppSidebarOwner(target)?.updateComplete ?? true;
         });
       }
       const source = Reflect.has(target, key) ? target : owner;
@@ -595,6 +584,30 @@ export async function mountSidebarContext(
       return written;
     },
   }) as SidebarLifecycleState;
+}
+
+export async function mountSidebarContext(
+  context: ApplicationContext,
+  _variant: "panel" | "drawer" = "panel",
+  activeRouteId?: RouteId,
+) {
+  const { getAppSidebarOwner } = await import("../components/app-sidebar.tsx");
+  const provider = createApplicationContextProvider(context);
+  const sidebar = await createSidebarElement();
+  const element = sidebar.hostElement;
+  // General behavioral fixtures model the all-session query contract.
+  sidebar.navigationScope = "all";
+  if (activeRouteId) {
+    sidebar.activeRouteId = activeRouteId;
+  }
+  provider.append(element);
+  document.body.append(provider);
+  await sidebar.updateComplete;
+  await waitForSolid(() => {
+    if (!getAppSidebarOwner(element)) {
+      throw new Error("Sidebar owner is not mounted");
+    }
+  });
   const owner = getAppSidebarOwner(element)!;
   await Promise.all([
     import("../components/app-sidebar-session-narration.ts"),

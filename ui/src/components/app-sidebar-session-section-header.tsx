@@ -16,7 +16,7 @@ export function renderSidebarSessionSectionHeader(params: {
   disabledReason?: string;
   onStartDrag: (sectionId: string) => void;
   onFinishDrag: () => void;
-  onContextMenu?: (event: MouseEvent) => void;
+  onContextMenu?: JSX.EventHandler<HTMLDivElement, MouseEvent>;
   reorder?: {
     label: string;
     onMove: (target: string, position: "before" | "after") => void | Promise<void>;
@@ -28,24 +28,24 @@ export function renderSidebarSessionSectionHeader(params: {
       class={`sidebar-recent-sessions__head ${draggable() ? "sidebar-recent-sessions__head--draggable" : ""}`}
       draggable={draggable() ? "true" : "false"}
       title={params.disabledReason ?? undefined}
-      onMouseDown={(event: MouseEvent) => {
-        const header = event.currentTarget as HTMLElement;
+      onMouseDown={(event) => {
+        const header = event.currentTarget;
         header.toggleAttribute(
           "data-section-drag-blocked",
-          Boolean((event.target as HTMLElement).closest("button, a")),
+          Boolean(event.target.closest("button, a")),
         );
       }}
-      onMouseUp={(event: MouseEvent) => {
-        (event.currentTarget as HTMLElement).removeAttribute("data-section-drag-blocked");
+      onMouseUp={(event) => {
+        event.currentTarget.removeAttribute("data-section-drag-blocked");
       }}
-      onDragStart={(event: DragEvent) => {
+      onDragStart={(event) => {
         if (!draggable()) {
           event.preventDefault();
           return;
         }
-        const header = event.currentTarget as HTMLElement;
+        const header = event.currentTarget;
         const startedFromControl =
-          Boolean((event.target as HTMLElement).closest("button, a")) ||
+          Boolean(event.target.closest("button, a")) ||
           header.hasAttribute("data-section-drag-blocked");
         header.removeAttribute("data-section-drag-blocked");
         if (startedFromControl) {
@@ -57,8 +57,8 @@ export function renderSidebarSessionSectionHeader(params: {
           params.onStartDrag(params.sectionId);
         }
       }}
-      onDragEnd={(event: DragEvent) => {
-        (event.currentTarget as HTMLElement).removeAttribute("data-section-drag-blocked");
+      onDragEnd={(event) => {
+        event.currentTarget.removeAttribute("data-section-drag-blocked");
         params.onFinishDrag();
       }}
       onContextMenu={params.onContextMenu ?? undefined}

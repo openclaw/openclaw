@@ -32,6 +32,7 @@ import { rowDemandsVisibility } from "./app-sidebar-session-types.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
+import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderSidebarSessionSubtitle } from "./solid/session-presentation.tsx";
@@ -39,6 +40,7 @@ import "./elapsed-time.ts";
 import "./tooltip.ts";
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 export interface SessionListHost {
+  readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
   readonly sidebarAgentsMode?: "chip" | "roster";
   readonly basePath: string;
   readonly sessionDataContext:
@@ -212,27 +214,10 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const team = createMemo(() => host().sidebarAgentsMode === "roster");
   const ownAttention = createMemo(() => session().ownAttention ?? session().attention);
   const label = createMemo(() => session().label);
-  const toolActivity = createMemo(() => {
-    const teamValue = team();
-    const hostValue = host();
-    const sessionValue = session();
-    return !teamValue &&
-      hostValue.sessionsShowPreview &&
-      sessionValue.hasActiveRun &&
-      hostValue.sidebarLiveActivity
-      ? hostValue.sidebarTools.get(sessionValue.key)
-      : undefined;
-  });
-  const subtitleState = createMemo(() =>
-    host().sessionProjection.resolveSubtitle({
-      session: session(),
-      hasDisplay: display() !== undefined,
-      sidebarLiveActivity: host().sidebarLiveActivity,
-      showPreview: host().sessionsShowPreview,
-      narrationLine: host().sidebarNarrationLines.get(session().key),
-      toolActivity: toolActivity(),
-      observerDigest: host().sidebarObserverDigests.get(session().key) ?? null,
-    }),
+  const subtitleState = createMemo(
+    () =>
+      (host().sidebarSnapshot ? session().snapshotSubtitle : undefined) ??
+      resolveSidebarSessionRowSubtitle(host(), session(), display()),
   );
   const subtitle = createMemo(() => subtitleState().subtitle),
     narration = createMemo(() => subtitleState().narration),
@@ -244,16 +229,18 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     pullRequest = createMemo(() => indicators.pullRequest),
     persistentIndicator = createMemo(() => indicators.persistentIndicator),
     childrenExpanded = createMemo(() => indicators.childrenExpanded);
-  const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
+  const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
     handleContextMenuEvent(
       event,
-      (event.currentTarget as HTMLElement).querySelector(".sidebar-recent-session__link"),
+      event.currentTarget.querySelector<HTMLElement>(".sidebar-recent-session__link"),
       (trigger, x, y) => {
         if (display()?.catalogMenu) {
           host().sidebarMenus.catalogMenu.open(display().catalogMenu, x, y, trigger ?? undefined);
           return;
         }
-        host().sidebarMenus.openSessionMenu(session(), x, y, trigger);
+        if (!host().sidebarSnapshot) {
+          host().sidebarMenus.openSessionMenu(session(), x, y, trigger);
+        }
       },
     );
   const pinLabel = createMemo(() => {
@@ -500,18 +487,15 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           <button
             class="session-action session-action--touch-menu"
             data-sidebar-session-menu="true"
+            disabled={Boolean(host().sidebarSnapshot)}
             type="button"
             title={t("chat.sidebar.openSessionMenu")}
             aria-label={`${t("chat.sidebar.openSessionMenu")}: ${label()}`}
             aria-haspopup="menu"
             aria-expanded={String(menuOpen())}
-            onClick={(event: MouseEvent) => {
+            onClick={(event) => {
               event.stopPropagation();
-              host().toggleSessionMenu(
-                session(),
-                event.currentTarget as HTMLElement,
-                display()?.catalogMenu,
-              );
+              host().toggleSessionMenu(session(), event.currentTarget, display()?.catalogMenu);
             }}
           >
             <Icon name="moreHorizontal" />

@@ -54,7 +54,6 @@ import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routi
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -67,7 +66,10 @@ import {
   buildEmbeddedRunExecutionParams,
   resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
-import type { CompactionNoticePhase } from "./compaction-notice.js";
+import {
+  resolveCompactionCompletionNotice,
+  type CompactionNoticePhase,
+} from "./compaction-notice.js";
 import {
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
@@ -661,16 +663,11 @@ export async function runSessionCompactionIfNeeded(params: {
       followupRun: params.followupRun,
     });
     assertActive();
-    const serverNotice =
-      result.compactionKind === "server-endpoint" &&
-      typeof result.result?.tokensBefore === "number" &&
-      typeof result.result.tokensAfter === "number"
-        ? `🧹 Server-side compaction complete (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
-        : undefined;
-    await notifyCompaction(
-      transcriptByteCompactionLatch ? "context_bounded" : "end",
-      transcriptByteCompactionLatch ? undefined : serverNotice,
+    const notice = resolveCompactionCompletionNotice(
+      result,
+      Boolean(transcriptByteCompactionLatch),
     );
+    await notifyCompaction(notice.phase, notice.text);
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
     const previousSessionId = params.followupRun.run.sessionId;

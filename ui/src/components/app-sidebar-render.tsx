@@ -75,6 +75,10 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
           }
         : undefined),
   );
+  const cached = () =>
+    host.sidebarSnapshot?.mode === "chip" && host.sidebarSnapshot.brand.agentId === cardAgentId()
+      ? host.sidebarSnapshot.brand
+      : null;
   const menuUnread = createMemo(() =>
     cardAgents().some((entry) => {
       const agentId = normalizeAgentId(entry.id);
@@ -83,7 +87,7 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
   );
   const cardName = createMemo(() => {
     const agent = cardAgent();
-    return agent ? normalizeAgentLabel(agent, cardIdentity()) : "";
+    return cached()?.name ?? (agent ? normalizeAgentLabel(agent, cardIdentity()) : "");
   });
   const avatarAuthReady = createMemo(() =>
     Boolean(
@@ -95,13 +99,25 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
     ),
   );
   return (
-    <Show when={cardAgent()} fallback={renderSidebarWorkspaceHeader(host)}>
+    <Show when={cardAgent() || cached()} fallback={renderSidebarWorkspaceHeader(host)}>
       <SidebarAgentCard
         agentName={cardName()}
         agentId={cardAgentId()}
-        avatarUrl={cardAgent() ? resolveAgentAvatarUrl(cardAgent()!, cardIdentity()) : undefined}
+        avatarUrl={
+          cached()
+            ? cached()!.avatar
+            : cardAgent()
+              ? resolveAgentAvatarUrl(cardAgent()!, cardIdentity())
+              : null
+        }
         avatarAuthReady={avatarAuthReady()}
-        avatarText={cardAgent() ? resolveAgentTextAvatar(cardAgent()!, cardIdentity()) : null}
+        avatarText={
+          cached()
+            ? (cached()!.textAvatar ?? null)
+            : cardAgent()
+              ? resolveAgentTextAvatar(cardAgent()!, cardIdentity())
+              : null
+        }
         environment={host.sessionDataContext?.config?.current?.environment ?? null}
         menuOpen={host.sidebarMenus.agentMenuPosition !== null}
         menuUnread={menuUnread()}
@@ -111,12 +127,12 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
           host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)
         }
         onMenuPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-        onContextMenu={(event: MouseEvent) => {
+        onContextMenu={(event) => {
           event.preventDefault();
           if (host.sidebarMenus.agentMenuPosition !== null) {
             return;
           }
-          const card = event.currentTarget as HTMLElement;
+          const card = event.currentTarget;
           const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
           host.sidebarMenus.toggleAgentMenu(trigger);
         }}
@@ -125,11 +141,47 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
   );
 }
 
+export function readSidebarBrandPresentation(host: AppSidebarRenderHost) {
+  const config = host.sessionDataContext?.config.current;
+  const chip = host.activeChipAgent();
+  const branding = host.sessionDataContext?.theme.branding ?? currentThemeBranding();
+  return {
+    agentId: host.sidebarAgentsMode === "chip" ? chip.agent?.id : undefined,
+    textAvatar:
+      host.sidebarAgentsMode === "chip" && chip.agent
+        ? resolveAgentTextAvatar(chip.agent, chip.identity)
+        : undefined,
+    name:
+      host.sidebarAgentsMode === "chip" && chip.agent
+        ? normalizeAgentLabel(chip.agent, chip.identity)
+        : readSidebarNativeGateway(host)?.name.trim() || branding.brandName,
+    avatar:
+      host.sidebarAgentsMode === "chip" && chip.agent
+        ? resolveAgentAvatarUrl(chip.agent, chip.identity)
+        : (config?.assistantIdentity.avatar ?? null),
+    icon: branding.brandIcon,
+    iconUrl: branding.artwork?.icons?.[branding.brandIcon]?.url,
+    environment: config?.environment?.label ?? null,
+  };
+}
+
 function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
-  const branding = () => host.sessionDataContext?.theme.branding ?? currentThemeBranding();
-  const name = createMemo(
-    () => readSidebarNativeGateway(host)?.name.trim() || branding().brandName,
+  const currentBranding = () => host.sessionDataContext?.theme.branding ?? currentThemeBranding();
+  const cached = () => (host.sidebarSnapshot?.brand.agentId ? null : host.sidebarSnapshot?.brand);
+  const brand = () => cached() ?? readSidebarBrandPresentation(host);
+  const branding = createMemo(() =>
+    cached()
+      ? {
+          ...currentBranding(),
+          brandName: brand().name,
+          brandIcon: brand().icon,
+          artwork: brand().iconUrl
+            ? { icons: { [brand().icon]: { url: brand().iconUrl } } }
+            : undefined,
+        }
+      : currentBranding(),
   );
+  const name = () => brand().name;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   return (
     <div class="sidebar-workspace-header">
@@ -188,10 +240,8 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
               <Icon name="chevronsUpDown" />
             </span>
           </span>
-          {host.sessionDataContext?.config.current.environment ? (
-            <span class="control-ui-environment-pill">
-              {host.sessionDataContext.config.current.environment.label}
-            </span>
+          {brand().environment ? (
+            <span class="control-ui-environment-pill">{brand().environment}</span>
           ) : undefined}
         </span>
       </button>
@@ -282,10 +332,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
     host.sessionDataContext
       ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
       : null;
-  const selfLabel = () => selfUser()?.name ?? selfUser()?.email ?? t("nav.owner");
+  const displayUser = () => selfUser() ?? host.sidebarSnapshot?.footer;
+  const selfLabel = () => displayUser()?.name ?? displayUser()?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
     id: "owner",
-    ...selfUser(),
+    ...displayUser(),
     name: selfLabel(),
     watchedSessions: [],
   }));
@@ -371,9 +422,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
         aria-label={
           identityDetail() ? `${identityMenuLabel()}: ${identityDetail()}` : identityMenuLabel()
         }
-        onClick={(event: MouseEvent) =>
-          host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)
-        }
+        onClick={(event) => host.sidebarMenus.toggleIdentityMenu(event.currentTarget)}
       >
         <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
         <span class="sidebar-identity-card__text">
@@ -438,7 +487,8 @@ export function renderAppSidebarPageEntry(
     ) : (
       <Show when={pinnedSession()}>{(session) => host.renderPinnedSidebarSession(session)}</Show>
     );
-  const draggable = entry.type === "route" || entry.type === "plugin";
+  const draggable = () =>
+    !host.sidebarSnapshot && (entry.type === "route" || entry.type === "plugin");
   return (
     <div
       class={[
@@ -448,7 +498,7 @@ export function renderAppSidebarPageEntry(
         },
       ]}
       data-sidebar-entry={serialized}
-      draggable={draggable ? "true" : "false"}
+      draggable={draggable() ? "true" : "false"}
       onDragStart={
         entry.type === "route"
           ? (event: DragEvent) => host.sessionOrganizer.startSidebarRouteDrag(event, entry.route)
@@ -456,7 +506,11 @@ export function renderAppSidebarPageEntry(
             ? (event: DragEvent) => host.sessionOrganizer.startSidebarPluginDrag(event, entry.key)
             : undefined
       }
-      onDragEnd={draggable ? () => host.sessionOrganizer.finishSidebarEntryDrag() : undefined}
+      onDragEnd={() => {
+        if (draggable()) {
+          host.sessionOrganizer.finishSidebarEntryDrag();
+        }
+      }}
     >
       {content}
     </div>
@@ -481,10 +535,13 @@ export function renderAppSidebarPluginTab(
       return `${location().pathname}${location().search}`;
     },
     get icon() {
+      const icon = tab().icon;
       return (
         <Icon
           name={
-            tab().icon && Object.hasOwn(iconData, tab().icon) ? (tab().icon as IconName) : "plug"
+            icon && Object.hasOwn(iconData, icon)
+              ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
+              : "plug"
           }
         />
       );

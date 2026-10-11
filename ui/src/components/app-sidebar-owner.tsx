@@ -10,6 +10,7 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -27,7 +28,7 @@ import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import { renderAppSidebarOnline } from "./app-sidebar-online.tsx";
+import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { renderSidebarRail, renderSidebarPages, renderSidebarScope } from "./app-sidebar-rail.tsx";
 import { renderAppSidebarBrand } from "./app-sidebar-render.tsx";
 import "../styles/app-sidebar.css";
@@ -64,6 +65,9 @@ import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarContextController } from "./sidebar-context-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { SidebarPeopleController } from "./sidebar-people-controller.ts";
+import { captureSidebarSnapshotModel } from "./sidebar-snapshot-capture.ts";
+import { SidebarSnapshotController } from "./sidebar-snapshot-controller.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
@@ -87,6 +91,92 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
   readonly people = new SidebarPeopleController(this);
+  private readonly sidebarSnapshotController = new SidebarSnapshotController(this);
+
+  restoreSidebarSnapshot(model: SidebarSnapshotModel): void {
+    this.sidebarSnapshot = model;
+    this.navigationView = model.navigationView;
+    this.navigationScope = model.navigationScope;
+    this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
+    const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];
+    for (const row of rows) {
+      rows.push(...row.children);
+    }
+    this.sessionProjection.restoreChildrenDisplay(rows);
+    this.people.sortMode = model.peopleSortMode;
+    this.people.statusFilter = model.peopleStatusFilter;
+    this.teamOnlineExpanded = model.onlineExpanded;
+    sidebarOnlineOrder(this).restore(model.onlineUsers, new Map(model.onlineCounts));
+    if (model.mode === "roster") {
+      void this.rosterRendererImport.load().catch(() => undefined);
+    }
+  }
+
+  releaseSidebarSnapshot(): void {
+    const snapshot = this.sidebarSnapshot;
+    this.sidebarPluginSnapshot =
+      snapshot && this.context?.plugins.registryStatus !== "complete"
+        ? { entries: snapshot.entries, plugins: snapshot.plugins }
+        : null;
+    this.sidebarSnapshot = null;
+  }
+
+  clearSidebarSnapshot(): void {
+    this.sidebarSnapshot = null;
+    this.sidebarPluginSnapshot = null;
+    this.sessionProjection.restoreChildrenDisplay([]);
+    sidebarOnlineOrder(this).clear();
+    this.people.resetView();
+    this.teamOnlineExpanded = false;
+  }
+
+  sidebarSnapshotSettled(): boolean {
+    const context = this.context;
+    if (!this.connected || !context) {
+      return false;
+    }
+    if (context.gateway.snapshot.selfUser?.id && !this.navigationCatalog.scopesReady) {
+      return false;
+    }
+    if (this.navigationView === "pages" && this.navigationCatalog.dashboards?.loading !== false) {
+      return false;
+    }
+    const people = sidebarOnlineOrder(this).users;
+    if (
+      people.some((person) => person.identity?.type === "profile") &&
+      this.sessionData.ownerCounts.counts === null &&
+      this.sessionData.ownerCounts.error === null
+    ) {
+      return false;
+    }
+    if (this.sidebarAgentsMode === "roster") {
+      const roster = rosterActivityStore(context).snapshot;
+      return (
+        Boolean(this.rosterRenderer) &&
+        (roster.membershipReady || roster.error !== null) &&
+        !roster.loading &&
+        roster.involvingMe === this.sidebarSessionOwnerFilter().involvingMe
+      );
+    }
+    return (
+      !this.sessionData.sessionsLoading &&
+      (Boolean(this.sessionData.sessionMutationError ?? context.sessions.state.error) ||
+        (Boolean(this.sessionData.sessionsResult) && !context.sessions.presentation.resultCached))
+    );
+  }
+
+  captureSidebarSnapshot(): SidebarSnapshotModel | null {
+    if (!this.context) {
+      return null;
+    }
+    const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
+    return captureSidebarSnapshotModel(
+      this,
+      this.context,
+      rows,
+      this.zonedVisibleSections(rows).sections,
+    );
+  }
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -140,6 +230,14 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   private readonly sidebarContext = new SidebarContextController(this);
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
+      () => this.sidebarSnapshotController,
+      (snapshot) => {
+        snapshot.connect();
+        return () => snapshot.disconnect();
+      },
+    )
+    .watchStore(() => this.sidebarSnapshotController)
+    .effect(
       () => this.context?.gateway,
       (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
     )
@@ -154,6 +252,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     )
     .watchStore(() => this.context?.plugins);
   get nativeGatewaySnapshot(): NativeGatewaysSnapshot | null {
+    // SAFETY: The macOS dashboard injects its encoded gateway snapshot at this key; browsers leave it unset.
     const snapshot = (window as Window & { __OPENCLAW_NATIVE_GATEWAYS__?: NativeGatewaysSnapshot })[
       "__OPENCLAW_NATIVE_GATEWAYS__"
     ];
@@ -217,6 +316,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   protected override willUpdate() {
     super.willUpdate();
+    this.sidebarSnapshotController.synchronize();
+    if (this.context?.plugins.registryStatus === "complete") {
+      this.sidebarPluginSnapshot = null;
+    }
     // Admit new geometry only between interactions; once shown it stays put.
     // Popover focus can leave :focus-within false; inspect the owned DOM instead.
     // Native drag can clear :hover, so retain the organizer's authoritative drag facts.
@@ -247,6 +350,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   override updated() {
     super.updated();
+    this.sidebarSnapshotController.capture();
     if (!this.narration) {
       if (this.sidebarLiveActivity) {
         this.ensureNarrationController();
@@ -589,7 +693,11 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const NewSessionMenu = dynamic(() => this.rosterRenderer?.SidebarNewSessionMenu);
     const brand = renderAppSidebarBrand(
       this,
-      <NewSessionMenu host={this} active={this.navigationVisible} />,
+      <NewSessionMenu
+        host={this}
+        active={this.navigationVisible}
+        access={this.readNewSessionAccess()}
+      />,
     );
     const rail = renderSidebarRail(this);
     const pages = renderSidebarPages(this);
@@ -597,83 +705,95 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const online = renderAppSidebarOnline(this);
     const menus = this.sidebarMenus.render();
     return (
-      <aside
-        class="sidebar sidebar--rail"
-        onPointerLeave={this.handleSidebarInteractionEnd}
-        onFocusOut={this.handleSidebarInteractionEnd}
-        onContextMenu={(event) => {
-          if (!(event.target as Element).closest("input, textarea, [contenteditable]")) {
-            event.preventDefault();
-          }
-        }}
+      <Show
+        when={
+          !this.sidebarSnapshotController.pending &&
+          !(this.sidebarSnapshot?.mode === "roster" && !this.rosterRenderer)
+        }
       >
-        {rail}
-        <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
-          {brand}
-          <div class="sidebar-shell__content">
-            <div
-              class={`sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData.sessionsScrollState}`}
-              onScroll={(event) => this.sidebarContext.handleScroll(event)}
-            >
-              <Show
-                when={this.navigationView === "pages"}
-                fallback={
-                  <Show
-                    when={this.navigationView === "online"}
-                    fallback={
-                      <>
-                        {scope}
-                        <div
-                          class="sidebar-session-content"
-                          hidden={Boolean(this.contextualSidebar)}
-                        >
-                          {sessions}
-                        </div>
-                        {this.contextualSidebar?.render(
-                          this.contextualSidebar.data,
-                          this.contextualSidebar.loaderPending,
-                          true,
-                        )}
-                      </>
-                    }
-                  >
-                    {online}
-                  </Show>
-                }
+        <aside
+          class="sidebar sidebar--rail"
+          data-snapshot-state={this.sidebarSnapshot ? "cached" : "live"}
+          data-snapshot-saved={String(this.sidebarSnapshotController.saved)}
+          onPointerLeave={this.handleSidebarInteractionEnd}
+          onFocusOut={this.handleSidebarInteractionEnd}
+          onContextMenu={(event) => {
+            if (
+              !(event.target instanceof Element) ||
+              !event.target.closest("input, textarea, [contenteditable]")
+            ) {
+              event.preventDefault();
+            }
+          }}
+        >
+          {rail}
+          <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
+            {brand}
+            <div class="sidebar-shell__content">
+              <div
+                class={`sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData.sessionsScrollState}`}
+                onScroll={(event) => this.sidebarContext.handleScroll(event)}
               >
-                {pages}
+                <Show
+                  when={this.navigationView === "pages"}
+                  fallback={
+                    <Show
+                      when={this.navigationView === "online"}
+                      fallback={
+                        <>
+                          {scope}
+                          <div
+                            class="sidebar-session-content"
+                            hidden={Boolean(this.contextualSidebar)}
+                          >
+                            {sessions}
+                          </div>
+                          {this.contextualSidebar?.render(
+                            this.contextualSidebar.data,
+                            this.contextualSidebar.loaderPending,
+                            true,
+                          )}
+                        </>
+                      }
+                    >
+                      {online}
+                    </Show>
+                  }
+                >
+                  {pages}
+                </Show>
+              </div>
+              <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
+                <PanelRefreshStatus
+                  status={this.sessionData.sessionCatalogRefreshStatus}
+                  {...{ className: "sidebar-session-error sidebar-session-catalog-error" }}
+                />
               </Show>
             </div>
-            <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
-              <PanelRefreshStatus
-                status={this.sessionData.sessionCatalogRefreshStatus}
-                {...{ className: "sidebar-session-error sidebar-session-catalog-error" }}
-              />
-            </Show>
+            <div class="sidebar-shell__invite">
+              <Show when={this.communityInvitePresentation === "shown"}>
+                <SidebarCommunityInvite
+                  onDismiss={this.dismissCommunityInvite}
+                  mode={this.context.theme.resolvedMode}
+                />
+              </Show>
+            </div>
+            <div class="sidebar-shell__footer">
+              <Show when={this.devGitBranch}>
+                <openclaw-tooltip prop:content={this.devGitBranch}>
+                  <div class="sidebar-footer-branch">
+                    <span class="sidebar-footer-branch__icon" aria-hidden="true">
+                      <Icon name="gitBranch" />
+                    </span>
+                    <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
+                  </div>
+                </openclaw-tooltip>
+              </Show>
+            </div>
           </div>
-          <div class="sidebar-shell__invite">
-            <Show when={this.communityInvitePresentation === "shown"}>
-              <SidebarCommunityInvite
-                onDismiss={this.dismissCommunityInvite}
-                mode={this.context.theme.resolvedMode}
-              />
-            </Show>
-          </div>
-          <div class="sidebar-shell__footer">
-            <Show when={this.devGitBranch}>
-              <openclaw-tooltip prop:content={this.devGitBranch}>
-                <div class="sidebar-footer-branch">
-                  <span class="sidebar-footer-branch__icon" aria-hidden="true">
-                    <Icon name="gitBranch" />
-                  </span>
-                  <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
-                </div>
-              </openclaw-tooltip>
-            </Show>
-          </div>
-        </div>
-        {menus}
-      </aside>
+          {menus}
+        </aside>
+      </Show>
     );
   }
 }

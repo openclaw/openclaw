@@ -37,7 +37,7 @@ it("updates contextual navigation from its router and retires the subscription o
     createGateway({} as GatewayBrowserClient),
     createSessions("main", []),
   );
-  const element = provider.querySelector("openclaw-app-sidebar")!;
+  const element = provider.querySelector<HTMLElement>("openclaw-app-sidebar")!;
   const owner = getAppSidebarOwner(element);
   expect(owner).toBeDefined();
   sidebar.router = router;

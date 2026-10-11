@@ -201,7 +201,7 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   expect(disconnect).toHaveBeenCalledOnce();
   expect(activeObservers.size).toBe(0);
   probe.reset();
-  provider.append(sidebar);
+  provider.append(sidebar.hostElement);
   await sidebar.updateComplete;
   await revealRunningRows();
   await probe.delivered;

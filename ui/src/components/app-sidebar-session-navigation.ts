@@ -97,6 +97,7 @@ import {
   sidebarRowsInputs,
   SidebarProjectionMemo,
 } from "./sidebar-projection-memo.ts";
+import { restoreSnapshotSections, restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 
 type SidebarRosterSessionSource = {
   result: SessionsListResult | null;
@@ -195,13 +196,19 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   get sessionOwnerFilterId(): string | null {
-    return this.effectiveNavigationScope === "mine"
-      ? (this.context?.gateway.snapshot.selfUser?.id ?? null)
-      : this.sessionOwnerFilter.ownerId;
+    return (
+      this.sidebarSnapshot?.ownerId ??
+      (this.effectiveNavigationScope === "mine"
+        ? (this.context?.gateway.snapshot.selfUser?.id ?? null)
+        : this.sessionOwnerFilter.ownerId)
+    );
   }
 
   get sessionInvolvingMeFilterActive(): boolean {
-    return this.effectiveNavigationScope !== "mine" && this.sessionOwnerFilter.involvingMe;
+    return (
+      this.sidebarSnapshot?.involvingMe ??
+      (this.effectiveNavigationScope !== "mine" && this.sessionOwnerFilter.involvingMe)
+    );
   }
 
   sessionOwnerOptions: readonly SessionOwnerOption[] = [];
@@ -437,6 +444,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   /** Collapsed zones keep full rows for true header counts and status dots. */
   protected zonedVisibleSections(rows: SidebarRecentSession[]): SidebarVisibleSections {
+    if (this.sidebarSnapshot) {
+      return restoreSnapshotSections(this.sidebarSnapshot, this.getRouteSessionKey());
+    }
     return memoizedSidebarSections(
       this.sectionsMemo,
       this,
@@ -622,12 +632,13 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   knownSessionGroups(): string[] {
     return collectKnownSessionGroups(
-      this.context?.sessions.state.groups ?? [],
+      this.sessionData.sessionsResult ? (this.context?.sessions.state.groups ?? []) : [],
       this.sessionData.sessionsResult?.sessions ?? [],
     );
   }
 
-  readonly knownSectionOrder = () => [...(this.context?.sessions.state.sectionOrder ?? [])];
+  readonly knownSectionOrder = () =>
+    this.sessionData.sessionsResult ? [...(this.context?.sessions.state.sectionOrder ?? [])] : [];
 
   knownSessionCatalogIds(): string[] {
     return collectKnownSidebarSessionCatalogIds({
@@ -667,6 +678,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   protected selectedAgentSessionRows(
     navigationState: SidebarSessionNavigationState,
   ): SidebarRecentSession[] {
+    if (this.sidebarSnapshot) {
+      return this.sidebarSnapshot.sessions.map((row) =>
+        restoreSnapshotSession(row, this.getRouteSessionKey()),
+      );
+    }
     const rows = this.rowsMemo.read(
       () => [
         ...sidebarRowsInputs(this, navigationState),

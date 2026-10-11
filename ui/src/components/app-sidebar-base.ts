@@ -19,6 +19,7 @@ import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/session
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 export type AppSidebarProps = {
   basePath: string;
@@ -37,6 +38,7 @@ export type AppSidebarProps = {
   sessionKey: string;
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
+  navigationView: "pages" | "sessions" | "online";
   navigationScope: "mine" | "all";
   navigationCollapsed: boolean;
   onUpdateNavigationScope: ((scope: "mine" | "all") => void) | undefined;
@@ -76,6 +78,7 @@ export const appSidebarProperties = {
   sessionKey: { default: "", attribute: false },
   sidebarEntries: { default: DEFAULT_SIDEBAR_ENTRIES, attribute: false },
   navigationVisible: { default: true, attribute: false },
+  navigationView: { default: "sessions", attribute: false },
   navigationScope: { default: "all", attribute: false },
   navigationCollapsed: { default: false, type: Boolean },
   onUpdateNavigationScope: { default: undefined, attribute: false },
@@ -120,6 +123,7 @@ export abstract class AppSidebarBase {
   declare sessionKey: AppSidebarProps["sessionKey"];
   declare sidebarEntries: AppSidebarProps["sidebarEntries"];
   declare navigationVisible: AppSidebarProps["navigationVisible"];
+  declare navigationView: AppSidebarProps["navigationView"];
   declare navigationScope: AppSidebarProps["navigationScope"];
   declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
   declare onUpdateNavigationScope: AppSidebarProps["onUpdateNavigationScope"];
@@ -153,8 +157,9 @@ export abstract class AppSidebarBase {
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
   contextualSidebar: ContextualSidebar | undefined;
-  navigationView: "pages" | "sessions" | "online" = "sessions";
   personalNavigationEpoch = 0;
+  sidebarSnapshot: SidebarSnapshotModel | null = null;
+  sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
 
   constructor(
     props: AppSidebarProps,
@@ -163,7 +168,10 @@ export abstract class AppSidebarBase {
   ) {
     for (const key of Object.keys(appSidebarProperties)) {
       Object.defineProperty(this, key, {
-        get: () => Reflect.get(props, key),
+        get: () =>
+          key === "sidebarAgentsMode"
+            ? (this.sidebarSnapshot?.mode ?? Reflect.get(props, key))
+            : Reflect.get(props, key),
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },
@@ -204,11 +212,12 @@ export abstract class AppSidebarBase {
     this.finishUpdate = undefined;
   }
   get isConnected(): boolean {
-    return this.attached;
+    // The bridge delays disposal across moves; detached hosts cannot admit new work.
+    return this.attached && this.hostElement.isConnected;
   }
   addController(controller: ReactiveController): void {
     this.controllers.add(controller);
-    if (this.attached) {
+    if (this.isConnected) {
       controller.hostConnected?.();
     }
   }
@@ -233,7 +242,7 @@ export abstract class AppSidebarBase {
     return this.complete;
   }
   prepareRender(): void {
-    if (!this.attached) {
+    if (!this.isConnected) {
       return;
     }
     this.willUpdate();
@@ -242,7 +251,7 @@ export abstract class AppSidebarBase {
     }
   }
   commitRender(): void {
-    if (!this.attached) {
+    if (!this.isConnected) {
       return;
     }
     const finish = this.finishUpdate;
@@ -320,15 +329,21 @@ export abstract class AppSidebarBase {
   }
 
   readNewSessionAccess(): SessionMethodAccess {
-    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, {
-      method: "sessions.create",
-      params: {},
-      sessionScope: true,
-    });
+    return readSessionMethodAccess(
+      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
+      {
+        method: "sessions.create",
+        params: {},
+        sessionScope: true,
+      },
+    );
   }
 
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess {
-    return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, request);
+    return readSessionMethodAccess(
+      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
+      request,
+    );
   }
 
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void {

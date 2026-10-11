@@ -23,11 +23,11 @@ import { selectSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import {
   createContext,
   createGatewayHarness,
+  createSidebarElement,
   createSessionsHarness,
 } from "../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
@@ -59,14 +59,11 @@ async function mountDefaultMine(
   }
   const context = createContext(gateway.gateway, harness.sessions);
   const provider = createApplicationContextProvider(context);
-  const sidebar = document.createElement("openclaw-app-sidebar");
-  if (!(sidebar instanceof AppSidebarSessionNavigationElement)) {
-    throw new Error("Expected registered sidebar");
-  }
+  const sidebar = await createSidebarElement();
   // Model the shell supplying the personal preference before first render.
   sidebar.navigationScope = "mine";
   sidebar.sidebarEntries = [];
-  provider.append(sidebar);
+  provider.append(sidebar.hostElement);
   document.body.append(provider);
   await settleLitElement(sidebar);
   return { sidebar, gateway, harness, provider };
@@ -192,12 +189,9 @@ describe("saved All filters in the personal Sessions view", () => {
     expect(sidebar.sidebarSessionOwnerFilter()).toEqual({ ownerId: "viewer", involvingMe: false });
     expect(stored()).toEqual(filter);
     sidebar.remove();
-    const reloaded = document.createElement("openclaw-app-sidebar");
-    if (!(reloaded instanceof AppSidebarSessionNavigationElement)) {
-      throw new Error("Expected sidebar");
-    }
+    const reloaded = await createSidebarElement();
     reloaded.navigationScope = "all";
-    provider.append(reloaded);
+    provider.append(reloaded.hostElement);
     await settleLitElement(reloaded);
     expect(reloaded.sidebarSessionOwnerFilter()).toEqual(filter);
     await reloaded.sidebarMenus.preloadMenuRenderer();

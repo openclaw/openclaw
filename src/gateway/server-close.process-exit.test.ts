@@ -6,6 +6,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -16,9 +17,7 @@ import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
 
-it("keeps accepted terminal writes and the clean-close receipt ahead of process exit", async ({
-  signal,
-}) => {
+it("settles accepted writes and all cleanup before Gateway close resolves", async ({ signal }) => {
   const state = await createOpenClawTestState({ scenario: "minimal" });
   const scheduler = createTestGatewayScheduler();
   const terminalOwner = lifecyclePersistence.createSessionLifecyclePersistenceOwner(scheduler);
@@ -27,21 +26,25 @@ it("keeps accepted terminal writes and the clean-close receipt ahead of process 
   const terminalDraining = createDeferredCore();
   const terminalDrained = createDeferredCore();
   const releaseMemory = createDeferredCore();
-  const exitEntered = createDeferredCore();
-  const releaseExit = createDeferredCore();
-  const onProcessExitReady = vi.fn(async () => {
-    exitEntered.resolve();
-    await releaseExit.promise;
-  });
+  const runtimesDrained = createDeferredCore();
+  const schedulerStopping = createDeferredCore();
+  const releaseScheduler = createDeferredCore();
+  const shutdownHook = vi.fn();
+  const preRestartHook = vi.fn();
+  registerInternalHook("gateway:shutdown", shutdownHook);
+  registerInternalHook("gateway:pre-restart", preRestartHook);
   const createDeps = createGatewayCloseTestDepsFactory({
     disposeAllBundleLspRuntimes: async () => {},
     stopGmailWatcher: async () => {},
     disposeAllCodeModeRuns: async () => {},
     closeProviderTransportDispatcherPool: async () => {},
-    drainRetainedEmbeddingProviders: async () => {},
+    drainRetainedEmbeddingProviders: async () => {
+      runtimesDrained.resolve();
+    },
   });
   const params = createDeps({
-    drainPersistence: async () => {
+    channelIds: ["telegram"],
+    agentUnsub: async () => {
       terminalDraining.resolve();
       await terminalOwner.drain();
       terminalDrained.resolve();
@@ -50,6 +53,11 @@ it("keeps accepted terminal writes and the clean-close receipt ahead of process 
       await releaseMemory.promise;
       return [];
     },
+    stopScheduler: vi.fn(async () => {
+      schedulerStopping.resolve();
+      await releaseScheduler.promise;
+      await scheduler.stop();
+    }),
   });
   let heldWriter: ReturnType<typeof patchSessionEntryCore> | undefined;
   let terminalWrite: Promise<void> | undefined;
@@ -57,10 +65,10 @@ it("keeps accepted terminal writes and the clean-close receipt ahead of process 
   let closing: Promise<unknown> | undefined;
   try {
     const options = { agentId: "main", env: state.env };
-    const sessionKey = "agent:main:process-exit";
+    const sessionKey = "agent:main:natural-close";
     const event = {
-      runId: "process-exit-run",
-      sessionId: "process-exit-session",
+      runId: "natural-close-run",
+      sessionId: "natural-close-session",
       seq: 1,
       stream: "lifecycle",
       ts: 2_000,
@@ -99,17 +107,19 @@ it("keeps accepted terminal writes and the clean-close receipt ahead of process 
       reason: "gateway restarting",
       restartExpectedMs: 1_500,
       drainTimeoutMs: 0,
-      onProcessExitReady,
     }).then((preparation) => completeGatewayClose(params, preparation));
     await withinTest(
       awaitGateBeforeSettlement(
         terminalDraining.promise,
         closing,
-        "Gateway skipped accepted terminal persistence before exit",
+        "Gateway skipped accepted terminal persistence before close",
       ),
       signal,
     );
-    expect(onProcessExitReady).not.toHaveBeenCalled();
+    expect(shutdownHook).toHaveBeenCalledTimes(1);
+    expect(preRestartHook).toHaveBeenCalledTimes(1);
+    expect(params.stopChannel).toHaveBeenCalledWith("telegram");
+    expect(params.stopScheduler).not.toHaveBeenCalled();
     expect(agent.db.isOpen).toBe(true);
     releaseWriter.resolve();
     await withinTest(
@@ -120,23 +130,32 @@ it("keeps accepted terminal writes and the clean-close receipt ahead of process 
       resolvedWidgetName: "accepted",
       widgets: [{ name: "accepted" }],
     });
-    expect(onProcessExitReady).not.toHaveBeenCalled();
+    await withinTest(
+      awaitGateBeforeSettlement(
+        runtimesDrained.promise,
+        closing,
+        "Gateway skipped runtime cleanup before retiring memory",
+      ),
+      signal,
+    );
+    expect(params.stopScheduler).not.toHaveBeenCalled();
     expect(agent.db.isOpen).toBe(true);
     releaseMemory.resolve();
     await withinTest(
-      awaitGateBeforeSettlement(exitEntered.promise, closing, "Gateway skipped process exit"),
+      awaitGateBeforeSettlement(
+        schedulerStopping.promise,
+        closing,
+        "Gateway skipped scheduler settlement before database close",
+      ),
       signal,
     );
+    expect(agent.db.isOpen).toBe(true);
+    releaseScheduler.resolve();
+    await withinTest(closing, signal);
+    expect(params.stopScheduler).toHaveBeenCalledTimes(1);
     expect(agent.db.isOpen).toBe(false);
     expect(readOpenClawAgentIntegrityVerification(agent.path, state.env)?.clean_close).toBe(1);
     expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
-    expect(() => openOpenClawAgentDatabase(options)).toThrow(
-      "Agent database resources are closing",
-    );
-    expect(params.stopChannel).not.toHaveBeenCalled();
-    expect(params.stopScheduler).not.toHaveBeenCalled();
-    releaseExit.resolve();
-    await withinTest(closing, signal);
     expect(loadSessionEntry(target)).toMatchObject({
       label: "accepted before shutdown",
       status: "done",
@@ -146,8 +165,10 @@ it("keeps accepted terminal writes and the clean-close receipt ahead of process 
   } finally {
     releaseWriter.resolve();
     releaseMemory.resolve();
-    releaseExit.resolve();
+    releaseScheduler.resolve();
     await Promise.allSettled([heldWriter, boardWrite, terminalWrite, closing]);
+    unregisterInternalHook("gateway:shutdown", shutdownHook);
+    unregisterInternalHook("gateway:pre-restart", preRestartHook);
     await scheduler.stop();
     await state.cleanup();
   }

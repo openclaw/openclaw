@@ -12,8 +12,8 @@ import {
 import "../test-helpers/app-sidebar-suite.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
-import "./app-sidebar.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import "./app-sidebar.tsx";
 
 async function fixture(onlySelf = false) {
   const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -39,9 +39,6 @@ async function fixture(onlySelf = false) {
     result.ownerSessionCounts = [{ profileId: "self", open: result.sessions.length, running: 0 }];
   }
   const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-  if (!(sidebar instanceof AppSidebarSessionNavigationElement)) {
-    throw new Error("expected sidebar");
-  }
   sidebar.connected = true;
   sidebar.sidebarEntries = [];
   sidebar.onUpdateSidebarEntries = (entries) => {
@@ -240,8 +237,9 @@ describe("personal navigation rail", () => {
     expect(sidebar.navigationScope).toBe("mine");
     expect(persist).not.toHaveBeenCalled();
     gateway.publish({ selfUser: { id: "self", name: "Self" } });
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
+    await waitForSolid(() => {
+      expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
+    });
     expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).toBeNull();
     expect(sidebar.querySelector('[aria-label="Mine"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(sidebar.navigationScope).toBe("mine");
@@ -394,7 +392,7 @@ describe("personal navigation rail", () => {
     sidebar.remove();
     await sidebar.updateComplete;
     expect(catalogQueries()).toHaveLength(0);
-    parent.append(sidebar);
+    parent.append(sidebar.hostElement);
     await sidebar.updateComplete;
     expect(catalogQueries()).toHaveLength(2);
     expect(sidebar.querySelector(".sidebar-pages")).not.toBeNull();

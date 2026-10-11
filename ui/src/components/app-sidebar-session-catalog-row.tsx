@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, createEffect, Show } from "solid-js";
 import type {
   SessionCatalog,
@@ -158,11 +159,11 @@ export function renderCatalogSessionRow(
   const openTerminal = () => params.onOpenTerminal(catalogKey(), params.newSessionAgentId);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
     params.onOpenMenu(catalogMenu(), x, y, trigger);
-  const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
+  const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
     handleContextMenuEvent(
       event,
       event instanceof KeyboardEvent
-        ? (event.currentTarget as HTMLElement).querySelector("[data-catalog-session-menu]")
+        ? event.currentTarget.querySelector<HTMLElement>("[data-catalog-session-menu]")
         : null,
       (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
     );
@@ -244,9 +245,9 @@ export function renderCatalogSessionRow(
             aria-label={t("chat.sidebar.openSessionMenu")}
             aria-haspopup="menu"
             aria-expanded={String(menuOpen())}
-            onClick={(event: MouseEvent) => {
+            onClick={(event) => {
               event.stopPropagation();
-              const trigger = event.currentTarget as HTMLElement;
+              const trigger = event.currentTarget;
               const rect = trigger.getBoundingClientRect();
               openMenu(rect.right, rect.bottom + 4, trigger);
             }}

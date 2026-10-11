@@ -47,9 +47,51 @@ import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
 } from "./main-session-restart-recovery-marking.js";
-import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
+import {
+  discoverRestartRecoveryStoreTargets,
+  mainSessionRecoveryLog,
+} from "./main-session-restart-recovery-shared.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
+
+it("reports why supplied shutdown candidates could not be marked", async () => {
+  const stateDir = sessionDirs.make();
+  const storePath = path.join(stateDir, "sessions.json");
+  const sessionKey = "agent:main:main";
+  await replaceSessionEntry(
+    { storePath, sessionKey },
+    {
+      sessionId: "main-session",
+      updatedAt: 1,
+      lifecycleRunId: "main-run",
+    },
+  );
+  const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+  try {
+    expect(
+      await markRestartAbortedMainSessions({
+        cfg: { session: { store: storePath } },
+        stateDir,
+        resolveGatewayContext: () => undefined,
+        activeRuns: [
+          {
+            sessionKey,
+            sessionId: "main-session",
+            runId: "main-run",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          },
+        ],
+        isActiveRun: () => false,
+      }),
+    ).toEqual({ marked: 0, skipped: 0 });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("activeRuns=1 skipped=0 skipReason=owner_changed"),
+    );
+    expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toBeUndefined();
+  } finally {
+    warn.mockRestore();
+  }
+});
 
 it("keeps healthy stores recoverable when an earlier startup mark fails", async () => {
   await withOpenClawTestState({ label: "recovery-mark-failure" }, async (state) => {

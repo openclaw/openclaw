@@ -20,6 +20,7 @@ import {
 } from "./app-sidebar-render.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { renderSidebarReorderMenu } from "./sidebar-reorder.tsx";
+import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
 import {
   renderSessionLeadingState,
@@ -31,7 +32,9 @@ type SidebarZone = ReturnType<AppSidebarRenderHost["reconciledSidebarZone"]>;
 export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   const zone = () => host.reconciledSidebarZone();
   const pins = createMemo(() =>
-    (normalizeSidebarEntries(host.sidebarEntries) ?? []).map((entry) => parseSidebarEntry(entry)!),
+    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).map(
+      (entry) => parseSidebarEntry(entry)!,
+    ),
   );
   const views = ["pages", "sessions", "online"] as const;
   const viewLabel = (view: (typeof views)[number]) =>
@@ -111,7 +114,10 @@ function renderRailPin(
       : undefined;
   const online = createMemo(() =>
     entry.type === "person"
-      ? projectOnlinePresenceViewers(host.sessionData.presencePayload).find(
+      ? (
+          host.sidebarSnapshot?.onlineUsers ??
+          projectOnlinePresenceViewers(host.sessionData.presencePayload)
+        ).find(
           (person) => person.identity?.type === "profile" && person.identity.id === entry.profileId,
         )
       : undefined,
@@ -243,24 +249,26 @@ function renderRailPin(
         drop()?.entry === serialized ? `sidebar-zone-entry--drop-${drop()?.position}` : undefined,
       ]}
       data-sidebar-entry={serialized}
-      draggable="true"
+      draggable={String(!host.sidebarSnapshot)}
       onDragStart={(event) => host.sessionOrganizer.startSidebarEntryDrag(event, entry)}
       onDragEnd={() => host.sessionOrganizer.finishSidebarEntryDrag()}
       onDragOver={(event) => host.sessionOrganizer.handleSidebarZoneDragOver(event, serialized)}
       onDrop={(event) => host.sessionOrganizer.handleSidebarZoneDrop(event, serialized)}
     >
       <openclaw-tooltip prop:content={label()}>{content}</openclaw-tooltip>
-      {renderSidebarReorderMenu({
-        get label() {
-          return label();
-        },
-        kind: "entry",
-        onRemove: () => host.sessionOrganizer.removeSidebarEntry(serialized),
-        onMove: async (target, position) => {
-          host.sessionOrganizer.writeSidebarEntryAt(serialized, target, position);
-          await host.updateComplete;
-        },
-      })}
+      <Show when={!host.sidebarSnapshot}>
+        {renderSidebarReorderMenu({
+          get label() {
+            return label();
+          },
+          kind: "entry",
+          onRemove: () => host.sessionOrganizer.removeSidebarEntry(serialized),
+          onMove: async (target, position) => {
+            host.sessionOrganizer.writeSidebarEntryAt(serialized, target, position);
+            await host.updateComplete;
+          },
+        })}
+      </Show>
     </div>
   );
 }
@@ -269,10 +277,19 @@ function renderRailPin(
 export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
   const zone = () => host.reconciledSidebarZone();
   const dashboards = () => host.navigationCatalog.dashboards;
+  const dashboardRows = createMemo(() =>
+    host.sidebarSnapshot
+      ? host.sidebarSnapshot.pages.map((row) =>
+          restoreSnapshotSession(row, host.getRouteSessionKey()),
+        )
+      : (dashboards()?.result?.sessions ?? []).map((row) =>
+          host.getSessionNavigationState().toSidebarSession(row),
+        ),
+  );
   const rows = createMemo(() => {
     const result = new Map(zone().sessionRows);
-    for (const row of dashboards()?.result?.sessions ?? []) {
-      result.set(row.key, host.getSessionNavigationState().toSidebarSession(row));
+    for (const row of dashboardRows()) {
+      result.set(row.key, row);
     }
     return result;
   });
@@ -286,7 +303,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
     ])) {
       result.push({ type: "plugin", key });
     }
-    for (const row of dashboards()?.result?.sessions ?? []) {
+    for (const row of dashboardRows()) {
       result.push({ type: "session", key: row.key });
     }
     return result;
@@ -310,6 +327,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
               <button
                 type="button"
                 class="sidebar-pages__pin"
+                disabled={Boolean(host.sidebarSnapshot)}
                 aria-label={t(host.sidebarEntries.includes(key) ? "nav.unpin" : "nav.pin")}
                 onClick={() => {
                   if (host.sidebarEntries.includes(key)) {
@@ -341,12 +359,15 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
 
 export function renderSidebarScope(host: AppSidebarRenderHost): JSX.Element {
   const allFilter = () => host.sessionOwnerFilter;
+  const ownerId = () => (host.sidebarSnapshot ? host.sidebarSnapshot.ownerId : allFilter().ownerId);
+  const involvingMe = () => host.sidebarSnapshot?.involvingMe ?? allFilter().involvingMe;
+  const selfId = () =>
+    host.sidebarSnapshot?.footer?.id ?? host.sessionDataContext?.gateway.snapshot.selfUser?.id;
   const redundant = () =>
     host.sessionsStatusFilter === "active" &&
-    host.navigationCatalog.scopesEquivalent &&
-    !allFilter().involvingMe &&
-    (!allFilter().ownerId ||
-      allFilter().ownerId === host.sessionDataContext?.gateway.snapshot.selfUser?.id);
+    (host.sidebarSnapshot?.scopesEquivalent ?? host.navigationCatalog.scopesEquivalent) &&
+    !involvingMe() &&
+    (!ownerId() || ownerId() === selfId());
   return (
     <Show when={!redundant()}>
       <div class="sidebar-navigation-scope" role="group" aria-label={titleForRoute("sessions")}>

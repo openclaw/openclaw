@@ -230,6 +230,7 @@ export function renderSidebarCatalogViewMenuForController(
               controller.setFilterMenuView(view);
             } else if (value?.startsWith("grouping:")) {
               host.setCatalogProjectGrouping(
+                // SAFETY: This owned menu emits grouping values only from groupingOptions below.
                 value.slice("grouping:".length) as CatalogProjectGrouping,
               );
               controller.closePositionedMenu("catalogView", { restoreFocus: true });
@@ -376,8 +377,8 @@ export function renderSidebarSessionSortMenuForController(
                       type="button"
                       id="sidebar-sessions-reset"
                       class="sidebar-session-menu-reset"
-                      onClick={(event: Event) => {
-                        (event.currentTarget as HTMLElement)
+                      onClick={(event) => {
+                        event.currentTarget
                           .closest(".sidebar-session-filter-panel")
                           ?.querySelector<HTMLElement>(
                             '#sidebar-sessions-status input[type="radio"][value="active"]',
@@ -506,8 +507,10 @@ export function renderSidebarSessionSortMenuForController(
                           { value: "none", label: t("sessionsView.groupByNone") },
                         ];
                       },
-                      onChange: (value) =>
-                        host.sessionOrganizer.setSessionsGrouping(value as SidebarSessionsGrouping),
+                      onChange: (value) => {
+                        // SAFETY: This picker emits only the category, project, person, and none options above.
+                        host.sessionOrganizer.setSessionsGrouping(value as SidebarSessionsGrouping);
+                      },
                     })}
                 {renderPicker({
                   id: "sidebar-sessions-sort",

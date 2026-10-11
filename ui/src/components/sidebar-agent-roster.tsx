@@ -1,6 +1,6 @@
 import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import type { ReactiveController } from "lit";
-import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onSettled, Show, untrack } from "solid-js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
@@ -40,6 +40,26 @@ registerEnglishCatalog(registerAgentsHomeEnglish);
 type RosterHost = AppSidebarRenderHost & SessionListHost;
 type RosterProps = { host: RosterHost; active?: boolean };
 
+function cachedRosterCards(host: RosterHost) {
+  return host.sidebarSnapshot?.cards.map((card) => ({
+    ...card,
+    avatar: card.avatar ?? null,
+    textAvatar: card.textAvatar ?? null,
+    role: card.role,
+    model: card.model,
+    activeNow: false,
+    unreadCount: 0,
+    lastActiveAt: 0,
+    preview: undefined,
+    target: sessionNavigationTarget({
+      face: "chat",
+      sessionKey: card.mainKey,
+      fallbackAgentId: card.id,
+      basePath: host.basePath,
+    }),
+  }));
+}
+
 function useRoster(props: RosterProps) {
   const application = useApplication();
   const currentHost = createMemo(() => props.host);
@@ -70,6 +90,10 @@ function useRoster(props: RosterProps) {
     return () => avatars.hostDisconnected();
   });
   const cards = createMemo(() => {
+    const cached = cachedRosterCards(host());
+    if (cached) {
+      return avatars.withActiveRoutes(() => cached);
+    }
     avatarRevision();
     const currentCards = snapshot().cards;
     const currentContext = context();
@@ -100,10 +124,20 @@ function SidebarAgentRosterContent(
   const roster = useRoster(props);
   const settingsScope = () => roster.gateway().read().connection.gatewayUrl;
   const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(
-    new Set(loadSettings(settingsScope()).sidebarCollapsedAgentIds ?? []),
+    new Set(
+      untrack(() => props.host.sidebarSnapshot?.collapsedAgentIds) ??
+        loadSettings(settingsScope()).sidebarCollapsedAgentIds ??
+        [],
+    ),
   );
   createEffect(settingsScope, (gatewayUrl) => {
-    setCollapsed(new Set(loadSettings(gatewayUrl).sidebarCollapsedAgentIds ?? []));
+    setCollapsed(
+      new Set(
+        props.host.sidebarSnapshot?.collapsedAgentIds ??
+          loadSettings(gatewayUrl).sidebarCollapsedAgentIds ??
+          [],
+      ),
+    );
   });
   createEffect(
     () => [roster.store(), props.involvingMe ?? false] as const,
@@ -386,9 +420,11 @@ function SidebarAgentRosterContent(
   );
 }
 
-function SidebarNewSessionMenuContent(props: RosterProps) {
+function SidebarNewSessionMenuContent(
+  props: RosterProps & { access: ReturnType<RosterHost["readNewSessionAccess"]> },
+) {
   const roster = useRoster(props);
-  const access = () => roster.host().readNewSessionAccess();
+  const access = () => props.access;
   let dropdown!: HTMLElement & { open: boolean };
   return (
     <>
@@ -487,30 +523,38 @@ export const SidebarAgentRoster = defineSolidBridge<AgentRosterBridgeProps>(
   },
 );
 
-export const SidebarNewSessionMenu = defineSolidBridge<RosterBridgeProps>(
+export const SidebarNewSessionMenu = defineSolidBridge<
+  RosterBridgeProps & { access: ReturnType<RosterHost["readNewSessionAccess"]> | null }
+>(
   "openclaw-sidebar-new-session-menu",
   (props) => (
     <Show when={props.host}>
-      {(host) => <SidebarNewSessionMenuContent host={host()} active={props.active} />}
+      {(host) => (
+        <Show when={props.access}>
+          {(access) => (
+            <SidebarNewSessionMenuContent host={host()} active={props.active} access={access()} />
+          )}
+        </Show>
+      )}
     </Show>
   ),
   {
     properties: {
       host: { default: null, attribute: false },
       active: { default: true, type: Boolean },
+      access: { default: null, attribute: false },
     },
   },
 );
 
 export function renderSidebarPinnedSession(host: RosterHost, session: () => SidebarRecentSession) {
   const agentId = createMemo(() => host.sessionNavigationAgentId(session()));
-  const card = createMemo(() =>
-    host.sessionDataContext
-      ? rosterActivityStore(host.sessionDataContext).snapshot.cards.find(
-          (agent) => agent.id === agentId(),
-        )
-      : undefined,
-  );
+  const card = createMemo(() => {
+    const cards =
+      cachedRosterCards(host) ??
+      (host.sessionDataContext ? rosterActivityStore(host.sessionDataContext).snapshot.cards : []);
+    return cards.find((agent) => agent.id === agentId());
+  });
   return renderSessionTree({
     host,
     get session() {

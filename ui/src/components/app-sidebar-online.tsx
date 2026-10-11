@@ -2,21 +2,48 @@ import type { JSX } from "@solidjs/web";
 import { Dynamic } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import {
   presenceViewerActivity,
   presenceActivityLabel,
   presenceViewerLabel,
   projectOnlinePresenceViewers,
-  type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
+import { sidebarOnlineCountFor, SidebarOnlineOrder } from "./sidebar-online-order.ts";
 import { Icon } from "./solid/icon.tsx";
 
-const onlineFaces = new WeakMap<AppSidebarRenderHost, readonly PresenceViewer[]>();
+const onlineOrders = new WeakMap<
+  HTMLElement,
+  {
+    gateway: ApplicationGateway | undefined;
+    revision: number | undefined;
+    viewerId: string | undefined;
+    order: SidebarOnlineOrder;
+  }
+>();
+
+export function sidebarOnlineOrder(host: AppSidebarRenderHost): SidebarOnlineOrder {
+  const element = host.hostElement;
+  const gateway = host.sessionDataContext?.gateway;
+  const revision = gateway?.connectionRevision;
+  const viewerId = host.sidebarSnapshot?.footer?.id ?? gateway?.snapshot.selfUser?.id;
+  let cached = onlineOrders.get(element);
+  if (
+    !cached ||
+    cached.gateway !== gateway ||
+    cached.revision !== revision ||
+    cached.viewerId !== viewerId
+  ) {
+    cached = { gateway, revision, viewerId, order: new SidebarOnlineOrder() };
+    onlineOrders.set(element, cached);
+  }
+  return cached.order;
+}
 
 export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element {
   const sectionId = "online";
@@ -25,49 +52,26 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
     team() ? !host.teamOnlineExpanded : host.collapsedSessionSections.has(sectionId),
   );
   const label = createMemo(() => t("presence.rosterTitle"));
-  const onlineUsers = createMemo(() => {
-    const users = projectOnlinePresenceViewers(host.sessionData.presencePayload);
-    const previous = onlineFaces.get(host);
-    // Retain equal facepile inputs while rechecking the activity ordering.
-    if (
-      previous?.length === users.length &&
-      users.every((user, index) => user === previous[index])
-    ) {
-      return previous;
-    }
-    onlineFaces.set(host, users);
-    return users;
+  const snapshot = () => host.sidebarSnapshot;
+  const online = createMemo(() => {
+    const saved = snapshot();
+    return sidebarOnlineOrder(host).resolve({
+      users:
+        saved?.onlineUsers ??
+        (host.sessionData.presencePayload
+          ? projectOnlinePresenceViewers(host.sessionData.presencePayload)
+          : null),
+      counts: saved ? new Map(saved.onlineCounts) : host.sessionData.ownerCounts.counts,
+      countsFailed: !saved && host.sessionData.ownerCounts.error !== null,
+      presentation: saved ? "snapshot" : "live",
+      sortMode: host.people.sortMode,
+      statusFilter: host.people.statusFilter,
+    });
   });
-  const counts = createMemo(() => host.sessionData.ownerCounts.counts, { equals: false });
-  const countsFor = (user: PresenceViewer) =>
-    counts() && user.identity?.type === "profile"
-      ? (counts()?.get(user.identity.id) ?? { open: 0, running: 0 })
-      : null;
-  // The default keeps presence groups and running-first ordering; explicit count sorts span groups.
-  const now = () => Date.now();
-  const activityOrder = { active: 0, idle: 1, unknown: 2 };
-  const running = (user: PresenceViewer) => Number((countsFor(user)?.running ?? 0) > 0);
+  const onlineUsers = () => online().users;
+  const counts = () => online().counts;
+  const listUsers = () => online().listUsers;
   const filtered = createMemo(() => host.people.statusFilter === "running");
-  const listUsers = createMemo(() =>
-    onlineUsers()
-      .filter((user) => !filtered() || running(user) > 0)
-      .toSorted((a, b) => {
-        const order =
-          host.people.sortMode === "presence"
-            ? activityOrder[presenceViewerActivity(a, now())] -
-                activityOrder[presenceViewerActivity(b, now())] || running(b) - running(a)
-            : host.people.sortMode === "name"
-              ? 0
-              : (countsFor(b)?.[host.people.sortMode] ?? -1) -
-                (countsFor(a)?.[host.people.sortMode] ?? -1);
-        return (
-          order ||
-          presenceViewerLabel(a).localeCompare(presenceViewerLabel(b), undefined, {
-            sensitivity: "base",
-          })
-        );
-      }),
-  );
   const routing = personActivityRouting(
     { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
     () => host.dismissTransientMenus(),
@@ -150,7 +154,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
               {(readUser) => {
                 const user = readUser;
                 const activityState = () => presenceViewerActivity(user());
-                const workload = () => countsFor(user());
+                const workload = () => sidebarOnlineCountFor(counts(), user());
                 const workloadLabel = () =>
                   workload()
                     ? t("presence.sessions.counts", {
@@ -164,7 +168,9 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                 return (
                   <div
                     class="sidebar-online__row"
-                    draggable={user().identity?.type === "profile" ? "true" : "false"}
+                    draggable={
+                      !snapshot() && user().identity?.type === "profile" ? "true" : "false"
+                    }
                     onDragStart={(event: DragEvent) => {
                       const identity = user().identity;
                       if (identity?.type === "profile") {
@@ -244,6 +250,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                       <button
                         type="button"
                         class="sidebar-pages__pin"
+                        disabled={Boolean(snapshot())}
                         aria-label={t("nav.pin")}
                         onClick={() => {
                           const identity = user().identity;

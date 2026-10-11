@@ -39,10 +39,6 @@ function isChannelModelOverridePath(path: string): boolean {
   return path.includes(".modelByChannel.");
 }
 
-function isModelPolicyAllowPath(path: string): boolean {
-  return path.endsWith(".modelPolicy.allow");
-}
-
 function isMediaModelPath(path: string): boolean {
   return ["image", "video", "music"].includes(pathKey(path)) && path.includes(".mediaModels.");
 }
@@ -81,7 +77,9 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
     return value.some((entry, index) =>
       typeof entry === "string" &&
       key &&
-      (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
+      (MODEL_REF_ARRAY_KEYS.has(key) ||
+        path.endsWith(".modelPolicy.allow") ||
+        path.endsWith(".modelPolicy.deny"))
         ? Boolean(normalizeKnownModelRef(entry))
         : scanKnownModelRefs(entry, undefined, `${path}.${index}`),
     );
@@ -382,7 +380,9 @@ export function rewriteModelRefs(
     const next = value.map((entry, index) => {
       if (
         typeof entry === "string" &&
-        (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
+        (MODEL_REF_ARRAY_KEYS.has(key) ||
+          path.endsWith(".modelPolicy.allow") ||
+          path.endsWith(".modelPolicy.deny"))
       ) {
         const rewritten = rewriteModelRefString(entry, `${path}.${index}`, changes, normalize);
         changed ||= rewritten !== entry;

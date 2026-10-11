@@ -105,6 +105,7 @@ export function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
   if (event.target instanceof HTMLInputElement && (event.key === "Home" || event.key === "End")) {
     return false;
   }
+  // SAFETY: Sidebar dropdown keydown handlers call this with their HTMLElement as currentTarget.
   const dropdown = (event.currentTarget as HTMLElement).closest("wa-dropdown");
   const items = sidebarMenuItems(dropdown);
   const footer = dropdown?.querySelector<HTMLElement>(".sidebar-identity-menu__footer");
@@ -384,10 +385,8 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
           aria-label={t("agentChip.search")}
           placeholder={t("agentChip.search")}
           prop:value={params.query}
-          onInput={(event: InputEvent) => {
-            // SAFETY: This handler is attached directly to the native search input.
-            const input = event.currentTarget as HTMLInputElement;
-            params.onQueryChange(input.value);
+          onInput={(event) => {
+            params.onQueryChange(event.currentTarget.value);
           }}
         />
       ) : undefined}

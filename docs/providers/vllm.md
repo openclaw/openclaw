@@ -322,7 +322,7 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
     }
     ```
 
-    `timeoutSeconds` applies to vLLM model HTTP requests only: connection setup, response headers, body streaming, and the total guarded-fetch abort. It also raises the LLM idle/stream watchdog ceiling above the implicit ~120s default for this provider. Prefer this over increasing `agents.defaults.timeoutSeconds`, which controls the whole agent run.
+    `timeoutSeconds` applies to vLLM model HTTP requests only: connection setup, response headers, body streaming, and the total guarded-fetch abort. It also raises the LLM idle/stream watchdog ceiling above the implicit ~120s default for this provider. Prefer this over increasing `agents.defaults.timeoutSeconds`, which controls each model attempt's execution budget. A lower agent or run-specific timeout still caps the attempt; each configured fallback gets a fresh budget.
 
   </Accordion>
 
