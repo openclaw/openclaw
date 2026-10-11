@@ -18,8 +18,9 @@ const journalReadState = vi.hoisted(() => ({
   gates: [] as Array<() => void>,
 }));
 
-// mock-isolation: The journal read transport stands in for state-read workers so the
+// The journal read transport stands in for state-read workers so the
 // fixture can observe admission concurrency without spawning real workers.
+// mock-isolation: the real state-read worker transport must stay unmocked at the export level; this fixture intercepts only the journal read entry point.
 vi.mock("./agent-deletion-journal.read.js", () => ({
   readAgentDeletionJournalStatusInWorker: vi.fn(async () => {
     journalReadState.calls += 1;
