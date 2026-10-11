@@ -160,10 +160,13 @@ function prepareSqliteWorkerOperationAdmission(
           schemaLease,
         });
       };
-      assertStateDatabaseAccessAllowed(databasePath, {
-        maintenanceScope: job.maintenanceScope,
-        schemaLease,
-      });
+      // Retirement must drain even after ordinary database access is revoked.
+      if (job.request.type !== "close") {
+        assertStateDatabaseAccessAllowed(databasePath, {
+          maintenanceScope: job.maintenanceScope,
+          schemaLease,
+        });
+      }
       retained.admission.bindDatabaseAuthority({
         databasePath,
         assertRequest: assertDispatchable,
