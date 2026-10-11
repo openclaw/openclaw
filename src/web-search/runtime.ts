@@ -73,18 +73,14 @@ function hasEntryCredential(
     resolveEnvValue: (configuredEnvVarId) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
       readWebProviderEnvValue(provider.envVars),
-    resolveProviderAuthValue: (providerId) => {
-      if (!authStore) {
-        resolveAuthProfileStoreSource?.();
-      }
-      return hasAuthProfileForProvider({
+    resolveProviderAuthValue: (providerId) =>
+      hasAuthProfileForProvider({
         provider: providerId,
         authStore,
-        authProfileStoreSource: resolveAuthProfileStoreSource?.(),
+        authProfileStoreSource: authStore ? undefined : resolveAuthProfileStoreSource?.(),
         agentDir:
           agentDir?.trim() || (authStore ? undefined : resolveDefaultAgentDir(config ?? {})),
-      });
-    },
+      }),
   });
 }
 

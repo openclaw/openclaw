@@ -985,7 +985,7 @@ describe("createImageGenerateTool", () => {
       createDeferred<
         Awaited<ReturnType<typeof taskStatus.findDuplicateGuardImageGenerationTaskForSession>>
       >();
-    const lookupStarted = createDeferred<void>();
+    const lookupStarted = createDeferred();
     const findDuplicate = vi
       .spyOn(taskStatus, "findDuplicateGuardImageGenerationTaskForSession")
       .mockImplementation(() => {

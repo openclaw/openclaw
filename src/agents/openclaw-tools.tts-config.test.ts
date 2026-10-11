@@ -169,6 +169,7 @@ describe("createOpenClawTools context wiring", () => {
             agentSessionKey: taskSessionKey,
             requesterRunSessionKey: runSessionKey,
           }),
+          true,
         );
       }
     },

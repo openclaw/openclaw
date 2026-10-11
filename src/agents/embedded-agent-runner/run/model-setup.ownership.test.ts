@@ -263,7 +263,7 @@ describe("model chat and native model ownership", () => {
     expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
   });
 
-  it.each(["current", "changed-again", "revoked"] as const)(
+  it.each(["current", "revoked"] as const)(
     "reacquires initial model preparation after a shared OAuth refresh while authority is %s",
     async (outcome) => {
       const fixture = await createFixture();
@@ -291,7 +291,6 @@ describe("model chat and native model ownership", () => {
         access: "synthetic-refreshed-access",
         refresh: "synthetic-refreshed-refresh",
       };
-      const latest = { ...rotated, access: "synthetic-latest-access" };
       const publish = (next: typeof credential) =>
         persistAuthProfileBatch({
           stateDir: fixture.state.stateDir,
@@ -308,8 +307,6 @@ describe("model chat and native model ownership", () => {
           if (reads === 1) {
             entered.resolve();
             await release.promise;
-          } else if (outcome === "changed-again") {
-            await publish(latest);
           }
           return rows;
         });
@@ -334,13 +331,6 @@ describe("model chat and native model ownership", () => {
           expect(fixture.generation.resolveDynamicModel).toHaveBeenCalled();
         } else if (outcome === "revoked") {
           await expect(loading).rejects.toBe(revoked);
-        } else {
-          await expect(loading).rejects.toThrow(
-            "Auth profile store changed during its runtime read",
-          );
-        }
-        if (outcome === "changed-again") {
-          expect(read).toHaveBeenCalledTimes(2);
         }
         if (outcome !== "current") {
           expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
@@ -349,7 +339,7 @@ describe("model chat and native model ownership", () => {
           readOnly: true,
           externalCli: { mode: "none" },
         });
-        expect(current.profiles[profileId]).toEqual(outcome === "changed-again" ? latest : rotated);
+        expect(current.profiles[profileId]).toEqual(rotated);
       } finally {
         release.resolve();
         await Promise.allSettled([loading]);

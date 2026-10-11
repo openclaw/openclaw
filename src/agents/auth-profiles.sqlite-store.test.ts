@@ -92,7 +92,7 @@ describe("auth profile sqlite store", () => {
         profileId: "test:original",
         credential: { type: "api_key", provider: "test", key: "original-key" },
       });
-      const options = { inheritedAuthDir: agentDir, externalCli: { mode: "none" as const } };
+      const options = { externalCli: { mode: "none" as const } };
       expect((await ensureAuthProfileStoreAsync(agentDir, options)).profiles).toHaveProperty(
         "test:original",
       );
