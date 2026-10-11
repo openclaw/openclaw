@@ -1503,6 +1503,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       if (!realChatServer) {
         throw new Error("Expected the Control UI server to be ready");
       }
+      await installResponsiveChatGateway(page);
       await page.goto(realChatServer.baseUrl, { waitUntil: "domcontentloaded" });
       await page.addScriptTag({
         type: "module",
@@ -1510,6 +1511,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
       const backgrounds = await page.evaluate(async () => {
         await customElements.whenDefined("mcp-app-view");
+        await customElements.whenDefined("openclaw-app");
+        const app = document.querySelector("openclaw-app")!;
+        await app.updateComplete;
         const readFrameBackground = async (boardSurface?: string) => {
           const owner = document.createElement("div");
           if (boardSurface) {
@@ -1519,15 +1523,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             updateComplete: Promise<boolean>;
           };
           owner.append(view);
-          document.body.replaceChildren(owner);
+          app.append(owner);
           await view.updateComplete;
-          const mount = view.shadowRoot?.querySelector(".mount");
+          const mount = view.querySelector(".mount");
           if (!mount) {
             throw new Error("MCP App mount is missing");
           }
           const frame = document.createElement("iframe");
           mount.append(frame);
-          return getComputedStyle(frame).backgroundColor;
+          const background = getComputedStyle(frame).backgroundColor;
+          owner.remove();
+          return background;
         };
         return {
           dashboard: await readFrameBackground("rgb(12, 34, 56)"),
