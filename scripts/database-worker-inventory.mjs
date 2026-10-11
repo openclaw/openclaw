@@ -1833,7 +1833,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readProcessAgentDatabaseLeasesInDatabase"],
         evidence:
-          "Sole caller is src/state/openclaw-state-read-registry.ts:69 under read worker openclaw-state-read.worker.ts:601; the Gateway shutdown report awaits readProcessAgentDatabaseLeasesInWorker.",
+          "Sole caller is src/state/openclaw-state-read-registry.ts:69, dispatched only by openclaw-state-read.worker.ts:605; the Gateway shutdown report awaits readProcessAgentDatabaseLeasesInWorker.",
       },
     ],
   ],
