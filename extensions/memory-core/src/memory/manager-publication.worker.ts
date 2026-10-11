@@ -67,6 +67,12 @@ type PublicationConnection =
       pragmas: Pick<MemoryShadowConnection["pragmas"], "busy_timeout" | "foreign_keys">;
     };
 
+// The agent owner configures these once; temporary transaction settings restore them.
+const agentConnectionPragmas = new WeakMap<
+  DatabaseSync,
+  Pick<MemoryShadowConnection["pragmas"], "busy_timeout" | "foreign_keys">
+>();
+
 function failure(error: unknown): MemoryShadowFailure {
   return {
     name: error instanceof Error ? error.name : "Error",
@@ -147,15 +153,20 @@ export function bindSqliteWorkerBackend(
   },
 ) {
   const db = context.database;
+  let pragmas = agentConnectionPragmas.get(db);
+  if ("kind" in input && !pragmas) {
+    pragmas = {
+      busy_timeout: readConnectionPragma(db, "busy_timeout"),
+      foreign_keys: readConnectionPragma(db, "foreign_keys"),
+    };
+    agentConnectionPragmas.set(db, pragmas);
+  }
   const connection: PublicationConnection =
     "kind" in input
       ? {
           kind: "agent",
           fileIdentity: readMemoryShadowIdentity(context.databasePath),
-          pragmas: {
-            busy_timeout: readConnectionPragma(db, "busy_timeout"),
-            foreign_keys: readConnectionPragma(db, "foreign_keys"),
-          },
+          pragmas: pragmas!,
         }
       : input;
   return createPublicationBackend(connection, context.databasePath, db, false, (stage) =>
