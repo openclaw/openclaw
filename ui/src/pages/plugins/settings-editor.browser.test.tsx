@@ -1,6 +1,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
+import type { ApplicationContext } from "../../app/context.ts";
 import { REDACTED_SENTINEL, type JsonSchema } from "../../lib/config-form-utils.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
@@ -100,10 +101,9 @@ describe("grouped plugin settings", () => {
       setValue({ plugins: { label: String(next) } });
     });
     const { gateway } = createApplicationGateway();
-    const context = createContext(gateway);
     const plugins = new ControlUiPluginRuntime(() => context);
     onTestFinished(() => plugins.dispose());
-    context.plugins = plugins;
+    const context: ApplicationContext = { ...createContext(gateway), plugins };
     const provider = createSolidApplicationContextProvider(context);
     const mounted = mountSolid(
       () => (

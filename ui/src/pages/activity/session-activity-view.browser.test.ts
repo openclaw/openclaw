@@ -118,27 +118,28 @@ it.each([
       void controller.load(client, props.filters, "refresh");
       await vi.waitFor(() => expect(controller.error).toBe("Refresh failed"));
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
-      const retryButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Retry",
-      )!;
-      expect(retryButton).toBeTruthy();
+      const retryButton = () =>
+        [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+          (button) => button.textContent?.trim() === "Retry",
+        )!;
+      expect(retryButton()).toBeTruthy();
       const pending = createDeferred<NonNullable<typeof props.result>>();
       request.mockReturnValueOnce(pending.promise);
-      retryButton.click();
+      retryButton().click();
       expect(controller.loading).toBe(true);
       expect(container.querySelector('[role="status"]')?.textContent).toContain("Refreshing");
-      expect(retryButton.disabled).toBe(true);
+      expect(retryButton().disabled).toBe(true);
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       pending.reject(new Error("Retry failed"));
       await vi.waitFor(() => expect(controller.error).toBe("Retry failed"));
-      expect(retryButton.disabled).toBe(false);
+      expect(retryButton().disabled).toBe(false);
       expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry failed");
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       const recovered = createDeferred<NonNullable<typeof props.result>>();
       request.mockReturnValueOnce(recovered.promise);
-      retryButton.click();
+      retryButton().click();
       expect(controller.retrying).toBe(true);
-      expect(retryButton.disabled).toBe(true);
+      expect(retryButton().disabled).toBe(true);
       recovered.resolve(props.result!);
       await vi.waitFor(() => expect(controller.loading).toBe(false));
       expect(container.textContent).not.toContain("Refreshing");
