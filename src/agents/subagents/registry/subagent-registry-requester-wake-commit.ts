@@ -25,6 +25,9 @@ const REQUESTER_SETTLE_WAKE_COMMIT_SUSTAINED_FAILURES = 5;
 
 const REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS = 120_000;
 
+// A parked episode keeps probing at this slow cadence instead of the backoff cap.
+export const REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS = 30 * 60_000;
+
 // Count emitted reports separately: not every reported rejection advances commit failures.
 const REQUESTER_SETTLE_WAKE_FAILURE_REPORT_BUDGET = 5;
 
@@ -258,7 +261,12 @@ function deferWakeCommit(
   // in the past would strand the pending wake until restart.
   pending.nextAttemptAt =
     Date.now() +
-    Math.min(REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS, 30_000 * 2 ** (pending.failures - 1));
+    (pending.parked
+      ? REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS
+      : Math.min(
+          REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS,
+          30_000 * 2 ** (pending.failures - 1),
+        ));
 }
 
 // Persistence failure cannot erase a transport result or its replay budget. Keep
