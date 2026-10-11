@@ -172,7 +172,7 @@ suite.define(() => {
         await page.locator(".log-row", { hasText: "log line 201" }).waitFor();
 
         const stream = page.locator(".log-stream");
-        const autoFollow = page.getByRole("switch", { name: "Auto-follow" });
+        const autoFollow = page.getByRole("switch", { name: "Auto-follow", exact: true });
         await expect
           .poll(() => stream.evaluate((element) => element.scrollHeight - element.clientHeight))
           .toBeGreaterThan(0);

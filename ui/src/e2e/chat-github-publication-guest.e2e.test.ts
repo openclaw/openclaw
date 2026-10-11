@@ -136,6 +136,7 @@ suite.define(() => {
       } satisfies SessionGitHubStatusResult;
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByText(historyText, { exact: true }).waitFor();
+      await openDetailsPullRequests(page);
       const discovered = await gateway.waitForRequest("sessions.github.options");
       expect(discovered.params).toEqual({ sessionKey, agentId: "main" });
       await openDetailsPullRequests(page);
@@ -183,6 +184,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
       expect(await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD)).toHaveLength(0);
       await page.reload();
+      await openDetailsPullRequests(page);
       await gateway.waitForRequest("sessions.github.options");
       await openDetailsPullRequests(page);
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
@@ -199,6 +201,7 @@ suite.define(() => {
         const gateway = await installGuestGateway(page, hasWorkspace, null);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText(historyText, { exact: true }).waitFor();
+        await openDetailsPullRequests(page);
         await gateway.waitForRequest("sessions.github.options");
         await openDetailsPullRequests(page);
         expect(await page.getByRole("button", { name: "Publish PR", exact: true }).count()).toBe(0);

@@ -88,38 +88,47 @@ function CloudWorkersContent() {
   );
   createEffect(catalogKey, (key) => {
     const appliedHash = key[3];
-    const scope = gateway.capture();
-    if (!scope || !canCallGatewayMethod(gateway.snapshot, "environments.list", "operator.admin")) {
-      setCatalog({ pending: false });
-      return;
-    }
     const controller = new AbortController();
-    setCatalog({ pending: true });
-    void scope.client
-      .request<EnvironmentsListResult>(
-        "environments.list",
-        { projection: "profiles" },
-        { signal: controller.signal },
-      )
-      .then(
-        (result) => {
-          if (
-            !controller.signal.aborted &&
-            gateway.isCurrent(scope) &&
-            context.runtimeConfig.state.configSnapshot?.appliedConfigHash === appliedHash
-          ) {
-            setCatalog({
-              pending: false,
-              value: new Map((result.profiles ?? []).map((profile) => [profile.id, profile])),
-            });
-          }
-        },
-        (error) => {
-          if (!controller.signal.aborted && gateway.isCurrent(scope)) {
-            setCatalog({ pending: false, error: formatUiError(error) });
-          }
-        },
-      );
+    // A nested bridge can flush effects while its parent is still rendering.
+    queueMicrotask(() => {
+      if (controller.signal.aborted) {
+        return;
+      }
+      const scope = gateway.capture();
+      if (
+        !scope ||
+        !canCallGatewayMethod(gateway.snapshot, "environments.list", "operator.admin")
+      ) {
+        setCatalog({ pending: false });
+        return;
+      }
+      setCatalog({ pending: true });
+      void scope.client
+        .request<EnvironmentsListResult>(
+          "environments.list",
+          { projection: "profiles" },
+          { signal: controller.signal },
+        )
+        .then(
+          (result) => {
+            if (
+              !controller.signal.aborted &&
+              gateway.isCurrent(scope) &&
+              context.runtimeConfig.state.configSnapshot?.appliedConfigHash === appliedHash
+            ) {
+              setCatalog({
+                pending: false,
+                value: new Map((result.profiles ?? []).map((profile) => [profile.id, profile])),
+              });
+            }
+          },
+          (error) => {
+            if (!controller.signal.aborted && gateway.isCurrent(scope)) {
+              setCatalog({ pending: false, error: formatUiError(error) });
+            }
+          },
+        );
+    });
     return () => controller.abort();
   });
   function advertisedProfiles() {

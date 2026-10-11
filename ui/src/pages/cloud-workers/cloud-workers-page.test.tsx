@@ -80,6 +80,7 @@ describe("Cloud Workers mutation requests", () => {
   ])(
     "forwards exact array intent for $action and saves OS $initialTarget → $target without losing unrelated data",
     async ({ action, initialTarget, target, systems }) => {
+      const renderingErrors = vi.spyOn(console, "error");
       const settings = {
         provider: "aws",
         class: "standard",
@@ -342,6 +343,7 @@ describe("Cloud Workers mutation requests", () => {
         container.remove();
         runtimeConfig.dispose();
       }
+      expect(renderingErrors).not.toHaveBeenCalled();
     },
   );
 });

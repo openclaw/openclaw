@@ -29,7 +29,7 @@ export function useGatewayPage(
   options: GatewayPageOptions = {},
 ) {
   const getContext = typeof context === "function" ? context : () => context;
-  let currentGateway = getContext().gateway;
+  let currentGateway = untrack(() => getContext().gateway);
   const projection = projectGateway(currentGateway);
   const lifecycle = createGatewayConnectionLifecycle(currentGateway.snapshot);
   let disposed = false;

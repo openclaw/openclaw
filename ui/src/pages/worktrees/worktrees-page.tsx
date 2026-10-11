@@ -72,9 +72,11 @@ export function WorktreesView(props: { model: WorktreesModel }) {
         }
       },
     });
-  const headerPart = renderLit(renderHeader(), headerContainer, headerOptions);
+  const headerPart = renderLit(untrack(renderHeader), headerContainer, headerOptions);
   const headerNodes = Array.from(headerContainer.childNodes);
-  createEffect(renderHeader, (template) => renderLit(template, headerContainer, headerOptions));
+  createEffect(renderHeader, (template) => {
+    renderLit(template, headerContainer, headerOptions);
+  });
   onCleanup(() => {
     headerPart.setConnected(false);
     renderLit(nothing, headerContainer, headerOptions);
