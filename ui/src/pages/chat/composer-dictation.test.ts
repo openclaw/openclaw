@@ -148,8 +148,12 @@ function createButtonHarness() {
     render(
       renderComposerVoiceButton({
         connected: true,
+        sending: false,
+        isBusy: false,
         dictation: controller,
-        onDictationPointerDown: (event) => controller.handlePointerDown(event),
+        onDictationPointerDown: (event) => {
+          controller.handlePointerDown(event);
+        },
         onToggleVoice: vi.fn(),
       }),
       container,
