@@ -31,13 +31,11 @@ function JobsFilter(
         class="settings-select"
         data-test-id={props.testId}
         value={props.value}
-        onChange={(event: Event) => {
-          if (event.currentTarget instanceof HTMLSelectElement) {
-            void props.onJobsFiltersChange({
-              [props.field]: event.currentTarget.value,
-            });
-          }
-        }}
+        onChange={(event) =>
+          void props.onJobsFiltersChange({
+            [props.field]: event.currentTarget.value,
+          })
+        }
       >
         <For each={props.options} keyed={(option) => option.value}>
           {(option) => (

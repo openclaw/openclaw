@@ -957,7 +957,6 @@
   "packages/gateway-protocol/src/session-row-fields.ts",
   "packages/gateway-protocol/src/startup-unavailable.ts",
   "packages/gateway-protocol/src/svg-image.ts",
-  "packages/gateway-protocol/src/system-agent-context.ts",
   "packages/gateway-protocol/src/theme-ids.ts",
   "packages/gateway-protocol/src/theme.ts",
   "packages/gateway-protocol/src/update-run-vocabulary.ts",

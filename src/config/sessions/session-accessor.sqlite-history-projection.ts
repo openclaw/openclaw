@@ -8,10 +8,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import { readTranscriptDisplaySource } from "./session-accessor.sqlite-display-position.js";
-import {
-  isVisibleHistoryNonMessageEvent,
-  isVisibleHistoryNonMessageEventSql,
-} from "./session-accessor.sqlite-history-interval.js";
+import { isVisibleHistoryNonMessageEventSql } from "./session-accessor.sqlite-history-interval.js";
 import {
   getActiveTranscriptKysely,
   type CurrentTranscriptProjection,
@@ -22,6 +19,7 @@ import {
   resolveTranscriptBoundaryWindow,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
+import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
