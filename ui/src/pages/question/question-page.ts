@@ -10,7 +10,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { requestQuestionGateway } from "../../app/question-prompt-client.ts";
+import { canUseQuestionPrompts, requestQuestionGateway } from "../../app/question-prompt-client.ts";
 import {
   cancelQuestionPrompt,
   createQuestionPromptState,
@@ -130,7 +130,10 @@ export class QuestionPage extends OpenClawLightDomElement {
     }
     this.operationGeneration += 1;
     this.client = nextClient;
-    setQuestionPromptClient(this.questionState, nextClient);
+    setQuestionPromptClient(
+      this.questionState,
+      canUseQuestionPrompts(snapshot) ? nextClient : null,
+    );
     if (!nextClient) {
       if (listQuestionPrompts(this.questionState).some((prompt) => prompt.id === this.questionId)) {
         this.loading = false;
@@ -147,6 +150,11 @@ export class QuestionPage extends OpenClawLightDomElement {
   }
 
   private async loadQuestion(client: GatewayBrowserClient): Promise<void> {
+    if (!canUseQuestionPrompts(this.context.gateway.snapshot)) {
+      this.loading = false;
+      this.requestError = "unavailable";
+      return;
+    }
     const id = this.questionId;
     const generation = ++this.operationGeneration;
     this.loading = true;

@@ -41,9 +41,9 @@ import {
   openAssistantMedia,
   resolveAssistantMediaAvailability,
 } from "./control-ui-assistant-media-read.js";
+import { matchesControlUiBootstrapConfigPath } from "./control-ui-bootstrap-contract.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
-  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   isControlUiRootPublicAsset,
   isControlUiVersionedPublicAsset,
   parseControlUiResourcePath,
@@ -504,19 +504,6 @@ function isSafeRelativePath(relPath: string) {
     normalized.startsWith("../") ||
     normalized === ".." ||
     normalized.includes("\0")
-  );
-}
-
-// The default SPA entry infers /__openclaw__ as its base path before bootstrap.
-const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPACE_PREFIX.replace(
-  /\/$/,
-  "",
-)}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
-
-function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
-  return (
-    pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
-    (basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH)
   );
 }
 

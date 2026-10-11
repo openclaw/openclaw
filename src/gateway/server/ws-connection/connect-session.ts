@@ -202,8 +202,12 @@ export async function attachAuthenticatedGatewayConnect(
     assertCurrent: profileLifecycle.assertCurrent,
   });
   const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
-  const sharedSecretOperatorOwner =
-    role === "operator" && (authMethod === "token" || authMethod === "password");
+  // The locally approved ingress grant acts as the shared owner, including token reconnects.
+  const operatorOwner =
+    role === "operator" &&
+    (authMethod === "token" ||
+      authMethod === "password" ||
+      Boolean(getRemoteControlUiIngressContext(context.handler.upgradeReq)));
   // Synthetic callers bypass WS admission; ephemeral control-plane clients stay unprofiled.
   const ownerProfileExpected =
     shouldTrackPresence &&
@@ -232,7 +236,7 @@ export async function attachAuthenticatedGatewayConnect(
     upgradeReq: context.handler.upgradeReq,
   });
   const rolePolicy =
-    role === "operator" && !sharedSecretOperatorOwner
+    role === "operator" && !operatorOwner
       ? resolveOperatorRolePolicyForAssignment(
           authenticatedUserProfile?.profileId,
           preparedProfile?.authority.role ?? null,
@@ -376,7 +380,7 @@ export async function attachAuthenticatedGatewayConnect(
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
     ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
     ...(trustedAgentRuntimeIdentity ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity } : {}),
-    ...(sharedSecretOperatorOwner ? { operatorRoleActor: { kind: "system" as const } } : {}),
+    ...(operatorOwner ? { operatorRoleActor: { kind: "system" as const } } : {}),
   };
   if (authenticatedOperator) {
     const source = await prepareGatewayConnectOperatorDeviceSource(context, state, deviceScopes);

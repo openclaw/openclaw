@@ -155,6 +155,18 @@ describe("remote Control UI HTTP owner", () => {
           path,
         ).toBe(owner);
       }
+      for (const path of ["/control-ui-config.json", "/__openclaw__/control-ui-config.json"]) {
+        expect(resolveRemoteControlUiHttpRoute(remoteRequest(path), "", ["operator.read"])).toBe(
+          "document",
+        );
+      }
+      expect(
+        resolveRemoteControlUiHttpRoute(
+          remoteRequest("/__openclaw__/control-ui-config.json"),
+          "/claw",
+          ["operator.read"],
+        ),
+      ).toBeUndefined();
     });
   });
 
