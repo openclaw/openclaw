@@ -8,6 +8,14 @@ import { formatAnalysisCost, formatUsageTokens } from "./metrics.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
 import { SessionBarRow } from "./view-session-row.tsx";
 
+const SESSION_SORT_OPTIONS = [
+  { value: "cost", labelKey: "usage.metrics.cost" },
+  { value: "errors", labelKey: "usage.overview.errors" },
+  { value: "messages", labelKey: "usage.overview.messages" },
+  { value: "recent", labelKey: "usage.sessions.recentShort" },
+  { value: "tokens", labelKey: "usage.metrics.tokens" },
+] as const;
+
 const buildSessionMeta = (session: UsageSessionEntry): string[] =>
   [
     session.channel && `channel:${session.channel}`,
@@ -166,29 +174,20 @@ export function SessionsCard(props: {
             <span>{t("usage.sessions.sort")}</span>
             <select
               class="settings-select"
-              onChange={(e: Event) =>
-                state().onDisplayChange({
-                  sessionSort: (e.target as HTMLSelectElement)
-                    .value as UsageProps["display"]["sessionSort"],
-                })
-              }
+              onChange={(event) => {
+                const selected = SESSION_SORT_OPTIONS.find(
+                  (option) => option.value === event.currentTarget.value,
+                );
+                if (selected) {
+                  state().onDisplayChange({ sessionSort: selected.value });
+                }
+              }}
             >
-              <For
-                each={Object.entries({
-                  cost: "usage.metrics.cost",
-                  errors: "usage.overview.errors",
-                  messages: "usage.overview.messages",
-                  recent: "usage.sessions.recentShort",
-                  tokens: "usage.metrics.tokens",
-                })}
-              >
-                {([value, labelKey]) => (
-                  <>
-                    {" "}
-                    <option value={value} selected={state().sessionSort === value}>
-                      {t(labelKey)}
-                    </option>{" "}
-                  </>
+              <For each={SESSION_SORT_OPTIONS}>
+                {({ value, labelKey }) => (
+                  <option value={value} selected={state().sessionSort === value}>
+                    {t(labelKey)}
+                  </option>
                 )}
               </For>
             </select>

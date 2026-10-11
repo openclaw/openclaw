@@ -4,7 +4,6 @@ import {
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsSection,
   SettingsPage,
@@ -31,12 +30,10 @@ import {
 } from "./metrics.ts";
 import { renderUsageEmptyState, renderUsageLoadingStatus } from "./page-shell.tsx";
 import {
-  applySuggestionToQuery,
   buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
   buildUsageFilterOptions,
-  removeQueryToken,
 } from "./query.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
@@ -48,14 +45,14 @@ import {
   renderFilterChips,
   renderUsageInsights,
 } from "./view-overview.tsx";
-import { UsageQueryFilter } from "./view-query-filter.tsx";
+import { UsageQuerySection } from "./view-query-section.tsx";
 import { SessionsCard } from "./view-sessions-card.tsx";
 
 registerEnglishCatalog(registerUsageEnglish);
 
 type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
 
-function DateInput(props: { value: string; label: string; onChange: (event: Event) => void }) {
+function DateInput(props: { value: string; label: string; onChange: (value: string) => void }) {
   return (
     <input
       class="usage-date-input"
@@ -63,7 +60,7 @@ function DateInput(props: { value: string; label: string; onChange: (event: Even
       value={props.value}
       title={props.label}
       aria-label={props.label}
-      onChange={(event) => props.onChange(event)}
+      onChange={(event) => props.onChange(event.currentTarget.value)}
     />
   );
 }
@@ -398,21 +395,13 @@ export function renderUsage(props: UsageProps) {
                   <DateInput
                     value={state().filters.startDate}
                     label={t("usage.filters.startDate")}
-                    onChange={(e: Event) =>
-                      state().filterActions.onDatesChange({
-                        startDate: (e.target as HTMLInputElement).value,
-                      })
-                    }
+                    onChange={(startDate) => state().filterActions.onDatesChange({ startDate })}
                   />
                   <span class="usage-separator">{t("usage.filters.to")}</span>
                   <DateInput
                     value={state().filters.endDate}
                     label={t("usage.filters.endDate")}
-                    onChange={(e: Event) =>
-                      state().filterActions.onDatesChange({
-                        endDate: (e.target as HTMLInputElement).value,
-                      })
-                    }
+                    onChange={(endDate) => state().filterActions.onDatesChange({ endDate })}
                   />
                 </div>
                 <select
@@ -420,11 +409,12 @@ export function renderUsage(props: UsageProps) {
                   title={t("usage.filters.timeZone")}
                   aria-label={t("usage.filters.timeZone")}
                   value={state().filters.timeZone}
-                  onChange={(e: Event) =>
-                    state().filterActions.onScopeChange({
-                      timeZone: (e.target as HTMLSelectElement).value as "local" | "utc",
-                    })
-                  }
+                  onChange={(event) => {
+                    const timeZone = event.currentTarget.value;
+                    if (timeZone === "local" || timeZone === "utc") {
+                      state().filterActions.onScopeChange({ timeZone });
+                    }
+                  }}
                 >
                   <option value="local">{t("usage.filters.timeZoneLocal")}</option>
                   <option value="utc">{t("usage.filters.timeZoneUtc")}</option>
@@ -570,141 +560,20 @@ export function renderUsage(props: UsageProps) {
               </div>
             </div>
 
-            <div class="usage-query-section">
-              <div class="usage-query-bar">
-                <input
-                  class="usage-query-input"
-                  type="text"
-                  value={state().filters.queryDraft}
-                  aria-label={t("usage.query.placeholder")}
-                  placeholder={t("usage.query.placeholder")}
-                  onInput={(e: Event) =>
-                    state().filterActions.onQueryDraftChange((e.target as HTMLInputElement).value)
-                  }
-                  onKeyDown={(e: KeyboardEvent) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      state().filterActions.onApplyQuery();
-                    }
-                  }}
-                />
-                <div class="usage-query-actions">
-                  <button
-                    class="btn btn--sm"
-                    onClick={() => state().filterActions.onApplyQuery()}
-                    disabled={state().data.loading || (!state().hasDraftQuery && !state().hasQuery)}
-                  >
-                    {t("usage.query.apply")}
-                  </button>
-                  {state().hasDraftQuery || state().hasQuery ? (
-                    <button
-                      class="btn btn--sm"
-                      onClick={() => state().filterActions.onClearQuery()}
-                    >
-                      {t("usage.filters.clear")}
-                    </button>
-                  ) : undefined}
-                  <span class="usage-query-hint">
-                    {!state().hasOverviewData
-                      ? undefined
-                      : state().hasQuery
-                        ? t("usage.query.matching", {
-                            shown: String(state().filteredSessions.length),
-                            total: String(state().totalSessions),
-                          })
-                        : t("usage.query.inRange", { total: String(state().totalSessions) })}
-                  </span>
-                </div>
-              </div>
-              <div class="usage-filter-row">
-                {
-                  <UsageQueryFilter
-                    filterKey="channel"
-                    label={t("usage.filters.channel")}
-                    options={state().filterOptions.channel}
-                    queryDraft={state().filters.queryDraft}
-                    onQueryDraftChange={state().filterActions.onQueryDraftChange}
-                  />
-                }
-                {
-                  <UsageQueryFilter
-                    filterKey="provider"
-                    label={t("usage.filters.provider")}
-                    options={state().filterOptions.provider}
-                    queryDraft={state().filters.queryDraft}
-                    onQueryDraftChange={state().filterActions.onQueryDraftChange}
-                  />
-                }
-                {
-                  <UsageQueryFilter
-                    filterKey="model"
-                    label={t("usage.filters.model")}
-                    options={state().filterOptions.model}
-                    queryDraft={state().filters.queryDraft}
-                    onQueryDraftChange={state().filterActions.onQueryDraftChange}
-                  />
-                }
-                {
-                  <UsageQueryFilter
-                    filterKey="tool"
-                    label={t("usage.filters.tool")}
-                    options={state().filterOptions.tool}
-                    queryDraft={state().filters.queryDraft}
-                    onQueryDraftChange={state().filterActions.onQueryDraftChange}
-                  />
-                }
-                <span class="usage-query-hint">{t("usage.query.tip")}</span>
-              </div>
-              {state().queryTerms.length > 0 ? (
-                <div class="usage-query-chips">
-                  <For each={state().queryTerms}>
-                    {(term) => {
-                      const label = term.raw;
-                      return (
-                        <span class="usage-query-chip">
-                          {label}
-                          <openclaw-tooltip prop:content={t("usage.filters.remove")}>
-                            <button
-                              aria-label={t("usage.filters.remove")}
-                              onClick={() =>
-                                state().filterActions.onQueryDraftChange(
-                                  removeQueryToken(state().filters.queryDraft, label),
-                                )
-                              }
-                            >
-                              <Icon name="x" />
-                            </button>
-                          </openclaw-tooltip>
-                        </span>
-                      );
-                    }}
-                  </For>
-                </div>
-              ) : undefined}
-              {state().querySuggestions.length > 0 ? (
-                <div class="usage-query-suggestions">
-                  <For each={state().querySuggestions}>
-                    {(suggestion) => (
-                      <button
-                        class="usage-query-suggestion"
-                        onClick={() =>
-                          state().filterActions.onQueryDraftChange(
-                            applySuggestionToQuery(state().filters.queryDraft, suggestion.value),
-                          )
-                        }
-                      >
-                        {suggestion.label}
-                      </button>
-                    )}
-                  </For>
-                </div>
-              ) : undefined}
-              {state().queryWarnings.length > 0 ? (
-                <div class="callout warning usage-callout usage-callout--tight">
-                  {state().queryWarnings.join(" · ")}
-                </div>
-              ) : undefined}
-            </div>
+            <UsageQuerySection
+              filters={state().filters}
+              actions={state().filterActions}
+              loading={state().data.loading}
+              hasDraftQuery={state().hasDraftQuery}
+              hasQuery={state().hasQuery}
+              hasOverviewData={state().hasOverviewData}
+              matchingSessions={state().filteredSessions.length}
+              totalSessions={state().totalSessions}
+              filterOptions={state().filterOptions}
+              queryTerms={state().queryTerms}
+              querySuggestions={state().querySuggestions}
+              queryWarnings={state().queryWarnings}
+            />
 
             {state().data.error ? (
               <div class="callout danger usage-callout">{state().data.error}</div>
@@ -836,5 +705,3 @@ export function renderUsage(props: UsageProps) {
     </SettingsPage>
   );
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

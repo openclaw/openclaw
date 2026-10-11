@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { JSX } from "@solidjs/web";
 import { For, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsToggle, SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -32,7 +33,7 @@ type ActivityProps = {
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onEntryToggle: (id: string, open: boolean) => void;
-  onScroll: (event: Event) => void;
+  onScroll: JSX.EventHandler<HTMLDivElement, Event>;
 };
 
 function formatDuration(value: number): string {
@@ -91,8 +92,8 @@ function StatusFilter(props: { activity: ActivityProps; status: ActivityStatus }
       <input
         type="checkbox"
         checked={props.activity.statusFilters[props.status]}
-        onChange={(event: Event) =>
-          props.activity.onStatusToggle(props.status, (event.target as HTMLInputElement).checked)
+        onChange={(event) =>
+          props.activity.onStatusToggle(props.status, event.currentTarget.checked)
         }
       />
       <span>{t(`activity.status.${props.status}`)}</span>
@@ -210,12 +211,7 @@ function ActivityEntryView(props: {
     <details
       class={`activity-entry activity-entry--${props.entry.status}`}
       prop:open={props.activity.expandedIds.has(props.entry.id)}
-      onToggle={(event: Event) =>
-        props.activity.onEntryToggle(
-          props.entry.id,
-          (event.currentTarget as HTMLDetailsElement).open,
-        )
-      }
+      onToggle={(event) => props.activity.onEntryToggle(props.entry.id, event.currentTarget.open)}
     >
       <summary class="activity-entry__summary">
         <span class="activity-entry__chevron" aria-hidden="true">

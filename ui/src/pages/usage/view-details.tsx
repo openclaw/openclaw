@@ -423,9 +423,19 @@ function LoadedContextPanel(props: {
   );
 }
 
-function selectedLogFilterValues(event: Event): string[] {
-  const selected = (event.target as HTMLSelectElement).selectedOptions;
-  return Array.from(selected, (option) => option.value);
+const SESSION_LOG_ROLES = [
+  ["user", "usage.overview.user"],
+  ["assistant", "usage.overview.assistant"],
+  ["tool", "usage.details.tool"],
+  ["toolResult", "usage.details.toolResult"],
+] as const;
+
+function isSessionLogRole(value: string): value is SessionLogRole {
+  return SESSION_LOG_ROLES.some(([role]) => role === value);
+}
+
+function selectedLogFilterValues(select: HTMLSelectElement): string[] {
+  return Array.from(select.selectedOptions, (option) => option.value);
 }
 
 function SessionLogs(props: {
@@ -530,22 +540,13 @@ function SessionLogs(props: {
               multiple
               size="4"
               aria-label={t("usage.details.filterByRole")}
-              onChange={(event: Event) =>
+              onChange={(event) =>
                 state().callbacks.onLogFiltersChange({
-                  roles: selectedLogFilterValues(event) as SessionLogRole[],
+                  roles: selectedLogFilterValues(event.currentTarget).filter(isSessionLogRole),
                 })
               }
             >
-              <For
-                each={
-                  [
-                    ["user", "usage.overview.user"],
-                    ["assistant", "usage.overview.assistant"],
-                    ["tool", "usage.details.tool"],
-                    ["toolResult", "usage.details.toolResult"],
-                  ] as const
-                }
-              >
+              <For each={SESSION_LOG_ROLES}>
                 {([role, labelKey]) => (
                   <>
                     {" "}
@@ -560,8 +561,10 @@ function SessionLogs(props: {
               multiple
               size="4"
               aria-label={t("usage.details.filterByTool")}
-              onChange={(event: Event) =>
-                state().callbacks.onLogFiltersChange({ tools: selectedLogFilterValues(event) })
+              onChange={(event) =>
+                state().callbacks.onLogFiltersChange({
+                  tools: selectedLogFilterValues(event.currentTarget),
+                })
               }
             >
               <For each={state().toolOptions}>
@@ -579,10 +582,8 @@ function SessionLogs(props: {
               <input
                 type="checkbox"
                 checked={state().filters.hasTools}
-                onChange={(event: Event) =>
-                  state().callbacks.onLogFiltersChange({
-                    hasTools: (event.target as HTMLInputElement).checked,
-                  })
+                onChange={(event) =>
+                  state().callbacks.onLogFiltersChange({ hasTools: event.currentTarget.checked })
                 }
               />
               {t("usage.details.hasTools")}
@@ -592,10 +593,8 @@ function SessionLogs(props: {
               placeholder={t("usage.details.searchConversation")}
               aria-label={t("usage.details.searchConversation")}
               value={state().filters.query}
-              onInput={(event: Event) =>
-                state().callbacks.onLogFiltersChange({
-                  query: (event.target as HTMLInputElement).value,
-                })
+              onInput={(event) =>
+                state().callbacks.onLogFiltersChange({ query: event.currentTarget.value })
               }
             />
             <button

@@ -331,7 +331,7 @@ export function ActivityPageView(props: {
                     update({ expandedIds: toggle(state().expandedIds, id, open) })
                   }
                   onScroll={(event) => {
-                    const container = event.currentTarget as HTMLElement;
+                    const container = event.currentTarget;
                     props.controller.atBottom =
                       container.scrollHeight - container.scrollTop - container.clientHeight < 120;
                   }}
