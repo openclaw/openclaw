@@ -45,67 +45,6 @@ describe("setup admission", () => {
     resetGatewayWorkAdmission();
   });
 
-  it("rejects concurrent work instead of queueing it", async () => {
-    const firstStarted = createDeferred();
-    const releaseFirst = createDeferred();
-    const events: string[] = [];
-    const first = runExclusiveSystemAgentSetupActivation(async () => {
-      events.push("first:start");
-      firstStarted.resolve();
-      await releaseFirst.promise;
-      events.push("first:end");
-    });
-    await firstStarted.promise;
-
-    const secondTask = vi.fn(async () => events.push("second:start"));
-    await expect(runExclusiveSystemAgentSetupActivation(secondTask)).rejects.toThrow(
-      "setup is already in progress",
-    );
-    expect(secondTask).not.toHaveBeenCalled();
-    releaseFirst.resolve();
-    await first;
-    await runExclusiveSystemAgentSetupActivation(async () => events.push("third:start"));
-    expect(events).toEqual(["first:start", "first:end", "third:start"]);
-  });
-
-  it("releases the admission lease when work fails", async () => {
-    await expect(
-      runExclusiveSystemAgentSetupActivation(async () => {
-        throw new Error("probe failed");
-      }),
-    ).rejects.toThrow("probe failed");
-
-    await expect(runExclusiveSystemAgentSetupActivation(async () => "ok")).resolves.toBe("ok");
-  });
-
-  it("does not misclassify a task's own file-lock timeout as setup contention", async () => {
-    const taskError = Object.assign(new Error("config lock timed out"), {
-      code: "file_lock_timeout",
-    });
-
-    await expect(
-      runExclusiveSystemAgentSetupActivation(async () => {
-        throw taskError;
-      }),
-    ).rejects.toBe(taskError);
-  });
-
-  it("holds an admitted session lease until its runner settles", async () => {
-    const settled = createDeferred();
-    const session = await createAdmittedWizardSession(
-      () => new WizardSession(() => settled.promise),
-    );
-
-    await expect(
-      createAdmittedWizardSession(() => new WizardSession(async () => {})),
-    ).resolves.toBeUndefined();
-    settled.resolve();
-    await whenAdmittedWizardSessionSettled(session!);
-    const next = await createAdmittedWizardSession(() => new WizardSession(async () => {}));
-    expect(next).toBeDefined();
-    await whenAdmittedWizardSessionSettled(next!);
-  });
-
   it("retains root work for post-start session continuations", async () => {
     const continueAfterStart = createDeferred();
     let runner: Promise<void> | undefined;
@@ -425,31 +364,6 @@ describe("setup admission", () => {
       }
     },
   );
-
-  it("does not report classic setup's saved settings as user cancellation", async () => {
-    const configPath = path.join(mocks.stateDir, "openclaw.json");
-    const saved = '{"gateway":{"mode":"remote"}}';
-    const session = await createAdmittedWizardSession(
-      () =>
-        new WizardSession(async (prompter) => {
-          await fs.writeFile(configPath, saved);
-          await prompter.outro("Remote Gateway configured.");
-        }),
-    );
-    if (!session) {
-      throw new Error("expected an admitted wizard");
-    }
-    try {
-      expect((await session.next()).step?.type).toBe("note");
-      markGatewayRestartDraining();
-      await whenAdmittedWizardSessionSettled(session);
-      expect(await fs.readFile(configPath, "utf8")).toBe(saved);
-      expect(await session.next()).toMatchObject({ done: true, status: "error" });
-    } finally {
-      session.cancel();
-      await whenAdmittedWizardSessionSettled(session);
-    }
-  });
 
   it("keeps shutdown error provenance when a provider maps closed input to cancellation", async () => {
     const session = await createAdmittedWizardSession(

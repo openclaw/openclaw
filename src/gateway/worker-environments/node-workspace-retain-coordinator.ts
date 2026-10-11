@@ -176,11 +176,7 @@ export function createNodeWorkspaceRetainCoordinator(
       !stopped &&
       transport === currentTransport &&
       currentTransport.isCurrent(node) &&
-      (!hostBuild || !bundleRetention!.isEnvironmentOwnedNode(node.nodeId));
-
-    if (!isCurrent()) {
-      return;
-    }
+      (!hostBuild || !bundleRetention?.isEnvironmentOwnedNode(node.nodeId));
     const preparedManifestRefs = new Map<string, () => readonly string[] | null>();
     if (options.additionalManifestRefs) {
       const environmentIds = new Set(
@@ -189,9 +185,6 @@ export function createNodeWorkspaceRetainCoordinator(
       for (const { placement } of preparedPlacements.values()) {
         if (placement?.environmentId && environmentIds.has(placement.environmentId)) {
           const current = await options.additionalManifestRefs(placement);
-          if (!isCurrent()) {
-            return;
-          }
           preparedManifestRefs.set(placement.sessionId, current);
         }
       }
@@ -201,9 +194,6 @@ export function createNodeWorkspaceRetainCoordinator(
       inventory.assertCurrent();
     } finally {
       inventory.release();
-    }
-    if (!isCurrent()) {
-      return;
     }
     const environments = nodeEnvironments(options, node.nodeId);
     // Provisioning and refresh install before recording receipts. Keep the current build until
@@ -343,14 +333,11 @@ export function createNodeWorkspaceRetainCoordinator(
       if (!retained.applied || !retained.hasMore) {
         const bundleStatus = retained.bundleStatus;
         const requestedBundleHash = input.bundleStatusHash;
-        const currentStatusTarget = requestedBundleHash
-          ? (hostBuild ?? bundleStatusTargetForNode(options, node.nodeId))
-          : undefined;
+        const currentStatusTarget = requestedBundleHash ? bundleStatusTarget : undefined;
         if (
           retained.applied &&
           currentStatusTarget &&
           bundleStatus &&
-          currentStatusTarget.bundleHash === requestedBundleHash &&
           bundleStatus.bundleHash === requestedBundleHash
         ) {
           currentTransport.acceptBundleStatus?.(node, {
@@ -384,9 +371,6 @@ export function createNodeWorkspaceRetainCoordinator(
       );
       for (const sessionId of sessionIds) {
         prepared.set(sessionId, await options.placements.prepareRuntimeRefresh(sessionId));
-        if (stopped || transport !== currentTransport || !currentTransport.isCurrent(node)) {
-          return;
-        }
       }
       await publishPreparedSnapshot(currentTransport, node, prepared);
     } finally {
