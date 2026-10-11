@@ -30,10 +30,7 @@ import { runManagedCommand } from "./lib/managed-child-process.mts";
 import type { MemoryLimitParams } from "./lib/process-memory.mts";
 import { resolveRunNodeInputSignature } from "./lib/run-node-input-state.mts";
 import { preflightInstalledSourceArtifacts } from "./lib/source-update-artifact-preflight.mts";
-import {
-  TSDOWN_PACKAGE_CONFIG_GROUP,
-  TSDOWN_UNIFIED_CONFIG_GROUP,
-} from "./lib/tsdown-config-groups.mts";
+import { TSDOWN_PACKAGE_CONFIG_GROUP } from "./lib/tsdown-config-groups.mts";
 import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
   tsdownPackageOutputRoot,
@@ -104,7 +101,11 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
     'require("node:fs").rmSync("dist", { recursive: true, force: true })',
   ]),
   pluginAssetStep("build"),
-  tsxStep("tsdown", "scripts/tsdown-build.mts"),
+  {
+    // Cap overlapping native bundle allocations in the shared runtime pass.
+    ...tsxStep("tsdown", "scripts/tsdown-build.mts", "--concurrency", "1"),
+    env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+  },
   declarationStep("tsdown-ai", "tsdown.ai.config.ts", [TSDOWN_AI_OUTPUT_ROOT]),
   declarationStep(
     "tsdown-packages",
@@ -113,21 +114,6 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
     "--filter",
     TSDOWN_PACKAGE_CONFIG_GROUP,
   ),
-  {
-    ...tsxStep(
-      "tsdown-unified",
-      "scripts/tsdown-build.mts",
-      "--config",
-      "tsdown.config.ts",
-      "--filter",
-      TSDOWN_UNIFIED_CONFIG_GROUP,
-      // Limit overlapping Rolldown native allocations, which Node's heap limit
-      // does not cap. Individual bundles retain their internal parallelism.
-      "--concurrency",
-      "1",
-    ),
-    env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-  },
   {
     ...tsxStep("write-unified-entry-dts", "scripts/write-unified-entry-dts.ts"),
     env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
@@ -196,11 +182,12 @@ const CI_ARTIFACT_STEP_LABELS = [
   "write-plugin-sdk-entry-dts",
   ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
 ];
-// Isolated plugins finish generating source assets before declarations capture
-// their resolution namespace, so the first build seals reusable cache inputs.
+// The final runtime pass rewrites package JS without declaration modules, whose
+// shared helpers otherwise change chunk boundaries between full/runtime builds.
+// Isolated plugin assets finish before declarations capture their inputs.
 const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
   step === "tsdown"
-    ? ["tsdown-ai", "tsdown-packages", "tsdown-unified"]
+    ? ["tsdown-ai", "tsdown-packages", "tsdown"]
     : step === "external-plugins:local-dist"
       ? [step, "write-unified-entry-dts"]
       : [step],
@@ -210,10 +197,17 @@ const FULL_BUILD_STEP_LABELS = [
   ...FULL_RUNTIME_STEP_LABELS,
   ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
 ];
+const RUNTIME_ONLY_STEP_LABELS = [
+  "native-protocol",
+  ...ASSET_RUNTIME_STEP_LABELS,
+  "ui:build",
+  ...BUILD_METADATA_STEP_LABELS,
+];
 
 const BUILD_ALL_PROFILES: Record<string, string[]> = {
   full: [...FULL_BUILD_STEP_LABELS],
   package: ["clean:dist", ...FULL_BUILD_STEP_LABELS],
+  runtime: RUNTIME_ONLY_STEP_LABELS,
   ciArtifacts: [...CI_ARTIFACT_STEP_LABELS],
   // Smoke builds retain typed compilation and publication checks without the UI/metadata tail.
   strictSmoke: [...FULL_RUNTIME_STEP_LABELS, "check-plugin-sdk-exports"],
@@ -227,18 +221,8 @@ const BUILD_ALL_PROFILES: Record<string, string[]> = {
   cliStartup: ["tsdown", ...RUNTIME_STEP_LABELS, "write-cli-startup-metadata"],
 };
 
-const FULL_RUNTIME_ONLY_STEPS = [
-  "native-protocol",
-  ...ASSET_RUNTIME_STEP_LABELS,
-  "ui:build",
-  ...BUILD_METADATA_STEP_LABELS,
-];
-
 const FULL_BUILD_PROFILE_STEP_ENV = {
   tsdown: {
-    OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
-  },
-  "tsdown-unified": {
     OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
   },
 };
@@ -335,33 +319,32 @@ export function resolveBuildAllSteps(
   const runtimeOnly = buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1";
   const labels =
     profile === "full" && runtimeOnly
-      ? FULL_RUNTIME_ONLY_STEPS
+      ? RUNTIME_ONLY_STEP_LABELS
       : profile === "package" && runtimeOnly
-        ? ["clean:dist", ...FULL_RUNTIME_ONLY_STEPS]
+        ? ["clean:dist", ...RUNTIME_ONLY_STEP_LABELS]
         : profileLabels;
-  const selected = labels.map((label) => BUILD_ALL_STEPS.find((step) => step.label === label));
-  if (selected.some((step) => !step)) {
-    const missing = labels.filter((label) => !BUILD_ALL_STEPS.some((step) => step.label === label));
-    throw new Error(`Build profile ${profile} references unknown steps: ${missing.join(", ")}`);
-  }
-  const envOverrides = BUILD_ALL_PROFILE_STEP_ENV[profile] ?? {};
-  return selected
-    .filter((step): step is NonNullable<typeof step> => step !== undefined)
-    .map((step) => {
-      const env = envOverrides[step.label];
-      if (!env) {
-        return step;
-      }
-      const mergedEnv = Object.assign({}, "env" in step ? step.env : undefined, env);
-      // Source-run rebuilds share qaRuntime but retain the caller's explicit
-      // declaration choice. The other partial profiles remain runtime-only.
-      if (profile === "qaRuntime" && step.label === "tsdown") {
-        mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] =
-          buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV];
-      }
-      const merged: BuildAllStep = Object.assign({}, step, { env: mergedEnv });
-      return merged;
-    });
+  const envOverrides = BUILD_ALL_PROFILE_STEP_ENV[profile === "runtime" ? "full" : profile] ?? {};
+  return labels.map((label) => {
+    const step = BUILD_ALL_STEPS.find((candidate) => candidate.label === label);
+    if (!step) {
+      throw new Error(`Build profile ${profile} references unknown step: ${label}`);
+    }
+    const env = envOverrides[step.label];
+    if (!env && profile !== "runtime") {
+      return step;
+    }
+    const mergedEnv = Object.assign({}, "env" in step ? step.env : undefined, env);
+    if (profile === "runtime") {
+      mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] = "1";
+    }
+    // Source-run rebuilds share qaRuntime but retain the caller's explicit
+    // declaration choice. The other partial profiles remain runtime-only.
+    if (profile === "qaRuntime" && step.label === "tsdown") {
+      mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] =
+        buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? mergedEnv[RUN_NODE_SKIP_DTS_BUILD_ENV];
+    }
+    return Object.assign({}, step, { env: mergedEnv });
+  });
 }
 
 /** Pin one source identity for every child process that contributes to this build. */
@@ -396,7 +379,9 @@ function resolveBuildAllTsdownPlan(
   heapShortfall: ReturnType<typeof resolveTsdownBuildPlan>["heapShortfall"];
 } {
   if (
-    !["full", "package", "ciArtifacts", "strictSmoke", "pluginSdkStrictSmoke"].includes(profile)
+    !["full", "package", "runtime", "ciArtifacts", "strictSmoke", "pluginSdkStrictSmoke"].includes(
+      profile,
+    )
   ) {
     return { env, heapShortfall: null };
   }
