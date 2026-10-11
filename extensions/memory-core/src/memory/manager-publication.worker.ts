@@ -55,6 +55,14 @@ import {
 } from "./manager-source-state.js";
 import { memoryTableExists } from "./manager-vector-rebuild-state.js";
 
+type PublicationConnection =
+  | MemoryShadowConnection
+  | {
+      kind: "agent";
+      fileIdentity: MemoryShadowConnection["fileIdentity"];
+      pragmas: Pick<MemoryShadowConnection["pragmas"], "busy_timeout" | "foreign_keys">;
+    };
+
 function failure(error: unknown): MemoryShadowFailure {
   return {
     name: error instanceof Error ? error.name : "Error",
@@ -135,11 +143,15 @@ export function bindSqliteWorkerBackend(
   },
 ) {
   const db = context.database;
-  const connection =
+  const connection: PublicationConnection =
     "kind" in input
       ? {
+          kind: "agent",
           fileIdentity: readMemoryShadowIdentity(context.databasePath),
-          pragmas: readConnectionPragmas(db),
+          pragmas: {
+            busy_timeout: readConnectionPragma(db, "busy_timeout"),
+            foreign_keys: readConnectionPragma(db, "foreign_keys"),
+          },
         }
       : input;
   return createPublicationBackend(connection, context.databasePath, db, false, (stage) =>
@@ -147,26 +159,30 @@ export function bindSqliteWorkerBackend(
   );
 }
 
+function readConnectionPragma(
+  db: DatabaseSync,
+  name: keyof MemoryShadowConnection["pragmas"],
+): number {
+  const row = db.prepare(`PRAGMA ${name}`).get();
+  const value = row?.[name] ?? row?.timeout;
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new Error("Invalid memory publication connection policy");
+  }
+  return value;
+}
+
 function readConnectionPragmas(db: DatabaseSync): MemoryShadowConnection["pragmas"] {
-  const read = (name: keyof MemoryShadowConnection["pragmas"]): number => {
-    const row = db.prepare(`PRAGMA ${name}`).get();
-    const value = row?.[name] ?? row?.timeout;
-    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-      throw new Error("Invalid memory publication connection policy");
-    }
-    return value;
-  };
   return {
-    busy_timeout: read("busy_timeout"),
-    synchronous: read("synchronous"),
-    foreign_keys: read("foreign_keys"),
-    journal_size_limit: read("journal_size_limit"),
-    checkpoint_fullfsync: read("checkpoint_fullfsync"),
+    busy_timeout: readConnectionPragma(db, "busy_timeout"),
+    synchronous: readConnectionPragma(db, "synchronous"),
+    foreign_keys: readConnectionPragma(db, "foreign_keys"),
+    journal_size_limit: readConnectionPragma(db, "journal_size_limit"),
+    checkpoint_fullfsync: readConnectionPragma(db, "checkpoint_fullfsync"),
   };
 }
 
 function createPublicationBackend(
-  input: MemoryShadowConnection,
+  input: PublicationConnection,
   databasePath: string,
   db: DatabaseSync,
   ownsConnection: boolean,
@@ -185,6 +201,13 @@ function createPublicationBackend(
       ))
     | undefined;
   let loadedExtension: string | undefined;
+  const loadExtension = (extensionPath: string | undefined) => {
+    if (extensionPath && extensionPath !== loadedExtension) {
+      loadSqliteVecExtensionFromPath(db, extensionPath);
+      assertPath();
+      loadedExtension = extensionPath;
+    }
+  };
   assertPath();
   for (const [name, value] of Object.entries(input.pragmas)) {
     if (!Number.isSafeInteger(value)) {
@@ -286,7 +309,9 @@ function createPublicationBackend(
     execute(command) {
       assertPath();
       if (command.type === "connection.inspect") {
-        return input;
+        return "kind" in input
+          ? { fileIdentity: input.fileIdentity, pragmas: readConnectionPragmas(db) }
+          : input;
       }
       if (command.type === "schema.admit") {
         // Storage/STRICT migration must disable foreign keys before BEGIN.
@@ -420,16 +445,11 @@ function createPublicationBackend(
           }),
         );
       }
-      const extensionPath = command.input.state.extensionPath;
-      if (extensionPath && extensionPath !== loadedExtension) {
-        loadSqliteVecExtensionFromPath(db, extensionPath);
-        assertPath();
-        loadedExtension = extensionPath;
-      }
       if (command.type === "vector.retireLegacy") {
         if (!memoryTableExists(db, "chunks_vec")) {
           return { ok: true, value: false };
         }
+        loadExtension(command.input.state.extensionPath);
         return write(() => {
           db.exec("DROP TABLE IF EXISTS chunks_vec");
           return true;
@@ -445,6 +465,7 @@ function createPublicationBackend(
         if (currentDimensions === dimensions && memoryTableExists(db, MEMORY_INDEX_VECTOR_TABLE)) {
           return { ok: true, value: undefined };
         }
+        loadExtension(command.input.state.extensionPath);
         return write(() => {
           db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_VECTOR_TABLE}`);
           db.exec(
@@ -460,6 +481,7 @@ function createPublicationBackend(
           }
         });
       }
+      loadExtension(command.input.state.extensionPath);
       if (command.type === "database.publish") {
         const publication = command.input;
         return transact((hooks) => {

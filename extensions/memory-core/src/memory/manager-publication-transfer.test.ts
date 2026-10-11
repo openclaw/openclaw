@@ -129,13 +129,14 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("allocates temporary input only for staged publications", () => {
+  it("avoids unused connection work for scalar publications", () => {
     const filename = path.join(tempDirs.make("memory-publication-input-"), "index.sqlite");
     const db = new DatabaseSync(filename);
     try {
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
       db.exec("CREATE TABLE chunks_vec (id TEXT)");
       const sql = vi.spyOn(db, "exec");
+      const reads = vi.spyOn(db, "prepare");
       const bind = () =>
         bindSqliteWorkerBackend(
           { kind: "agent" },
@@ -149,6 +150,27 @@ describe("bounded memory publication transfer", () => {
       expect(scalar.execute({ type: "vector.retireLegacy", input: { state } })).toEqual({
         ok: true,
         value: true,
+      });
+      expect(
+        scalar.execute({
+          type: "vector.retireLegacy",
+          input: { state: { ...state, extensionPath: path.join(filename, "missing-vec") } },
+        }),
+      ).toEqual({ ok: true, value: false });
+      expect(
+        reads.mock.calls.filter(([statement]) =>
+          /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)$/u.test(statement),
+        ),
+      ).toEqual([]);
+      expect(scalar.execute({ type: "connection.inspect", input: undefined })).toEqual({
+        fileIdentity: readMemoryShadowIdentity(filename),
+        pragmas: {
+          busy_timeout: expect.any(Number),
+          synchronous: expect.any(Number),
+          foreign_keys: expect.any(Number),
+          journal_size_limit: expect.any(Number),
+          checkpoint_fullfsync: expect.any(Number),
+        },
       });
       scalar.close();
       expect(
