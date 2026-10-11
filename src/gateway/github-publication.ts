@@ -37,19 +37,21 @@ import {
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
+import {
+  digestGitHubPublicationRequest as digestRequest,
+  projectGitHubPublicationResult as publicationResult,
+} from "./github-publication-receipt.js";
 import { readGitHubPublicationRequestInWorker } from "./github-publication-recovery.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
   claimGitHubPublicationExecution as claimExecution,
   createGitHubPublicationExecutionStore,
   deferGitHubPublicationRequests as deferRequests,
-  digestGitHubPublicationRequest as digestRequest,
   insertGitHubPublicationRequest,
   ensureGitHubPublicationStore as ensureSchema,
   githubPublicationDatabase as publicationDb,
   isGitHubPublicationExecutionOwner as ownsExecution,
   listGitHubPublicationsForClaim,
-  projectGitHubPublicationResult as publicationResult,
   readGitHubPublicationRequest,
 } from "./github-publication-store.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
