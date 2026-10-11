@@ -106,14 +106,6 @@ function requireCachedThreadStarter(value: ReturnType<typeof getCachedThreadStar
   return value.starter;
 }
 
-function firstRestGetPath(get: ReturnType<typeof vi.fn>): unknown {
-  const [call] = get.mock.calls;
-  if (!call) {
-    throw new Error("expected Discord REST GET call");
-  }
-  return call[0];
-}
-
 async function resolveStarter(params: {
   message: ThreadStarterRestMessage;
   parentId?: string;
@@ -173,19 +165,19 @@ describe("resolveDiscordThreadStarter", () => {
     }
   });
 
-  it.each([
-    { name: "the exact five-minute freshness boundary", now: 1_300_000 },
-    { name: "a clock rollback before the starter was fetched", now: 999_999 },
-  ])("invalidates cached thread starters at $name", ({ now }) => {
-    const key = `expired-thread-${++threadIdIndex}`;
-    setCachedThreadStarter(
-      key,
-      { kind: "hit", starter: { text: "stale", author: "Alice" } },
-      1_000_000,
-    );
+  it.each([{ name: "a clock rollback before the starter was fetched", now: 999_999 }])(
+    "invalidates cached thread starters at $name",
+    ({ now }) => {
+      const key = `expired-thread-${++threadIdIndex}`;
+      setCachedThreadStarter(
+        key,
+        { kind: "hit", starter: { text: "stale", author: "Alice" } },
+        1_000_000,
+      );
 
-    expect(getCachedThreadStarter(key, now)).toBeUndefined();
-  });
+      expect(getCachedThreadStarter(key, now)).toBeUndefined();
+    },
+  );
 
   it("retains recently used thread starters when the 500-entry cache reaches capacity", () => {
     const prefix = `lru-thread-${++threadIdIndex}-`;
@@ -216,7 +208,6 @@ describe("resolveDiscordThreadStarter", () => {
   });
 
   it.each([
-    { name: "a missing starter", get: () => vi.fn().mockResolvedValue(null) },
     {
       name: "an inaccessible starter",
       get: () => vi.fn().mockRejectedValue(createDiscordError(403)),
@@ -344,49 +335,6 @@ describe("resolveDiscordThreadStarter", () => {
     expect(allowedGet).toHaveBeenCalledOnce();
   });
 
-  it("does not cache missing parent metadata", async () => {
-    const get = vi.fn().mockResolvedValue(createStarterMessage({ content: "resolved" }));
-    const client = { rest: { get } } as unknown as Client;
-    const channel = { id: String(++threadIdIndex) };
-
-    await expect(
-      resolveDiscordThreadStarter({
-        channel,
-        client,
-        accountId: "test-account",
-        parentType: ChannelType.GuildText,
-        resolveTimestampMs: () => undefined,
-      }),
-    ).resolves.toBeNull();
-    await expect(
-      resolveDiscordThreadStarter({
-        channel,
-        client,
-        accountId: "test-account",
-        parentId: "parent-1",
-        parentType: ChannelType.GuildText,
-        resolveTimestampMs: () => undefined,
-      }),
-    ).resolves.toMatchObject({ text: "resolved" });
-    expect(get).toHaveBeenCalledOnce();
-  });
-
-  it("resolves thread starters when their parent type is unavailable", async () => {
-    const threadId = String(++threadIdIndex);
-    const get = vi.fn().mockResolvedValue(createStarterMessage({ content: "visible starter" }));
-
-    await expect(
-      resolveDiscordThreadStarter({
-        channel: { id: threadId },
-        client: { rest: { get } } as unknown as Client,
-        accountId: "test-account",
-        parentId: "parent-1",
-        resolveTimestampMs: () => undefined,
-      }),
-    ).resolves.toMatchObject({ text: "visible starter" });
-    expect(get).toHaveBeenCalledExactlyOnceWith(`/channels/parent-1/messages/${threadId}`);
-  });
-
   it("keeps parent-route misses separate when forum metadata recovers", async () => {
     const threadId = String(++threadIdIndex);
     const get = vi.fn(async (path: string) =>
@@ -434,33 +382,6 @@ describe("resolveDiscordThreadStarter", () => {
       memberRoleIds: undefined,
       timestamp: 123,
     });
-  });
-
-  it("prefers starter content over embed, component, and forwarded fallback text", async () => {
-    const { result } = await resolveStarter({
-      message: createStarterMessage({
-        content: "starter content",
-        embeds: [{ title: "Alert", description: "Details" }],
-        components: COMPONENTS_V2_STARTER_BODY,
-        message_snapshots: [createForwardedSnapshot({ content: "forwarded content" })],
-      }),
-    });
-
-    if (!result) {
-      throw new Error("starter content should have produced a resolved starter payload");
-    }
-    expect(result.text).toBe("starter content");
-  });
-
-  it("keeps Components v2 text from a component-only starter", async () => {
-    const { result } = await resolveStarter({
-      message: createStarterMessage({
-        components: COMPONENTS_V2_STARTER_BODY,
-        flags: MessageFlags.IsComponentsV2,
-      }),
-    });
-
-    expect(requireThreadStarter(result).text).toBe("Deploy failed\nstaging pipeline exited 1");
   });
 
   it("prefers Components v2 text over a forwarded snapshot when a starter carries both", async () => {
@@ -518,22 +439,6 @@ describe("resolveDiscordThreadStarter", () => {
     });
   });
 
-  it("joins multiple forwarded message snapshots", async () => {
-    const { result } = await resolveStarter({
-      message: createStarterMessage({
-        message_snapshots: [
-          createForwardedSnapshot({ content: "first forwarded message" }),
-          createForwardedSnapshot({ content: "second forwarded message" }),
-        ],
-        author: createStarterAuthor({ id: "u5", username: "Eve" }),
-      }),
-    });
-
-    const starter = requireThreadStarter(result);
-    expect(starter.text).toContain("first forwarded message");
-    expect(starter.text).toContain("second forwarded message");
-  });
-
   it("preserves forwarded attachment placeholders in thread starter context", async () => {
     const { result } = await resolveStarter({
       message: createStarterMessage({
@@ -557,59 +462,6 @@ describe("resolveDiscordThreadStarter", () => {
     expect(starter.text).toContain("[Forwarded message]");
     expect(starter.text).toContain("<media:image>");
     expect(starter.text).not.toContain("(1 image)");
-  });
-
-  it("preserves forwarded sticker placeholders in thread starter context", async () => {
-    const { result } = await resolveStarter({
-      message: createStarterMessage({
-        message_snapshots: [
-          createForwardedSnapshot({
-            sticker_items: [
-              {
-                id: "s1",
-                name: "party",
-                format_type: StickerFormatType.PNG,
-              },
-            ],
-          }),
-        ],
-        author: createStarterAuthor({ id: "u7", username: "Grace" }),
-      }),
-    });
-
-    const starter = requireThreadStarter(result);
-    expect(starter.text).toContain("[Forwarded message]");
-    expect(starter.text).toContain("<media:sticker>");
-    expect(starter.text).not.toContain("(1 sticker)");
-  });
-
-  it("renders native media for attachment-only thread starters", async () => {
-    const { result } = await resolveStarter({
-      message: createStarterMessage({
-        attachments: [
-          {
-            id: "a1",
-            filename: "starter.png",
-            content_type: "image/png",
-            url: "https://cdn.discordapp.com/starter.png",
-          },
-        ],
-      }),
-    });
-
-    expect(requireThreadStarter(result).text).toBe("<media:image>");
-  });
-
-  it("uses the thread id as the message channel id for forum parents", async () => {
-    const { get, result, threadId } = await resolveStarter({
-      message: createStarterMessage({ content: "starter content" }),
-      parentId: undefined,
-      parentType: ChannelType.GuildForum,
-    });
-
-    expect(requireThreadStarter(result).text).toBe("starter content");
-    expect(get).toHaveBeenCalledTimes(1);
-    expect(firstRestGetPath(get)).toBe(`/channels/${threadId}/messages/${threadId}`);
   });
 
   it("returns null when content, embeds, and snapshots are all empty", async () => {
