@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
@@ -8,11 +9,14 @@ import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 export async function seedMemoryAccountingTranscript(
   scope: SessionTranscriptRuntimeTarget,
@@ -226,3 +230,33 @@ export type CompactEmbeddedAgentSessionParams = {
   sessionId?: string;
   trigger?: string;
 };
+
+type TestReplyOperation = ReplyOperation & {
+  setPhase: ReturnType<typeof vi.fn<ReplyOperation["setPhase"]>>;
+  updateSessionId: ReturnType<typeof vi.fn<ReplyOperation["updateSessionId"]>>;
+};
+
+export function createReplyOperation(): TestReplyOperation {
+  const { replyOperation } = createMockReplyOperation({ key: "test" });
+  return Object.assign(replyOperation, {
+    phase: "queued" as const,
+    setPhase: vi.fn<ReplyOperation["setPhase"]>(),
+    updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
+  });
+}
+
+export function createCompactionLifecycle(replyOperation: ReplyOperation) {
+  return {
+    abortSignal: replyOperation.abortSignal,
+    onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+    onSessionIdChanged: (sessionId: string) => replyOperation.updateSessionId(sessionId),
+  };
+}
+
+export function loadMainSessionEntry(storePath: string): SessionEntry {
+  const entry = loadSessionEntry({ storePath, sessionKey: "main" });
+  if (!entry) {
+    throw new Error("expected persisted main session entry");
+  }
+  return entry;
+}
