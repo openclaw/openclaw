@@ -3070,7 +3070,13 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     "scripts/lib/plugin-npm-release.ts",
     ["test/plugin-npm-release.test.ts", "test/plugin-clawhub-release.test.ts"],
   ],
-  ["scripts/lib/extension-source-classifier.mts", ["extension-source-classifier"]],
+  [
+    "scripts/lib/extension-source-classifier.mts",
+    [
+      "extension-source-classifier",
+      "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
+    ],
+  ],
   ["scripts/build-stamp.mts", ["src/infra/build-stamp.test.ts"]],
   ["scripts/run-vitest.mjs", ["run-vitest", "test-projects", "vitest-local-scheduling"]],
   ["scripts/run-vitest.mts", ["run-vitest", "test-projects", "vitest-local-scheduling"]],

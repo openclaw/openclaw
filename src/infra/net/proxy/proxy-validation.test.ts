@@ -264,6 +264,34 @@ describe("proxy validation", () => {
     ]);
   });
 
+  it("fails validation when a denied destination succeeds", async () => {
+    const result = await runProxyValidation({
+      config: {
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: ["https://example.com/"],
+      deniedUrls: ["http://127.0.0.1/"],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.checks).toEqual([
+      {
+        kind: "allowed",
+        url: "https://example.com/",
+        ok: true,
+        status: 200,
+      },
+      {
+        kind: "denied",
+        url: "http://127.0.0.1/",
+        ok: false,
+        status: 200,
+        error: "Denied destination returned HTTP 200; expected the proxy to block the connection",
+      },
+    ]);
+  });
+
   it("adds an APNs reachability check when requested", async () => {
     const result = await runProxyValidation({
       config: {

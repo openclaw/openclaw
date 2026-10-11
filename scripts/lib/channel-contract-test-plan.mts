@@ -4,6 +4,7 @@ import { listTrackedTestFiles } from "./list-test-files.mts";
 import { assignWeightedTestFiles } from "./weighted-test-shards.mts";
 
 const CONTRACT_FILE_WEIGHTS = new Map([
+  ["channel-import-guardrails.test.ts", 18],
   ["outbound-payload.contract.test.ts", 18],
   // Loads every bundled channel plugin surface in one file.
   ["plugin-shape.contract.test.ts", 48],

@@ -60,6 +60,7 @@ afterEach(async () => {
 
 describe("OpenClawChannelBridge — Claude permission authorization", () => {
   test.each([
+    { name: "non-owner", senderIsOwner: false, role: "user" },
     { name: "missing owner metadata", senderIsOwner: undefined, role: "user" },
     { name: "assistant message", senderIsOwner: true, role: "assistant" },
   ])("does not resolve a pending permission from a $name reply", async (reply) => {

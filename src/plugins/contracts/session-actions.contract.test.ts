@@ -563,6 +563,7 @@ describe("plugin session actions", () => {
       ["write cannot pair", "pairing", [WRITE_SCOPE], PAIRING_SCOPE],
       ["write cannot answer questions", "questions", [WRITE_SCOPE], QUESTIONS_SCOPE],
       ["write admits an action with default scopes", "default-write", [WRITE_SCOPE]],
+      ["talk cannot perform a default-write action", "default-write", [TALK_SCOPE], WRITE_SCOPE],
       ["read cannot perform a default-write action", "default-write", [READ_SCOPE], WRITE_SCOPE],
     ])("%s", async (_name, actionId, scopes, missingScope) => {
       const response = await callRegisteredSessionActionThroughGatewayForTest({
