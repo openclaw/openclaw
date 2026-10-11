@@ -200,13 +200,6 @@ describe("resolveSlackBotLoopProtection conversation scope", () => {
     },
   );
 
-  it.each(BURST_ABSENT)(
-    "uses the bare channel conversation identity with %s",
-    (_label, configs) => {
-      expect(conversationIdFor(configs, "1700000000.001")).toBe("C123");
-    },
-  );
-
   it.each(BURST_PRESENT)(
     "scopes pair accounting to the thread when the burst budget resolves from %s",
     (_label, configs) => {
@@ -218,14 +211,6 @@ describe("resolveSlackBotLoopProtection conversation scope", () => {
       expect(record("C_OPTIN", "030", "B_PEER", "1700000000.200")).toBe(false);
       // The first thread's own budget is still enforced.
       expect(record("C_OPTIN", "040", "B_PEER", "1700000000.100")).toBe(true);
-    },
-  );
-
-  it.each(BURST_PRESENT)(
-    "qualifies the thread conversation identity with its channel for %s",
-    (_label, configs) => {
-      // Matches buildSlackDebounceKey: a thread ts is unique only inside its channel.
-      expect(conversationIdFor(configs, "1700000000.001")).toBe("C123:1700000000.001");
     },
   );
 

@@ -45,6 +45,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Keep real Google Chat HTTP transport out of the admission-boundary replay.
 vi.mock("./api.js", () => ({
   deleteGoogleChatMessage: apiMocks.deleteGoogleChatMessage,
   downloadGoogleChatMedia: apiMocks.downloadGoogleChatMedia,
@@ -52,10 +53,12 @@ vi.mock("./api.js", () => ({
   updateGoogleChatMessage: apiMocks.updateGoogleChatMessage,
 }));
 
+// mock-isolation: Drive admission directly instead of through the real inbound access policy.
 vi.mock("./monitor-access.js", () => ({
   applyGoogleChatInboundAccessPolicy: accessMocks.applyGoogleChatInboundAccessPolicy,
 }));
 
+// mock-isolation: Capture the webhook processor locally rather than registering a live target.
 vi.mock("./monitor-routing.js", () => ({
   registerGoogleChatWebhookTarget: vi.fn(),
   setGoogleChatWebhookEventProcessor: vi.fn(

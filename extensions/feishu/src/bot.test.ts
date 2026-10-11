@@ -1200,7 +1200,7 @@ describe("handleFeishuMessage command authorization", () => {
         onAbandoned: abandoned,
       }),
     });
-    const receive = async (id: string, sender: string) => {
+    const receiveBurst = async (id: string, sender: string) => {
       await handler(
         createFeishuTestEvent({
           messageId: `burst-retry-${id}`,
@@ -1216,21 +1216,21 @@ describe("handleFeishuMessage command authorization", () => {
       );
       await drain();
     };
-    await receive("a1", "ou-burst-a");
-    await receive("a2", "ou-burst-a");
-    await receive("b1", "ou-burst-b");
+    await receiveBurst("a1", "ou-burst-a");
+    await receiveBurst("a2", "ou-burst-a");
+    await receiveBurst("b1", "ou-burst-b");
     expect(completed).toEqual(["burst-retry-a1", "burst-retry-a2"]);
     expect(abandoned).toHaveBeenCalled();
     // The real receive handler releases its logical claim on abandonment.
-    await receive("b1", "ou-burst-b");
-    await receive("b2", "ou-burst-b");
+    await receiveBurst("b1", "ou-burst-b");
+    await receiveBurst("b2", "ou-burst-b");
     expect(completed).toEqual([
       "burst-retry-a1",
       "burst-retry-a2",
       "burst-retry-b1",
       "burst-retry-b2",
     ]);
-    await receive("b3", "ou-burst-b");
+    await receiveBurst("b3", "ou-burst-b");
     expect(completed).toHaveLength(4);
   });
 

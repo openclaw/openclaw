@@ -14,7 +14,9 @@
  * model request carrying an event's marker is a positive admission observation
  * and its absence at the settle deadline is a suppression observation. The
  * deadline is validated against the slowest admission actually measured in the
- * same run, so a broken pipeline cannot read as suppression.
+ * same run, so a broken pipeline cannot read as suppression. Each Gateway first
+ * serves one warm-up turn on an isolated channel, keeping one-time startup cost
+ * out of that measurement.
  *
  * Scenarios, each on a fresh Gateway so the guard starts empty: pair budget
  * only (new setting absent); conversation burst budget enabled; cross-thread
@@ -45,6 +47,9 @@ const PEER_BOT_ID = "BPEER";
 const OTHER_BOT_ID = "BOTHER";
 const SETTLE_MS = 20_000;
 const GATEWAY_READY_TIMEOUT_MS = 120_000;
+// Guard state is keyed by conversation, so a warm-up turn here cannot touch the
+// budgets of the channels a scenario measures.
+const WARMUP_CHANNEL = "C_WARMUP";
 
 const heartbeat = new Worker(
   'setInterval(() => process.stdout.write("proof-117734-slack: gateway proof still active\\n"), 30000)',
@@ -271,11 +276,12 @@ function buildConfig(params: ScenarioConfigParams): Record<string, unknown> {
         allowBots: true,
         groupPolicy: "open",
         requireMention: false,
-        // Peer bots reach a room turn through the per-channel allowlist. Both
-        // channels carry the identical entry so only the channel id differs.
+        // Peer bots reach a room turn through the per-channel allowlist. Every
+        // channel carries the identical entry so only the channel id differs.
         channels: {
           C_FIRST: { requireMention: false, users: [PEER_BOT_ID, OTHER_BOT_ID] },
           C_SECOND: { requireMention: false, users: [PEER_BOT_ID, OTHER_BOT_ID] },
+          [WARMUP_CHANNEL]: { requireMention: false, users: [PEER_BOT_ID, OTHER_BOT_ID] },
         },
       },
     },
@@ -311,7 +317,6 @@ function buildConfig(params: ScenarioConfigParams): Record<string, unknown> {
         workspace: params.workspaceDir,
         skipBootstrap: true,
         timeoutSeconds: 30,
-        contextTokens: 32000,
       },
     },
     skills: { allowBundled: [] },
@@ -500,6 +505,7 @@ async function runScenario(params: {
   rootDir: string;
   maxEventsPerWindow: number;
   maxConversationBotEvents?: number;
+  warmupTs: string;
   events: Array<SlackEventParams & { expectAdmitted: boolean }>;
   verifySignatureRejection?: boolean;
 }): Promise<ScenarioResult> {
@@ -564,6 +570,25 @@ async function runScenario(params: {
       );
     }
 
+    // The first agent turn after Gateway start pays one-time costs (lazy provider
+    // plugin load, first session setup) that later turns do not. Spend them on an
+    // isolated channel so the deadline check below measures the steady pipeline.
+    const warmup = await driveEvent({
+      gateway,
+      edges,
+      event: {
+        channel: WARMUP_CHANNEL,
+        ts: params.warmupTs,
+        threadTs: params.warmupTs,
+        botId: PEER_BOT_ID,
+        marker: `${params.label}-warmup`,
+      },
+    });
+    check(
+      warmup.admitted,
+      `${params.label}: ${WARMUP_CHANNEL} warm-up turn admitted (observed in ${warmup.latencyMs}ms, excluded from the deadline check)`,
+    );
+
     const observations: ScenarioResult["observations"] = [];
     let slowestAdmissionMs = 0;
     for (const event of params.events) {
@@ -619,11 +644,14 @@ try {
   // A second thread in the SAME channel. Whether these two threads share one
   // pair budget is exactly the upgrade question the compatibility scenarios ask.
   const otherThread = ts(3);
+  // One second before every measured event, on its own channel.
+  const warmupTs = ts(-1);
 
   const pairOnly = await runScenario({
     label: "pair-budget-only",
     cwd,
     rootDir,
+    warmupTs,
     maxEventsPerWindow: 2,
     verifySignatureRejection: true,
     events: [
@@ -668,6 +696,7 @@ try {
     label: "conversation-burst-budget",
     cwd,
     rootDir,
+    warmupTs,
     maxEventsPerWindow: 100,
     maxConversationBotEvents: 3,
     events: [
@@ -730,6 +759,7 @@ try {
     label: "cross-thread-upgrade-compatibility",
     cwd,
     rootDir,
+    warmupTs,
     maxEventsPerWindow: 2,
     events: [
       {
@@ -768,6 +798,7 @@ try {
     label: "cross-thread-opt-in-scope",
     cwd,
     rootDir,
+    warmupTs,
     maxEventsPerWindow: 2,
     maxConversationBotEvents: 50,
     events: [
