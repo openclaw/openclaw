@@ -226,8 +226,8 @@ OpenClaw classifies sessions by the work it can still observe:
 
 Recovery emits structured `session.recovery.requested` and
 `session.recovery.completed` events. Diagnostic session state is marked idle
-only after a mutating recovery outcome (`aborted` or `released`) and only if
-the same processing generation is still current.
+only after a mutating recovery outcome (`aborted`, `force_cleared`, or
+`released`) and only if the same processing generation is still current.
 
 Only `session.stuck` emits the `openclaw.session.stuck` counter, the
 `openclaw.session.stuck_age_ms` histogram, and the `openclaw.session.stuck`
