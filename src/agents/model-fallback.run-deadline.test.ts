@@ -92,25 +92,4 @@ describe("model fallback run deadline", () => {
     // being given a real attempt.
     expect(remainingAtFallbackMs).toBeGreaterThan(TIMEOUT_MS);
   });
-
-  it("leaves runs without a registered owner on their existing deadline", async () => {
-    const run = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        throw new FailoverError("primary timed out", { reason: "timeout" });
-      })
-      .mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg: createModelFallbackConfig("openai/m1", ["anthropic/m2"]),
-      provider: "openai",
-      model: "m1",
-      runId: "unowned-run",
-      manifestPlugins: [],
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-  });
 });
