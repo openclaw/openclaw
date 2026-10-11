@@ -6,7 +6,7 @@ import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import { isGatewayNativeApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
+import { isGatewayWorkerApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
@@ -146,7 +146,7 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
   questionCallerRead?: PreparedQuestionCallerRead,
 ): T {
   if (
-    isGatewayNativeApprovalMethod(options.req.method) &&
+    isGatewayWorkerApprovalMethod(options.req.method) &&
     isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)
   ) {
     const captured = captureRequestMutationOptions(options);

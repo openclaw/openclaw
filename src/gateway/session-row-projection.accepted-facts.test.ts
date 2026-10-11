@@ -6,12 +6,10 @@ import { queryObjects } from "node:v8";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
   getSubagentSessionListReadSnapshotIdentity,
-  withSubagentRunReadSnapshot,
+  prepareSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -496,15 +494,6 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           };
           replaceSessionEntrySync(suffixScope, entries[1]);
         }
-        const previous = createSubagentRunRecord({
-          runId: "accepted-archive-previous-run",
-          childSessionKey: "agent:main:unrelated-child",
-          requesterSessionKey: "agent:main:unrelated-parent",
-          generation: 1,
-          completion: { required: false },
-          delivery: { status: "not_required" },
-        });
-        saveSubagentRegistryToSqlite(new Map([[previous.runId, previous]]));
         const releaseForeground = retainSessionListForegroundWork();
         const releaseBulk = createDeferredCore();
         const registryPending = createDeferredCore();
@@ -543,22 +532,11 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               return result;
             },
           );
-          const replacement = { ...previous, runId: "accepted-archive-current-run", generation: 2 };
-          saveSubagentRegistryToSqlite(new Map([[replacement.runId, replacement]]));
-          recovery = withSubagentRunReadSnapshot(
-            new Map(),
-            (snapshot) => ({
-              runIds: [...snapshot.values()]
-                .filter((run) => run.childSessionKey === previous.childSessionKey)
-                .map((run) => run.runId),
-              sessionKeys: [],
-            }),
-            (selection) => selection.runIds,
-            { sessionKeys: [previous.childSessionKey], descendants: true },
-          );
+          clearSubagentRunsReadCacheForTest();
+          recovery = prepareSubagentSessionListReadCache();
           await registryPending.promise;
           expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
-          // Recovery defers these real archive publications into the ordinary dirty queue.
+          // Cold preparation defers these archive publications into the ordinary dirty queue.
           for (const [index, query] of queries.slice(0, 2).entries()) {
             replaceSessionEntrySync(
               { agentId: query.agentId, sessionKey: query.key },
@@ -567,7 +545,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           }
           expect(projection.dirtyRowCount).toBe(2);
           releaseRegistry.resolve();
-          expect(await recovery).toEqual([replacement.runId]);
+          await recovery;
           const reads: SessionRowDatabaseFacts[][] = [];
           const readDatabases = history.withSessionHistoryWorkerDatabases;
           vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(

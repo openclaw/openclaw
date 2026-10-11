@@ -78,8 +78,9 @@ function ensureReplicaSubscription(): void {
   }
   // Lifecycle cleanup also clears listeners; subscribe only when this owner resumes.
   pool.unsubscribe = sessionChanges.subscribeFacts((change) => {
-    // oxlint-disable-next-line unicorn/no-useless-spread -- Receipt installation reorders the LRU map.
-    for (const cell of [...pool.cells.values()]) {
+    // Receipt installation reorders the LRU map, so visit the original cells once.
+    const cellsBeforePublication = [...pool.cells.values()];
+    for (const cell of cellsBeforePublication) {
       const { database, sessionKey } = cell.target;
       if (
         database.kind !== "file" ||

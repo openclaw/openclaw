@@ -619,7 +619,7 @@ function renderSessionsCard(
             mode: "buttons",
             variant: "accent",
             ariaPressed: false,
-            className: "small",
+            class: "small",
             value: sessionsTab,
             onChange: (tab) => onDisplayChange({ sessionsTab: tab }),
             onReselect: (tab) => onDisplayChange({ sessionsTab: tab }),

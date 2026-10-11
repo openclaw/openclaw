@@ -59,8 +59,9 @@ current event, retry-delayed pending rows, and locally released or ended claims.
 Channel buffers can match their own payloads to wait for already-admitted input;
 the core drain remains the owner of lane state. The SDK inbound debouncer's
 optional `shouldHoldFlush(items)` hook can defer a quiet-timer flush until its
-existing deadline. Appends supersede an in-flight check, and explicit flushes
-bypass it.
+existing deadline. Appends during a check join the same batch; a check may
+flush it without waiting for another quiet window. Explicit flushes bypass
+the check.
 
 That tombstone is the layering rule for replay guards
 (`openclaw/plugin-sdk/persistent-dedupe`): a drained channel keeps a separate

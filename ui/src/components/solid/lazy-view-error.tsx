@@ -1,7 +1,8 @@
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { JSX as SolidJSX } from "../../types/solid-elements.js";
+import "../modal-dialog.ts";
 import { Icon } from "./icon.tsx";
 import { LoadingState } from "./loading-state.tsx";
 

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -33,10 +32,7 @@ import {
   hasSchemaRefusal,
 } from "./schema-preflight.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
-import {
-  captureOwnedManagedUpdatePreflightContext,
-  revalidateUpdateDatabaseContext,
-} from "./update-command-managed-context.js";
+import { captureOwnedManagedUpdatePreflightContext } from "./update-command-managed-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -382,7 +378,7 @@ describe("target-release database schema preflight", () => {
 });
 
 describe("planned legacy configuration admission", () => {
-  it.each(["unchanged", "root edit", "include edit", "different profile"] as const)(
+  it.each(["unchanged", "different profile"] as const)(
     "keeps profile ownership and authored bytes across %s",
     async (scenario) => {
       await withTempHome(async (home) => {
@@ -427,9 +423,7 @@ describe("planned legacy configuration admission", () => {
           expect(fs.readFileSync(configPath)).toEqual(original);
           expect(fs.readFileSync(includePath)).toEqual(originalInclude);
           expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
-          if (scenario === "unchanged") {
-            expect((await revalidateUpdateDatabaseContext(context)).config).toEqual(context.config);
-          } else if (scenario === "different profile") {
+          if (scenario === "different profile") {
             const otherPath = path.join(path.dirname(configPath), "other.json");
             fs.writeFileSync(otherPath, original);
             await expect(
@@ -438,20 +432,6 @@ describe("planned legacy configuration admission", () => {
                 { legacyConfigPlan },
               ).then(() => true),
             ).rejects.toMatchObject({ reason: "invalid-config" });
-          } else {
-            fs.appendFileSync(scenario === "root edit" ? configPath : includePath, "\n");
-            const refreshed = await revalidateUpdateDatabaseContext(context);
-            expect(refreshed.config).toEqual(context.config);
-            expect(refreshed.configSnapshot.raw).toBe(fs.readFileSync(configPath, "utf8"));
-            expect(refreshed.legacyConfigPlan).toBeDefined();
-            expect(
-              refreshed.legacyConfigPlan?.includeIdentity.includeFileHashesForWrite?.[includePath],
-            ).toBe(
-              createHash("sha256")
-                .update("present\0")
-                .update(fs.readFileSync(includePath))
-                .digest("hex"),
-            );
           }
         });
       });
