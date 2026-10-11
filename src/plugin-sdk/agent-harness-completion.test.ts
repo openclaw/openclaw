@@ -43,6 +43,16 @@ vi.mock("../agents/subagents/announce/subagent-announce-delivery.js", () => ({
   loadRequesterSessionEntry: mocks.loadRequester,
   isInternalAnnounceRequesterSession: () => false,
 }));
+vi.mock(
+  "../agents/subagents/announce/subagent-announce-delivery.runtime.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../agents/subagents/announce/subagent-announce-delivery.runtime.js")
+    >()),
+    captureRequesterSessionEntryCurrent: (sessionKey: string, agentId?: string) => () =>
+      mocks.loadRequester(sessionKey, agentId).entry,
+  }),
+);
 vi.mock("../agents/subagents/announce/subagent-announce-origin.js", () => ({
   resolveAnnounceOrigin: () => ({ channel: "test", to: "requester" }),
   resolveSubagentCompletionOrigin: mocks.resolveCompletionOrigin,

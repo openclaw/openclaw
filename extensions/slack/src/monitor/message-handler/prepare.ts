@@ -660,7 +660,7 @@ export async function prepareSlackMessage(params: {
       agentViewThreadTs,
       eventScope: opts.eventScope,
     });
-  let routing = resolveMessageRouting(seedTopLevelRoomThreadBySource);
+  let routing = await resolveMessageRouting(seedTopLevelRoomThreadBySource);
 
   const groupThreadPeerId = isDirectMessage
     ? qualifySlackRoutePeerId({
@@ -897,8 +897,8 @@ export async function prepareSlackMessage(params: {
   const canSeedMentionedRoomThread =
     !seedTopLevelRoomThreadBySource && isRoom && !routing.isThreadReply && !hasBoundSession;
   let seededMentionRouting: typeof routing | undefined;
-  const getSeededMentionRouting = () => {
-    seededMentionRouting ??= resolveMessageRouting(true);
+  const getSeededMentionRouting = async () => {
+    seededMentionRouting ??= await resolveMessageRouting(true);
     return seededMentionRouting;
   };
 
@@ -919,7 +919,7 @@ export async function prepareSlackMessage(params: {
   if (shouldPreflightAudioMention && preflightAudioFile) {
     // Scope the provider call to the session that will own an admitted root,
     // not the provisional channel session used before its spoken mention exists.
-    const preflightRouting = canSeedMentionedRoomThread ? getSeededMentionRouting() : routing;
+    const preflightRouting = canSeedMentionedRoomThread ? await getSeededMentionRouting() : routing;
     const preflightContent = await resolveMessageContent({
       ...message,
       files: [preflightAudioFile],
@@ -966,7 +966,7 @@ export async function prepareSlackMessage(params: {
   // target session. A spoken regex mention needs the same seeded root routing
   // as a typed mention, or its later thread replies would use another session.
   if (canSeedMentionedRoomThread && wasMentioned) {
-    routing = getSeededMentionRouting();
+    routing = await getSeededMentionRouting();
     if (
       isGroupThreadRouteExclusive({
         sessionKey: routing.sessionKey,

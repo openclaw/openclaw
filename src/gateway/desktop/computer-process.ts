@@ -116,9 +116,6 @@ export function startComputerHostProcess(params: {
   };
   const fail = (error: Error) => {
     failure ??= error;
-    active = false;
-    ready.reject(error);
-    pending.rejectAll(error);
     void close().catch(() => {});
   };
   const failWhileOpen = (error: unknown) => {

@@ -1,7 +1,11 @@
-import type WaRadioGroup from "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import { expect } from "vitest";
 import type { SidebarLifecycleState } from "./app-sidebar.ts";
 import { waitForFast } from "./wait-for.ts";
+
+type SessionMenuHost = Pick<
+  SidebarLifecycleState,
+  "querySelector" | "updateComplete" | "sessionData"
+>;
 
 export function sessionMenuChoice(menu: Element, value: string) {
   const [kind, option] = value.split(":");
@@ -16,12 +20,12 @@ export function sessionMenuChoice(menu: Element, value: string) {
       `#sidebar-sessions-${ids[kind!]} ~ wa-popup [data-value="${option}"]`,
     );
   }
-  return menu.querySelector<HTMLElement>(
-    `#sidebar-sessions-${ids[kind!]} wa-radio[value="${option}"]`,
+  return menu.querySelector<HTMLInputElement>(
+    `#sidebar-sessions-${ids[kind!]} .settings-segmented__input[value="${option}"]`,
   );
 }
 
-export async function openSessionMenu(sidebar: SidebarLifecycleState): Promise<HTMLElement> {
+export async function openSessionMenu(sidebar: SessionMenuHost): Promise<HTMLElement> {
   if (!sidebar.querySelector(".sidebar-session-sort-menu")) {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
     await sidebar.updateComplete;
@@ -33,7 +37,7 @@ export async function openSessionMenu(sidebar: SidebarLifecycleState): Promise<H
   return menu;
 }
 
-export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
+export async function activateSessionMenuValue(sidebar: SessionMenuHost, value: string) {
   const menu = await openSessionMenu(sidebar);
   if (
     value === "involving-me" ||
@@ -76,20 +80,12 @@ export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, v
     if (!input) {
       throw new Error(`Expected session choice ${value}`);
     }
-    const group = input.closest<WaRadioGroup>("wa-radio-group");
-    if (!group) {
-      throw new Error(`Expected radio group for ${value}`);
-    }
-    // Lit's Node export disables Web Awesome's click listener in jsdom.
-    // Browser tests cover that listener; this harness drives its change boundary.
-    group.value = input.getAttribute("value");
-    await group.updateComplete;
-    group.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    input.click();
   }
   await sidebar.updateComplete;
 }
 
-export async function selectSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
+export async function selectSessionMenuValue(sidebar: SessionMenuHost, value: string) {
   await activateSessionMenuValue(sidebar, value);
   await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
   await sidebar.updateComplete;

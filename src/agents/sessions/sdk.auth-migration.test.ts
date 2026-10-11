@@ -7,6 +7,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { snapshotFiles } from "../../infra/state-migrations.caller-mode.test-helpers.js";
 import { autoMigrateLegacyState } from "../../infra/state-migrations.doctor.js";
+import { inspectLegacyAgentDir } from "../../infra/state-migrations.legacy-sessions.js";
 import type { Model } from "../../llm/types.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../../plugins/legacy-session-surfaces.types.js";
 import {
@@ -76,6 +77,8 @@ it("keeps a legacy SDK store when Doctor's configured owner differs", async () =
         status: "owned",
         agentId: "main",
       });
+      // Ownership may use admitted facts; payload inspection materializes native WAL sidecars.
+      expect(inspectLegacyAgentDir(legacyDir)).toEqual({ status: "payload" });
       const before = snapshotFiles(legacyDir);
       const cfg = { agents: { entries: { worker: {} } }, plugins: { enabled: false } };
       await state.writeConfig(cfg);

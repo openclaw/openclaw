@@ -245,7 +245,7 @@ export function buildBindingId(ref: ConversationRef): string {
   return `${CURRENT_BINDINGS_ID_PREFIX}${buildConversationKey(ref)}`;
 }
 
-function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boolean {
+export function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boolean {
   if (record.expiresAt === undefined) {
     return false;
   }

@@ -50,7 +50,7 @@ Rules:
   trusted rewrites (the normal OpenClaw shell exec tool also uses a `command`
   field). Blank caller aliases are treated as absent; a hook or trusted policy
   that invalidates one populated alias (blank or non-string) invalidates both so
-  execution fails closed. When both aliases are non-empty, their values must match.
+  execution is blocked. When both aliases are non-empty, their values must match.
 - Write plain JavaScript. TypeScript annotations, interfaces, and other
   TypeScript-only syntax are not accepted. Tool signatures and `API.read`
   declarations remain available as documentation for composing calls.
@@ -266,7 +266,7 @@ order: OpenClaw core tools, bundled plugin tools, external plugin tools, MCP
 tools, then client-provided tools for the current run.
 
 Catalog ids remain opaque host-only routing identities. They are stable within
-one run and deterministic across equivalent tool sets when possible, but they
+one run and the same across equivalent tool sets when possible, but they
 are never included in the prompt, guest metadata, handle descriptions, or
 errors. Policy, approvals, telemetry, replay safety, and namespace dispatch
 continue to use them internally.
@@ -325,7 +325,7 @@ Inside the guest runtime:
   gets the `tool_` prefix. For example, `llm-task` becomes `llm_task` when that
   name is free.
 - JavaScript reserved words, specialized globals, and normalized collisions
-  receive a deterministic short suffix derived from the host-only identity.
+  receive a stable short suffix derived from the host-only identity.
 - Exact safe names win their unsuffixed spelling. A raw tool never overwrites
   `catalog`, `MCP`, `API`, `nodes`, `skills`, `namespaces`, `results`, `store`,
   `load`, output/timer helpers,

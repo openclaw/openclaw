@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 372878,
-  "reason": "Native sidebar bridge landing: measured production startup JS 372,878 B after rebasing onto main, +1,107 B (0.298%) over the prior baseline within the approved sub-1% ceiling rule. Matched-toolchain main measured 372,406 B versus 372,597 B before final action-module extraction (+191 B); retain the existing 512 B growth and 64 B build-variance allowances.",
-  "updatedAt": "2026-10-02"
+  "startupJsGzipBytes": 374285,
+  "reason": "Personal backgrounds: Peter authorized fix and landing on 2026-10-10 after the scoped 1,407 B (0.38%) cap proposal. Paired candidate measured 374,285 B before the final deferred-drain repair and 374,327 B afterward; the 42 B difference stays within the existing 512 B growth allowance. Retain the 64 B build-variance allowance and all request, CSS, asset, and route budgets.",
+  "updatedAt": "2026-10-10"
 }

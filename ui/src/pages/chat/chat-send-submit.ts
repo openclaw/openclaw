@@ -51,6 +51,7 @@ import {
 } from "./chat-send-queue-state.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
+  chatSendAdmissionHoldReason,
   chatSendHoldReason,
   formatChatQueueAdmissionError,
   isChatResetCommand,
@@ -245,7 +246,7 @@ export async function handleSendChat(
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, userMessage);
       }
-      await handleAbortChat(host);
+      await handleAbortChat(host, { scope: "session" });
       return undefined;
     }
 
@@ -511,12 +512,17 @@ export async function handleSendChat(
     ) {
       return;
     }
-    if (chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId)) {
+    const admissionHoldReason = () =>
+      intent || rawParsedCommand || isInlineEditSubmission
+        ? chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId)
+        : chatSendAdmissionHoldReason(host, submittedSessionKey, submittedAgentId);
+    if (admissionHoldReason()) {
       // The composer owns transient recovery notices, including their removal.
       host.requestUpdate?.();
       return;
     }
     let pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
+    const initialTurnPending = host.hasPendingInitialTurn?.(submittedSessionKey) === true;
     const applyRunPolicy = hasDirectSessionRun(host) || isInitialChatHistoryUnavailable(host);
     // The edited row hands its place to the replacement and is retired by the same
     // store write, so a rejected write leaves the original queued and editable.
@@ -524,11 +530,13 @@ export async function handleSendChat(
       requestedEditId && resumedEditCandidate?.id === requestedEditId ? resumedEditCandidate : null;
     // Editing preserves the row's delivery choice; current composer defaults must
     // not turn an explicitly queued message into a steer or interrupt.
-    const followUpMode = resumedEdit
-      ? (resumedEdit.source.queueMode ?? "queue")
-      : (opts?.followUpMode ??
-        host.chatFollowUpMode ??
-        normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode));
+    const followUpMode = initialTurnPending
+      ? "queue"
+      : resumedEdit
+        ? (resumedEdit.source.queueMode ?? "queue")
+        : (opts?.followUpMode ??
+          host.chatFollowUpMode ??
+          normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode));
     const activeRunQueueMode =
       !intent && applyRunPolicy && followUpMode !== "queue" ? followUpMode : undefined;
     const allowActiveRunSend = Boolean(intent || (applyRunPolicy && followUpMode !== "queue"));
@@ -571,7 +579,7 @@ export async function handleSendChat(
         return;
       }
       queued = { ...queued, ...payload.update };
-      const hold = chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId);
+      const hold = admissionHoldReason();
       if (hold || (intent && (isChatBusy(host) || hasDirectSessionRun(host)))) {
         retireOutboxPayload(queued);
         if (hold) {

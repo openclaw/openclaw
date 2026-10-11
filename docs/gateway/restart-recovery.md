@@ -8,14 +8,19 @@ title: "Restart recovery"
 ---
 
 Conversations, transcripts, scheduled jobs, native subagent records, and queued
-outbound messages live on disk. After a gateway restart, eligible work interrupted
-mid-turn is detected and resumed automatically. Recovery is always on and
-normally needs no manual intervention. Exhausted infrastructure retries, or a
+outbound messages live on disk. Main chat sessions that were working when the
+Gateway restarted always enter automatic main-session recovery, including after
+a crash, forced kill, or missed shutdown marker. No operator action is needed to
+resume them. Recovery is always on. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
+
+During startup, a new reply waits for its agent's model and plugin runtime to
+finish loading. Agents that are already ready can serve replies while other
+agents continue loading. Startup preparation failures still report an error.
 
 ## What survives a restart
 
@@ -84,6 +89,14 @@ and missing or contradictory source identities do not authorize replay. A held a
 or still-valid admitted input keeps recovery pending. Native parent rotation must preserve
 the current connection and requester identity checks. A later parent registration cannot
 supply missing historical ownership.
+
+An interrupted admitted completion keeps its complete recovery claim even when
+the saved run status is failed, timed out, or killed. The next visible message or queued
+follow-up resumes that recovery before taking foreground ownership or entering
+the active transcript. Session reuse must not attach the old completion to the
+new message. Recovery still checks the admitted input, requester lifecycle,
+delivery receipt, and replay safety; it does not infer delivery from a terminal
+run status.
 
 Before parent completion admission, native Codex pending assignments retain their
 run, child-thread, native-parent, and known native-turn identities in the existing
@@ -334,9 +347,10 @@ while the Gateway drains. These requests must belong to still-pending work
 admitted before shutdown; normal authorization checks still apply. New question
 and approval requests remain fenced.
 
-Only work that cannot finish inside the drain budget (or any run interrupted
-by a forced restart or a crash) is aborted — and before that happens, each
-affected session is marked for recovery.
+Work that cannot finish inside the drain budget is marked for recovery before
+the shutdown owner aborts it. Restart cancellation from an earlier cleanup step
+does not remove that run from the marker's candidates. If no supplied candidate
+can be marked, a warning reports the counts and dominant skip reason.
 
 Restart cancellation also preserves recoverability when the bulk shutdown marker
 cannot be written. Native runtime preparation interrupted by the same Gateway
@@ -636,13 +650,18 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   currently loaded `before_agent_reply` hooks run under their normal trigger
   rules. Ambiguous prior hook outcomes resume with restart-safe tools rather
   than replaying unrestricted side effects.
-- **At shutdown:** during the restart drain, every session with an active run
-  is stamped with a recovery marker in the session store before the run is
-  aborted.
-- **At startup:** the gateway scans recovery-owned claims whose execution has
-  no live owner in the new process. This catches hard crashes and kills where
-  no shutdown code ran, without inferring recovery from a run outcome. Stale transcript lock
-  files are cleaned up at the same time.
+- **At shutdown:** every session with an active run is stamped with a recovery
+  marker before the shutdown owner aborts it. Runs already cancelled for restart
+  remain candidates, even if connection cleanup ran first.
+- **At startup:** the Gateway scans recovery-owned claims and main sessions with
+  `abortedLastRun: true` or an `interrupted` outcome, even without a claim. With
+  no live owner in the new process, the existing recovery owner creates the
+  missing cycle and resumes the turn. This safety net covers missed or failed
+  shutdown markers, hard crashes, and kills where no shutdown code ran. Archived
+  and tombstoned sessions stay excluded; pending delivery, yielded continuations,
+  and retry budgets retain their existing owners and rules. A newer user turn
+  clears the prior interruption and is not replayed. Stale transcript lock files
+  are cleaned up at the same time.
 
 Agents still undergoing database startup inspection retain their recovery work.
 When admission finishes, the same startup recovery owner scans their stores with
@@ -850,6 +869,9 @@ through their normal completion path as soon as startup restores requester owner
 without waiting for the periodic registry sweep. The sweep remains a retry backstop.
 The crash-loop breaker pauses this settlement too; the same sweep retries when
 the breaker's recovery window ends.
+Startup restores completed runs directly from the registry. Any retained delivery
+keeps its normal session and ownership checks. Unfinished runs still reconcile
+the current child session before resuming.
 They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
 Its recovery input lists current unfinished child session and run identities,
@@ -1010,6 +1032,13 @@ channels.start --params '{"channel":"<id>"}'`
   See also [Gateway](/gateway) (safe mode paragraph) for the same control-plane
   vs channel-autostart split.
 
+- **Session preparation:** an interrupted session that is still initializing or
+  waiting for workspace setup stays deferred. Recovery rechecks that exact
+  startup candidate when its session preparation changes, without charging a
+  dispatch attempt while it waits. Shutdown or a new Gateway lifecycle cancels
+  the wait; replacing or resetting the session invalidates the old candidate.
+  Archived, expired, restart-tombstoned, and provider-review-blocked sessions
+  still require their normal operator action.
 - **Main-session attempt budget:** three charged automatic dispatch attempts
   per interrupted cycle. Exhaustion tombstones that session until it is
   inspected and replaced.
@@ -1019,10 +1048,14 @@ channels.start --params '{"channel":"<id>"}'`
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
   subsystems. Every startup pass includes bounded skip counts by reason such as
-  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`, even when
-  other sessions started. Each interrupted main candidate has a structured
-  decision line with boot/pass, session and source-run identity, outcome
+  `archived`, `live_owner`, `work_start_pending`, `work_start_blocked`, or
+  `dispatch_target_unavailable`, even when other sessions started. Each interrupted
+  main candidate has a structured decision line with boot/pass, session and source-run identity, outcome
   (`started`, `settled`, `deferred`, or `blocked`), and the next responsible owner.
+  Work-start decisions name the specific condition, such as
+  `initialization_pending`, `workspace_pending`, `archived`, or `provider_review`.
+  Archived sessions are deferred with no next owner, rather than reported as
+  blocked work requiring operator action.
 - **Reply hooks:** resumed turns run currently loaded `before_agent_reply`
   hooks under the normal user-trigger rules. Automatically delivered replies
   also run the normal `reply_payload_sending` hook before channel delivery,

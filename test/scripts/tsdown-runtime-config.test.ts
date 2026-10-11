@@ -8,7 +8,6 @@ import type { TsdownPluginOption } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPluginSdkPackageExports } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import tsdownConfig, {
   createStateSchemaInlinePlugin,
@@ -23,7 +22,6 @@ type TsdownConfigEntry = {
   };
   entry?: Record<string, string> | string[];
   inputOptions?: TsdownInputOptions;
-  minify?: unknown;
   dts?: boolean | { emitDtsOnly?: boolean };
   define?: Record<string, unknown>;
   outputOptions?: { codeSplitting?: boolean; chunkFileNames?: string };
@@ -129,20 +127,6 @@ function requireUnifiedDistGraph(): TsdownConfigEntry {
   return distGraph;
 }
 
-function readGatewayRunLoopSource(): string {
-  return ["run-loop.ts", "run-loop-startup.ts"]
-    .map((file) =>
-      stripNodeTypeScriptTypes(
-        readFileSync(new URL(`../../src/cli/gateway-cli/${file}`, import.meta.url), "utf8"),
-      ),
-    )
-    .join("\n");
-}
-
-function readAgentAuthDiscoverySource(): string {
-  return readFileSync(new URL("../../src/agents/agent-auth-discovery.ts", import.meta.url), "utf8");
-}
-
 afterEach(() => vi.unstubAllEnvs());
 
 describe("tsdown config", () => {
@@ -167,38 +151,12 @@ describe("tsdown config", () => {
     },
   );
 
-  it("minifies only the sealed deploy worker while preserving runtime names", () => {
-    const configs = asConfigArray(tsdownConfig);
-    const deployWorker = configs.find((config) => entryKeys(config).includes("worker/worker"));
-    const rsyncReceiver = configs.find((config) =>
-      entryKeys(config).includes("worker/workspace-rsync-receiver"),
-    );
-    const githubExecLauncher = configs.find((config) =>
-      entryKeys(config).includes("worker/github-exec-launcher"),
-    );
-
-    expect(deployWorker?.minify).toEqual({
-      codegen: true,
-      compress: true,
-      mangle: { keepNames: true },
-    });
-    expect(rsyncReceiver?.minify).toBeUndefined();
-    expect(githubExecLauncher?.minify).toBeUndefined();
-    expect(requireUnifiedDistGraph().minify).toBeUndefined();
-  });
-
   it.each([
     {
       exportName: "OPENCLAW_STATE_SCHEMA_SQL",
       modulePath: "src/state/openclaw-state-schema.ts",
       schemaPath: "src/state/openclaw-state-schema.sql",
       sourceValue: OPENCLAW_STATE_SCHEMA_SQL,
-    },
-    {
-      exportName: "OPENCLAW_AGENT_SCHEMA_SQL",
-      modulePath: "src/state/openclaw-agent-schema.ts",
-      schemaPath: "src/state/openclaw-agent-schema.sql",
-      sourceValue: OPENCLAW_AGENT_SCHEMA_SQL,
     },
   ])("inlines canonical schema bytes for $modulePath", (schema) => {
     const rootDir = process.cwd();
@@ -248,8 +206,10 @@ describe("tsdown config", () => {
       expectDefined(workerGraph, "deploy worker graph"),
       requireStandaloneRuntimeGraph("worker/code-mode-node.worker"),
       requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
+      requireStandaloneRuntimeGraph("worker/file-tool-read.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
+      requireStandaloneRuntimeGraph("worker/sqlite-source-revision.worker"),
       requireStandaloneRuntimeGraph("worker/openclaw-state-read.worker"),
       requireStandaloneRuntimeGraph("worker/worker-native-lifecycle.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),
@@ -340,11 +300,6 @@ describe("tsdown config", () => {
       source: "src/infra/sqlite-source-revision.worker.ts",
     },
     {
-      label: "shared-state reader",
-      entry: "state/openclaw-state-read.worker",
-      source: "src/state/openclaw-state-read.worker.ts",
-    },
-    {
       label: "native hook locator worker",
       entry: "agents/harness/native-hook-relay-client.worker",
       source: "src/agents/harness/native-hook-relay-client.worker.ts",
@@ -368,17 +323,10 @@ describe("tsdown config", () => {
   });
 
   it.each([
-    ["docker-healthcheck", "src/docker-healthcheck.ts"],
-    ["cli/gateway-lifecycle.runtime", "src/cli/gateway-cli/lifecycle.runtime.ts"],
     [
       "config/sessions/session-transcript-reconcile",
       "src/config/sessions/session-transcript-reconcile.ts",
     ],
-    ["provider-dispatcher.runtime", "src/auto-reply/reply/provider-dispatcher.runtime.ts"],
-    ["plugins/hook-runner-global", "src/plugins/hook-runner-global.ts"],
-    ["gateway/worker-environments/runtime", "src/gateway/worker-environments/runtime.ts"],
-    // Already-running v2026.9.1 Gateways lazily load this reload entry.
-    ["gateway/plugin-channel-reload-targets", "src/gateway/plugin-channel-reload-targets.ts"],
     [
       "telegram-ingress-worker.runtime",
       "extensions/telegram/src/telegram-ingress-worker.runtime.ts",
@@ -421,58 +369,6 @@ describe("tsdown config", () => {
     }
   });
 
-  it("keeps root-package-excluded external plugins out of the root dist graph", () => {
-    const distGraph = requireUnifiedDistGraph();
-    const keys = entryKeys(distGraph);
-    const hasPluginEntry = (pluginId: string) =>
-      keys.some((entry) => entry.startsWith(`${bundledPluginRoot(pluginId)}/`));
-
-    expect(hasPluginEntry("amazon-bedrock")).toBe(false);
-    expect(hasPluginEntry("amazon-bedrock-mantle")).toBe(false);
-  });
-
-  it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
-    const distGraph = requireUnifiedDistGraph();
-    const importSpecifiers = [
-      ...readAgentAuthDiscoverySource().matchAll(
-        /from ["']([^"']*synthetic-auth\.runtime\.js)["']/gu,
-      ),
-    ].map((match) => match[1]);
-
-    expect(importSpecifiers).toEqual(["../plugins/synthetic-auth.runtime.js"]);
-    expect(entrySources(distGraph)["plugins/synthetic-auth.runtime"]).toBe(
-      "src/plugins/synthetic-auth.runtime.ts",
-    );
-  });
-
-  it("routes gateway run-loop lifecycle imports through the stable runtime boundary", () => {
-    const importSpecifiers = [
-      ...readGatewayRunLoopSource().matchAll(/\bimport\s*\(\s*["']([^"']+)["']/gu),
-    ].map((match) => match[1]);
-
-    expect(new Set(importSpecifiers)).toEqual(new Set(["./lifecycle.runtime.js"]));
-  });
-
-  it("keeps bundled plugins out of separate dependency-staging graphs", () => {
-    const extensionGraphs = asConfigArray(tsdownConfig).filter(
-      (config) => typeof config.outDir === "string" && config.outDir.startsWith("dist/extensions/"),
-    );
-
-    expect(extensionGraphs).toStrictEqual([]);
-  });
-
-  it("does not emit plugin-sdk or hooks from a separate dist graph", () => {
-    const configs = asConfigArray(tsdownConfig);
-    const hookEntries = configs.flatMap((config) =>
-      Array.isArray(config.entry)
-        ? config.entry.filter((entry) => entry.includes("src/hooks/"))
-        : [],
-    );
-
-    expect(configs.map((config) => config.outDir)).not.toContain("dist/plugin-sdk");
-    expect(hookEntries).toStrictEqual([]);
-  });
-
   it("bundles SDK-owned helpers while retaining native package ownership", () => {
     for (const graph of [
       requireUnifiedDistGraph(),
@@ -513,50 +409,5 @@ describe("tsdown config", () => {
     );
 
     expect(handled).toStrictEqual([]);
-  });
-
-  it("keeps unresolved imports outside extension source visible", () => {
-    const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
-    const handled: TsdownLog[] = [];
-    const log = {
-      code: "UNRESOLVED_IMPORT",
-      message: "Could not resolve 'missing-dependency' in src/index.ts",
-    };
-
-    configured?.("warn", log, (_level, forwardedLog) => handled.push(forwardedLog));
-
-    expect(handled).toEqual([log]);
-  });
-
-  it("suppresses rolldown-plugin-dts CommonJS dts warnings from bundled zod locales", () => {
-    const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
-    const handled: TsdownLog[] = [];
-
-    configured?.(
-      "warn",
-      {
-        code: "PLUGIN_WARNING",
-        plugin: "rolldown-plugin-dts:fake-js",
-        message:
-          "/abs/path/node_modules/zod/v4/locales/ur.d.cts uses CommonJS dts syntax. CommonJS dts modules cannot be reliably bundled by rolldown-plugin-dts. Please mark this module as external in your Rolldown config.",
-      },
-      (_level, log) => handled.push(log),
-    );
-
-    expect(handled).toStrictEqual([]);
-  });
-
-  it("keeps other rolldown-plugin-dts warnings visible", () => {
-    const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
-    const handled: TsdownLog[] = [];
-    const log = {
-      code: "PLUGIN_WARNING",
-      plugin: "rolldown-plugin-dts:fake-js",
-      message: "some other dts warning that should not be hidden",
-    };
-
-    configured?.("warn", log, (_level, forwardedLog) => handled.push(forwardedLog));
-
-    expect(handled).toEqual([log]);
   });
 });

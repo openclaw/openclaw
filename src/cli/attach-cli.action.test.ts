@@ -1,10 +1,29 @@
 import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { dirname } from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsResolveResult } from "../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, mkdtempSync: vi.fn(actual.mkdtempSync) };
+});
 
 const spawnedChild = Object.assign(new EventEmitter(), { kill: vi.fn() });
-vi.mock("node:child_process", () => ({ spawn: vi.fn(() => spawnedChild) }));
+let spawned = createDeferred();
+let revokeStarted = createDeferred();
+let revokeWork = async () => {};
+let responseGate: { method: string; entered: () => void; release: Promise<void> } | undefined;
+const configDirectories = new Set<string>();
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn((_bin: string, args: string[]) => {
+    configDirectories.add(dirname(args[2]!));
+    spawned.resolve();
+    return spawnedChild;
+  }),
+}));
 
 const gatewayCalls: Array<{
   method: string;
@@ -24,7 +43,8 @@ function gatewayParams(params: unknown): Record<string, unknown> {
   return params as Record<string, unknown>;
 }
 
-vi.mock("../gateway/call.js", () => ({
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: vi.fn(
     async (p: {
       method: string;
@@ -45,6 +65,10 @@ vi.mock("../gateway/call.js", () => ({
         requiredStoredDeviceAuthScopes: p.requiredStoredDeviceAuthScopes,
         hasDeviceIdentityKey: "deviceIdentity" in p,
       });
+      if (responseGate?.method === p.method) {
+        responseGate.entered();
+        await responseGate.release;
+      }
       if (p.method === "sessions.resolve") {
         return { ok: true, key: "agent:ops:thread:resolved" };
       }
@@ -69,6 +93,10 @@ vi.mock("../gateway/call.js", () => ({
           env: { OPENCLAW_MCP_TOKEN: "tok-123" },
         };
       }
+      if (p.method === "attach.revoke") {
+        revokeStarted.resolve();
+        await revokeWork();
+      }
       return {};
     },
   ),
@@ -78,37 +106,87 @@ vi.mock("../gateway/call.js", () => ({
 
 const logs: string[] = [];
 let exitCode: number | undefined;
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: {
     log: (m: string) => logs.push(m),
     error: (m: string) => logs.push(`ERR:${m}`),
-    exit: (c: number) => {
+    exit: vi.fn((c: number) => {
       exitCode = c;
-    },
+    }),
   },
 }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 
 import { callGateway } from "../gateway/call.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerAttachCli } from "./attach-cli.js";
 
-async function runAttach(...args: string[]) {
-  const program = new Command().name("openclaw").exitOverride();
-  await registerAttachCli(program);
-  await program.parseAsync(["node", "openclaw", "attach", ...args]);
+const activeActions = new Set<Promise<void>>();
+function runAttach(...args: string[]) {
+  const action = (async () => {
+    const program = new Command().name("openclaw").exitOverride();
+    await registerAttachCli(program);
+    await program.parseAsync(["node", "openclaw", "attach", ...args]);
+  })();
+  const settled = action.then(
+    () => {},
+    () => {},
+  );
+  activeActions.add(settled);
+  void settled.then(() => activeActions.delete(settled));
+  return action;
 }
-const tick = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+async function waitForSpawn(action: Promise<void>) {
+  await awaitGateBeforeSettlement(
+    spawned.promise,
+    action,
+    "attach returned before its child closed",
+  );
+}
 
 describe("openclaw attach (action)", () => {
   beforeEach(() => {
+    spawned = createDeferred();
+    revokeStarted = createDeferred();
+    revokeWork = async () => {};
+    responseGate = undefined;
+    vi.mocked(defaultRuntime.exit)
+      .mockReset()
+      .mockImplementation((code) => {
+        exitCode = code;
+      });
     gatewayCalls.length = 0;
     logs.length = 0;
     exitCode = undefined;
     spawnedChild.removeAllListeners();
     spawnedChild.kill.mockClear();
+  });
+
+  afterEach(async () => {
+    revokeWork = async () => {};
+    spawnedChild.emit("close", 0, null);
+    await Promise.all(activeActions);
+    const { spawn } = await import("node:child_process");
+    for (const call of vi.mocked(spawn).mock.calls) {
+      const args = call[1];
+      if (Array.isArray(args) && typeof args[2] === "string") {
+        configDirectories.add(dirname(args[2]));
+      }
+    }
+    for (const line of logs) {
+      if (line.startsWith("{")) {
+        const parsed = JSON.parse(line) as { configPath?: string };
+        if (parsed.configPath) {
+          configDirectories.add(dirname(parsed.configPath));
+        }
+      }
+    }
+    for (const dir of configDirectories) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    configDirectories.clear();
   });
 
   it.each([
@@ -178,6 +256,13 @@ describe("openclaw attach (action)", () => {
         gateway.mockImplementation(originalImplementation);
       }
     }
+  });
+
+  it("keeps the printed configuration after setup-only completion", async () => {
+    await runAttach("--print-config", "--session", "agent:main:cli");
+    const printed = JSON.parse(logs[0]!) as { configPath: string };
+    expect(existsSync(printed.configPath)).toBe(true);
+    expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
   });
 
   it("resolves a URL target before granting on the same origin", async () => {
@@ -253,35 +338,143 @@ describe("openclaw attach (action)", () => {
     expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeUndefined();
   });
 
-  it("spawns Claude Code and revokes the grant when the child exits", async () => {
-    const baseInt = process.listenerCount("SIGINT");
-    const baseTerm = process.listenerCount("SIGTERM");
-    await runAttach("--session", "agent:main:spawn");
-    expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeTruthy();
-    const { spawn } = await import("node:child_process");
-    expect(vi.mocked(spawn).mock.calls[0]?.[1]).toEqual([
-      "--strict-mcp-config",
-      "--mcp-config",
-      expect.stringContaining(".mcp.json"),
-    ]);
-    expect(process.listenerCount("SIGINT")).toBe(baseInt + 1);
-    spawnedChild.emit("exit", 0, null);
-    await tick();
-    await tick();
-    expect(process.listenerCount("SIGINT")).toBe(baseInt);
-    expect(process.listenerCount("SIGTERM")).toBe(baseTerm);
-    expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
-    expect(exitCode).toBe(0);
-  });
+  it.each([
+    { code: 7, signal: null, expected: 7 },
+    { code: null, signal: "SIGTERM", expected: 143 },
+  ] as const)(
+    "joins child close and revoke before unwinding with $expected",
+    async ({ code, signal, expected }) => {
+      const allowRevoke = createDeferred();
+      revokeWork = () => allowRevoke.promise;
+      vi.mocked(defaultRuntime.exit).mockImplementation((value) => {
+        throw new ExitError(value);
+      });
+      const beforeInt = process.listeners("SIGINT");
+      const beforeTerm = process.listeners("SIGTERM");
+      const action = runAttach("--session", "agent:main:spawn");
+      const outcome = action.catch((error: unknown) => error);
+      await waitForSpawn(action);
+      const { spawn } = await import("node:child_process");
+      const args = vi.mocked(spawn).mock.calls.at(-1)?.[1];
+      expect(args).toEqual([
+        "--strict-mcp-config",
+        "--mcp-config",
+        expect.stringContaining(".mcp.json"),
+      ]);
+      const configPath = Array.isArray(args) ? args[2] : undefined;
+      if (typeof configPath !== "string") {
+        throw new Error("missing spawned MCP config path");
+      }
+      expect(existsSync(configPath)).toBe(true);
+      const onSigint = process.listeners("SIGINT").find((fn) => !beforeInt.includes(fn));
+      const onSigterm = process.listeners("SIGTERM").find((fn) => !beforeTerm.includes(fn));
+      expect(onSigint).toBeTypeOf("function");
+      onSigint?.("SIGINT");
+      expect(spawnedChild.kill).not.toHaveBeenCalled();
+      onSigterm?.("SIGTERM");
+      expect(spawnedChild.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+      spawnedChild.emit("exit", code, signal);
+      expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      spawnedChild.emit("close", code, signal);
+      try {
+        await awaitGateBeforeSettlement(
+          revokeStarted.promise,
+          action,
+          "attach skipped grant revocation",
+        );
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
+        expect(existsSync(configPath)).toBe(true);
+      } finally {
+        allowRevoke.resolve();
+      }
+      expect(await outcome).toEqual(new ExitError(expected));
+      expect(gatewayCalls.filter((call) => call.method === "attach.revoke")).toHaveLength(1);
+      expect(existsSync(configPath)).toBe(false);
+      expect(process.listeners("SIGINT")).toEqual(beforeInt);
+      expect(process.listeners("SIGTERM")).toEqual(beforeTerm);
+    },
+  );
 
   it("revokes once and surfaces a launch failure when the child errors", async () => {
-    await runAttach("--session", "agent:main:spawn-err");
+    const exit = new ExitError(1);
+    vi.mocked(defaultRuntime.exit).mockImplementation((code) => {
+      exitCode = code;
+      throw exit;
+    });
+    const action = runAttach("--session", "agent:main:spawn-err");
+    const completed = expect(action).rejects.toBe(exit);
+    await waitForSpawn(action);
     spawnedChild.emit("error", new Error("ENOENT"));
-    await tick();
-    await tick();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    spawnedChild.emit("close", -2, null);
+    await completed;
     expect(gatewayCalls.filter((c) => c.method === "attach.revoke")).toHaveLength(1);
     expect(exitCode).toBe(1);
     expect(logs.join("\n")).toContain("Failed to launch");
+  });
+
+  it.each(["sessions.resolve", "attach.grant"] as const)(
+    "fences attach side effects when cancellation wins the %s response",
+    async (method) => {
+      const scope = new AsyncWorkScope();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const cancelled = new Error("attach command cancelled");
+      responseGate = { method, entered: entered.resolve, release: release.promise };
+      const { spawn } = await import("node:child_process");
+      const spawnCount = vi.mocked(spawn).mock.calls.length;
+      const configCount = vi.mocked(mkdtempSync).mock.calls.length;
+      const action = scope.track(() =>
+        method === "sessions.resolve"
+          ? runAttach("movies-a1166b81")
+          : runAttach("--session", "agent:main:late-grant"),
+      );
+      const outcome = action.then(
+        () => ({ status: "completed" }),
+        (error: unknown) => ({ status: "cancelled", error }),
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          action,
+          "attach did not reach the held response",
+        );
+        scope.beginClose(cancelled);
+        release.resolve();
+        // A regressed action waits on its new child forever. Observe admission
+        // directly so the test fails promptly and can still close that child.
+        await expect(
+          Promise.race([outcome, spawned.promise.then(() => ({ status: "spawned" }))]),
+        ).resolves.toEqual({ status: "cancelled", error: cancelled });
+        expect(vi.mocked(spawn).mock.calls).toHaveLength(spawnCount);
+        expect(vi.mocked(mkdtempSync).mock.calls).toHaveLength(configCount);
+        expect(gatewayCalls.filter((call) => call.method === "attach.grant")).toHaveLength(
+          method === "attach.grant" ? 1 : 0,
+        );
+        const revocations = gatewayCalls.filter((call) => call.method === "attach.revoke");
+        expect(revocations).toHaveLength(method === "attach.grant" ? 1 : 0);
+        if (method === "attach.grant") {
+          expect(revocations[0]?.params).toEqual({ token: "tok-123" });
+        }
+      } finally {
+        release.resolve();
+        spawnedChild.emit("close", 0, null);
+        await outcome;
+        await scope.drain();
+        responseGate = undefined;
+      }
+    },
+  );
+
+  it("revokes the minted grant if spawning throws synchronously", async () => {
+    const { spawn } = await import("node:child_process");
+    const failure = new Error("spawn rejected");
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      throw failure;
+    });
+    await expect(runAttach("--session", "agent:main:spawn")).rejects.toBe(failure);
+    expect(gatewayCalls.map((call) => call.method)).toEqual(["attach.grant", "attach.revoke"]);
   });
 
   it("warns when revoke fails but still exits with the child status", async () => {
@@ -310,10 +503,11 @@ describe("openclaw attach (action)", () => {
       throw new Error("gateway down");
     });
 
-    await runAttach("--session", "agent:main:spawn");
+    const action = runAttach("--session", "agent:main:spawn");
+    await waitForSpawn(action);
     spawnedChild.emit("exit", 0, null);
-    await tick();
-    await tick();
+    spawnedChild.emit("close", 0, null);
+    await action;
 
     expect(exitCode).toBe(0);
     expect(logs.join("\n")).toContain("failed to revoke attach grant");

@@ -235,7 +235,7 @@ export async function hydrateChatHistory(
         currentRunProjections: historyProjection.runs,
         resetStream: !state.chatRunId || state.chatRunId === previousRunId,
       });
-      commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null);
+      commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null, response.sessionInfo);
       recordTiming("applied", {
         messageCount: response.messages.length,
         visibleMessageCount: response.messages.length,
@@ -325,7 +325,7 @@ export async function hydrateChatHistory(
       receipts:
         !previousSessionId || previousSessionId === nextSessionId ? res.inputReceipts : undefined,
     });
-    commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null);
+    commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null, res.sessionInfo);
     if (
       state.reconnectResumeSessionId &&
       state.reconnectResumeSessionId !== state.currentSessionId

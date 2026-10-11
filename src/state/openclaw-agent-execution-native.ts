@@ -421,7 +421,8 @@ export function createAgentDatabaseNativeGeneration(
           assertCallerCurrent?.();
           signal?.throwIfAborted();
         };
-        const store = await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
+        // Keep the native owner reachable if registration publication fails after open.
+        openedStore = await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
           {
             moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
             databasePath: pathname,
@@ -442,13 +443,11 @@ export function createAgentDatabaseNativeGeneration(
               nativeStopped = stopped;
               readCloseReceipt = readReceipt;
             },
-            // A failed pooled worker also retires proof lent by its other agent actors.
-            onNativeLost: () => invalidateOpenClawAgentDatabaseValidation(pathname),
+            // The actor outlives the caller; bind the path and preserve default identity lookup.
+            onNativeLost: invalidateOpenClawAgentDatabaseValidation.bind(null, pathname, undefined),
           },
         );
-        // Keep the native owner reachable if registration publication fails after open.
-        openedStore = store;
-        return store;
+        return openedStore;
       };
       const store = registration
         ? await settleAgentRegistration(registration, openStore)

@@ -84,6 +84,9 @@ it.each(["fresh", "cached"] as const)(
       await withoutParentSql(async () => {
         expect(await loadNodeHostConfig(env)).toEqual(expected);
       });
+      await closeOpenClawStateDatabaseAsync();
+      fs.renameSync(databasePath, `${databasePath}.template`);
+      fs.copyFileSync(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
       const external = new DatabaseSync(databasePath);
       try {
         external.exec("DROP INDEX idx_plugin_state_listing");

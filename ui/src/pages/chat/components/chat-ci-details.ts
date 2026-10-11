@@ -11,6 +11,7 @@ import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatCiEnglish } from "../../../i18n/locales/en-chat-ci.ts";
+import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
@@ -18,6 +19,7 @@ import { resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { ChatCiDisclosure } from "./chat-ci-disclosure.ts";
 
 registerChatCiEnglish();
+registerGitHubEnglish();
 
 const REFRESH_MS = 30_000;
 const SKIPPED_ICON = strokeIcon(svg`<circle cx="12" cy="12" r="10" /><path d="M8 12h8" />`);

@@ -584,13 +584,13 @@ it("rejects oversized direct bridge responses", async () => {
       });
 
       // Cold locator startup must not consume this byte-limit fixture's caller deadline.
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       try {
         await expect(invokeNativeHookRelayBridge(bridgeInvocation(relay))).rejects.toThrow(
           "native hook relay bridge response too large",
         );
       } finally {
-        clock.mockRestore();
+        vi.useRealTimers();
       }
     } finally {
       await new Promise<void>((resolve) => {
@@ -624,14 +624,14 @@ it("binds direct bridge tokens to the relay they were issued for", async () => {
         record: { ...firstRecord, relayId: second.relayId, expiresAtMs: Date.now() + 10_000 },
       });
       // Cold locator startup must not consume this token-binding fixture's caller deadline.
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       try {
         await expect(invokeNativeHookRelayBridge(bridgeInvocation(second))).rejects.toThrow(
           "native hook relay bridge target mismatch",
         );
         expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
       } finally {
-        clock.mockRestore();
+        vi.useRealTimers();
       }
     } finally {
       first.unregister();
@@ -656,8 +656,8 @@ it("does not start transport when locator lookup consumes the caller deadline", 
         return record;
       },
     );
-    const startedAt = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    const startedAt = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(startedAt);
     const invocation = invokeNativeHookRelayBridge({
       provider: "codex",
       relayId: relay.relayId,

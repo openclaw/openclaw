@@ -1,6 +1,7 @@
 // Msteams tests cover reply stream controller plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { teamsQuotedTableReply } from "./format.test-fixtures.js";
+import { flattenInformativeStatus } from "./informative-status.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 
 type StreamCloseResult = { id: string } | undefined;
@@ -446,5 +447,30 @@ describe("createTeamsReplyStreamController", () => {
       expect(stream.emit).toHaveBeenCalledTimes(1);
       expect(ctrl.isStreamActive()).toBe(false);
     });
+  });
+});
+
+describe("flattenInformativeStatus", () => {
+  const bytes = (v: string) => new TextEncoder().encode(v).length;
+
+  it("joins rows onto one line without bullets", () => {
+    expect(flattenInformativeStatus("Working\n• tool: search\n- tool: exec\n\n")).toBe(
+      "Working · tool: search · tool: exec",
+    );
+  });
+
+  it("keeps the newest rows within 1000 characters", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => `row ${i} ${"x".repeat(40)}`);
+    const out = flattenInformativeStatus(rows.join("\n"));
+    expect(out.length).toBeLessThanOrEqual(1000);
+    expect(out.startsWith("…")).toBe(true);
+    expect(out.endsWith(rows.at(-1)!)).toBe(true);
+  });
+
+  it("enforces the byte limit without splitting a joined emoji", () => {
+    const grapheme = "👩🏽‍💻";
+    const out = flattenInformativeStatus(grapheme.repeat(200));
+    expect(out).toBe(`…${grapheme.repeat(68)}`);
+    expect(bytes(out)).toBe(1023);
   });
 });

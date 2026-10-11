@@ -1,6 +1,7 @@
 import { registerListener } from "../../../src/shared/listeners.js";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { buildLocalUserMessage } from "../pages/chat/user-message-content.ts";
+import type { CreationComposer } from "../pages/new-session/creation-composer.ts";
 
 type RetainedMessage = NonNullable<ReturnType<typeof buildLocalUserMessage>>;
 
@@ -29,10 +30,11 @@ type PendingChatCreate = Readonly<{
   creation: Readonly<{ sessionKey: string; admitted: boolean }>;
   message: RetainedMessage | null;
   canDisplay: () => boolean;
+  composer?: CreationComposer;
 }>;
 
 export type ApplicationChatSubmissions = ReturnType<typeof createChatSubmissions>;
-/** App-owned display bytes only. Outbox payloads, attempts, and retries stay with the outbox. */
+/** App-owned display bytes only. Delivery and retries stay with the outbox. */
 export function createChatSubmissions() {
   const initial = new Map<string, RetainedChatSubmission>();
   // Only the foreground handoff owns a provisional display; accepted turns are separate.
@@ -109,6 +111,10 @@ export function createChatSubmissions() {
       pendingCreate?.creation.sessionKey === sessionKey && pendingCreate.canDisplay()
         ? pendingCreate.message
         : null,
+    readCreateComposer: (sessionKey: string) =>
+      pendingCreate?.creation.sessionKey === sessionKey && pendingCreate.canDisplay()
+        ? pendingCreate.composer
+        : undefined,
     subscribeCreate: (listener: () => void) => registerListener(createListeners, listener),
     readInitial,
     observeInitialSession: (sessionKey: string, owner: object | null, sessionId: string | null) => {

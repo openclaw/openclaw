@@ -16,6 +16,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -415,5 +416,14 @@ it("reads incognito progress only from its process-held owner", async () => {
   await progressCardStore.put(key, { markdown: "private card" });
   expect(await progressCardStore.get(key)).toMatchObject({ markdown: "private card", revision: 1 });
   expect(fs.existsSync(storePath)).toBe(false);
+  await boardStore.putWidget({
+    sessionKey: key,
+    name: "native",
+    content: { kind: "html", html: "<p>Native private Board</p>" },
+  });
+  expect((await boardStore.getSnapshot({ sessionKey: key })).widgets).toMatchObject([
+    { name: "native" },
+  ]);
+  expect(captureOpenClawAgentDatabaseExecution.listIncognito(process.env)).toEqual([]);
   expect(database.db.isOpen).toBe(true);
 });

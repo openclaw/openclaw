@@ -15,7 +15,7 @@ import {
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import { CrabboxCheckpointCreateError } from "./crabbox-worker-warm-image-checkpoint.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
@@ -46,14 +46,14 @@ function notSubmittedReceipt(leaseId: string) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
-  it("continues cold after unsupported native capture and captures again on the next provision", async () => {
+  it("skips refused native captures across restart until the refresh interval expires", async () => {
     const now = 1_800_000_000_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const events: string[] = [];
     let current = projectOptions(events);
     let unsupported = true;
     const profile = { ...CLASSLESS_PROFILE, provider: "hetzner", class: "standard" };
-    const { provider, calls, warn } = createWarmProvider((call) => {
+    const command = (call: CommandCall) => {
       current.observe(call);
       if (unsupported && call.argv[2] === "create") {
         return commandResult({
@@ -65,7 +65,8 @@ describe("Crabbox project snapshot provisioning", () => {
         });
       }
       return undefined;
-    });
+    };
+    const { provider, calls, warn, stateDir } = createWarmProvider(command);
     const source = await provider.provision(profile, "unsupported-project", current.options);
     expect(events).toEqual([
       "project-prepared",
@@ -87,18 +88,26 @@ describe("Crabbox project snapshot provisioning", () => {
     });
     expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(
-      `Crabbox warm image capture unsupported: ${unsupportedCaptureReceipt("unused").message}. Workers for this profile use an existing compatible snapshot when one is available and otherwise provision cold; each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on the profile to stop capture attempts.`,
+      expect.stringContaining("Crabbox warm image capture unsupported:"),
     );
-    await provider.destroy({ ...source, profile });
-    // The retained refusal must not suppress the next attempt once Crabbox can capture.
+    await destroyAndWait(provider, { ...source, profile });
     expect((await listCrabboxWarmImages(crabboxState))[0]?.captureUnsupported?.atMs).toBe(now);
-    calls.length = 0;
+    await provider.dispose();
+    const restarted = createWarmProvider(command, stateDir);
     clock.mockReturnValue(now + 60_000);
+    current = projectOptions([]);
+    const next = await restarted.provider.provision(profile, "refused-next", current.options);
+    expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
+    expect(current.options.beginNodeEnrollment).toHaveBeenCalledOnce();
+    expect(restarted.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+    await destroyAndWait(restarted.provider, { ...next, profile });
+    expect(restarted.calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+    clock.mockReturnValue(now + 86_400_000);
     unsupported = false;
     current = projectOptions([]);
-    await provider.provision(profile, "supported-next", current.options);
+    await restarted.provider.provision(profile, "supported-next", current.options);
     expect(current.options.prepareNodeRuntime).toHaveBeenCalledOnce();
-    expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+    expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
     expect((await listCrabboxWarmImages(crabboxState))[0]?.checkpointId).toBe(CHECKPOINT_ID);
     expect((await listCrabboxWarmImages(crabboxState))[0]?.captureUnsupported).toBeUndefined();
   });
@@ -358,7 +367,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
         "replay-baseline",
         projectOptions([], new AbortController(), preparation).options,
       );
-      await initial.provider.destroy({ ...baseline, profile: PROFILE });
+      await destroyAndWait(initial.provider, { ...baseline, profile: PROFILE });
       await initial.provider.dispose();
       const operation = "prepared-capture-replay";
       const leaseId = operationLeaseId(operation);
@@ -890,7 +899,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       calls.length = 0;
       warn.mockClear();
 
-      const cleanup = provider.destroy({ leaseId, profile: PROFILE });
+      const cleanup = destroyAndWait(provider, { leaseId, profile: PROFILE });
       if (stopFails) {
         await expect(cleanup).rejects.toThrow("source cleanup still pending");
         expect((await listCrabboxWarmImages(crabboxState))[0]?.allocations[leaseId]).toBeDefined();

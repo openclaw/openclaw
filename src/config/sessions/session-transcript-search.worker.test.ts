@@ -5,13 +5,15 @@ import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
+import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import * as projectionWriter from "./session-transcript-projection-writer.js";
 import {
@@ -20,6 +22,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 import {
+  isSessionTranscriptSearchCurrentSync,
   searchSessionTranscripts,
   searchSessionTranscriptsReadOnlySync,
 } from "./session-transcript-search.js";
@@ -123,22 +126,43 @@ it("keeps a warmed search reader through discovery and retires it through its ca
       } finally {
         hostSql.restore();
       }
-      const changed = await reader.owner.searchTranscripts(request, async () => {
-        runOpenClawAgentWriteTransaction(({ db }) => {
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<DB>(db)
-              .updateTable("schema_meta")
-              .set({ updated_at: 2 })
-              .where("meta_key", "=", "primary"),
+      const broker = new SqliteWorkerBroker();
+      const receiptSql = observeHostDataSql();
+      try {
+        const store = await broker.open<AdmissionOperations>({
+          moduleUrl: new URL(
+            "../../infra/sqlite-database-admission.worker.test-support.ts",
+            import.meta.url,
+          ),
+          databasePath: storePath,
+          input: undefined,
+        });
+        const before = searchSessionTranscriptsReadOnlySync(request, database);
+        expect(before.revision).toBeDefined();
+        const changed = await reader.owner.searchTranscripts(request, async () => {
+          await broker.runOperation(store!, (operation) =>
+            operation.execute({
+              type: "writeRows",
+              input: {
+                sql: "UPDATE schema_meta SET updated_at = 2 WHERE meta_key = 'primary'",
+              },
+            }),
           );
-        }, database);
-        return projectionWriter.readSessionTranscriptIndexStatus(database);
-      });
-      expect(changed.indexing).toBe(true);
-      const refreshed = await search();
-      expect(refreshed.hits).toEqual(initial.hits);
-      expect(refreshed.indexing).toBe(false);
+          return projectionWriter.readSessionTranscriptIndexStatus(database);
+        });
+        expect(changed.indexing).toBe(true);
+        expect(isSessionTranscriptSearchCurrentSync(before.revision!, database)).toBe(false);
+        const refreshed = await search();
+        expect(refreshed.hits).toEqual(initial.hits);
+        expect(refreshed.indexing).toBe(false);
+        const after = searchSessionTranscriptsReadOnlySync(request, database);
+        expect(after.revision).toBeDefined();
+        expect(isSessionTranscriptSearchCurrentSync(after.revision!, database)).toBe(true);
+        expect(receiptSql.queries.filter((sql) => /\bdata_version\b/iu.test(sql))).toEqual([]);
+      } finally {
+        receiptSql.restore();
+        await broker.close();
+      }
       await closeOpenClawAgentDatabaseByPathAsync(aliasPath, "main");
       await expect(search()).rejects.toThrow("revoked");
     } finally {

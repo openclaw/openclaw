@@ -1,10 +1,10 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
-import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { promoteToPopoverTopLayer, renderMenuTrigger } from "./menu-surface.ts";
 import "./web-awesome.ts";
 
 export type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
@@ -67,14 +67,7 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
         @wa-select=${this.handleSelect}
         @wa-after-hide=${this.handleAfterHide}
       >
-        <button
-          slot="trigger"
-          type="button"
-          tabindex="-1"
-          aria-hidden="true"
-          aria-label=${menuLabel}
-          style="position: fixed; left: ${x}px; top: ${y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-        ></button>
+        ${renderMenuTrigger({ x, y }, menuLabel)}
         ${
           this.lastActive
             ? html`<div class="session-menu__info">
@@ -82,45 +75,27 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
               </div>`
             : ""
         }
-        <wa-dropdown-item class="session-menu__item" value="viewer">
-          <span slot="icon" class="session-menu__icon" aria-hidden="true"
-            >${icons.messageSquare}</span
-          >
-          <span class="session-menu__text">${t("chat.catalog.openInOpenClaw")}</span>
-        </wa-dropdown-item>
-        ${
-          this.canImport
-            ? html`<wa-dropdown-item class="session-menu__item" value="import">
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.download}</span
-                >
-                <span class="session-menu__text">${t("chat.catalog.importToOpenClaw")}</span>
-              </wa-dropdown-item>`
-            : ""
-        }
-        <wa-dropdown-item
-          class="session-menu__item"
-          value="terminal"
-          title=${this.terminalDisabled ? t("chat.catalog.terminalUnavailable") : ""}
-          ?disabled=${this.terminalDisabled}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.terminal}</span>
-          <span class="session-menu__text">${t("chat.catalog.openInTerminal")}</span>
-        </wa-dropdown-item>
-        ${
-          this.canDelete
+        ${(
+          [
+            ["viewer", true, "chat.catalog.openInOpenClaw", icons.messageSquare],
+            ["import", this.canImport, "chat.catalog.importToOpenClaw", icons.download],
+            ["terminal", true, "chat.catalog.openInTerminal", icons.terminal],
+            ["delete", this.canDelete, "chat.catalog.deleteSession", icons.trash],
+          ] as const
+        ).map(([action, visible, label, icon]) =>
+          visible
             ? html`<wa-dropdown-item
-                class="session-menu__item session-menu__item--destructive"
-                variant="danger"
-                value="delete"
+                class=${`session-menu__item${action === "delete" ? " session-menu__item--destructive" : ""}`}
+                variant=${action === "delete" ? "danger" : nothing}
+                value=${action}
+                title=${action === "terminal" ? (this.terminalDisabled ? t("chat.catalog.terminalUnavailable") : "") : nothing}
+                ?disabled=${action === "terminal" && this.terminalDisabled}
               >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.trash}</span
-                >
-                <span class="session-menu__text">${t("chat.catalog.deleteSession")}</span>
+                <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
+                <span class="session-menu__text">${t(label)}</span>
               </wa-dropdown-item>`
-            : ""
-        }
+            : "",
+        )}
       </wa-dropdown>
     `;
   }

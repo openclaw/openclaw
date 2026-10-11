@@ -516,17 +516,25 @@ export async function handleDirectiveOnly(
             directives.rawModelDirective ?? `${modelSelection.provider}/${modelSelection.model}`,
         },
       });
-      // `/model` should retarget queued/future work without interrupting the
-      // active run. Refresh queued followups so they pick up the persisted
-      // selection once the current turn finishes.
+    }
+    if (
+      sessionKey &&
+      ((modelSelection && modelSelectionUpdated) || touchedSessionFields.includes("thinkingLevel"))
+    ) {
+      // Publish committed preferences to waiting turns without interrupting the
+      // active run. Thinking-only edits retain queued model/auth/fallback state.
       refreshQueuedFollowupSession({
         key: sessionKey,
-        nextProvider: modelSelection.provider,
-        nextModel: modelSelection.model,
-        nextRouteResolution: "resolved",
-        nextModelOverrideSource: modelSelection.isDefault ? undefined : "user",
-        nextAuthProfileId: sessionEntry.authProfileOverride,
-        nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(sessionEntry),
+        ...(modelSelection && modelSelectionUpdated
+          ? {
+              nextProvider: modelSelection.provider,
+              nextModel: modelSelection.model,
+              nextRouteResolution: "resolved",
+              nextModelOverrideSource: modelSelection.isDefault ? undefined : "user",
+              nextAuthProfileId: sessionEntry.authProfileOverride,
+              nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(sessionEntry),
+            }
+          : {}),
         nextThinking: {
           level: sessionEntry.thinkingLevel,
           catalog: thinkingCatalog,

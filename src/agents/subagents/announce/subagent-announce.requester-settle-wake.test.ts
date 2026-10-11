@@ -511,41 +511,23 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     {
       name: "visible local route change",
       requesterOrigin: undefined,
-      terminalReply: {
-        disposition: "visible",
-        text: "authoritative final output",
-        modelRouteChange: "Model route changed: requested/model → actual/model.",
-      } as const,
-      resultText: "stale child output",
-      expected: "authoritative final output",
       expectedRouteInstruction:
         "Preserve this runtime-authored model-route change notice in your final answer.",
-      expectedRouteChange: "Model route changed: requested/model → actual/model.",
     },
     {
       name: "visible shared route change",
       requesterOrigin: { channel: "discord", to: "channel:shared" },
-      terminalReply: {
-        disposition: "visible",
-        text: "authoritative final output",
-        modelRouteChange: "Model route changed: requested/model → actual/model.",
-      } as const,
-      resultText: "stale child output",
-      expected: "authoritative final output",
       expectedRouteInstruction:
         "Keep this runtime-authored model-route change notice internal on this shared surface.",
-      expectedRouteChange: "Model route changed: requested/model → actual/model.",
     },
   ])(
     "keeps producer-owned $name terminal evidence in the requester settle wake",
-    async ({
-      terminalReply,
-      resultText,
-      expected,
-      expectedRouteChange,
-      expectedRouteInstruction,
-      requesterOrigin,
-    }) => {
+    async ({ expectedRouteInstruction, requesterOrigin }) => {
+      const terminalReply = {
+        disposition: "visible",
+        text: "authoritative final output",
+        modelRouteChange: "Model route changed: requested/model → actual/model.",
+      } as const;
       registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
         makeSettledChild({ runId: "run-b" }),
         ...["run-a", "run-c"].map((runId) =>
@@ -554,7 +536,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
             delivery: { status: "failed" },
             completion: {
               required: true,
-              resultText,
+              resultText: "stale child output",
               fallbackResultText: "stale retained findings",
               terminalReply,
             },
@@ -563,26 +545,24 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         ),
       ]);
 
-      if (terminalReply.disposition === "visible") {
-        for (const child of listedRequesterRuns()) {
-          sessionStore[child.childSessionKey] = { sessionId: `session-${child.runId}` };
-        }
-        findTranscriptEventMock.mockImplementation(async (scope, match) => {
-          const child = listedRequesterRuns().find(
-            (entry) => `session-${entry.runId}` === scope.sessionId,
-          );
-          const event = {
-            type: "message",
-            message: {
-              role: "assistant",
-              stopReason: "stop",
-              content: [{ type: "text", text: terminalReply.text }],
-              __openclaw: { runId: child?.runId },
-            },
-          };
-          return matchesTranscriptEvent(event, match) ? { event } : undefined;
-        });
+      for (const child of listedRequesterRuns()) {
+        sessionStore[child.childSessionKey] = { sessionId: `session-${child.runId}` };
       }
+      findTranscriptEventMock.mockImplementation(async (scope, match) => {
+        const child = listedRequesterRuns().find(
+          (entry) => `session-${entry.runId}` === scope.sessionId,
+        );
+        const event = {
+          type: "message",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: terminalReply.text }],
+            __openclaw: { runId: child?.runId },
+          },
+        };
+        return matchesTranscriptEvent(event, match) ? { event } : undefined;
+      });
 
       expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ requesterOrigin }))).toBe(
         true,
@@ -590,13 +570,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       const message = String(deliveredCallArg().triggerMessage);
       expect(message).not.toContain("stale retained findings");
       expect(message).not.toContain("stale child output");
-      if (expected) {
-        expect(message).toContain(expected);
-      }
-      if (expectedRouteChange) {
-        expect(message.split(expectedRouteChange)).toHaveLength(2);
-        expect(message).toContain(expectedRouteInstruction);
-      }
+      expect(message).toContain(terminalReply.text);
+      expect(message.split(terminalReply.modelRouteChange)).toHaveLength(2);
+      expect(message).toContain(expectedRouteInstruction);
     },
   );
 

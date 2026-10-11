@@ -30,28 +30,27 @@ function fixture(bytes = Buffer.from("captured"), basename = "input.js") {
   };
 }
 
-it.skipIf(process.platform === "win32")(
-  "copies small files through owned descriptors with the same bytes, identity and mode",
-  () => {
-    const subject = fixture();
-    const admitted = fs.statSync(subject.source, { bigint: true });
-    const clone = vi.spyOn(fsSafe, "copyRootFileSync");
-    const copied = subject.copy();
-    expect(clone).not.toHaveBeenCalled();
-    expect(copied).toEqual({
-      contentHash: createHash("sha256").update(subject.bytes).digest("hex"),
-      sizeBytes: subject.bytes.length,
-      sourceIdentity: pluginSourceStatIdentity(admitted),
-    });
-    expect(fs.readFileSync(subject.target)).toEqual(subject.bytes);
-    expect(fs.statSync(subject.target).ino).not.toBe(fs.statSync(subject.source).ino);
+it("copies small files through owned descriptors with the same bytes, identity and mode", () => {
+  const subject = fixture();
+  const admitted = fs.statSync(subject.source, { bigint: true });
+  const clone = vi.spyOn(fsSafe, "copyRootFileSync");
+  const copied = subject.copy();
+  expect(clone).not.toHaveBeenCalled();
+  expect(copied).toEqual({
+    contentHash: createHash("sha256").update(subject.bytes).digest("hex"),
+    sizeBytes: subject.bytes.length,
+    sourceIdentity: pluginSourceStatIdentity(admitted),
+  });
+  expect(fs.readFileSync(subject.target)).toEqual(subject.bytes);
+  expect(fs.statSync(subject.target).ino).not.toBe(fs.statSync(subject.source).ino);
+  if (process.platform !== "win32") {
     expect(fs.statSync(subject.target).mode & 0o777).toBe(0o700);
-    fs.writeFileSync(subject.source, "edited");
-    expect(fs.readFileSync(subject.target)).toEqual(subject.bytes);
-  },
-);
+  }
+  fs.writeFileSync(subject.source, "edited");
+  expect(fs.readFileSync(subject.target)).toEqual(subject.bytes);
+});
 
-it.skipIf(process.platform === "win32").each(["grow", "shrink", "replace", "symlink"])(
+it.each(["grow", "shrink", "replace", "symlink"])(
   "refuses a source that changes after descriptor admission: %s",
   (change) => {
     const subject = fixture();
@@ -78,29 +77,26 @@ it.skipIf(process.platform === "win32").each(["grow", "shrink", "replace", "syml
   },
 );
 
-it.skipIf(process.platform === "win32").each(["grow", "shrink"])(
-  "refuses source %s during the bounded transfer",
-  (change) => {
-    const subject = fixture();
-    const write = fs.writeSync;
-    let changed = false;
-    vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
-      if (!changed) {
-        changed = true;
-        if (change === "grow") {
-          fs.appendFileSync(subject.source, "more");
-        } else {
-          fs.truncateSync(subject.source, 1);
-        }
+it.each(["grow", "shrink"])("refuses source %s during the bounded transfer", (change) => {
+  const subject = fixture();
+  const write = fs.writeSync;
+  let changed = false;
+  vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
+    if (!changed) {
+      changed = true;
+      if (change === "grow") {
+        fs.appendFileSync(subject.source, "more");
+      } else {
+        fs.truncateSync(subject.source, 1);
       }
-      return Reflect.apply(write, fs, args);
-    });
-    expect(subject.copy).toThrow("Plugin source changed");
-    expect(changed).toBe(true);
-  },
-);
+    }
+    return Reflect.apply(write, fs, args);
+  });
+  expect(subject.copy).toThrow("Plugin source changed");
+  expect(changed).toBe(true);
+});
 
-it.skipIf(process.platform === "win32").each(["leaf", "parent", "hardlink"])(
+it.each(["leaf", "parent", "hardlink"])(
   "refuses substituted destination %s before transfer",
   (change) => {
     const subject = fixture();
@@ -125,19 +121,16 @@ it.skipIf(process.platform === "win32").each(["leaf", "parent", "hardlink"])(
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "preserves disk-full diagnostics and does not retry descriptor transfer",
-  () => {
-    const subject = fixture();
-    const cause = Object.assign(new Error("capture filesystem is full"), { code: "ENOSPC" });
-    const failure = new FsSafeError("helper-failed", "descriptor copy failed", { cause });
-    const transfer = vi.spyOn(fsSafe, "copyFileDescriptorSync").mockImplementation(() => {
-      throw failure;
-    });
-    expect(subject.copy).toThrow("capture filesystem is full");
-    expect(transfer).toHaveBeenCalledOnce();
-    // A failed acquisition is not retried over the partially created output.
-    expect(subject.copy).toThrow(expect.objectContaining({ code: "already-exists" }));
-    expect(transfer).toHaveBeenCalledOnce();
-  },
-);
+it("preserves disk-full diagnostics and does not retry descriptor transfer", () => {
+  const subject = fixture();
+  const cause = Object.assign(new Error("capture filesystem is full"), { code: "ENOSPC" });
+  const failure = new FsSafeError("helper-failed", "descriptor copy failed", { cause });
+  const transfer = vi.spyOn(fsSafe, "copyFileDescriptorSync").mockImplementation(() => {
+    throw failure;
+  });
+  expect(subject.copy).toThrow("capture filesystem is full");
+  expect(transfer).toHaveBeenCalledOnce();
+  // A failed acquisition is not retried over the partially created output.
+  expect(subject.copy).toThrow(expect.objectContaining({ code: "already-exists" }));
+  expect(transfer).toHaveBeenCalledOnce();
+});

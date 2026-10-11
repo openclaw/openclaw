@@ -19,7 +19,6 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { withOpenClawAgentDatabaseWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import type { EmbeddingProvider } from "./embeddings.js";
 import { getMemoryManagerLifecycle } from "./lifecycle.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
@@ -51,6 +50,7 @@ import {
   MemoryTargetedSessionSyncQueue,
   hasTargetedSessionSyncParams,
 } from "./manager-sync-control.js";
+import type { MemorySyncOutcome } from "./manager-sync-outcome.js";
 import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 
@@ -60,9 +60,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   private readonly managerRegistry: MemoryManagerRegistry<MemoryIndexManager>;
   protected readonly createProvider: MemoryManagerProviderFactory = (adapter, create) =>
     this.managerRegistry.createProvider(this, adapter, create);
-  protected releaseProvider(provider: EmbeddingProvider): void {
-    this.managerRegistry.releaseProvider(this, provider);
-  }
   protected canPublishEmbeddingProbe(): boolean {
     return this.managerRegistry.canPublishProbe(this);
   }
@@ -411,8 +408,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     // An intentional no-progress pass may remain dirty. Only newly accepted
     // watch facts can admit another pass; joined callers cannot spin on dirty.
     this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
-    const run = () =>
-      this.publishedDatabase.withPublicationGeneration(async () => {
+    const run = async () => {
+      let outcome: MemorySyncOutcome;
+      await this.publishedDatabase.withPublicationGeneration(async () => {
+        await this.publishedDatabase.refreshFacts();
         const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
         let forceFtsOnly =
           this.embeddingBootstrapFailure !== undefined &&
@@ -443,8 +442,11 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             await this.publishedDatabase.closePublicationWorker();
             this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
             try {
-              await this.runSync(params).then(
-                () => this.publishedDatabase.closePublicationWorker(),
+              return await this.runSync(params).then(
+                async (syncOutcome) => {
+                  await this.publishedDatabase.closePublicationWorker();
+                  return syncOutcome;
+                },
                 async (error: unknown) => {
                   const [cleanup] = await Promise.allSettled([
                     this.publishedDatabase.closePublicationWorker(),
@@ -467,12 +469,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           }
         };
         try {
-          await runGeneration(forceFtsOnly);
+          outcome = await runGeneration(forceFtsOnly);
         } catch (err) {
           const canDegrade =
-            this.providerRequirement.mode === "optional" &&
-            (options?.allowEmbeddingBootstrapFallback || hadBootstrapFailure) &&
-            isMemoryEmbeddingOperationError(err);
+            this.providerRequirement.mode === "optional" && isMemoryEmbeddingOperationError(err);
           if (!canDegrade) {
             throw err;
           }
@@ -481,8 +481,11 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             retainProvider: this.provider !== null,
             provider: failedProvider,
           });
+          if (!options?.allowEmbeddingBootstrapFallback && !hadBootstrapFailure) {
+            throw err;
+          }
           forceFtsOnly = true;
-          await runGeneration(true);
+          outcome = await runGeneration(true);
         }
 
         if (
@@ -495,6 +498,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           this.clearEmbeddingBootstrapFailureAfterRecovery();
         }
       });
+      return outcome;
+    };
     this.syncing = this.syncOutcomes.track(run, true).finally(() => {
       this.syncing = null;
     });

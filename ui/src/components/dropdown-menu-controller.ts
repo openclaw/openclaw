@@ -5,8 +5,6 @@ import { trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 type DropdownMenuHost = ReactiveControllerHost & HTMLElement;
 
 export class DropdownMenuController implements ReactiveController {
-  private generation = 0;
-
   constructor(
     private readonly host: DropdownMenuHost,
     private readonly options: {
@@ -20,12 +18,10 @@ export class DropdownMenuController implements ReactiveController {
 
   hostConnected(): void {
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    const generation = ++this.generation;
-    void this.focusFirstItem(generation);
+    void this.focusFirstItem();
   }
 
   hostDisconnected(): void {
-    this.generation += 1;
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
   }
 
@@ -61,13 +57,13 @@ export class DropdownMenuController implements ReactiveController {
     this.options.onClose();
   };
 
-  private async focusFirstItem(generation: number): Promise<void> {
+  private async focusFirstItem(): Promise<void> {
     await this.host.updateComplete;
     const dropdown = this.host.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
       "wa-dropdown",
     );
     await dropdown?.updateComplete;
-    if (this.host.isConnected && generation === this.generation) {
+    if (this.host.isConnected) {
       this.host.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
     }
   }

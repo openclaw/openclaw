@@ -102,6 +102,7 @@ function createFixture() {
     trackPromptSettlePromise,
   };
   const contextGuards = {
+    checkMidTurnPrecheck: vi.fn(),
     getAfterTurnCheckpoint: vi.fn(() => null),
     remove: vi.fn(),
     takePendingMidTurnPrecheckRequest: vi.fn(() => null),

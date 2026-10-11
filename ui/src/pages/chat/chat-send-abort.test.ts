@@ -38,9 +38,12 @@ describe("handleAbortChat", () => {
     { action: "typed", message: "stop" },
     { action: "read-only", message: "/stop" },
     { action: "offline", message: "/stop" },
-  ] as const)("handles an exact-run stop via $action ($message)", async ({ action, message }) => {
+  ] as const)("handles a stop during a run via $action ($message)", async ({ action, message }) => {
     const host = makeChatHost({
-      requestHandlers: action === "read-only" ? {} : { "chat.abort": { aborted: true } },
+      requestHandlers:
+        action === "read-only"
+          ? {}
+          : { "chat.abort": { aborted: true }, "sessions.abort": { status: "aborted" } },
       connected: action !== "offline",
       chatRunId: "run-main",
       chatMessage: message,
@@ -71,6 +74,12 @@ describe("handleAbortChat", () => {
         conversation: { sessionKey: "agent:main" },
       });
       expect(host.request).not.toHaveBeenCalled();
+    } else if (action === "typed") {
+      expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+        key: "agent:main",
+        clearQueued: true,
+      });
+      expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
     } else {
       expect(host.request).toHaveBeenCalledWith("chat.abort", {
         runId: "run-main",
@@ -80,6 +89,47 @@ describe("handleAbortChat", () => {
     expect(host.chatMessage).toBe(action === "toolbar" || action === "read-only" ? message : "");
     expect(host.chatRunId).toBe("run-main");
   });
+
+  it.each(["current", "terminal", "replacement"] as const)(
+    "keeps a typed-stop failure with its originating run (%s)",
+    async (scenario) => {
+      const response = Promise.withResolvers<never>();
+      const request = vi.fn(() => response.promise);
+      const host = makeChatHost({
+        client: clientWithRequest(request),
+        connected: true,
+        chatRunId: "run-a",
+        chatMessage: "/stop",
+        sessionKey: "agent:main",
+      });
+      const sending = handleSendChat(host);
+      expect(request).toHaveBeenCalledWith("sessions.abort", {
+        key: "agent:main",
+        clearQueued: true,
+      });
+      if (scenario === "replacement") {
+        host.chatRunId = "run-b";
+      } else if (scenario === "terminal") {
+        host.chatRunId = null;
+        host.lastLocalTerminalReconcile = {
+          sessionKey: host.sessionKey,
+          runId: "run-a",
+          phase: "interrupted",
+          sessionStatus: "killed",
+        };
+      }
+      response.reject(new Error("stop failed"));
+      await sending;
+      if (scenario === "current") {
+        expect(host.chatError).toContain("stop failed");
+      } else if (scenario === "terminal") {
+        expect(host.chatRunError).toMatchObject({ runId: "run-a", summary: "stop failed" });
+      } else {
+        expect(host.chatError).toBeFalsy();
+        expect(host.chatRunError).toBeFalsy();
+      }
+    },
+  );
 
   it.each([
     { key: "agent:main:openclaw-weixin:direct:wechat-user", scope: "per-sender", connected: true },

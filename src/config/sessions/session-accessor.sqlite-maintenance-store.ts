@@ -229,6 +229,8 @@ export function prepareSessionEntryMaintenanceInDatabase(
       },
     };
   }
+  // Selected victims have not changed yet; their future age hint is not committed.
+  invalidateSessionEntryMaintenanceAgeFact(reader.db);
   const readInputs = (database: Pick<OpenClawAgentDatabase, "db">) => {
     const db = getSessionKysely(database.db);
     const rows = executeSqliteQuerySync(

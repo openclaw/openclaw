@@ -6,6 +6,7 @@
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
+  ProviderModelRouteSource,
   ProviderResolveModelRoutesContext,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
@@ -56,6 +57,8 @@ type PrepareAgentRuntimeAuthPlanParams = {
   modelId: string;
   modelApi?: string | null;
   modelBaseUrl?: unknown;
+  /** Physical catalog rows for the logical model; replaces the single api/baseUrl observation. */
+  observedRoutes?: readonly ProviderModelRouteSource[];
   requestTransportOverrides?: ProviderRouteOverridePresence;
   config?: OpenClawConfig;
   agentId?: string;
@@ -524,6 +527,7 @@ export function prepareAgentRuntimeAuth(
     modelId: params.modelId,
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
+    observedRoutes: params.observedRoutes,
     config: params.config,
     agentId: params.agentId,
     primaryModel:
@@ -584,16 +588,24 @@ export function prepareAgentRuntimeAuth(
       modelRoute,
     });
   };
+  const rejectionError = (
+    decision: Extract<ReturnType<typeof selectOpenAIModelRouteAuth>, { kind: "rejected" }>,
+  ) =>
+    decision.reason === "all-cooldown" && decision.source
+      ? createAuthProfileCooldownError(params, decision.source.profileId)
+      : new Error(decision.message);
+  const assertForwardedProfile = (profileId: string | undefined, plan: AgentRuntimeAuthPlan) => {
+    if (profileId && harnessOwnsOpenAIAuth && plan.forwardedAuthProfileId !== profileId) {
+      throw new Error(`Auth profile "${profileId}" cannot be forwarded to the codex runtime.`);
+    }
+  };
   if (!resolution || resolution.kind === "indeterminate") {
     const sourceDecision = selectProviderModelAuthSources({
       provider: authProfileSelectionProvider,
       plan: sourcePlan,
     });
     if (sourceDecision.kind === "rejected") {
-      if (sourceDecision.reason === "all-cooldown" && sourceDecision.source) {
-        throw createAuthProfileCooldownError(params, sourceDecision.source.profileId);
-      }
-      throw new Error(sourceDecision.message);
+      throw rejectionError(sourceDecision);
     }
     const buildGenericPlan = (
       attempt: (typeof sourceDecision.attempts)[number] | undefined,
@@ -605,15 +617,7 @@ export function prepareAgentRuntimeAuth(
       return buildAttemptPlan(attempt?.source, candidateIds.length > 0 ? candidateIds : undefined);
     };
     const prepared = prepareAuthAttempts(sourceDecision.attempts, buildGenericPlan);
-    if (
-      selectedProfileId &&
-      harnessOwnsOpenAIAuth &&
-      prepared.plan.forwardedAuthProfileId !== selectedProfileId
-    ) {
-      throw new Error(
-        `Auth profile "${selectedProfileId}" cannot be forwarded to the codex runtime.`,
-      );
-    }
+    assertForwardedProfile(selectedProfileId, prepared.plan);
     return prepared;
   }
   if (resolution.kind === "incompatible") {
@@ -645,14 +649,7 @@ export function prepareAgentRuntimeAuth(
     return { plan, attempts: [{ kind: "implicit", plan }] };
   }
   if (routeAuthDecision.kind !== "selected") {
-    if (
-      routeAuthDecision.kind === "rejected" &&
-      routeAuthDecision.reason === "all-cooldown" &&
-      routeAuthDecision.source
-    ) {
-      throw createAuthProfileCooldownError(params, routeAuthDecision.source.profileId);
-    }
-    throw new Error(routeAuthDecision.message);
+    throw rejectionError(routeAuthDecision);
   }
   const buildRoutedPlan = (attempt: (typeof routeAuthDecision.attempts)[number] | undefined) => {
     const route = attempt?.route ?? routeAuthDecision.selection.route;
@@ -664,15 +661,8 @@ export function prepareAgentRuntimeAuth(
   };
   const prepared = prepareAuthAttempts(routeAuthDecision.attempts, buildRoutedPlan);
   for (const attempt of prepared.attempts) {
-    if (
-      attempt.kind !== "implicit" &&
-      attempt.profileId &&
-      harnessOwnsOpenAIAuth &&
-      attempt.plan.forwardedAuthProfileId !== attempt.profileId
-    ) {
-      throw new Error(
-        `Auth profile "${attempt.profileId}" cannot be forwarded to the codex runtime.`,
-      );
+    if (attempt.kind !== "implicit") {
+      assertForwardedProfile(attempt.profileId, attempt.plan);
     }
   }
   return prepared;

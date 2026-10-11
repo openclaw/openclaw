@@ -34,7 +34,6 @@ import type {
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import type { RestartLifecycleWorkerOperations } from "../infra/restart-lifecycle.worker.js";
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
@@ -190,6 +189,13 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: Omit<Parameters<typeof secretWrites.deleteSecretStoreEntryInDatabase>[0], "database">;
       output: void;
     };
+    "secrets.allowedHosts": {
+      input: Omit<
+        Parameters<typeof secretWrites.updateSecretStoreAllowedHostsInDatabase>[0],
+        "database"
+      >;
+      output: void;
+    };
     "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
     "secrets.writeForConfigRef": {
       input: SecretStoreConfigRefWrite;
@@ -229,7 +235,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
 
 /** Internal inspection cannot open canonical state or execute a domain command. */
 export type OpenClawStateWorkerInspectionOperations = {
-  "database.generationMatches": { input: { generation: SqliteFileGeneration }; output: boolean };
   "database.inspectIdle": { input: undefined; output: "healthy" | "retire" };
 };
 

@@ -171,7 +171,8 @@ export function createCronRunReceiptSettlementOwner(callbacks: {
             );
           }
         },
-        prepare: () => ({ value: {}, assertCurrent() {} }),
+        // A runner may appear after dispatch; receipt identity still guards the terminal write.
+        snapshot: {},
         onSettled(outcome) {
           retrySafe = outcome === "not-committed";
         },
@@ -217,6 +218,7 @@ export function createCronRunReceiptSettlementOwner(callbacks: {
       locallyOwnedReceipts.add(handle.receiptId);
     },
     owns: (receiptId: string) => locallyOwnedReceipts.has(receiptId),
+    listLocallyOwnedCronRunReceiptIds: () => [...locallyOwnedReceipts],
     trackCronRunReceiptSettlement,
     retainCronRunReceiptSettlement,
     finishCronRunReceiptAsync,

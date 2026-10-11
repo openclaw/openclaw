@@ -215,19 +215,6 @@ export function resolvePluginModulePackageRoot(filename: string): string {
   return path.dirname(filename);
 }
 
-export function capturePluginModuleSource(
-  filename: string,
-  capture: (root: string, source: string) => void,
-): string | undefined {
-  const real = fs.realpathSync(filename);
-  if (!fs.statSync(real).isFile()) {
-    return undefined;
-  }
-  // The admitted artifact owns byte capture; package metadata only selects its layout.
-  capture(resolvePluginModulePackageRoot(real), real);
-  return real;
-}
-
 export function capturePluginPackageMetadata(
   root: string,
   destination: string,
@@ -393,7 +380,6 @@ function visitPluginPackageTargetFiles(params: {
 
 type PluginPackageCaptureState = "metadata" | "entry" | "body" | { error: unknown };
 export type PluginPackageCapture = {
-  destination: string;
   /** Absolute normalized root captured by the artifact producer. */
   readonly capturedRoot: string;
   sourceRoot: string;

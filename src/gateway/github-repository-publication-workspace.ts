@@ -7,6 +7,7 @@ import {
 import {
   prepareGitHubPublicationWorkspaceOwner,
   type PublicationSessionIdentity,
+  readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
@@ -15,7 +16,6 @@ import {
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
 import { failRepositoryGitHubPublicationPreparation } from "./github-repository-publication-store.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 
 export async function prepareRepositoryOwner(session: PublicationSessionIdentity) {
@@ -35,7 +35,7 @@ export function resolveReceiptOwner(
   >,
   prepared: PreparedRepositoryWorkspace,
 ) {
-  const loaded = loadGatewaySessionEntryReadOnly(row.session_key, { agentId: row.agent_id });
+  const loaded = readGitHubPublicationSession(row.session_key, { agentId: row.agent_id });
   const workspace = prepared.current();
   if (
     loaded.entry?.sessionId !== row.session_id ||

@@ -14,6 +14,7 @@ import {
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
 import { resolveTestBunSourceArgs } from "../../src/test-utils/bun-process.ts";
+import { controlUiSolidPlugin } from "../../ui/config/control-ui-solid.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -147,6 +148,11 @@ export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
   plugins: [
+    // Node tests also import UI renderers. Keep their compiler off non-UI sources.
+    ...controlUiSolidPlugin([
+      `${repoRoot.replaceAll("\\", "/")}/ui/**/*.tsx`,
+      `${repoRoot.replaceAll("\\", "/")}/extensions/*/browser/**/*.tsx`,
+    ]),
     {
       name: "openclaw:node-worker-policy",
       config: () => ({
@@ -513,6 +519,8 @@ export const sharedVitestConfig = {
   test: {
     dir: repoRoot,
     root: repoRoot,
+    // Solid defaults unspecified test environments to jsdom; preserve Node's default.
+    environment: "node",
     // Emit completed cases even under agent detection so healthy runs feed the output watchdog.
     reporters: ["verbose", ...(process.env.GITHUB_ACTIONS === "true" ? ["github-actions"] : [])],
     testTimeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,

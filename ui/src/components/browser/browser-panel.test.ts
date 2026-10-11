@@ -145,7 +145,7 @@ describe("normalizeBrowserUrlDraft", () => {
 
     const empty = panel.renderRoot.querySelector("openclaw-panel-empty-state");
     await empty?.updateComplete;
-    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Browser");
+    expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Browser");
     expect(empty?.querySelector("svg")).not.toBeNull();
   });
 

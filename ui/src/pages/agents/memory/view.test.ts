@@ -252,9 +252,9 @@ describe("dreaming view", () => {
 
     // The sleeper is the seeded pet cameo: eyes closed, pupils hidden.
     const closedEyes = container.querySelector<SVGGElement>(".dreams__lobster .lob-eye-closed");
-    expect(closedEyes?.getAttribute("style")).toContain("opacity:1");
+    expect(closedEyes?.style.opacity).toBe("1");
     const openEyes = container.querySelector<SVGGElement>(".dreams__lobster .lob-eye-open");
-    expect(openEyes?.getAttribute("style")).toContain("display:none");
+    expect(openEyes?.style.display).toBe("none");
     expect(
       container.querySelector<HTMLElement>(".dreams__lobster")?.getAttribute("style"),
     ).toContain("--lob-shell:");

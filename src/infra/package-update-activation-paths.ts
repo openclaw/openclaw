@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveExecutablePath } from "./executable-path.js";
+import type { ImmutableRecoveryRuntimeReference } from "./package-update-activation-immutable-recovery-schema.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
+import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
 
@@ -148,4 +151,11 @@ export function isPackageActivationComplete(
   // A helper left by an interrupted unlink or a later replacement is cleanup,
   // not permission to restore an earlier generation or block a new update.
   return true;
+}
+
+export function resolveImmutableRecoveryCommand(
+  reference: ImmutableRecoveryRuntimeReference,
+  descriptor: ImmutableInstallDescriptor,
+): string {
+  return `${quoteCliArg(descriptor.runtime.path)} ${quoteCliArg(reference.helperPath)}`;
 }

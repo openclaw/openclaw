@@ -3,7 +3,10 @@ import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-cor
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
-import type { CompactionSummarizationInstructions } from "../compaction.js";
+import type {
+  CompactionSummarizationInstructions,
+  summarizeCompactionHistory,
+} from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
 const MAX_EXTRACTED_IDENTIFIERS = 12;
@@ -26,6 +29,22 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
+
+export function resolveSummaryReserveTokens(
+  requestedReserveTokens: number,
+  model: NonNullable<Parameters<typeof summarizeCompactionHistory>[0]["model"]>,
+): number {
+  const requested = Math.max(1, Math.floor(requestedReserveTokens));
+  const modelMaxTokens = model.maxTokens;
+  if (
+    typeof modelMaxTokens !== "number" ||
+    !Number.isFinite(modelMaxTokens) ||
+    modelMaxTokens <= 0
+  ) {
+    return requested;
+  }
+  return Math.max(1, Math.min(requested, Math.floor(modelMaxTokens)));
+}
 
 /** Demotes canonical headings when a summary is embedded as supporting context. */
 export function nestRequiredSummaryHeadings(text: string): string {
@@ -207,13 +226,9 @@ export function createSummaryQualityRetentionPlan(
           (hasAskOverlap(pendingAsk, params.latestAsk) && !pendingAsk.includes(requiredAskContext)))
       ? `${LATEST_USER_REQUEST_CONTEXT_LABEL}\n${JSON.stringify(requiredAskContext)}`
       : "";
-  const protectedTails = REQUIRED_SUMMARY_SECTIONS.map((_, index) =>
-    index === PENDING_ASK_SECTION_INDEX
-      ? protectedAskContext
-      : index === EXACT_IDENTIFIERS_SECTION_INDEX
-        ? auditedIdentifiers.join("\n")
-        : "",
-  );
+  const protectedTails = REQUIRED_SUMMARY_SECTIONS.map(() => "");
+  protectedTails[PENDING_ASK_SECTION_INDEX] = protectedAskContext;
+  protectedTails[EXACT_IDENTIFIERS_SECTION_INDEX] = auditedIdentifiers.join("\n");
   const bodyHasIdentifiers = auditedIdentifiers.every((identifier) =>
     summaryIncludesIdentifier(summary, identifier),
   );
@@ -249,17 +264,19 @@ export function createSummaryQualityRetentionPlan(
       ? [tail, isEmptyPendingAsk(leading) ? "" : optional].filter(Boolean).join("\n")
       : [isEmptyPendingAsk(optional) ? "" : optional, tail].filter(Boolean).join("\n");
   };
+  const joinBlocks = (blocks: string[], includeMarker: boolean) =>
+    [
+      ...(requiredContextBlock ? [requiredContextBlock] : []),
+      ...blocks.slice(0, QUALITY_PROTECTED_SECTION_START),
+      ...(includeMarker ? [marker] : []),
+      ...blocks.slice(QUALITY_PROTECTED_SECTION_START),
+    ].join("\n\n");
   // Reserve every heading/content/tail separator up front so trimmed optional
   // text can never push the rendered artifact past `maxChars`.
   const minimumBlocks = REQUIRED_SUMMARY_SECTIONS.map(
     (heading, index) => `${heading}\n\n${protectedTails[index] ?? ""}`,
   );
-  const minimumSummary = [
-    ...(requiredContextBlock ? [requiredContextBlock] : []),
-    ...minimumBlocks.slice(0, QUALITY_PROTECTED_SECTION_START),
-    marker,
-    ...minimumBlocks.slice(QUALITY_PROTECTED_SECTION_START),
-  ].join("\n\n");
+  const minimumSummary = joinBlocks(minimumBlocks, true);
   // Audit-bearing sections (pending asks, exact identifiers) are funded first so
   // a runaway earlier section cannot starve them, but each is hard-capped: an
   // uncapped identifier list re-distills into the whole budget — even while the
@@ -324,12 +341,7 @@ export function createSummaryQualityRetentionPlan(
       );
       const blocks = renderSections(sectionContents);
       return {
-        text: [
-          ...(requiredContextBlock ? [requiredContextBlock] : []),
-          ...blocks.slice(0, QUALITY_PROTECTED_SECTION_START),
-          ...(trimmed ? [marker] : []),
-          ...blocks.slice(QUALITY_PROTECTED_SECTION_START),
-        ].join("\n\n"),
+        text: joinBlocks(blocks, trimmed),
         trimmed,
       };
     },
@@ -343,7 +355,7 @@ export function buildStructuredFallbackSummary(previousSummary: string | undefin
     return trimmedPreviousSummary;
   }
   const values = [
-    trimmedPreviousSummary || "No prior history.",
+    nestRequiredSummaryHeadings(trimmedPreviousSummary) || "No prior history.",
     "None.",
     "None.",
     "None.",

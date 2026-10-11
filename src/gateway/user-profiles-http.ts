@@ -2,9 +2,7 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveHostAccountAvatar } from "../infra/host-account-avatar.js";
 import { LruCache } from "../infra/lru-cache.js";
@@ -13,6 +11,7 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createProfileAvatarReader } from "../state/user-profiles-avatar.js";
 import { formatUserProfileAvatarEtag, UserProfileNotFoundError } from "../state/user-profiles.js";
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
+import { setControlUiImageCorsHeaders } from "./control-ui-image-cors.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { sendJson, sendMethodNotAllowed, watchClientDisconnect } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
@@ -30,45 +29,6 @@ const MAX_GRAVATAR_BYTES = 1_000_000;
 // Bound upstream disclosure when every earlier linked email misses.
 const MAX_GRAVATAR_EMAIL_LOOKUPS = 8;
 const GRAVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
-
-function resolveAvatarCorsOrigin(req: IncomingMessage, cfg: OpenClawConfig): string | undefined {
-  const rawOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
-  if (!rawOrigin) {
-    return undefined;
-  }
-  let origin: string;
-  try {
-    const parsed = new URL(rawOrigin);
-    if (parsed.origin !== rawOrigin || parsed.username || parsed.password) {
-      return undefined;
-    }
-    origin = parsed.origin;
-  } catch {
-    return undefined;
-  }
-  const allowed = resolveControlUiAllowedOrigins(cfg);
-  return allowed.some((candidate) => candidate.trim() === "*" || candidate.trim() === origin)
-    ? origin
-    : undefined;
-}
-
-function setAvatarCorsHeaders(
-  req: IncomingMessage,
-  res: ServerResponse,
-  cfg: OpenClawConfig,
-): boolean {
-  res.setHeader("Vary", "Origin, Authorization, Cookie");
-  if (!req.headers.origin) {
-    return true;
-  }
-  const origin = resolveAvatarCorsOrigin(req, cfg);
-  if (!origin) {
-    return false;
-  }
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  return true;
-}
 
 type GravatarHit = {
   kind: "hit";
@@ -241,7 +201,7 @@ export async function handleUserProfileAvatarHttpRequest(
   }
   const method = req.method;
   const cfg = opts.cfg ?? getRuntimeConfig();
-  const corsAllowed = setAvatarCorsHeaders(req, res, cfg);
+  const corsAllowed = setControlUiImageCorsHeaders(req, res, cfg);
   if (method === "OPTIONS") {
     if (!corsAllowed) {
       sendJson(res, 403, { ok: false, error: { type: "origin_not_allowed" } });

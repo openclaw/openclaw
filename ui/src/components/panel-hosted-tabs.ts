@@ -2,6 +2,18 @@ import type { nothing, TemplateResult } from "lit";
 
 export const PANEL_HOSTED_TABS_CHANGE_EVENT = "openclaw:panel-hosted-tabs-change";
 
+const hostedTabsChangeKeys = new WeakMap<HTMLElement, string>();
+
+export function notifyPanelHostedTabsChanged(element: HTMLElement, facts: unknown[]): void {
+  const key = JSON.stringify(facts);
+  if (hostedTabsChangeKeys.get(element) !== key) {
+    hostedTabsChangeKeys.set(element, key);
+    element.dispatchEvent(
+      new CustomEvent(PANEL_HOSTED_TABS_CHANGE_EVENT, { bubbles: true, composed: true }),
+    );
+  }
+}
+
 export type PanelHostedTab = {
   id: string;
   label: string;

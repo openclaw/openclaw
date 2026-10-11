@@ -1,7 +1,11 @@
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   consumeCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
@@ -24,10 +28,16 @@ const sharedClients = vi.hoisted(() => ({
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),
   createIsolatedCodexAppServerClient: vi.fn(),
-  isCodexAppServerStartSelectionChangedError: () => false,
 }));
 
 vi.mock("./app-server/shared-client.js", () => sharedClients);
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    cleanup();
+  }),
+);
 
 describe("native Codex thread selection", () => {
   it.each(["connection", "session", "config"] as const)(
@@ -45,13 +55,16 @@ describe("native Codex thread selection", () => {
       let config: OpenClawConfig = {};
       const session = {
         sessionId: identity.sessionId,
+        updatedAt: 1,
         modelSelectionLocked: false,
         inputTokens: 0,
       };
+      const storePath = path.join(tempDirs.make("codex-thread-selection-"), "sessions.json");
+      await upsertSessionEntry({ ...identity, storePath, entry: session });
       const runtime = createPluginRuntimeMock({
         agent: {
           session: {
-            getSessionEntry: () => ({ ...session, updatedAt: Date.now() }),
+            resolveStorePath: () => storePath,
           },
         },
       });
@@ -73,6 +86,7 @@ describe("native Codex thread selection", () => {
         } else if (change === "config") {
           config = { ...config };
         }
+        await upsertSessionEntry({ ...identity, storePath, entry: session });
         options.assertCurrent!();
         return dispatch();
       });
@@ -119,7 +133,9 @@ describe("native Codex fork ownership", () => {
       sessionId: "session-id",
       sessionKey: "agent:main:fork-ownership",
     };
-    const session = { sessionId: identity.sessionId, modelSelectionLocked: false };
+    const session = { sessionId: identity.sessionId, updatedAt: 1, modelSelectionLocked: false };
+    const storePath = path.join(tempDirs.make("codex-thread-fork-"), "sessions.json");
+    await upsertSessionEntry({ ...identity, storePath, entry: session });
     let invocationCurrent = true;
     const forkWritten = createDeferred<void>();
     const response = {
@@ -165,7 +181,7 @@ describe("native Codex fork ownership", () => {
       createCodexThreadsTool({
         bindingStore,
         runtime: createPluginRuntimeMock({
-          agent: { session: { getSessionEntry: () => ({ ...session, updatedAt: Date.now() }) } },
+          agent: { session: { resolveStorePath: () => storePath } },
         }),
         context: {
           config: {},
@@ -185,6 +201,7 @@ describe("native Codex fork ownership", () => {
       bindingStore,
       identity,
       session,
+      storePath,
       binding,
       harness,
       forkWritten,
@@ -365,6 +382,11 @@ describe("native Codex fork ownership", () => {
         .mockResolvedValueOnce(fixture.harness.client)
         .mockImplementationOnce(async () => {
           fixture.session.modelSelectionLocked = true;
+          await upsertSessionEntry({
+            ...fixture.identity,
+            storePath: fixture.storePath,
+            entry: fixture.session,
+          });
           return fixture.harness.client;
         });
       await expect(

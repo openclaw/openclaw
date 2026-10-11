@@ -1,6 +1,7 @@
 import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
+import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   withOwnedSessionTranscriptWrites,
@@ -283,6 +284,11 @@ export function createEmbeddedRunCompactionRuntime(input: {
       ? params.sessionManager
       : undefined;
   const detached = params.sessionPersistence === "detached";
+  const initialTarget = sessionPromptState.sessionTarget;
+  const incognito =
+    !memoryManager && !detached && initialTarget
+      ? captureIncognitoSessionSource(initialTarget)
+      : undefined;
   const assertAdmittedActive = composeSessionSourceAssertion(
     [admittedAssertion],
     (assertSource) => {
@@ -303,14 +309,28 @@ export function createEmbeddedRunCompactionRuntime(input: {
     if (memoryManager || detached) {
       return;
     }
+    incognito?.admissionSignal?.throwIfAborted();
+    if (incognito && "kind" in incognito) {
+      incognito.assertCurrent();
+    }
+    if (
+      incognito &&
+      (target?.agentId !== initialTarget?.agentId || target?.storePath !== initialTarget?.storePath)
+    ) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
     const entry =
       target?.sessionKey && target.storePath
-        ? loadSessionEntry({
-            agentId: target.agentId,
-            sessionKey: target.sessionKey,
-            storePath: target.storePath,
-            readConsistency: "latest",
-          })
+        ? incognito
+          ? "kind" in incognito
+            ? undefined
+            : incognito.actor.sessions.readSharing(target.sessionKey)?.entry
+          : loadSessionEntry({
+              agentId: target.agentId,
+              sessionKey: target.sessionKey,
+              storePath: target.storePath,
+              readConsistency: "latest",
+            })
         : undefined;
     if (
       !writerFence ||

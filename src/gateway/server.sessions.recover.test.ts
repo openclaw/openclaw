@@ -513,6 +513,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
         modelSelectionLocked: true,
         pinnedAt: 1,
         sandbox: "required",
+        communication: { send: "never", receive: "ask" },
         spawnedCwd: "/tmp/recovered-worktree",
         mainRestartRecovery: {
           cycleId: "cycle-tombstoned",
@@ -574,6 +575,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     previousSessionId: sourceSessionId,
     providerOverride: "openai",
     sandbox: "required",
+    communication: { send: "never", receive: "ask" },
     spawnedCwd: "/tmp/recovered-worktree",
   });
   const archivedSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });

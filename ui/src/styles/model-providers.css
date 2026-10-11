@@ -39,7 +39,10 @@
 }
 
 .model-providers__no-stats,
-.model-providers__local-cost-detail {
+.model-providers__local-cost-detail,
+.model-providers__profiles-heading-copy span,
+.model-providers__profile-copy span,
+.model-providers__updated {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -81,7 +84,8 @@
 }
 
 .model-providers__profiles-heading-copy,
-.model-providers__profile-copy {
+.model-providers__profile-copy,
+.model-provider-login__copy {
   display: grid;
   gap: var(--space-1);
   min-width: 0;
@@ -97,12 +101,6 @@
   color: var(--text-strong);
   font-size: var(--control-ui-text-sm);
   font-weight: 650;
-}
-
-.model-providers__profiles-heading-copy span,
-.model-providers__profile-copy span {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
 }
 
 .model-providers__profiles-heading-actions,
@@ -387,11 +385,6 @@
   gap: calc(var(--space-3) * 1.5);
 }
 
-.model-providers__updated {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
 .settings-section__actions .model-providers__refresh-button.btn--icon.btn--xs svg {
   width: var(--control-ui-text-xs);
   height: var(--control-ui-text-xs);
@@ -536,13 +529,6 @@ openclaw-model-account-usage,
   padding: var(--space-3);
   text-align: start;
   white-space: normal;
-}
-
-.model-provider-login__copy {
-  display: grid;
-  gap: var(--space-1);
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .model-provider-login__copy > span {

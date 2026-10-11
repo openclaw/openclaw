@@ -3,7 +3,7 @@ import { once } from "node:events";
 import net from "node:net";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,9 +56,9 @@ const storeOptions = {
   overflowPolicy: "reject-new" as const,
 };
 const openStore = () =>
-  createPluginStateKeyedStoreForTests<
+  createPluginStateKeyedStoreV2ForTests<
     Omit<PendingFaceTimeDial, "callUUIDAliases"> & { callUUIDAliases?: string[] }
-  >("facetime", storeOptions);
+  >("facetime", storeOptions, { assertCurrent() {} });
 
 class WireHelper {
   readonly actions: Array<Record<string, unknown>> = [];
@@ -222,7 +222,7 @@ describe("FaceTime production authority boundary", () => {
       logger: log,
       pluginRoot: "/isolated",
       runtime: {
-        state: { openKeyedStore: openStore },
+        state: { openKeyedStoreV2: openStore },
         system: {
           runCommandWithTimeout: vi.fn(async () => {
             throw new Error("host command is forbidden in authority proof");

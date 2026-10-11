@@ -3,12 +3,13 @@ import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-bin
 import {
   getConversationSession,
   resolveStorePath,
+  type SessionEntrySourceAuthority,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import {
   normalizeSlackRouteBindingConfig,
-  resolveSlackConversationBindingRoute,
+  resolveSlackConversationBindingRouteAsync,
 } from "../../conversation-binding-route.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
@@ -28,9 +29,9 @@ type SlackRoutingContextDeps = Pick<
   "cfg" | "teamId" | "threadInheritParent" | "threadHistoryScope"
 >;
 
-type SlackRoutingContext = ReturnType<typeof resolveSlackRoutingContext>;
+type SlackRoutingContext = Awaited<ReturnType<typeof resolveSlackRoutingContext>>;
 
-export function resolveSlackRoutingContext(params: {
+export async function resolveSlackRoutingContext(params: {
   ctx: SlackRoutingContextDeps;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
@@ -86,7 +87,7 @@ export function resolveSlackRoutingContext(params: {
   );
   const runtimeBindingThreadId =
     routedThreadId ?? (isDirectMessage && isThreadReply ? threadTs : undefined);
-  const bindingRoute = resolveSlackConversationBindingRoute({
+  const bindingRoute = await resolveSlackConversationBindingRouteAsync({
     cfg: ctx.cfg,
     resolveRoute: ({ boundAgentId, bindingOwnerAvailable }) =>
       resolveSlackAgentRoute({
@@ -144,11 +145,14 @@ export async function resolveSlackSessionEventRoutingContext(
     "ctx" | "assistantThreadTs" | "agentViewThreadTs"
   > & { ctx: SlackMonitorContext; intent: "stop" | "title" },
 ): Promise<
-  SlackRoutingContext & { isCurrentSession: () => boolean; assertCurrentSession: () => void }
+  SlackRoutingContext & {
+    isCurrentSession: () => boolean;
+    assertCurrentSession: SessionEntrySourceAuthority;
+  }
 > {
   const { ctx, message, eventScope } = params;
   const threadTs = message.thread_ts;
-  const routing = resolveSlackRoutingContext(params);
+  const routing = await resolveSlackRoutingContext(params);
   const address = {
     agentId: routing.route.agentId,
     storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: routing.route.agentId }),

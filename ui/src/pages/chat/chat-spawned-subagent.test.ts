@@ -208,12 +208,11 @@ describe("a launched subagent", () => {
     link.click();
     expect(onOpenSubagent).toHaveBeenCalledExactlyOnceWith(story.key);
     expect(onToggleExpanded).not.toHaveBeenCalled();
-    // The Subagents panel does not list a swarm's workers, so one still opens as a session.
     mount([{ ...story, swarmGroupId: "parallel-audit" }])
       .querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!
       .click();
-    expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(story.key);
-    expect(onOpenSubagent).toHaveBeenCalledOnce();
+    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(onOpenSubagent).toHaveBeenNthCalledWith(2, story.key);
     row
       .querySelector<HTMLButtonElement>(".chat-tool-row--subagent > .chat-tool-row__toggle")!
       .click();

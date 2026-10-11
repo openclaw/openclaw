@@ -2,7 +2,6 @@
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
-  clearPersistedContextEngineQuarantineForActivation,
   clearPersistedContextEngineQuarantineForProcess,
   listPersistedContextEngineQuarantines,
   recordPersistedContextEngineQuarantine,
@@ -91,9 +90,4 @@ export async function clearContextEngineRuntimeQuarantine(
       throw new Error("Context engine quarantine changed during recovery");
     }
   });
-}
-
-export function clearContextEngineQuarantineForActivation(engineId: string): void {
-  contextEngineRegistryState.quarantinedEngines.delete(engineId);
-  clearPersistedContextEngineQuarantineForActivation(engineId);
 }

@@ -60,11 +60,18 @@ it("binds iterators immediately and holds custody until exhaustion or explicit r
 
   const next = statement.iterate(3);
   expect(next.next().value).toEqual({ value: 3 });
-  // A completed cursor's return is inert on Node but can reset a sibling on Bun.
-  // Neither runtime permits that stale cursor to certify the newer cursor's settlement.
+  // Native return can reset the shared statement, even from a completed cursor.
+  // That stale cursor cannot certify the newer cursor's settlement.
   rows.return?.();
   expect(hasPendingSqliteNativeExecution(db)).toBe(true);
   next.return?.();
+  expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+
+  const last = statement.iterate(4);
+  expect(last.next().value).toEqual({ value: 4 });
+  next.return?.();
+  expect(hasPendingSqliteNativeExecution(db)).toBe(true);
+  last.return?.();
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
 });
 
@@ -234,8 +241,14 @@ it("preserves native cursor behavior when an invalidated iterator is stepped", (
     } catch (error) {
       stale = error instanceof Error ? error.message : error;
     }
+    if (db !== native) {
+      expect(hasPendingSqliteNativeExecution(db)).toBe(true);
+    }
     const next = second.next();
     first.return?.();
+    if (db !== native) {
+      expect(hasPendingSqliteNativeExecution(db)).toBe(true);
+    }
     second.return?.();
     return { stale, next };
   };

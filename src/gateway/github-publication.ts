@@ -22,6 +22,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
   prepareGitHubPublicationWorkspaceOwner,
+  readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import {
   createGitHubPublicationCoordinatorMethods,
@@ -55,7 +56,6 @@ import {
 } from "./github-publication-store.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { createRepositoryGitHubPublicationCoordinator } from "./github-repository-publication.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
@@ -557,7 +557,7 @@ export function createGitHubPublicationCoordinator(params: {
       repository.deferClaimPreparation(claim);
     },
     requestForSession(input: Parameters<typeof methods.requestForSession>[0]) {
-      const loaded = loadGatewaySessionEntryReadOnly(input.sessionKey!, { agentId: input.agentId });
+      const loaded = readGitHubPublicationSession(input.sessionKey!, { agentId: input.agentId });
       return loaded.entry?.repositoryWorkspaceId
         ? repository.requestForSession(input)
         : methods.requestForSession(input);

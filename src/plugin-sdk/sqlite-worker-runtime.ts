@@ -16,6 +16,13 @@ export {
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
 export {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  readSqliteDatabasePendingWriteToken,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
+export { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+export {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,

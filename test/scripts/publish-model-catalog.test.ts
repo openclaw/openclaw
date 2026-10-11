@@ -304,6 +304,26 @@ describe("publish model catalog", () => {
     expect(MODEL_CATALOG_MIN_MODELS).toBe(200);
   });
 
+  it("omits empty static catalogs owned by runtime discovery", async () => {
+    const bundle = await assembleFixtureBundle([
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          modelCatalog: {
+            providers: {
+              anthropic: fixtureProvider("claude", 100),
+              openai: fixtureProvider("gpt", 100),
+              "claude-cli": { models: [] },
+            },
+          },
+        },
+      },
+    ]);
+    expect(bundle.providers).not.toHaveProperty("claude-cli");
+    expect(summarizeModelCatalogBundle(bundle)).toMatchObject({ providers: 2, models: 200 });
+  });
+
   it("rejects missing required providers, low counts, and invalid provider rows", async () => {
     const makeEntry = (providers: Record<string, unknown>) => [
       {

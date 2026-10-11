@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 
-import type { ReactiveController } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
+import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
@@ -12,7 +12,6 @@ import {
 import { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 
 let originalLocalStorage: PropertyDescriptor | undefined;
-
 beforeEach(() => {
   originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   Object.defineProperty(globalThis, "localStorage", {
@@ -20,7 +19,6 @@ beforeEach(() => {
     value: createStorageMock(),
   });
 });
-
 afterEach(() => {
   if (originalLocalStorage) {
     Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
@@ -29,124 +27,236 @@ afterEach(() => {
   }
 });
 
-describe("SessionOwnerFilterController", () => {
-  it.each([
-    { ownerId: "restored-owner", involvingMe: false },
-    { ownerId: null, involvingMe: true },
-  ])("defers restoring $ownerId/$involvingMe until the selected chat is ready", async (filter) => {
-    const bootstrap = createConnectionBootstrapCoordinator();
-    const client = {};
-    bootstrap.setForegroundRoute("agent:main:current");
-    bootstrap.synchronize({ client, connected: true });
-    const refreshed = createDeferred();
-    const refresh = vi.fn(() => refreshed.promise);
-    let scheduled: Promise<void> | undefined;
-    const host = {
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-      sessionData: {
-        resetSessionList: vi.fn(),
-        refreshSidebarSessions: refresh,
-        scheduleSidebarSessions: () =>
-          (scheduled = bootstrap.run(host, refresh, { background: true })),
-      },
-    };
-    const gatewayUrl = "wss://filter.example";
-    storeSidebarSessionOwnerFilter(gatewayUrl, "profile", filter);
-    const controller = new SessionOwnerFilterController(host, () => ({
-      gateway: { connection: { gatewayUrl }, snapshot: { selfUser: { id: "profile" } } },
-    }));
-    try {
-      controller.hostUpdated();
-      expect(controller.ownerId).toBe(filter.ownerId);
-      expect(controller.involvingMe).toBe(filter.involvingMe);
-      expect(refresh).not.toHaveBeenCalled();
+function fixture(initialMine = false) {
+  const context = {
+    gateway: {
+      connection: { gatewayUrl: "wss://one.example/ws" },
+      snapshot: { selfUser: { id: "profile-ada" } as { id: string } | null },
+    },
+  };
+  let mine = initialMine;
+  let facet: SessionListSnapshot | undefined;
+  const host = {
+    isConnected: true,
+    addController: vi.fn(),
+    removeController: vi.fn(),
+    requestUpdate: vi.fn(),
+    updateComplete: Promise.resolve(true),
+    sidebarSessionOwnerFilter: () => ({
+      ownerId: mine ? (context.gateway.snapshot.selfUser?.id ?? null) : controller.ownerId,
+      involvingMe: !mine && controller.involvingMe,
+    }),
+    sessionData: {
+      resetSessionList: vi.fn(),
+      refreshSidebarSessions: vi.fn(() => Promise.resolve()),
+      scheduleSidebarSessions: vi.fn(() => Promise.resolve()),
+    },
+  };
+  const controller = new SessionOwnerFilterController(
+    host,
+    () => context,
+    () => (mine ? undefined : facet),
+  );
+  const update = () => {
+    controller.hostUpdate();
+    controller.hostUpdated();
+  };
+  return {
+    host,
+    controller,
+    context,
+    update,
+    mine: (value: boolean, userIntent = true) => {
+      mine = value;
+      if (userIntent) {
+        controller.markUserIntent();
+      }
+      update();
+    },
+    facet: (value: SessionListSnapshot) => {
+      facet = value;
+      update();
+    },
+  };
+}
+function ownerFacet(id: string): SessionListSnapshot {
+  return {
+    result: { ...sessionsResult([], 1), owners: [{ type: "human", id }] },
+    loading: false,
+    error: null,
+    agentId: "main",
+    readSucceeded: true,
+  };
+}
 
-      bootstrap.setForegroundPane({}, { sessionKey: "agent:main:current", client, ready: true });
-      expect(refresh).toHaveBeenCalledOnce();
-      controller.observeOwnerFacet(true, []);
-      controller.hostUpdated();
-      expect(controller.ownerId).toBe(filter.ownerId);
-      refreshed.resolve();
-      await refreshed.promise;
-      await scheduled;
-      await Promise.resolve();
-      controller.observeOwnerFacet(true, filter.ownerId ? [{ id: filter.ownerId }] : []);
-      controller.hostUpdated();
-      expect(controller.ownerId).toBe(filter.ownerId);
-      expect(controller.involvingMe).toBe(filter.involvingMe);
-      bootstrap.setForegroundRoute("agent:main:next");
-      controller.set("explicit-owner");
-      expect(refresh).toHaveBeenCalledTimes(2);
-      expect(controller.ownerId).toBe("explicit-owner");
-    } finally {
-      refreshed.resolve();
-      bootstrap.reset();
-    }
+describe("SessionOwnerFilterController", () => {
+  it("schedules initial Mine and programmatic scope changes but immediately refreshes explicit changes", () => {
+    const { controller, host, update, mine } = fixture(true);
+    controller.hostConnected();
+    update();
+    expect(host.sidebarSessionOwnerFilter()).toEqual({
+      ownerId: "profile-ada",
+      involvingMe: false,
+    });
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledOnce();
+    expect(host.sessionData.resetSessionList).not.toHaveBeenCalled();
+    expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+
+    mine(false, false);
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledTimes(2);
+    expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+    mine(true);
+    expect(host.sessionData.refreshSidebarSessions).toHaveBeenCalledOnce();
+    mine(false, false);
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledTimes(3);
+    expect(host.sessionData.refreshSidebarSessions).toHaveBeenCalledOnce();
   });
 
-  it("waits for the new identity roster before validating its stored owner", async () => {
-    let controller: ReactiveController | undefined;
-    const host = {
-      addController: (value: ReactiveController) => {
-        controller = value;
-      },
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-      sessionData: {
-        resetSessionList: vi.fn(),
-        refreshSidebarSessions: () => refresh(),
-        scheduleSidebarSessions: () => refresh(),
-      },
-    };
-    let selfUserId = "profile-ada";
-    let finishRefresh!: () => void;
-    const refresh = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          finishRefresh = resolve;
-        }),
-    );
-    const ownerFilter = new SessionOwnerFilterController(host, () => ({
-      gateway: {
-        connection: { gatewayUrl: "wss://one.example/ws" },
-        snapshot: { selfUser: { id: selfUserId } },
-      },
-    }));
-    expect(controller).toBe(ownerFilter);
-    ownerFilter.hostUpdated();
-    ownerFilter.observeOwnerFacet(true, [{ id: "owner-ada" }]);
+  it.each(["no query change", "replacement profile", "disconnected host"])(
+    "does not carry explicit intent into later automatic work after %s",
+    (retirement) => {
+      const { controller, host, context, update } = fixture(true);
+      controller.hostConnected();
+      update();
+      controller.markUserIntent();
+      if (retirement === "no query change") {
+        update();
+      } else if (retirement === "disconnected host") {
+        controller.hostDisconnected();
+        controller.hostConnected();
+      }
+      context.gateway.snapshot.selfUser = { id: "replacement-profile" };
+      update();
+      expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+      expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledTimes(2);
+      expect(host.sidebarSessionOwnerFilter()).toEqual({
+        ownerId: "replacement-profile",
+        involvingMe: false,
+      });
+    },
+  );
+
+  it.each([
+    { ownerId: "owner-bob", involvingMe: false },
+    { ownerId: null, involvingMe: true },
+  ])(
+    "restores $ownerId/$involvingMe before initial subscription without another read",
+    (filter) => {
+      storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", filter);
+      const { controller, host, update, mine } = fixture();
+      controller.hostConnected();
+      expect(controller.ownerId).toBe(filter.ownerId);
+      expect(controller.involvingMe).toBe(filter.involvingMe);
+      update();
+      update();
+      expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+      expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledOnce();
+      mine(true);
+      expect(host.sidebarSessionOwnerFilter()).toEqual({
+        ownerId: "profile-ada",
+        involvingMe: false,
+      });
+      expect(host.sessionData.refreshSidebarSessions).toHaveBeenCalledOnce();
+      mine(false);
+      expect(host.sidebarSessionOwnerFilter()).toEqual(filter);
+      expect(host.sessionData.refreshSidebarSessions).toHaveBeenCalledTimes(2);
+      expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual(
+        filter,
+      );
+      const reloaded = fixture();
+      reloaded.controller.hostConnected();
+      expect(reloaded.host.sidebarSessionOwnerFilter()).toEqual(filter);
+    },
+  );
+
+  it("keeps profiles and gateways isolated, including a temporarily unavailable identity", () => {
+    const { controller, context, update, host } = fixture();
+    controller.hostConnected();
+    update();
+    controller.set("owner-ada");
+    update();
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-bob", {
+      ownerId: null,
+      involvingMe: true,
+    });
+    context.gateway.snapshot.selfUser = null;
+    update();
+    expect(host.sidebarSessionOwnerFilter()).toEqual({ ownerId: null, involvingMe: false });
+    context.gateway.snapshot.selfUser = { id: "profile-bob" };
+    update();
+    expect(host.sidebarSessionOwnerFilter()).toEqual({ ownerId: null, involvingMe: true });
+    context.gateway.connection.gatewayUrl = "wss://two.example/ws";
+    update();
+    expect(host.sidebarSessionOwnerFilter()).toEqual({ ownerId: null, involvingMe: false });
+    controller.set("owner-two");
+    update();
+    context.gateway.connection.gatewayUrl = "wss://one.example/ws";
+    context.gateway.snapshot.selfUser = { id: "profile-ada" };
+    update();
+    expect(controller.ownerId).toBe("owner-ada");
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-bob")).toEqual({
+      ownerId: null,
+      involvingMe: true,
+    });
+  });
+
+  it("waits for the replacement profile's query before validating its saved All owner", async () => {
+    const { controller, host, context, update, facet } = fixture();
+    controller.hostConnected();
+    update();
+    facet(ownerFacet("owner-ada"));
     storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-bob", {
       ownerId: "owner-bob",
       involvingMe: false,
     });
+    const pending = createDeferred();
+    host.sessionData.scheduleSidebarSessions.mockReturnValueOnce(pending.promise);
+    context.gateway.snapshot.selfUser = { id: "profile-bob" };
+    update();
+    facet(ownerFacet("owner-ada"));
+    expect(controller.ownerId).toBe("owner-bob");
+    expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledTimes(2);
+    facet(ownerFacet("owner-bob"));
+    pending.resolve();
+    await pending.promise;
+    update();
+    expect(controller.ownerId).toBe("owner-bob");
+    expect(host.sessionData.refreshSidebarSessions).not.toHaveBeenCalled();
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledTimes(2);
+  });
 
-    selfUserId = "profile-bob";
-    ownerFilter.hostUpdated();
+  it("clears only from a settled complete All facet, never a Mine or failed snapshot", async () => {
+    const { controller, host, update, mine, facet } = fixture();
+    controller.hostConnected();
+    controller.set("owner-bob");
+    update();
+    mine(true);
     await Promise.resolve();
-    ownerFilter.observeOwnerFacet(true, [{ id: "owner-ada" }]);
-    ownerFilter.hostUpdated();
-
-    expect(ownerFilter.ownerId).toBe("owner-bob");
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-bob")).toEqual({
-      ownerId: "owner-bob",
+    facet(ownerFacet("profile-ada"));
+    expect(controller.ownerId).toBe("owner-bob");
+    mine(false);
+    await Promise.resolve();
+    for (const patch of [
+      { loading: true },
+      { startupPending: true },
+      { error: "offline" },
+      { readSucceeded: false },
+      { result: sessionsResult([], 1) },
+    ]) {
+      facet({ ...ownerFacet("profile-ada"), ...patch });
+      expect(controller.ownerId).toBe("owner-bob");
+    }
+    facet(ownerFacet("owner-bob"));
+    expect(controller.ownerId).toBe("owner-bob");
+    facet(ownerFacet("profile-ada"));
+    expect(controller.ownerId).toBeNull();
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      ownerId: null,
       involvingMe: false,
     });
-
-    finishRefresh();
-    await Promise.resolve();
-    ownerFilter.hostUpdated();
-    ownerFilter.observeOwnerFacet(true, [{ id: "owner-bob" }]);
-    ownerFilter.hostUpdated();
-    expect(ownerFilter.ownerId).toBe("owner-bob");
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-bob")).toEqual({
-      ownerId: "owner-bob",
-      involvingMe: false,
-    });
+    update();
+    expect(host.sessionData.refreshSidebarSessions).toHaveBeenCalledTimes(3);
+    expect(host.sessionData.scheduleSidebarSessions).toHaveBeenCalledOnce();
   });
 });

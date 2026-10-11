@@ -26,6 +26,7 @@ function emitCompactionAgentEvent(
         willRetry: boolean;
         outcome: SessionCompactionEndEvent["outcome"]["status"];
         reason?: string;
+        qualityDegraded?: true;
       },
 ): void {
   const event = { stream: "compaction" as const, data };
@@ -205,6 +206,7 @@ export function handleCompactionEnd(
     completed,
     willRetry,
     outcome: outcome.status,
+    ...(completed && outcome.qualityDegraded ? { qualityDegraded: true } : {}),
     ...(outcomeReason ? { reason: outcomeReason } : {}),
   });
 

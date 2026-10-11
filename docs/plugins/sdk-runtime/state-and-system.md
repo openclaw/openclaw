@@ -225,17 +225,18 @@ the named `plugin-state-sync-keyed-store` compatibility adapter. Existing method
 remain supported through the next Plugin SDK major; removal also requires a
 supported external-plugin migration and explicit breaking-release approval.
 
-Use `api.runtime.state.openKeyedStore` with the same namespace and options, then
+Use `api.runtime.state.openKeyedStoreV2` with the same namespace and options, then
 await its operations. The opener itself still returns a store synchronously.
 Both interfaces use the same plugin-scoped data, so no data migration is needed.
 
 Deferred runtime code without a bound plugin API can import
-`createPluginStateKeyedStore` from `openclaw/plugin-sdk/plugin-state-store-runtime`.
-Pass the plugin ID and the same namespace options, then await each operation.
+`createPluginStateKeyedStoreV2` from `openclaw/plugin-sdk/plugin-state-store-runtime`.
+Pass the plugin ID, the same namespace options, and the owner's required
+`{ assertCurrent }` capability, then await each operation.
 Keep this import lazy because the factory loads the state database runtime.
 
 ```typescript
-const store = api.runtime.state.openKeyedStore<MyRecord>({
+const store = api.runtime.state.openKeyedStoreV2<MyRecord>({
   namespace: "my-feature",
   maxEntries: 200,
 });
@@ -244,19 +245,21 @@ const value = await store.lookup("key-1");
 ```
 
 For writes on behalf of a current tool invocation or other revocable action,
-require `store.withCurrent` before starting effects. Bind the host-provided
-assertion together with any action-specific permission check:
+bind the host-provided assertion together with the action's permission check:
 
 ```typescript
-if (!store.withCurrent) {
-  throw new Error("Update OpenClaw to authorize this state mutation.");
-}
-const actionStore = store.withCurrent({
-  assertCurrent: () => {
-    context.assertInvocationCurrent();
-    assertActionAllowed();
+const actionStore = api.runtime.state.openKeyedStoreV2<MyRecord>(
+  {
+    namespace: "my-feature",
+    maxEntries: 200,
   },
-});
+  {
+    assertCurrent: () => {
+      context.assertInvocationCurrent();
+      assertActionAllowed();
+    },
+  },
+);
 await actionStore.register("key-1", { value: "hello" });
 ```
 
@@ -267,7 +270,10 @@ host and is checked after reads and at both transaction and final commit
 admission for writes, including bounded stores. Create a separate view for each
 action; do not keep one caller's authority on a shared service. The legacy
 `PluginStateKeyedStore<T>` keeps this capability optional for older hosts and
-adapters. An action requiring it must refuse when it is absent.
+adapters through its optional `withCurrent` method. An action requiring that
+capability must refuse when it is absent. The V2 opener binds the plugin lifetime
+without requiring a separate action; its optional authority adds the action's
+revocation checks. Worker completion includes committed fact installation.
 
 `observe` and a comparison conflict return observations without committing the
 requested mutation; they also require current authority when returning that data.
@@ -276,29 +282,54 @@ A refusal before the commit grant rolls back the mutation. Once commit is
 authorized, later revocation does not turn the settled write into a refusal.
 Recheck authority before the next external effect, and preserve the recorded
 result; never retry a committed or unknown write to compensate for revocation.
+Runtime adapters can use `hasSqliteWorkerOutcomeUnknown(error)` from
+`openclaw/plugin-sdk/sqlite-runtime` to recognize unknown outcomes through
+canonical error causes. For an unknown outcome, retire an uncertain cached view
+instead of attempting a reconciliation read; rejection alone does not prove
+that native work has stopped.
 
 The async store's `update` updater and `deleteIf` predicate are deprecated
 compatibility methods. They still run synchronously on the main thread inside
 the transaction containing the authoritative read and mutation, and remain
-supported through the next Plugin SDK major.
+supported until they are removed in the next Plugin SDK major. Actual legacy
+calls emit one deprecation diagnostic per plugin and capability family per
+Gateway process; importing the SDK does not warn. Synchronous methods still
+commit and install their facts before returning.
+Runtime-bound stores retain their plugin identity for diagnostics even when a
+saved method is called outside the opening invocation.
 Finish asynchronous planning before calling these methods; do not make their
 callbacks async or replace atomic operations with separate lookups and writes.
 Returning `undefined` from an updater leaves the entry unchanged. `update`,
 `deleteIf`, `lookupMany`, and `count` remain optional in public store types, so preserve
 capability checks for supported older hosts and third-party adapters.
 
-For new atomic mutations, use the optional `observe` and `compareAndApply`
-methods. `observe(key)` prepares a mutation through canonical writable database
+Thread-binding adapters that preserve deprecated cache mutations can import
+`warnPluginSdkDeprecation` from `openclaw/plugin-sdk/thread-bindings-session-runtime`.
+Call it at the legacy operation with static `family`, `method`, and `replacement`
+descriptions, plus the known `pluginId` and an accurate `compatibility` description.
+It shares the host's warning budget; a cache mutation that defers persistence
+must describe that timing rather than claim the write has already committed.
+
+For new atomic mutations, use `observe` and `compareAndApply`, which are required
+on V2 stores and optional only in the legacy structural store contract.
+`observe(key)` prepares a mutation through canonical writable database
 admission and may create or open state. It returns `{ value, comparison }`; use
 `lookup` for a plain, noncreating read. No transaction remains open while the
 caller prepares the next value.
 
-`compareAndApply(key, comparison, intent)` compares the current live row before
+`compareAndApply(key, comparison, intent, options?)` compares the current live row before
 changing it in the same worker-owned transaction. The opaque comparison binds
 the actual database, plugin, namespace, key, stored JSON bytes, creation time,
 and expiry. It compares content and metadata; it is not an incarnation token or
 permission to act. Another store or key rejects the comparison with
 `PLUGIN_STATE_INVALID_INPUT`.
+
+The optional `conditions` array contains up to 100 observations for other keys
+in the same plugin's namespaces. The worker checks them in the destination's
+transaction before applying the intent. A condition conflict returns the
+destination's current observation; reread all dependent inputs before preparing
+another attempt. This preserves a cross-key predicate without sending a closure
+or holding a transaction open during asynchronous preparation.
 
 The intent is explicit:
 
@@ -319,8 +350,88 @@ Existing quotas, eviction order, validation, and store errors still apply.
 On an explicit conflict, a plugin may recompute a named pure decision from
 `current.value` and try again. Prepare clocks, randomness, and external effects
 outside that decision. Never retry transport failures, unknown outcomes, or
-arbitrary callbacks. Check both optional methods before using this capability;
-there is no safe fallback consisting of a separate lookup and unconditional write.
+arbitrary callbacks. When accepting a legacy store, check both optional methods
+before using this capability; there is no safe fallback consisting of a separate
+lookup and unconditional write.
+
+For a complete operation spanning keys or namespaces, use the optional
+`store.createOperation` capability. Its named plugin module runs inside the
+existing shared-state worker, with all reads and writes in one synchronous
+transaction. The factory captures the admitted plugin generation, physical state
+source, namespace handles, and live action authority before any await.
+
+```typescript
+type MoveOperations = {
+  move: { input: { key: string }; output: boolean };
+};
+const operation = source.createOperation<MoveOperations>(
+  [source, destination],
+  {
+    moduleName: "transfer-operation-api.js",
+    exportName: "executeTransfer",
+  },
+  { assertCurrent },
+);
+const receipt = await operation.execute(
+  { type: "move", input: { key } },
+  { writeStores: [0, 1], watchStores: [1] },
+);
+receipt.assertCurrent();
+```
+
+The worker export accepts the typed command and a
+`PluginStateOperationTransaction`. Its synchronous `lookup`, `lookupMany`,
+`entries`, `set`, and `delete` methods address the captured stores by index.
+Repeated reads share the transaction's row view; `lookupMany` selects uncached
+keys together. Writes update that view and preserve existing JSON limits,
+namespace quotas, eviction, and TTL rules. The host rejects writes outside
+`writeStores`, retained transaction methods used after return, and Promise or
+thenable handler results. A failure rolls back the whole operation.
+
+Put operation entrypoints at the plugin package root as `*-operation-api.ts`
+(or compiled JavaScript). They are captured with the admitted plugin generation
+and included by the existing bundled and standalone plugin build owners. The
+worker loads that captured module before entering the transaction. The captured
+plugin owner resolves the top-level filename within its selected source or build
+family, including `.js` references to TypeScript source. Paths and URLs are refused.
+It does not rediscover a current plugin by id, serialize a closure, or open another
+database owner. Plugins do not need a process-runtime import or their own knowledge
+of source, bundled-build, and standalone-package directory layouts.
+
+For bundled plugins, capture follows all operation entrypoints in the selected
+source or build family and their actual imports. Packages compiled into those
+files do not also need an installed runtime copy merely because the source
+manifest declares them. External imports still need their runtime dependencies.
+The entries share one captured generation, including their common dependencies,
+and recovery retains those bytes until the last owning instance releases them.
+Compiled entries can also capture shared chunks from their owning host package.
+This also applies when Doctor loads the plugin during an update.
+
+An empty `writeStores` array selects a noncreating read. Supply `missingValue`
+when an absent physical database has a defined result, including explicit
+`undefined`; the host returns that value without creating the database or
+executing the handler. An absent source without `missingValue` refuses the call.
+
+The Gateway owns online database mutation. Operation receipts use its in-process
+write publications, pending-mutation invalidation, expiry, and lifecycle state.
+They do not poll SQLite for foreign commits or reread rows on the main thread.
+Call `receipt.assertCurrent()` immediately before a later external effect.
+`watchStores` selects the namespaces on which that effect depends; unrelated
+writes to other namespaces do not invalidate it. A queued mutation invalidates
+older receipts before native commit. Unknown outcomes never authorize replay.
+Accepted writes still settle when their caller closes; a returned historical
+result does not grant permission for a new effect.
+
+When composing a continuation with more store handles, pass its original
+`sourceReceipt` in the factory's authority options. The host verifies that all
+participants belong to that captured source before awaiting; a new environment
+selection cannot redirect a recovery operation.
+
+`createOperation` remains optional in version 1 and version 2 store types so
+released hosts and third-party adapters remain source-compatible. Select a named
+compatibility path only when the capability is absent, before awaiting. A worker,
+authority, or module-loading failure never selects a synchronous fallback.
+No schema, retention, durability, or minimum-host version change is required.
 
 `registerIfAbsent` and the optional `deleteIfEqual(key, expected)` operation use
 the shared-state SQLite worker. `deleteIfEqual` accepts a string, finite number,
@@ -359,11 +470,10 @@ without comparisons retain atomic `deleteIf` cleanup; a failed worker operation
 never selects that compatibility path. The namespace, stored records, and
 retention remain unchanged, so this cutover requires no data migration.
 
-This deprecation adds editor annotations, documentation, and compatibility
-inventory metadata. It adds no runtime warning. Both runtime openers are available
-to every loaded plugin. Runtime deprecation warnings should wait for an actionable supported upgrade.
-Only the operations identified above execute on the worker. Callback execution
-is unchanged during this migration.
+Both legacy and versioned runtime openers are available to every loaded plugin.
+Actual legacy operations warn as described above; opening a store does not warn.
+Only the operations identified above execute on the worker. Callback execution,
+stored data, and retention are unchanged during this migration.
 
 ## Per-agent SQLite writes
 

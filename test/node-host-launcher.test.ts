@@ -8,7 +8,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
-const processes = new Set<ChildProcessWithoutNullStreams>();
+const processes = new Map<ChildProcessWithoutNullStreams, Promise<unknown>>();
 let bootstrapSource: string;
 let launcherClientSource: string;
 
@@ -40,11 +40,11 @@ beforeAll(async () => {
 
 afterEach(async () => {
   await Promise.all(
-    [...processes].map(async (child) => {
+    [...processes].map(async ([child, closed]) => {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");
-        await once(child, "exit");
       }
+      await closed;
     }),
   );
   processes.clear();
@@ -145,7 +145,6 @@ function run(
     },
     stdio: "pipe",
   });
-  processes.add(child);
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk: Buffer) => {
@@ -155,6 +154,7 @@ function run(
     stderr += chunk.toString();
   });
   const done = once(child, "close").then(([code, signal]) => ({ code, signal, stdout, stderr }));
+  processes.set(child, done);
   return { child, done, output: () => stdout };
 }
 

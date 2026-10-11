@@ -1079,6 +1079,11 @@ export class ManagedWorktreeService {
         progress.error("limits", error);
       }
       assertCurrent();
+      if (params.retryDeferred) {
+        // Repair before cleanup can defer the repository for those same missing objects.
+        await this.maintainGit(params);
+        assertCurrent();
+      }
       const { records, leases } = await readWorktreeCleanupState(this.env);
       const classification = { ...params, ...(await params.prepareOwners?.(records)) };
       assertCurrent();
@@ -1111,12 +1116,14 @@ export class ManagedWorktreeService {
           },
           classification,
         );
-      const { remove, retireMissing, onError, repositoryProtection } = createWorktreeGcRemoval({
+      const { collect, repositoryProtection } = createWorktreeGcRemoval({
         env: this.env,
         records,
         now,
         progress,
         policy: params,
+        expiresBefore: now - IDLE_GC_MS,
+        classifyOwner: classification.readOwnerState,
         signal: params.signal,
         assertCurrent,
         remove: (input) => this.remove(input),
@@ -1128,57 +1135,7 @@ export class ManagedWorktreeService {
         guard: params,
         checkpoint: () => params.checkpoint?.(progress.result) ?? Promise.resolve(),
       });
-      // Keep cold classification serial: each candidate can request several Git processes.
-      const evictedIds = new Set(progress.result.removed);
-      for (const record of records) {
-        assertCurrent();
-        if (evictedIds.has(record.id)) {
-          continue;
-        }
-        let retiredOwner = false;
-        try {
-          if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
-            const retired = await retireMissing(record);
-            if (retired.protection) {
-              progress.protect("idle", record.id, retired.protection);
-            } else if (retired.record?.removedAt === now) {
-              progress.result.orphansRetired += 1;
-            }
-            continue;
-          }
-          // Manual worktrees remain until explicit removal; only run-owned worktrees expire.
-          const expiresWhenIdle =
-            record.ownerKind === "workboard" || record.ownerKind === "session";
-          if (record.removedAt !== undefined || !expiresWhenIdle) {
-            continue;
-          }
-          retiredOwner =
-            record.ownerId !== undefined &&
-            classification.readOwnerState?.(record.ownerKind, record.ownerId) === "retired";
-          if (retiredOwner || now - record.lastActiveAt > IDLE_GC_MS) {
-            // Capacity eviction and idle cleanup share one decision per record per pass.
-            if (!progress.start(record.id)) {
-              continue;
-            }
-            const repositoryReason = repositoryProtection(record.repoRoot);
-            if (repositoryReason) {
-              progress.protect("idle", record.id, repositoryReason);
-              continue;
-            }
-            const protection = await protect(record);
-            if (protection !== undefined) {
-              progress.protect("idle", record.id, protection);
-              continue;
-            }
-            await remove(record, retiredOwner ? "owner-gc" : "idle-gc", retiredOwner);
-            progress.result.removed.push(record.id);
-          }
-        } catch (error) {
-          await onError(record, error, retiredOwner);
-        } finally {
-          await params.checkpoint?.(progress.result);
-        }
-      }
+      await collect(protect, () => params.checkpoint?.(progress.result));
       try {
         if (await hasTemplatesAsync(this.env)) {
           await collectWorktreeTemplates(
@@ -1209,8 +1166,10 @@ export class ManagedWorktreeService {
       progress.result.orphansDeleted = orphansDeleted;
       progress.result.snapshotsPruned = snapshotsPruned;
       assertCurrent();
-      // Cleanup has released allocation ownership and retired its refs before maintenance.
-      await this.maintainGit({ ...params, shouldDeferRepository: repositoryProtection });
+      if (!params.retryDeferred) {
+        // Cleanup has released allocation ownership and retired its refs before maintenance.
+        await this.maintainGit({ ...params, shouldDeferRepository: repositoryProtection });
+      }
       assertCurrent();
       return progress.result;
     });

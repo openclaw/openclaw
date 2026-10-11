@@ -70,6 +70,91 @@ function createProjectionFixture(
 }
 
 describe("plugin inventory install health", () => {
+  it.skipIf(process.platform === "win32")(
+    "reports a blocked linked path without missing-metadata or reinstall diagnostics",
+    () => {
+      const root = tempDirs.make("blocked-linked-plugin-health-");
+      const pluginId = "blocked-linked-fixture";
+      const pluginPath = path.join(root, "directory-alias");
+      fs.mkdirSync(pluginPath);
+      const fixture = createColdPluginFixture({ rootDir: pluginPath, pluginId });
+      fs.chmodSync(pluginPath, 0o777);
+      try {
+        const config = {
+          plugins: {
+            load: { paths: [pluginPath] },
+            entries: { [pluginId]: { enabled: true } },
+          },
+        };
+        const env = {
+          ...createColdPluginHermeticEnv(root),
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+        };
+        const index = loadInstalledPluginIndex({
+          config,
+          env,
+          installRecords: {
+            [pluginId]: { source: "path", sourcePath: pluginPath, installPath: pluginPath },
+          },
+        });
+        expect(index.plugins).toEqual([]);
+        expect(index.diagnostics).toContainEqual(
+          expect.objectContaining({
+            pluginId,
+            level: "warn",
+            message: expect.stringContaining("blocked plugin candidate: world-writable path"),
+          }),
+        );
+        const metadata = loadPluginMetadataSnapshot({ config, env, index });
+        const report = projectPluginInstallHealth(
+          { plugins: [], diagnostics: [...index.diagnostics] },
+          { metadata, config, env },
+        );
+        expect(report.diagnostics).toEqual(index.diagnostics);
+        expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
+      } finally {
+        fs.chmodSync(pluginPath, 0o755);
+      }
+    },
+  );
+
+  it.each(["sourcePath", "installPath", "unrecorded"] as const)(
+    "keeps missing linked-path recovery source-specific with %s",
+    (recordedPath) => {
+      const root = tempDirs.make("missing-linked-plugin-health-");
+      const pluginId = "missing-linked-fixture";
+      const pluginPath = path.join(root, "local plugin");
+      const config = { plugins: { entries: { [pluginId]: { enabled: true } } } };
+      const env = {
+        ...createColdPluginHermeticEnv(root),
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+      };
+      const installRecord: PluginInstallRecord = {
+        source: "path",
+        ...(recordedPath === "unrecorded" ? {} : { [recordedPath]: pluginPath }),
+      };
+      const index = loadInstalledPluginIndex({
+        config,
+        env,
+        installRecords: { [pluginId]: installRecord },
+      });
+      const metadata = loadPluginMetadataSnapshot({ config, env, index });
+      const report = projectPluginInstallHealth(
+        { plugins: [], diagnostics: [...index.diagnostics] },
+        { metadata, config, env },
+      );
+      const diagnostic = report.diagnostics.find((entry) => entry.code === "plugin-verification");
+      expect(diagnostic).toMatchObject({ pluginId, level: "error" });
+      expect(diagnostic?.message).not.toContain(`openclaw plugins install ${pluginId} --force`);
+      expect(diagnostic?.fixHint).toBeTruthy();
+      expect(diagnostic?.fixHint).toMatch(/path|local/i);
+    },
+  );
+
   it.each([
     "empty-project",
     "missing-project-package-json",

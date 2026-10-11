@@ -438,7 +438,7 @@ export function createManagerIndexFixture(deps: {
           },
           remote: params.batchEnabled ? { batch: { enabled: true } } : undefined,
           query: { minScore: params.minScore ?? 0 },
-          cache: params.cacheEnabled ? { enabled: true } : undefined,
+          cache: params.cacheEnabled !== undefined ? { enabled: params.cacheEnabled } : undefined,
           extraPaths: params.extraPaths,
           multimodal: params.multimodal,
           sources: params.sources,

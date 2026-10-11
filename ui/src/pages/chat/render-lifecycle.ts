@@ -13,3 +13,13 @@ export interface RenderLifecycle {
    */
   afterCommit(effect: AfterCommitEffect, onCancel?: () => void): CancelAfterCommit;
 }
+
+// Opt-in E2E instrumentation. Renderers report accepted invalidations and
+// completed DOM commits here; counters and retained references belong to the test.
+export function notifyRenderLifecycleForTest(host: object, phase: "invalidate" | "commit"): void {
+  // SAFETY: The E2E probe installs this optional property using the shared hook type.
+  const scope = globalThis as typeof globalThis & {
+    openclawRenderLifecycleTestHook?: typeof notifyRenderLifecycleForTest;
+  };
+  scope.openclawRenderLifecycleTestHook?.(host, phase);
+}

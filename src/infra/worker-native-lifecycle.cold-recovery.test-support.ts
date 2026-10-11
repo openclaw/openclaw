@@ -67,7 +67,7 @@ export async function runNativeColdRecovery(
     const once = this.once.bind(this);
     const result = once(...args);
     if (
-      args[0] === "close" &&
+      args[0] === "exit" &&
       this.spawnfile === process.execPath &&
       this.spawnargs.length === brokerArgv.length + 1 &&
       this.spawnargs[0] === process.execPath &&
@@ -75,7 +75,7 @@ export async function runNativeColdRecovery(
     ) {
       assert.ok(!observed.child, "capture only the original native resource broker");
       observed.child = this;
-      once("close", () => {
+      once("exit", () => {
         nativeBrokerClosed = true;
         brokerClosed.resolve();
       });

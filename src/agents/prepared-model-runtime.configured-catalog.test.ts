@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  prepareProviderStaticCatalog,
+  resolvePreparedProviderStaticConfigs,
+} from "../plugins/provider-discovery.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { orderModelCatalogForPicker } from "./model-catalog-order.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
@@ -76,6 +80,70 @@ describe("configured catalog registry composition", () => {
       expect(orderModelCatalogForPicker(refreshed.entries).map(({ id }) => id)).toEqual(expected);
     },
   );
+
+  it("publishes static rows answered under a declared catalog alias once on startup", async () => {
+    const provider = {
+      api: "openai-responses" as const,
+      baseUrl: "https://fixture.invalid/v1",
+      models: [
+        {
+          id: "static-model",
+          name: "Static model",
+          contextWindow: 32_000,
+          maxTokens: 4096,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          reasoning: false,
+          input: ["text" as const],
+        },
+      ],
+    };
+    const config: OpenClawConfig = {};
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "fixture",
+          providers: ["fixture"],
+          modelCatalog: {
+            providers: { fixture: provider },
+            aliases: { "fixture-alias": { provider: "fixture" } },
+          },
+        },
+      ],
+    });
+    const staticProviderConfigs = resolvePreparedProviderStaticConfigs(
+      await prepareProviderStaticCatalog({
+        providers: [
+          {
+            id: "fixture",
+            pluginId: "fixture",
+            label: "Fixture",
+            aliases: ["fixture-alias"],
+            auth: [],
+            staticCatalog: { run: async () => ({ provider }) },
+          },
+        ],
+      }),
+    );
+    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+      config,
+      includePluginCatalogs: false,
+      pluginMetadataSnapshot: metadataSnapshot,
+      staticProviderConfigs,
+    });
+    const { modelCatalog } = prepareCapturedRuntimeFacts({
+      agentFacts: { input: { config }, configuredModelRefs: [] },
+      workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
+      templateModelRegistry: registry,
+      configuredRuntimeModels: [],
+    });
+
+    // The producer answers the alias too; the startup publication folds it into the canonical row.
+    expect(Object.keys(staticProviderConfigs).toSorted()).toEqual(["fixture", "fixture-alias"]);
+    expect(modelCatalog.entries.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "fixture/static-model",
+    ]);
+    expect(modelCatalog.routeVariants).toEqual(modelCatalog.entries);
+  });
 
   it("bounds captured catalog policy loading by provider and refreshes it per invocation", () => {
     const loadPolicy = vi.spyOn(providerPolicy, "resolveDirectBundledProviderPolicySurface");

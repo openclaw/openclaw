@@ -100,7 +100,7 @@ output projection, and process status, use [`openclaw agent exec`](/cli/agent#ag
   and session state before retrying or rerunning with `--local`.
 - Session selection: `--to` derives the session key (group/channel targets
   preserve isolation; direct chats collapse to `main`). With `--agent`,
-  `--channel`, and `--to` together, routing follows the channel's canonical
+  `--channel`, and `--to` together, routing follows the channel's resolved
   recipient and `session.dmScope`. Stable outbound-only identities use a
   provider-owned session isolated from the agent's main session.
 - `--session-key` selects an explicit key. Agent-prefixed keys must use

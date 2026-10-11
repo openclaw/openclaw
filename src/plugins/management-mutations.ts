@@ -28,6 +28,7 @@ import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
 import {
+  assertRecordsOnlyUpdateConfigFresh,
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
 } from "./install-config-mutation.js";
@@ -384,27 +385,42 @@ export async function mutateManagedPluginEnabled(
     }
     const changedPaths = new Set<string>();
     collectChangedPaths(snapshot.config, next, "", changedPaths);
-    const write = await replaceConfigFile({
-      sourceConfig: next,
-      baseHash: snapshot.baseHash,
-      // CLI alias writes preserve merged canonical settings during source projection.
-      writeOptions: {
-        ...snapshot.writeOptions,
-        assertConfigPathForWrite: () => {
-          snapshot.writeOptions.assertConfigPathForWrite?.();
-          beforePersistentApply();
-        },
-        ...(cli || params.applyRuntime
-          ? { explicitSetPaths: [["plugins", "entries", policyPluginId]] }
-          : {}),
-        ...(params.applyRuntime
-          ? { afterWrite: { mode: "none" as const, reason: "plugin lifecycle applies runtime" } }
-          : {}),
-      },
-    });
+    const write =
+      changedPaths.size > 0
+        ? await replaceConfigFile({
+            sourceConfig: next,
+            baseHash: snapshot.baseHash,
+            // CLI alias writes preserve merged canonical settings during source projection.
+            writeOptions: {
+              ...snapshot.writeOptions,
+              assertConfigPathForWrite: () => {
+                snapshot.writeOptions.assertConfigPathForWrite?.();
+                beforePersistentApply();
+              },
+              ...(cli || params.applyRuntime
+                ? { explicitSetPaths: [["plugins", "entries", policyPluginId]] }
+                : {}),
+              ...(params.applyRuntime
+                ? {
+                    afterWrite: {
+                      mode: "none" as const,
+                      reason: "plugin lifecycle applies runtime",
+                    },
+                  }
+                : {}),
+            },
+          })
+        : undefined;
+    if (!write) {
+      await assertRecordsOnlyUpdateConfigFresh(snapshot);
+      beforePersistentApply();
+    }
     const registryWarnings: string[] = [];
     await refreshPluginRegistryAfterConfigMutation({
-      configPath: write.path,
+      configPath:
+        write?.path ??
+        snapshot.writeOptions.ownedConfigPathForWrite ??
+        snapshot.writeOptions.expectedConfigPath,
       env,
       reason: "policy-changed",
       invalidateRuntimeCache: false,

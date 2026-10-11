@@ -196,6 +196,33 @@ function evidence(dir: string, captureName = "merge-output.log") {
 }
 
 describePosix("native worktree cleanup preserves merge evidence", () => {
+  it("scopes dry-run and removal to the requested PR without observing siblings", async ({
+    command,
+  }) => {
+    await command.lifetime.run(async () => {
+      const f = await fixture(command);
+      const selected = await f.add(910001);
+      const sibling = await f.add(910002);
+      const branches = await f.branches();
+      const registrations = await f.worktrees();
+      const dry = await f.run(["gc_pr_worktrees true 910001"], "MERGED");
+      expect(dry.status, dry.output).toBe(0);
+      expect(dry.output).toContain("would remove .worktrees/pr-910001");
+      expect(dry.output).not.toContain("pr-910002");
+      expect(await f.branches()).toBe(branches);
+      expect(await f.worktrees()).toBe(registrations);
+      const actual = await f.run(["gc_pr_worktrees false 910001"], "MERGED");
+      expect(actual.status, actual.output).toBe(0);
+      expect(existsSync(selected)).toBe(false);
+      expect(existsSync(sibling)).toBe(true);
+      expect(await f.worktrees()).toContain(`worktree ${sibling}\n`);
+      for (const branch of ["temp/pr-910002", "pr-910002", "pr-910002-prep"]) {
+        expect(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
+      }
+      expect(readFileSync(join(f.root, "gh-calls"), "utf8")).not.toContain("910002");
+    });
+  });
+
   it.for(["", ".local/nested"])(
     "defers removal while the parent session holds cwd %s, then removes after release",
     async (subdirectory, { command }) => {

@@ -41,7 +41,7 @@ describe("iMessage approval reaction persistence", () => {
     if (!state) {
       throw new Error("Expected synthetic iMessage state runtime");
     }
-    const openStore = state.openKeyedStore.bind(state);
+    const openStore = state.openKeyedStoreV2.bind(state);
     const pollGate = createDeferred<void>();
     const reactionGate = createDeferred<void>();
     const deletionGate = createDeferred<void>();
@@ -49,7 +49,7 @@ describe("iMessage approval reaction persistence", () => {
     const deletions: Promise<boolean>[] = [];
     const pollWrites: Promise<void>[] = [];
     const openSpy = vi
-      .spyOn(state, "openKeyedStore")
+      .spyOn(state, "openKeyedStoreV2")
       .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = openStore<T>(options);
         const register = store.register.bind(store);
@@ -209,7 +209,7 @@ describe("iMessage approval reaction persistence", () => {
   ])("rejects persisted targets containing an invalid approval $name", async (invalid) => {
     installIMessageStateRuntimeForTest();
     clearIMessageApprovalReactionTargetsForTest();
-    const store = getOptionalIMessageRuntime()?.state.openKeyedStore({
+    const store = getOptionalIMessageRuntime()?.state.openKeyedStoreV2({
       namespace: "imessage.approval-reactions",
       maxEntries: 1000,
       defaultTtlMs: 24 * 60 * 60 * 1000,

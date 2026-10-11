@@ -103,6 +103,11 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedKey));
       await page.getByText("The retained conversation is ready.", { exact: true }).waitFor();
+      // This probe measures shared-roster updates, including conversations not owned by Reader.
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
       const backgroundRow = page.locator(`[data-session-key="${foreignKey}"]`);
       await backgroundRow.waitFor({ state: "visible" });
       await gateway.waitForRequest("agent.identity.get");

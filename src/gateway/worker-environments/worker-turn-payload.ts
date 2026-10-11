@@ -389,7 +389,7 @@ export async function finalizeWorkerTurnResult(
     resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
   };
   assertResultCurrent();
-  const currentPlacement = params.placements.get(placement.sessionId);
+  const currentPlacement = params.placements.preparedWorkspaceResultPlacement(params.turnClaim);
   if (
     runtimeResult.transcriptLeafId !== completed.getLeafId() ||
     runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1
@@ -405,6 +405,21 @@ export async function finalizeWorkerTurnResult(
     : undefined;
   if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
     throw new Error("Cloud worker completed without a terminal assistant transcript message");
+  }
+  // Reply accounting needs the admitted writer even when this turn did not compact.
+  if (transcriptTarget.expectedWriterRunId !== undefined) {
+    turn.onCompactionAccounting?.({
+      kind: "durable",
+      count: 0,
+      target: {
+        agentId: transcriptTarget.agentId,
+        sessionId: transcriptTarget.sessionId,
+        sessionKey: transcriptTarget.sessionKey,
+        storePath: transcriptTarget.storePath,
+        lifecycleRevision: transcriptTarget.expectedLifecycleRevision,
+        activeWriterRunId: transcriptTarget.expectedWriterRunId,
+      },
+    });
   }
   const text = collectTextContentBlocks(terminal.message.content).join("");
   const baseIndex = completed.getBranch().findIndex((entry) => entry.id === params.baseLeafId);

@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
+import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectMcpAppStyleVariables } from "../components/mcp-app-theme.ts";
+import { projectTheme } from "../lib/reactive/theme.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
@@ -50,6 +52,42 @@ function pendingPalette() {
 }
 
 describe("applied theme palette publication", () => {
+  it("projects immediate preferences separately from the applied palette", () => {
+    const { theme } = setup();
+    const projection = projectTheme(theme);
+    const preferences: string[] = [];
+    const palettes: string[] = [];
+    const dispose = createRoot((stop) => {
+      createEffect(
+        () => projection.preferences.read().theme,
+        (value) => {
+          preferences.push(value);
+        },
+      );
+      createEffect(
+        () => projection.appliedPalette.read()?.theme,
+        (value) => {
+          palettes.push(value ?? "none");
+        },
+      );
+      return stop;
+    });
+    disposals.push(dispose, projection.dispose);
+    flush();
+    patchSettings({ theme: "tide", themeMode: "dark" });
+    flush();
+    expect(preferences).toEqual(["claw", "tide"]);
+    expect(palettes).toEqual(["claw"]);
+    pendingPalette().dispatchEvent(new Event("load"));
+    flush();
+    expect(preferences).toEqual(["claw", "tide"]);
+    expect(palettes).toEqual(["claw", "tide"]);
+    projection.dispose();
+    patchSettings({ theme: "claw" });
+    flush();
+    expect(palettes).toEqual(["claw", "tide"]);
+  });
+
   it.each(["synchronous", "load", "error"])(
     "publishes the applied palette with %s completion without a branding change",
     (event) => {

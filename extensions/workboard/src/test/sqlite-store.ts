@@ -122,6 +122,6 @@ export function createWorkboardSqliteTestStore(options: WorkboardSqliteTestOptio
 }
 
 export function sqliteTestAuxStores(stores: WorkboardSqliteTestStores) {
-  const { boards, sessionsBoard, subscriptions, attachments, ready } = stores;
-  return { boards, sessionsBoard, subscriptions, attachments, ready };
+  const { boards, sessionsBoard, subscriptions, attachments, ready, readWriteToken } = stores;
+  return { boards, sessionsBoard, subscriptions, attachments, ready, readWriteToken };
 }

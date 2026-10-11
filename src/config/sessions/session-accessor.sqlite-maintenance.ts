@@ -557,7 +557,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
                 plan,
               });
         },
-        incognito ? { incognito: incognito.actor, callerSettlesReceipts: true } : undefined,
+        incognito ? { incognito: incognito.actor } : undefined,
       );
       if (result.kind !== "maintenance-finalize") {
         throw new Error("SQLite maintenance returned another operation's result");

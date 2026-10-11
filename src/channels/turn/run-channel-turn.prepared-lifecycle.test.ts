@@ -110,6 +110,28 @@ describe("prepared channel turn lifecycle", () => {
     },
   );
 
+  it.each(["record", "dispatch"])(
+    "checks current channel authority before %s",
+    async (boundary) => {
+      const turn = createTurn();
+      let current = boundary === "dispatch";
+      const refusal = new Error("channel authority revoked");
+      turn.assertAuthority = () => {
+        if (!current) {
+          throw refusal;
+        }
+      };
+      turn.recordInboundSession = vi.fn(async () => {
+        current = false;
+      });
+
+      await expect(run(turn)).rejects.toBe(refusal);
+
+      expect(turn.recordInboundSession).toHaveBeenCalledTimes(boundary === "record" ? 0 : 1);
+      expect(turn.runDispatch).not.toHaveBeenCalled();
+    },
+  );
+
   it("settles prepared resources when observe-only suppresses dispatch", async () => {
     const events: string[] = [];
     const turn = createTurn();

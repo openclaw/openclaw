@@ -1,13 +1,13 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
-import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -170,29 +170,6 @@ async function updateCommandInternal(
     prepared.timeoutMs ?? admittedRun.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   let target = initialization?.target;
-  let reselected = false;
-  if (target && initialization && !opts.channel && !opts.sourceUpdate) {
-    const config =
-      target.legacyConfigPlan?.config ??
-      (target.configSnapshot.valid
-        ? target.configSnapshot.config
-        : target.configSnapshot.sourceConfig);
-    if (normalizeUpdateChannel(config.update?.channel) !== target.storedChannel) {
-      defaultRuntime.error(
-        "Warning: Stored update channel changed during admission; selecting the current channel's target.",
-      );
-      admittedRun.executorFence?.assertCurrent();
-      await initialization.stagedPackage?.close();
-      admittedRun.executorFence?.assertCurrent();
-      // Candidate verdicts and downgrade confirmation belong to the old target.
-      initialization.stagedPackage = undefined;
-      initialization.candidateAdmission = undefined;
-      initialization.downgradeConfirmed = undefined;
-      admittedRun.candidateAdmissionChecks = undefined;
-      target = undefined;
-      reselected = true;
-    }
-  }
   const selectTarget = () =>
     resolveUpdateCommandTarget(
       opts,
@@ -209,17 +186,6 @@ async function updateCommandInternal(
   }
   if (!target) {
     return;
-  }
-  if (reselected && initialization) {
-    admittedRun.executorFence = await executor.enter(target.root, {
-      preflight: true,
-      serviceRoot: target.managedServiceRoot,
-    });
-    admittedRun.executorFence.assertCurrent();
-    assertUpdatePackageActivationAdmission(target.root, {
-      serviceRoot: target.managedServiceRoot,
-    });
-    initialization.target = target;
   }
   const runResolvedUpdate = async (stagedPackage?: StagedPackageInstallUpdate): Promise<void> => {
     const {
@@ -442,6 +408,7 @@ async function updateCommandInternal(
     );
     let preUpdatePluginInstallRecords: Awaited<ReturnType<typeof prepareMutableUpdateRuntime>> = {};
     let mutableUpdatePrepared = false;
+    let retainedRuntimeStep: UpdateStepResult | undefined;
     const prepareMutableUpdate: Parameters<
       typeof executeMutableUpdate
     >[0]["prepareMutableUpdate"] = async (
@@ -486,12 +453,15 @@ async function updateCommandInternal(
         timeoutMs: updateStepTimeoutMs,
         assertCurrent: () => fence.assertCurrent(),
       });
-      await reportUpdateStepCompletion(progress, {
-        ...retentionStep,
+      retainedRuntimeStep = {
+        name: retentionStep.name,
+        command: retentionStep.command,
+        cwd: root,
         durationMs: Date.now() - retentionStartedAt,
         exitCode: 0,
         diagnostics: retention ? [JSON.stringify(retention)] : undefined,
-      });
+      };
+      await reportUpdateStepCompletion(progress, { ...retentionStep, ...retainedRuntimeStep });
       mutableUpdatePrepared = true;
     };
 
@@ -528,6 +498,9 @@ async function updateCommandInternal(
     }
     const { ownedManagedUpdateContext, recoveryEnv, ...executionState } = execution;
     const { result } = executionState;
+    if (retainedRuntimeStep) {
+      result.steps.unshift(retainedRuntimeStep);
+    }
     result.runId = run.runId;
     if (result.status === "skipped" && result.reason === "already-current") {
       await activateCurrentCore();

@@ -16,6 +16,24 @@ provenance-based deletion.
 Provided by the bundled `memory-core` plugin. `plugins.slots.memory` selects
 `memory-core` by default. Other memory plugins expose their own CLI namespaces.
 
+`search` and `session-backfill` route through the local Gateway when it is
+running. Search preserves its result limits, session scope, and recall recording.
+When dreaming is enabled, those recalls feed the requested agent's workspace
+just as they do when searching offline.
+Backfill preview, apply, and rollback retain their existing output. Apply keeps
+its bounded batch loop and requires the same Gateway owner throughout; a failed
+request is never replayed locally. Update an
+older Gateway if it does not support this routing.
+
+Other commands, and session backfill with `--rem` or `--archive-files`, require
+the local Gateway to be stopped. Diagnostics and previews can initialize writable
+stores. Stop the Gateway through its service
+owner, run the command, then restart it. Commands refuse before opening those
+stores when a Gateway owns the state directory; offline execution retains
+exclusive ownership through manager and worker cleanup. The provider health
+returned by `memory.status` RPC is different from the CLI's aggregate index,
+source, embedding, and dreaming diagnostics and repair options.
+
 When another plugin owns the memory slot and `memory-core` runs only as the
 dreaming consolidation sidecar:
 
@@ -162,7 +180,7 @@ Both repair commands replace the derived memory index while preserving other age
 state. Use `--agent` to limit the repair to the affected agent.
 
 <Warning>
-The default `openclaw-agent.sqlite` database also contains canonical sessions,
+The default `openclaw-agent.sqlite` database also contains stored sessions,
 transcripts, and other durable agent state. Never delete it or its `-wal`,
 `-shm`, or `-journal` sidecars to reset a memory index. Use `memory index --force`
 to rebuild, or [`memory reset`](/cli/memory#memory-reset) to clear the derived index and
@@ -510,16 +528,16 @@ openclaw memory session-backfill --agent <id> --rollback [--json]
 | `--to YYYY-MM-DD`           | none         | Include messages on or before this day in the dreaming timezone.                                              |
 | `--limit-days <n>`          | `92`         | Process at most this many hash-untracked days, oldest first.                                                  |
 | `--archive-files <path...>` | none         | Also inspect foreign transcript files as untrusted input; embedded owner metadata is not accepted.            |
-| `--rem`                     | off          | Write deterministic grounded per-day previews to `DREAMS.md` and retain their source-origin records.          |
+| `--rem`                     | off          | Write rule-based grounded per-day previews to `DREAMS.md` and retain their source-origin records.             |
 | `--apply`                   | preview only | Drain all bounded batches, stage trusted candidates, and write reversible `DREAMS.md` diary blocks.           |
 | `--rollback`                | off          | Remove all grounded backfill candidates and shared backfill diary blocks, including `rem-backfill` artifacts. |
 | `--json`                    | off          | Print machine-readable per-day counts and top candidates.                                                     |
 
-The command reads the selected agent's canonical session store, including
+The command reads the selected agent's session store, including
 retained SQLite transcript identities from session rotation. It uses the same
 tracked message hashes and per-run caps as live session ingestion, so repeated
 `--apply` runs skip already ingested messages. Owner and agent lines from the
-canonical store are eligible; tool output, web or non-owner input, and turns
+session store are eligible; tool output, web or non-owner input, and turns
 without trustworthy owner provenance are excluded. Foreign archive files have
 no authenticated owner-provenance contract, so their embedded ownership fields
 remain untrusted and cannot be staged. Sessions previously purged with

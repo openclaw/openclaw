@@ -14,6 +14,7 @@ import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -419,6 +420,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     const sessionKey = request.sessionKey.trim();
     const agentId = request.agentId.trim();
     const question = request.question.trim();
+    const incognitoSource = captureIncognitoSessionSource({ sessionKey, agentId });
     if (!sessionKey || !agentId || !question || params.isDisposed() || request.signal?.aborted) {
       throw new SessionCompanionAskError("unavailable", "Side chat is unavailable.");
     }
@@ -615,8 +617,9 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       thread.lastUsedAt = ts;
       return { answer, ts };
     };
+    const execution = execute();
     try {
-      return await Promise.race([execute(), aborted.promise]);
+      return await Promise.race([execution, aborted.promise]);
     } catch (error) {
       if (
         error instanceof SessionCompanionAskError ||
@@ -641,6 +644,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
             : "Side chat could not answer right now.",
       );
     } finally {
+      // Actor source authority must outlive accepted writes to the separate durable run.
+      if (incognitoSource) {
+        await execution.catch(() => undefined);
+      }
       clearTimeout(timeout);
       controller.signal.removeEventListener("abort", onAbort);
       requestSignal?.removeEventListener("abort", abortRequest);
