@@ -411,6 +411,7 @@ describe("write-unified-entry-dts", () => {
         command,
         TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
       );
+      const cacheDisabled = failure === "missing successful receipt without cache";
       write("dist/index.d.ts", "previous root declaration");
       write("dist/extensions/retained/index.d.ts", "previous plugin declaration");
       const before = treeHashes(path.join(root, "dist"));
@@ -434,7 +435,7 @@ selected.hooks = async hooks => {
       const failed = await runUnifiedWriter(
         command,
         root,
-        failure === "missing successful receipt without cache" ? { OPENCLAW_BUILD_CACHE: "0" } : {},
+        cacheDisabled ? { OPENCLAW_BUILD_CACHE: "0" } : {},
       );
       expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
       expect(failed.stdout + failed.stderr).toContain("invocation 1/1 finished");
@@ -442,7 +443,12 @@ selected.hooks = async hooks => {
         failure === "compiler failure" ? "TS2305" : "Missing successful compiler membership",
       );
       expect(treeHashes(path.join(root, "dist"))).toEqual(before);
-      expect(treeHashes(path.join(root, ".artifacts/build-all-cache"))).toEqual(cached);
+      const cacheDirectory = path.join(root, ".artifacts/build-all-cache");
+      if (cacheDisabled) {
+        expect(fs.existsSync(cacheDirectory)).toBe(false);
+      } else {
+        expect(treeHashes(cacheDirectory)).toEqual(cached);
+      }
       expectStagingClean(root);
     }),
   );
