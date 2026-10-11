@@ -16,7 +16,9 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { InternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractFirstTextBlock } from "../../shared/chat-message-content.js";
+import type { ChatCanvasBlock } from "../chat-display-projection.canvas.js";
 import { persistInternalSourceReply } from "../internal-source-reply-persistence.js";
 import { resolveManagedOutgoingMediaArtifactDownload } from "../managed-image-attachments.js";
 import { getMessage, getMessageContent, TINY_PNG_BASE64 } from "./chat-message.test-fixtures.js";
@@ -30,6 +32,7 @@ type SourceMediaFixture = {
     stateDir: string;
   };
   stageMediaPath: (path: string, contentType: string) => void;
+  publishedUpdates: () => readonly InternalSessionTranscriptUpdate[];
   withTranscriptFixtureState: (
     prefix: string,
     run: (dir: string) => Promise<void>,
@@ -50,6 +53,12 @@ type SourceMediaFixture = {
   }) => SourceReply;
   setAgentRunReplies: (replies: SourceReply[]) => void;
   send: (params: { idempotencyKey: string; message: string }) => Promise<unknown>;
+  sendLate: (params: {
+    runId: string;
+    payloads: ReplyPayload[];
+    canvas: Omit<ChatCanvasBlock, "type">;
+    bufferCurrent: boolean;
+  }) => Promise<unknown>;
   writeSavedPng: (dir: string, name: string) => string;
 };
 
@@ -63,80 +72,146 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
     setAgentRunReplies,
     writeSavedPng,
   } = fixture;
-  it("reuses committed message-tool media after its tool result and final answer", async () => {
-    await withTranscriptFixtureState("openclaw-chat-send-committed-source-media-", async (dir) => {
-      const { cfg, scope, stateDir } = fixture.session();
-      const mediaUrl = path.join(dir, "probe.txt");
-      fs.writeFileSync(mediaUrl, "SOURCE-MEDIA-PROOF\n");
-      const idempotencyKey = "source-media-run:message-tool:send";
-      const sessionKey = "agent:main:main";
-      const payload: ReplyPayload = {
-        mediaUrls: [mediaUrl],
-        attachments: [{ name: "probe.txt", mimeType: "text/plain" }],
-        trustedLocalMedia: true,
-      };
-      await persistInternalSourceReply({
-        cfg,
-        agentId: "main",
-        sessionKey,
-        expectedSessionId: scope.sessionId,
-        idempotencyKey,
-        payload,
-        sourceReplyFinal: true,
-      });
-      const committed = (await readActiveAssistantTranscriptMessages())[0];
-      const attachment = asOptionalRecord(getMessageContent({ message: committed })[0]?.attachment);
-      expect(attachment).toMatchObject({ label: "probe.txt", mimeType: "text/plain" });
-      await appendTranscriptMessage(scope, {
-        message: {
-          role: "toolResult",
-          toolCallId: "send",
-          toolName: "message",
-          content: [
-            { type: "text", text: "Sent visible reply to the current source conversation." },
-          ],
-        },
-      });
-      await appendSourceReplyMirrorEntry({
-        idempotencyKey: "source-media-run:assistant",
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        text: "The attachment is ready.",
-      });
-      const before = loadTranscriptEventsSync(scope);
-      fixture.stageMediaPath(mediaUrl, "text/plain");
-      const source = buildSourceReplyPayloadState({
-        sessionKey,
-        agentId: "main",
-        payloads: [{ ...payload, idempotencyKey, transcriptOwner: true }],
-      });
-      setAgentRunReplies(source.replyItems.map((reply) => ({ kind: "final", payload: reply })));
-      const broadcast = await fixture.send({
-        idempotencyKey: "source-media-run",
-        message: "Send the probe attachment.",
-      });
-      expect(getMessageContent(broadcast)).toEqual(committed?.content);
-      expect(loadTranscriptEventsSync(scope)).toEqual(before);
-      const previousConfig = getRuntimeConfigSnapshot();
-      setRuntimeConfigSnapshot(cfg);
-      try {
-        await expect(
-          resolveManagedOutgoingMediaArtifactDownload({
+  it.each([
+    { count: 1, delivery: "direct" },
+    { count: 2, delivery: "direct" },
+    { count: 1, delivery: "late canvas" },
+    { count: 1, delivery: "late stale canvas" },
+  ])(
+    "settles $count committed message-tool replies without duplicating media ($delivery)",
+    async ({ count, delivery }) => {
+      await withTranscriptFixtureState(
+        "openclaw-chat-send-committed-source-media-",
+        async (dir) => {
+          const { cfg, scope, stateDir } = fixture.session();
+          const sessionKey = "agent:main:main";
+          const runId = "source-media-run";
+          const payloads = Array.from({ length: count }, (_, index) => {
+            const name = `probe-${index}.txt`;
+            const mediaUrl = path.join(dir, name);
+            fs.writeFileSync(mediaUrl, "SOURCE-MEDIA-PROOF\n");
+            return {
+              mediaUrl,
+              mediaUrls: [mediaUrl],
+              attachments: [{ name, mimeType: "text/plain" }],
+              trustedLocalMedia: true,
+              idempotencyKey: `${runId}:message-tool:send-${index}`,
+              transcriptOwner: true as const,
+            };
+          });
+          for (const payload of payloads) {
+            await persistInternalSourceReply({
+              cfg,
+              agentId: "main",
+              sessionKey,
+              expectedSessionId: scope.sessionId,
+              idempotencyKey: payload.idempotencyKey,
+              payload,
+              runId,
+              sourceReplyFinal: true,
+            });
+          }
+          const published = fixture
+            .publishedUpdates()
+            .filter((update) =>
+              payloads.some(
+                (payload) =>
+                  asOptionalRecord(update.message)?.idempotencyKey === payload.idempotencyKey,
+              ),
+            );
+          expect(published).toHaveLength(count);
+          for (const [index, update] of published.entries()) {
+            expect(update).toMatchObject({
+              runId,
+              messageId: expect.any(String),
+              messageSeq: expect.any(Number),
+              message: { idempotencyKey: payloads[index]?.idempotencyKey },
+            });
+          }
+          const committed = await readActiveAssistantTranscriptMessages();
+          expect(committed).toHaveLength(count);
+          await appendTranscriptMessage(scope, {
+            message: {
+              role: "toolResult",
+              toolCallId: "send",
+              toolName: "message",
+              content: [
+                { type: "text", text: "Sent visible reply to the current source conversation." },
+              ],
+            },
+          });
+          await appendSourceReplyMirrorEntry({
+            idempotencyKey: "source-media-run:assistant",
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            text: "The attachment is ready.",
+          });
+          const before = loadTranscriptEventsSync(scope);
+          for (const payload of payloads) {
+            fixture.stageMediaPath(payload.mediaUrl, "text/plain");
+          }
+          const source = buildSourceReplyPayloadState({
             sessionKey,
             agentId: "main",
-            artifactId: String(attachment?.artifactId),
-            stateDir,
-          }),
-        ).resolves.toMatchObject({ type: "file", title: "probe.txt", sizeBytes: 19 });
-      } finally {
-        if (previousConfig) {
-          setRuntimeConfigSnapshot(previousConfig);
-        } else {
-          clearRuntimeConfigSnapshot();
-        }
-      }
-    });
-  });
+            payloads,
+          });
+          const canvas: Omit<ChatCanvasBlock, "type"> = {
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              viewId: "result",
+              url: "/__openclaw__/canvas/documents/result/index.html",
+            },
+            rawText: null,
+          };
+          setAgentRunReplies(source.replyItems.map((reply) => ({ kind: "final", payload: reply })));
+          const broadcast =
+            delivery === "direct"
+              ? await fixture.send({
+                  idempotencyKey: runId,
+                  message: "Send the probe attachment.",
+                })
+              : await fixture.sendLate({
+                  runId,
+                  payloads: source.replyItems,
+                  canvas,
+                  bufferCurrent: delivery === "late canvas",
+                });
+          expect(broadcast).toMatchObject({ state: "final", runId });
+          if (delivery === "late canvas") {
+            expect(getMessageContent(broadcast)).toEqual([{ type: "canvas", ...canvas }]);
+          } else {
+            expect(asOptionalRecord(broadcast)?.message).toBeUndefined();
+          }
+          expect(loadTranscriptEventsSync(scope)).toEqual(before);
+          const previousConfig = getRuntimeConfigSnapshot();
+          setRuntimeConfigSnapshot(cfg);
+          try {
+            for (const [index, message] of committed.entries()) {
+              const attachment = asOptionalRecord(getMessageContent({ message })[0]?.attachment);
+              const title = `probe-${index}.txt`;
+              expect(attachment).toMatchObject({ label: title, mimeType: "text/plain" });
+              await expect(
+                resolveManagedOutgoingMediaArtifactDownload({
+                  sessionKey,
+                  agentId: "main",
+                  artifactId: String(attachment?.artifactId),
+                  stateDir,
+                }),
+              ).resolves.toMatchObject({ type: "file", title, sizeBytes: 19 });
+            }
+          } finally {
+            if (previousConfig) {
+              setRuntimeConfigSnapshot(previousConfig);
+            } else {
+              clearRuntimeConfigSnapshot();
+            }
+          }
+        },
+      );
+    },
+  );
 
   it("backs source reply media with an equivalent deduped delivery mirror", async () => {
     await withTranscriptFixtureState(
@@ -311,7 +386,11 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         });
 
         const broadcastContent = getMessageContent(broadcast);
-        expect(broadcastContent).toContainEqual({ type: "text", text: "Text source reply" });
+        expect(broadcast).toMatchObject({ state: "final" });
+        expect(broadcastContent).not.toContainEqual({ type: "text", text: "Text source reply" });
+        expect((await readActiveAssistantTranscriptMessages())[0]?.content).toEqual([
+          { type: "text", text: "Text source reply" },
+        ]);
         expect(broadcastContent).toContainEqual({
           type: "text",
           text: "Media reply could not be displayed.",

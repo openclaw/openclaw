@@ -76,6 +76,7 @@ import {
 } from "./chat-message.test-fixtures.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
+import { createChatSendLateReplyFinalizer } from "./chat-send-source-finalization.js";
 import { registerChatSourceMediaTests } from "./chat.directive-tags.source-media.suite.js";
 import {
   ChatDirectiveDedupe,
@@ -3011,6 +3012,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     stageMediaPath: (mediaPath, contentType) => {
       mockState.savedMediaResults.push({ path: mediaPath, contentType });
     },
+    publishedUpdates: () => mockState.emittedTranscriptUpdates,
     withTranscriptFixtureState,
     readActiveAssistantTranscriptMessages,
     readRawActiveAssistantTranscriptMessages,
@@ -3018,6 +3020,37 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     createMainSourceReply,
     setAgentRunReplies,
     send: (params) => createChatRequestFixture().send(params),
+    sendLate: async ({ runId, payloads, canvas, bufferCurrent }) => {
+      const context = createChatContext();
+      const run = context.chatRunState.getOrCreate(runId);
+      run.canvasBlocks = [{ type: "canvas", ...canvas }];
+      run.bufferIsCurrent = () => bufferCurrent;
+      const finalize = createChatSendLateReplyFinalizer({
+        context,
+        accountId: undefined,
+        terminalEntry: undefined,
+        session: {
+          cfg: readChatDirectiveConfig(mockState),
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          backingSessionId: mockState.sessionId,
+          clientRunId: runId,
+          sessionLoadOptions: { agentId: "main" },
+        },
+      });
+      await expect(
+        finalize({
+          runId,
+          clientRunId: runId,
+          payloads,
+          completion: { kind: "completed" },
+          isCurrent: () => true,
+        }),
+      ).resolves.toMatchObject({ kind: "delivered" });
+      expect(context.removeChatRun).toHaveBeenCalledWith(runId, runId, "agent:main:main");
+      expect(context.chatRunState.runs.has(runId)).toBe(false);
+      return lastBroadcastPayload(context);
+    },
     writeSavedPng,
   });
 
