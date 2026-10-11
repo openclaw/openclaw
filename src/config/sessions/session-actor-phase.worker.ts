@@ -112,7 +112,8 @@ export function applySessionActorPhase(
     if (
       input.sessionKey !== sessionKey ||
       input.agentId !== database.agentId ||
-      input.options.expectedSessionId !== requireEntry().sessionId
+      input.options.expectedSessionId !==
+        (state.hot.entry?.sessionId ?? input.options.initialSessionEntry?.sessionId)
     ) {
       throw new Error("Session actor turn changed its captured target");
     }
@@ -132,7 +133,10 @@ export function applySessionActorPhase(
   switch (command.type) {
     case "session.actor.acceptInput": {
       const { pending, expectedState, lifecycle: patch } = command.input;
-      if (pending.sessionKey !== sessionKey || pending.sessionId !== requireEntry().sessionId) {
+      if (
+        pending &&
+        (pending.sessionKey !== sessionKey || pending.sessionId !== requireEntry().sessionId)
+      ) {
         throw new Error("Session actor input changed its captured target");
       }
       if (command.input.turn && command.input.append) {
@@ -161,15 +165,39 @@ export function applySessionActorPhase(
         }
         context.admit("transaction", { kind: "session-actor-recovery", recovery });
       }
-      pendingInputMutationReceipt = mutatePendingInput(pending, context, () => {});
-      lifecycle(pending.sessionId, expectedState, patch);
+      if (pending) {
+        pendingInputMutationReceipt = mutatePendingInput(pending, context, () => {});
+      }
+      const input = command.input.turn;
+      if (
+        input?.options.initialSessionEntry &&
+        Object.values(expectedState).some((value) => value !== undefined)
+      ) {
+        throw new Error("Session actor initialization cannot expect an existing lifecycle");
+      }
+      if (!input && pending) {
+        lifecycle(pending.sessionId, expectedState, patch);
+      }
       result = {
-        inputId: pending.expected.existing?.input_id ?? pending.inputId,
-        ...(command.input.turn ? { turn: turn(command.input.turn) } : {}),
+        inputId: pending && (pending.expected.existing?.input_id ?? pending.inputId),
+        ...(input
+          ? {
+              turn: turn({
+                ...input,
+                options: {
+                  ...input.options,
+                  ...(!input.options.initialSessionEntry
+                    ? { expectedSessionState: expectedState }
+                    : {}),
+                  sessionLifecyclePatch: { ...input.options.sessionLifecyclePatch, ...patch },
+                },
+              }),
+            }
+          : {}),
         ...(command.input.append
           ? { append: applySessionActorAppend(command.input.append, state, context) }
           : {}),
-        adoption: {
+        adoption: pending && {
           existing: pending.expected.existing,
           previous: pending.expected.previous,
           committed: pending.expected.committed,
@@ -178,12 +206,29 @@ export function applySessionActorPhase(
       };
       break;
     }
-    case "session.actor.adoptRun":
-      lifecycle(command.input.sessionId, command.input.expectedState, {
+    case "session.actor.adoptRun": {
+      const patch = {
         ...command.input.lifecycle,
         ...(command.input.runId !== undefined ? { activeWriterRunId: command.input.runId } : {}),
-      });
+      };
+      const input = command.input.turn;
+      if (input) {
+        if (input.options.expectedSessionId !== command.input.sessionId) {
+          throw new Error("Session actor adoption changed its captured session");
+        }
+        result = turn({
+          ...input,
+          options: {
+            ...input.options,
+            expectedSessionState: command.input.expectedState,
+            sessionLifecyclePatch: { ...input.options.sessionLifecyclePatch, ...patch },
+          },
+        });
+      } else {
+        lifecycle(command.input.sessionId, command.input.expectedState, patch);
+      }
       break;
+    }
     case "session.actor.deliveryPending": {
       const input = command.input;
       if (input.claim) {

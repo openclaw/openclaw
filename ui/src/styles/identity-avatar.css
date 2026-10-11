@@ -1,8 +1,3 @@
-.identity-avatar-presentation {
-  display: contents;
-  border-radius: inherit;
-}
-
 :where(.identity-avatar--agent),
 .identity-avatar--neutral > svg,
 .identity-avatar__hat > svg,
@@ -59,7 +54,6 @@
   content: attr(data-avatar);
 }
 
-.viewer-avatar > .identity-avatar--agent,
-.viewer-avatar > .identity-avatar-presentation > .identity-avatar--agent {
+.viewer-avatar > .identity-avatar--agent {
   display: inline-grid;
 }

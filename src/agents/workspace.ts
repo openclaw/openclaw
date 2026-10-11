@@ -45,9 +45,9 @@ import {
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import { createWorkspaceFileMutationGuard } from "./workspace-file-mutation-guard.js";
 import {
+  createLoadedWorkspaceBootstrapFile,
   isTransientWorkspaceReadError,
   readWorkspaceFileWithGuards,
-  setWorkspaceFileSourceIdentity,
 } from "./workspace-file-read.js";
 import { ensureGitRepo } from "./workspace-git.js";
 import { LEGACY_WORKSPACE_STATE_CURRENT_FILENAME } from "./workspace-legacy-state.js";
@@ -926,14 +926,7 @@ export async function loadWorkspaceBootstrapFiles(
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
-      const file: WorkspaceBootstrapFile = {
-        name: entry.name,
-        path: entry.filePath,
-        content: loaded.content,
-        missing: false,
-      };
-      setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
-      result.push(file);
+      result.push(createLoadedWorkspaceBootstrapFile(entry.name, entry.filePath, loaded));
     } else if (isRootFileMissingFailure(loaded)) {
       if (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) {
         continue;
@@ -1176,14 +1169,13 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
-      const file: WorkspaceBootstrapFile = {
-        name: baseName as WorkspaceBootstrapFileName,
-        path: filePath,
-        content: loaded.content,
-        missing: false,
-      };
-      setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
-      files.push(file);
+      files.push(
+        createLoadedWorkspaceBootstrapFile(
+          baseName as WorkspaceBootstrapFileName,
+          filePath,
+          loaded,
+        ),
+      );
       continue;
     }
 

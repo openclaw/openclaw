@@ -29,8 +29,9 @@ import {
 } from "../session-row-badge-presentation.ts";
 import type { resolveSidebarSessionSubtitle } from "../session-row-subtitle.ts";
 import { SessionRunVisibilityController } from "../session-run-visibility-controller.ts";
+import { ChannelAvatarContent } from "./channel-avatar.tsx";
 import { Icon } from "./icon.tsx";
-import { renderAgentIdentityAvatar } from "./identity-avatar.tsx";
+import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 import "../session-owner-chip.ts";
 import "../tooltip.ts";
 
@@ -261,10 +262,9 @@ export function renderSessionOwnerAvatar(
     });
     return (
       <span class="viewer-avatar viewer-avatar--session" aria-label={owner.label || owner.id}>
-        {renderAgentIdentityAvatar({
-          id: owner.identity.id,
-          avatar: avatar.kind === "profile" ? avatar.url : null,
-        })}
+        <AgentIdentityAvatar
+          agent={{ id: owner.identity.id, avatar: avatar.kind === "profile" ? avatar.url : null }}
+        />
       </span>
     );
   }
@@ -428,7 +428,6 @@ const renderedOwnerIdentities = new WeakMap<
   readonly SessionParticipantIdentity[]
 >();
 const EMPTY_IDENTITIES: readonly SessionParticipantIdentity[] = Object.freeze([]);
-let channelAvatarElementLoad: Promise<unknown> | undefined;
 export function renderSessionLeadingState(
   session: SidebarRecentSession,
   ownerActor: SessionCreatedActor | null | undefined,
@@ -498,17 +497,17 @@ export function renderSessionLeadingState(
         )
       : undefined;
   if (session.channelAvatarUrl) {
-    channelAvatarElementLoad ??= import("../channel-avatar.ts");
     return {
       running,
       leadingIndicator: renderSessionGlyph({
         content: (
-          <openclaw-channel-avatar
-            prop:routeUrl={session.channelAvatarUrl}
-            prop:authTokens={avatarAuth?.authTokens ?? []}
-            prop:authReady={avatarAuth?.authReady ?? false}
-            prop:fallback={ownerChip}
-          />
+          <ChannelAvatarContent
+            routeUrl={session.channelAvatarUrl}
+            authTokens={avatarAuth?.authTokens ?? []}
+            authReady={avatarAuth?.authReady ?? false}
+          >
+            {ownerChip}
+          </ChannelAvatarContent>
         ),
         ...runState,
         badge:

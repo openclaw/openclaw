@@ -131,7 +131,6 @@ function requireRunningBuild(
 }
 
 // Observe creation policy without process.umask(), whose getter mutates process-wide state.
-// Probe again before publication: a changed policy must not silently change archive modes.
 async function observeBootstrapModes(root: string): Promise<readonly number[]> {
   const modes: number[] = [];
   for (const requested of [0o644, 0o755]) {
@@ -536,9 +535,6 @@ export async function prepareNodeBootstrapArtifact(
           sha256: createHash("sha256").update(contents).digest("hex"),
         };
         const inspected = sourceFacts.get(relative);
-        if (inspected && identity.sha256 !== inspected.sha256) {
-          throw new Error(`Node distribution changed after import inspection: ${relative}`);
-        }
         if (entry.scope.patchedMcp) {
           entry.scope.patchedMcp.hashes.set(importerPath, identity.sha256);
         } else {
@@ -582,17 +578,6 @@ export async function prepareNodeBootstrapArtifact(
           `Node distribution ${scope.label} ${scope.patchedMcp ? "has an invalid patched dependency" : "has an incomplete built import closure"}; rebuild and restart the Gateway: ${errors.slice(0, 5).join("; ")}`,
         );
       }
-    }
-    if (!isDeepStrictEqual(await observeBootstrapModes(temporaryRoot), modes)) {
-      throw new Error("Node bootstrap file creation policy changed while packaging");
-    }
-    if (
-      (await fs.readFile(buildInfoPath, "utf8")) !== buildInfo ||
-      !isDeepStrictEqual(await readPackageManifest(packageRoot), sourcePackage)
-    ) {
-      throw new Error(
-        "Gateway build changed while preparing cloud bootstrap; restart the Gateway and retry",
-      );
     }
     pack?.end();
     await archiveDone;

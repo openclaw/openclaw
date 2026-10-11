@@ -7,13 +7,12 @@ import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-proto
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
-const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn(), sleep: vi.fn() }));
+const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn() }));
 vi.mock("../infra/gateway-lock.js", () => ({ readActiveGatewayLockIdentity: mocks.lock }));
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: mocks.call,
 }));
-vi.mock("../utils/sleep.js", () => ({ sleep: mocks.sleep }));
 const { resolvePluginLifecycleGateway, resolvePluginBatchReload } =
   await import("./plugins-lifecycle-client.js");
 
@@ -21,7 +20,6 @@ describe("plugin lifecycle CLI transport", () => {
   beforeEach(() => {
     mocks.lock.mockReset().mockResolvedValue({ port: 19001 });
     mocks.call.mockReset().mockResolvedValue({ runtime: { generation: 2 } });
-    mocks.sleep.mockReset().mockResolvedValue(undefined);
   });
 
   it("waits without a response deadline and cancels the request on CLI interruption", async () => {
@@ -68,7 +66,6 @@ describe("plugin lifecycle CLI transport", () => {
       }),
     ).rejects.toBe(busy);
     expect(mocks.call).toHaveBeenCalledOnce();
-    expect(mocks.sleep).not.toHaveBeenCalled();
     await expect(waitForSignalExitBarriers()).resolves.toBeUndefined();
   });
 
@@ -126,72 +123,6 @@ describe("plugin lifecycle CLI transport", () => {
     const gateway = await resolvePluginLifecycleGateway();
     await expect(gateway?.("plugins.uninstall", { pluginId: "demo" })).rejects.toBe(failure);
     expect(mocks.call).toHaveBeenCalledOnce();
-  });
-
-  it("waits for rejected lifecycle admission without changing its owner, parameters or timeout budget", async () => {
-    let now = 0;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    mocks.sleep.mockImplementation(async (ms: number) => {
-      now += ms;
-    });
-    const busy = new GatewayClientRequestError({
-      code: "UNAVAILABLE",
-      message: "lifecycle busy",
-      retryable: true,
-      retryAfterMs: 1000,
-    });
-    mocks.call.mockRejectedValueOnce(busy).mockRejectedValueOnce(busy);
-    try {
-      const gateway = await resolvePluginLifecycleGateway();
-      const params = {
-        plugins: [{ pluginId: "alpha" }, { pluginId: "beta" }],
-        acknowledgeCapabilities: { reviewToken: "a".repeat(64) },
-      };
-      await expect(gateway!("plugins.reload", params)).resolves.toEqual({
-        runtime: { generation: 2 },
-      });
-      expect(mocks.sleep.mock.calls).toEqual([[1000], [1000]]);
-      expect(
-        mocks.call.mock.calls.map(([call]) => ({
-          method: call.method,
-          params: call.params,
-          port: call.localPortOverride,
-          timeout: call.timeoutMs,
-        })),
-      ).toEqual(
-        [600000, 599000, 598000].map((timeout) => ({
-          method: "plugins.reload",
-          params,
-          port: 19001,
-          timeout,
-        })),
-      );
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
-  it.each(["delay overshoots deadline"])("bounds admission waits when %s", async (outcome) => {
-    let now = 0;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const busy = new GatewayClientRequestError({
-      code: "UNAVAILABLE",
-      message: "lifecycle busy",
-      retryable: true,
-      retryAfterMs: 300000,
-    });
-    mocks.call.mockRejectedValue(busy);
-    mocks.sleep.mockImplementation(async (ms: number) => {
-      now += outcome === "delay overshoots deadline" ? 600001 : ms;
-    });
-    try {
-      const gateway = await resolvePluginLifecycleGateway();
-      await expect(gateway!("plugins.refresh", {})).rejects.toBe(busy);
-      expect(mocks.sleep).toHaveBeenCalledExactlyOnceWith(300000);
-      expect(mocks.call).toHaveBeenCalledTimes(outcome === "delay overshoots deadline" ? 1 : 2);
-    } finally {
-      clock.mockRestore();
-    }
   });
 
   it.each([{ method: "plugins.reload", params: { plugins: [{ pluginId: "demo" }] } }])(

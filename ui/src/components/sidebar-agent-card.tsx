@@ -5,7 +5,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
-import { renderAgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 
 /** Sidebar identity row: who you're talking to. The whole body opens the
     agent menu (switcher + utilities) — the conversation itself lives on the
@@ -82,16 +82,17 @@ function SidebarAgentCardContent(props: SidebarAgentCardProps, host: HTMLElement
             { "sidebar-agent-card__avatar--environment": Boolean(props.environment) },
           ]}
         >
-          {renderAgentIdentityAvatar(
-            {
+          <AgentIdentityAvatar
+            agent={{
               id: props.agentId,
               avatar: avatar().url,
               textAvatar: props.avatarText,
               pending: avatar().pending,
-            },
-            "",
-            avatar().sourceUrl ? avatarLoader.imageErrorHandler(avatar().sourceUrl!) : undefined,
-          )}
+            }}
+            onImageError={
+              avatar().sourceUrl ? avatarLoader.imageErrorHandler(avatar().sourceUrl!) : undefined
+            }
+          />
           {props.menuUnread && !props.menuOpen ? (
             <span
               class="session-unread-dot sidebar-agent-card__menu-unread"

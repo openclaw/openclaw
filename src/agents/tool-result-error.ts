@@ -23,6 +23,24 @@ const TOOL_TIMEOUT_ERROR_CODES = new Set([
 const NETWORK_TOOL_ERROR_MAX_CHARS = 4_000;
 const protectedNetworkToolErrors = new WeakSet<object>();
 const protectedNetworkToolTimeoutErrors = new WeakSet<object>();
+const TOOL_RESULT_FAILURE_STATUSES = new Map<string, ToolResultFailureKind>([
+  ["error", "failed"],
+  ["failed", "failed"],
+  ["failure", "failed"],
+  ["timeout", "timed_out"],
+  ["timed_out", "timed_out"],
+  ["blocked", "blocked"],
+  ["denied", "blocked"],
+  ["forbidden", "blocked"],
+  ["unavailable", "failed"],
+  ["approval-unavailable", "blocked"],
+  ["disabled", "blocked"],
+  ["aborted", "cancelled"],
+  ["cancelled", "cancelled"],
+  ["canceled", "cancelled"],
+  ["killed", "cancelled"],
+  ["invalid", "failed"],
+]);
 
 function readToolErrorField(error: object, key: string): unknown {
   try {
@@ -97,24 +115,7 @@ export function isToolResultError(result: unknown): boolean {
   if (ok === false || success === false) {
     return true;
   }
-  const hasFailureStatus =
-    normalized === "error" ||
-    normalized === "failed" ||
-    normalized === "failure" ||
-    normalized === "timeout" ||
-    normalized === "timed_out" ||
-    normalized === "blocked" ||
-    normalized === "denied" ||
-    normalized === "forbidden" ||
-    normalized === "unavailable" ||
-    normalized === "approval-unavailable" ||
-    normalized === "disabled" ||
-    normalized === "aborted" ||
-    normalized === "cancelled" ||
-    normalized === "canceled" ||
-    normalized === "killed" ||
-    normalized === "invalid";
-  if (hasFailureStatus && !explicitlySuccessful) {
+  if (TOOL_RESULT_FAILURE_STATUSES.has(normalized ?? "") && !explicitlySuccessful) {
     return true;
   }
   const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
@@ -215,28 +216,14 @@ export function resolveToolResultFailureKind(result: unknown): ToolResultFailure
   if (!isToolResultError(result)) {
     return undefined;
   }
-  const status = readToolResultStatus(result);
-  if (
-    status === "blocked" ||
-    status === "denied" ||
-    status === "forbidden" ||
-    status === "disabled" ||
-    status === "approval-unavailable"
-  ) {
+  const statusKind = TOOL_RESULT_FAILURE_STATUSES.get(readToolResultStatus(result) ?? "");
+  if (statusKind === "blocked") {
     return "blocked";
   }
   const details = readToolResultDetails(result);
   const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
-  if (timedOut === true || status === "timeout" || status === "timed_out") {
+  if (timedOut === true || statusKind === "timed_out") {
     return "timed_out";
   }
-  if (
-    status === "aborted" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "killed"
-  ) {
-    return "cancelled";
-  }
-  return "failed";
+  return statusKind ?? "failed";
 }

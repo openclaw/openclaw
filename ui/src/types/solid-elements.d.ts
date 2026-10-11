@@ -10,12 +10,12 @@ import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/ta
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
 import type { WaTabShowEvent } from "@awesome.me/webawesome/dist/events/tab-show.js";
-import type { AgentAvatar } from "../components/agent-avatar.ts";
+import "../components/agent-avatar.ts";
 import type { CatalogSessionMenu } from "../components/catalog-session-menu.ts";
-import type { ChannelAvatar } from "../components/channel-avatar.ts";
+import "../components/channel-avatar.ts";
 import type { ElapsedTime } from "../components/elapsed-time.ts";
 import type { ApprovalCountdown } from "../components/exec-approval-card.ts";
-import type { McpAppCatalog } from "../components/mcp-app-catalog.ts";
+import "../components/mcp-app-catalog.tsx";
 import "../components/menu-surface.ts";
 import type { RelativeTime } from "../components/relative-time.ts";
 import type { SelectPicker } from "../components/select-picker.ts";
@@ -34,11 +34,10 @@ import type {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-agent-avatar": HTMLAttributes<AgentAvatar> &
-        Properties<AgentAvatar> & {
-          "prop:option"?: AgentAvatar["option"];
-          "prop:identity"?: AgentAvatar["identity"];
-          "prop:presentation"?: AgentAvatar["presentation"];
+      "openclaw-agent-avatar": HTMLAttributes<HTMLElementTagNameMap["openclaw-agent-avatar"]> &
+        Properties<HTMLElementTagNameMap["openclaw-agent-avatar"]> & {
+          "prop:option"?: HTMLElementTagNameMap["openclaw-agent-avatar"]["option"];
+          "prop:identity"?: HTMLElementTagNameMap["openclaw-agent-avatar"]["identity"];
         };
       "openclaw-approval-countdown": HTMLAttributes<ApprovalCountdown> &
         Properties<ApprovalCountdown>;
@@ -47,15 +46,16 @@ declare module "@solidjs/web" {
           "prop:onAction"?: CatalogSessionMenu["onAction"];
           "prop:onClose"?: CatalogSessionMenu["onClose"];
         };
-      "openclaw-channel-avatar": HTMLAttributes<ChannelAvatar> &
-        Properties<ChannelAvatar> & {
-          "prop:authTokens"?: ChannelAvatar["authTokens"];
-          "prop:fallback"?: ChannelAvatar["fallback"];
+      "openclaw-channel-avatar": HTMLAttributes<HTMLElementTagNameMap["openclaw-channel-avatar"]> &
+        Properties<HTMLElementTagNameMap["openclaw-channel-avatar"]> & {
+          "prop:authTokens"?: HTMLElementTagNameMap["openclaw-channel-avatar"]["authTokens"];
         };
       "openclaw-elapsed-time": HTMLAttributes<ElapsedTime> & Properties<ElapsedTime>;
-      "openclaw-mcp-app-catalog": HTMLAttributes<McpAppCatalog> &
-        Properties<McpAppCatalog> &
-        Partial<Pick<McpAppCatalog, "surface">>;
+      "openclaw-mcp-app-catalog": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-mcp-app-catalog"]
+      > &
+        Properties<HTMLElementTagNameMap["openclaw-mcp-app-catalog"]> &
+        Partial<Pick<HTMLElementTagNameMap["openclaw-mcp-app-catalog"], "surface">>;
       "openclaw-menu-surface": HTMLAttributes<HTMLElementTagNameMap["openclaw-menu-surface"]> &
         Properties<HTMLElementTagNameMap["openclaw-menu-surface"]>;
       "openclaw-plugin-contributions": HTMLAttributes<ControlUiPluginContributions> &
@@ -106,6 +106,8 @@ declare module "@solidjs/web" {
       "openclaw-theme-mode-toggle": HTMLAttributes<ThemeModeToggle> & Properties<ThemeModeToggle>;
       "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> &
         Properties<HTMLElementTagNameMap["openclaw-tooltip"]> & {
+          "prop:content"?: string;
+          placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
           "prop:contentTemplate"?: HTMLElementTagNameMap["openclaw-tooltip"]["contentTemplate"];
           "prop:hoverDismissDelay"?: HTMLElementTagNameMap["openclaw-tooltip"]["hoverDismissDelay"];
           "prop:delay"?: HTMLElementTagNameMap["openclaw-tooltip"]["delay"];

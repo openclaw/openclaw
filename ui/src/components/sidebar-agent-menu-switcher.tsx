@@ -5,7 +5,7 @@ import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { Icon } from "./solid/icon.tsx";
-import { renderAgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 export const AGENT_VALUE_PREFIX = "agent:";
 export type SidebarAgentMenuSwitcherParams = {
   activeId: string;
@@ -39,26 +39,28 @@ function renderAgentAvatar(
   const agentId = createMemo(() => normalizeAgentId(readAgent().id));
   const identity = createMemo(() => params.identities.get(agentId()) ?? null);
   const avatarUrl = createMemo(() => resolveAgentAvatarUrl(readAgent(), identity()));
-  return renderAgentIdentityAvatar(
-    {
-      get id() {
-        return readAgent().id;
-      },
-      get avatar() {
+  return (
+    <AgentIdentityAvatar
+      agent={{
+        get id() {
+          return readAgent().id;
+        },
+        get avatar() {
+          const url = avatarUrl();
+          return url ? params.resolveAvatarUrl(url) : null;
+        },
+        get textAvatar() {
+          return resolveAgentTextAvatar(readAgent(), identity());
+        },
+      }}
+      class="agent-select__avatar"
+      onImageError={() => {
         const url = avatarUrl();
-        return url ? params.resolveAvatarUrl(url) : null;
-      },
-      get textAvatar() {
-        return resolveAgentTextAvatar(readAgent(), identity());
-      },
-    },
-    "agent-select__avatar",
-    () => {
-      const url = avatarUrl();
-      if (url) {
-        params.avatarErrorHandler(url)();
-      }
-    },
+        if (url) {
+          params.avatarErrorHandler(url)();
+        }
+      }}
+    />
   );
 }
 function renderAgentGroupAvatar(

@@ -19,7 +19,7 @@ import {
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import "./session-menu.ts";
-import "./mcp-app-catalog.ts";
+import "./mcp-app-catalog.tsx";
 import "./sidebar-agent-card.tsx";
 import "./sidebar-attention.tsx";
 import { showToast } from "../lib/toast.ts";

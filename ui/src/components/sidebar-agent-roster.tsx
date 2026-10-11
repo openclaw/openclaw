@@ -30,7 +30,7 @@ import {
 } from "./app-sidebar-session-row-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { Icon } from "./solid/icon.tsx";
-import { renderAgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";
 import { renderTeamSessionSlots, sessionRunVisibility } from "./solid/session-presentation.tsx";
 import "../styles/sidebar-agent-roster.css";
@@ -281,7 +281,7 @@ function SidebarAgentRosterContent(
                       }}
                     >
                       <span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                        {renderAgentIdentityAvatar(card())}
+                        <AgentIdentityAvatar agent={card()} />
                       </span>
                       <span class="sidebar-agent-roster__copy">
                         <span>{card().name}</span>
@@ -477,7 +477,7 @@ function SidebarNewSessionMenuContent(
                 tabIndex={-1}
               >
                 <span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                  {renderAgentIdentityAvatar(card())}
+                  <AgentIdentityAvatar agent={card()} />
                 </span>
                 <span>{card().name}</span>
               </a>
@@ -561,7 +561,7 @@ export function renderSidebarPinnedSession(host: RosterHost, session: () => Side
     },
     listItem: false,
     get icon() {
-      return renderAgentIdentityAvatar(card() ?? { id: agentId() });
+      return <AgentIdentityAvatar agent={card() ?? { id: agentId() }} />;
     },
   });
 }
