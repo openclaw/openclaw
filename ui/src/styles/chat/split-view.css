@@ -324,6 +324,10 @@
   height: 14px;
 }
 
+.chat-pane__branches-menu {
+  --versions-icon-column: 28px;
+}
+
 .chat-pane__versions-heading {
   display: flex;
   align-items: center;
@@ -336,7 +340,8 @@
 
 .chat-pane__versions-info {
   margin-inline-start: auto;
-  width: 28px;
+  width: var(--versions-icon-column);
+  min-width: var(--versions-icon-column);
   height: 28px;
   padding: 6px;
 }
@@ -390,7 +395,9 @@
 
 .chat-pane__branch-active {
   display: inline-flex;
+  width: var(--versions-icon-column);
   align-items: center;
+  justify-content: center;
   color: var(--accent);
 }
 
