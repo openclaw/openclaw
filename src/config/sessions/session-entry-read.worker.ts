@@ -371,8 +371,12 @@ export function readExactSessionEntriesWithLifecycle(
             ...(request.expectedIdentity
               ? { source: captureSessionEntryReadSource(database, request.expectedIdentity) }
               : {}),
-            entries: readSelectedSessionEntriesInDatabase(database, request.sessionKeys, {
+            entries: readSelectedSessionEntriesInDatabase(database, request.sessionKeys ?? [], {
               continuation: request.continuation,
+              ...(request.selection?.kind === "label" ? { label: request.selection.label } : {}),
+              ...(request.selection?.kind === "session-id-or-key"
+                ? { sessionIdOrKey: request.selection.sessionIdOrKey }
+                : {}),
             }),
             lifecycleTimestamps: {},
           }

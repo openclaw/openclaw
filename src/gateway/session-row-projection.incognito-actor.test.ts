@@ -33,9 +33,9 @@ import { reportPlacementTransition } from "./worker-environments/placement-recor
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 // Two retained private actors plus shared-state reads need three broker slots.
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 24,
+vi.mock("../infra/worker-pool-sizing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-pool-sizing.js")>()),
+  resolveSqliteBrokerWorkerCount: () => 3,
 }));
 
 it("materializes actor-prepared private entries and lineage without host SQLite", async () => {
