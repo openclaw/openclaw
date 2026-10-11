@@ -201,7 +201,7 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
 
 ACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true) | run jobId (runMode "force"=now; waits up to timeoutMs, default 60s, and returns the finished run: status, error, deliveryStatus, summary; a longer run, or a main-session job that starts after this turn, returns runId — check it later with runs jobId runId, never with a scheduled verify job) | runs jobId runId? = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
-SCOPE: Authenticated configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns see only caller-visible jobs; totals/counts and hasMore describe that scoped view, not global inventory. In that restricted view, an empty list or failed list/get/update/remove (including not-found) does not establish global absence, whatever the source of a known job id (including your own history). Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results. Report that you cannot establish global absence and ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page. Genuinely new, requested automations can still be created.
+SCOPE: Authenticated configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns see only caller-visible jobs; total, snapshotRevision, offset, limit, nextOffset, and hasMore describe that scoped view, not the complete Gateway inventory. In that restricted view, an empty list or failed list/get/update/remove (including not-found) does not establish global absence, whatever the source of a known job id (including your own history). Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results. Report that you cannot establish global absence and ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page. Genuinely new, requested automations can still be created.
 
 ADD: job requires schedule+payload.
 
@@ -381,16 +381,26 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               ? undefined
               : readNonNegativeIntegerParam(params, "offset");
             let useCompactList = true;
+            let useVisibilityMetadata = true;
             const requestListPage = async (pageParams: Record<string, unknown>) => {
               for (;;) {
                 try {
                   return await callGateway("cron.list", gatewayOpts, {
                     includeDisabled,
                     ...(useCompactList ? { compact: true } : {}),
+                    ...(useVisibilityMetadata ? { includeVisibility: true } : {}),
                     ...(listAgentId ? { agentId: listAgentId } : {}),
                     ...pageParams,
                   });
                 } catch (error) {
+                  if (
+                    useVisibilityMetadata &&
+                    isOlderGatewayRejectingParam(error, "cron.list", "includeVisibility")
+                  ) {
+                    // Older strict Gateway request schemas do not know this opt-in.
+                    useVisibilityMetadata = false;
+                    continue;
+                  }
                   if (
                     !useCompactList ||
                     !isOlderGatewayRejectingParam(error, "cron.list", "compact")
