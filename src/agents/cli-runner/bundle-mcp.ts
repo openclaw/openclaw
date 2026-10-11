@@ -452,6 +452,7 @@ export async function prepareCliBundleMcpConfig(params: {
     const acquisition = await acquireSessionMcpRuntime({
       sessionId: params.nativeMcpPolicy.sessionId,
       sessionKey: params.nativeMcpPolicy.sessionKey,
+      agentId: params.nativeMcpPolicy.capabilityProfile.agentId,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       cfg: runtimeConfig,

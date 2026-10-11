@@ -19,8 +19,12 @@ export function agentTerminalOwnerMatches(
   );
 }
 
-function drainKey(owner: AgentTerminalOwner): string {
-  return JSON.stringify([owner.agentSessionKey, owner.agentSessionId, owner.agentId]);
+function drainKey(owner: AgentTerminalOwner | string): string {
+  return JSON.stringify(
+    typeof owner === "string"
+      ? [owner]
+      : [owner.agentSessionKey, owner.agentSessionId, owner.agentId],
+  );
 }
 
 export class AgentTerminalSessionDrainTracker {
@@ -28,7 +32,7 @@ export class AgentTerminalSessionDrainTracker {
   private readonly exiting = new Set<TerminalSession>();
 
   begin(
-    owner: AgentTerminalOwner,
+    owner: AgentTerminalOwner | string,
     params: {
       pendingOpens: ReadonlyMap<TerminalPendingOpen, TerminalOwner>;
       sessions: ReadonlyMap<string, TerminalSession>;
@@ -37,16 +41,20 @@ export class AgentTerminalSessionDrainTracker {
     },
   ): AgentTerminalSessionDrain {
     params.assertCurrent?.();
+    const matches = (terminalOwner: TerminalOwner | null, agentId: string) =>
+      typeof owner === "string"
+        ? agentId === owner
+        : agentTerminalOwnerMatches(terminalOwner, owner);
     const pending = [...params.pendingOpens]
-      .filter(([, pendingOwner]) => agentTerminalOwnerMatches(pendingOwner, owner))
+      .filter(([entry, pendingOwner]) => matches(pendingOwner, entry.agentId))
       .map(([entry]) => entry);
     const sessions = [...params.sessions.values()].filter(
-      (session) => !session.closed && agentTerminalOwnerMatches(session.owner, owner),
+      (session) => !session.closed && matches(session.owner, session.agentId),
     );
     let pendingWork = pending;
     let sessionWork = [
       ...sessions,
-      ...[...this.exiting].filter((session) => agentTerminalOwnerMatches(session.owner, owner)),
+      ...[...this.exiting].filter((session) => matches(session.owner, session.agentId)),
     ];
     const hasWork = () =>
       pendingWork.some((entry) => params.pendingOpens.has(entry)) ||
@@ -80,7 +88,7 @@ export class AgentTerminalSessionDrainTracker {
     try {
       for (const entry of pending) {
         params.assertCurrent?.();
-        entry.abort("terminal closed because its session was archived");
+        entry.abort("terminal closed because its owner is draining");
         cancelledPending += 1;
       }
       for (const session of sessions) {
@@ -103,8 +111,11 @@ export class AgentTerminalSessionDrainTracker {
     return receipt;
   }
 
-  isActive(owner: AgentTerminalOwner): boolean {
-    return this.active.has(drainKey(owner));
+  isActive(owner: TerminalOwner, agentId: string): boolean {
+    return (
+      this.active.has(drainKey(agentId)) ||
+      (owner.kind === "agent" && this.active.has(drainKey(owner)))
+    );
   }
 
   trackExit(session: TerminalSession): void {
@@ -115,10 +126,12 @@ export class AgentTerminalSessionDrainTracker {
     this.exiting.delete(session);
   }
 
-  settleIfIdle(owner: AgentTerminalOwner): void {
+  settleIfIdle(owner: TerminalOwner | null, agentId: string): void {
     // Each receipt retains only the work whose cancellation it accepted.
-    for (const settle of this.active.get(drainKey(owner)) ?? []) {
-      settle();
+    for (const key of [drainKey(agentId), ...(owner?.kind === "agent" ? [drainKey(owner)] : [])]) {
+      for (const settle of this.active.get(key) ?? []) {
+        settle();
+      }
     }
   }
 }

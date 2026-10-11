@@ -1,4 +1,9 @@
+import {
+  listAgentSessionMcpRuntimeIds,
+  retireSessionMcpRuntimeForAgentDeletion,
+} from "../../agents/agent-bundle-mcp-manager-cleanup.js";
 import { tryResolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
+import { drainAgentExecProcesses } from "../../agents/bash-process-control.js";
 import { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import {
   captureEmbeddedRunDrainTarget,
@@ -6,12 +11,13 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.registry.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentRunContext, listLiveAgentRunIds } from "../../infra/agent-run-registry.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { agentWorkAdmissionIdentity } from "../../sessions/session-agent-work-admission.js";
 import {
   collectActiveAgentSessionWorkAdmissions,
@@ -39,6 +45,7 @@ export async function drainAgentDeletionRuns(
   const admissionAgent = agentWorkAdmissionIdentity({ agentId });
   const embeddedRuns = new Map<string, EmbeddedRunDrainTarget>();
   const unkeyedRuns: EmbeddedRunDrainTarget[] = [];
+  const mcpSessionIds = new Set<string>();
   const targets = new Map<string, Parameters<typeof prepareSessionLifecycleDrain>[0]>();
   const add = (sessionKey: string, sessionId?: string, scope = storePath) => {
     const canonicalKey = resolveSessionStoreIdentity({ cfg, sessionKey, agentId }).canonicalKey;
@@ -85,6 +92,7 @@ export async function drainAgentDeletionRuns(
       const embedded = captureEmbeddedRunDrainTarget(sessionId, { agentId, defaultAgentId });
       if (embedded) {
         embeddedRuns.set(sessionId, embedded);
+        mcpSessionIds.add(sessionId);
       }
       addOwned(embedded);
       if (embedded && !embedded.sessionKey) {
@@ -160,7 +168,15 @@ export async function drainAgentDeletionRuns(
         reason: createAgentRunDirectAbortError(),
       }).released;
     });
-    const settled = await Promise.allSettled([...sessions, admitted, ...embedded]);
+    const terminals = Promise.resolve().then(async () => {
+      const drain = context.terminalSessions?.beginAgentSessionDrain(agentId, assertCurrent);
+      try {
+        await drain?.drained;
+      } finally {
+        drain?.release();
+      }
+    });
+    const settled = await Promise.allSettled([...sessions, admitted, ...embedded, terminals]);
     const failures = settled.filter((result) => result.status === "rejected");
     if (failures.length) {
       throw new AggregateError(
@@ -168,6 +184,29 @@ export async function drainAgentDeletionRuns(
         `Agent ${agentId} deletion is still draining`,
       );
     }
+    await drainAgentExecProcesses(agentId, assertCurrent);
+    for (const sessionId of listAgentSessionMcpRuntimeIds(agentId)) {
+      mcpSessionIds.add(sessionId);
+    }
+    for (const target of targets.values()) {
+      if (target.sessionId) {
+        mcpSessionIds.add(target.sessionId);
+      }
+    }
+    for (const sessionId of mcpSessionIds) {
+      await retireSessionMcpRuntimeForAgentDeletion({ sessionId, agentId, assertCurrent });
+    }
+    await cleanupBrowserSessionsForLifecycleEnd({
+      cfg,
+      sessionKeys: [...targets.values()]
+        .flatMap((target) => target.sessionKeys)
+        .map((requestKey) => toAgentStoreSessionKey({ agentId, requestKey })),
+      isCurrent: () => {
+        assertCurrent();
+        return true;
+      },
+      onWarn: (message) => context.logGateway.warn(message),
+    });
     assertCurrent();
   } finally {
     for (const drain of drains) {
