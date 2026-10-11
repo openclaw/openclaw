@@ -12,6 +12,23 @@ const suite = createControlUiE2eSuite({
   name: "Queued correction update recovery",
   trackBrowserContexts: true,
 });
+async function logQueuedEdit(page: import("playwright").Page, stage: string) {
+  console.log(
+    "QUEUED_EDIT",
+    stage,
+    await page.locator("openclaw-chat-pane.chat-pane-cache__pane--active").evaluate((element) => {
+      const pane = element as HTMLElement & {
+        state?: { chatQueuedEdit?: { draftText: string; revision: number } };
+      };
+      return {
+        draftText: pane.state?.chatQueuedEdit?.draftText,
+        revision: pane.state?.chatQueuedEdit?.revision,
+        value: pane.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")?.value,
+      };
+    }),
+  );
+}
+
 suite.define(() => {
   it.each([
     { resolution: "save", split: false, cachedSplit: false, narrow: false, otherPage: false },
@@ -61,6 +78,7 @@ suite.define(() => {
         const edit = page.locator(".chat-queue__edit-input");
         await edit.fill("Reply exactly CORRECTED-RELOAD");
         await composer.fill("Separate saved composer draft");
+        await logQueuedEdit(page, "before-navigation");
         await page.screenshot({
           path: `${suite.artifactDir}/${resolution}-before-update.png`,
           fullPage: true,
@@ -152,6 +170,7 @@ suite.define(() => {
           }),
         );
         expect(reloads, "automatic build recovery must not discard a queued correction").toBe(0);
+        await logQueuedEdit(page, "after-navigation");
         expect(await edit.inputValue()).toBe("Reply exactly CORRECTED-RELOAD");
         if (split) {
           await expect
@@ -250,6 +269,7 @@ suite.define(() => {
         const edit = page.locator(".chat-pane-cache__pane--active .chat-queue__edit-input");
         await edit.fill("Reply exactly CORRECTED-RELOAD");
         await composer.fill("Separate saved composer draft");
+        await logQueuedEdit(page, "before-navigation");
         await page.screenshot({
           path: `${suite.artifactDir}/${resolution}-before-navigation.png`,
           fullPage: true,
@@ -318,6 +338,7 @@ suite.define(() => {
         expect(await edit.count(), "queued correction must survive same-pane cache eviction").toBe(
           1,
         );
+        await logQueuedEdit(page, "after-navigation");
         expect(await edit.inputValue()).toBe("Reply exactly CORRECTED-RELOAD");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await page
