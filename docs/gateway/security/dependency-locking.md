@@ -31,7 +31,7 @@ Release automation reuses its existing standard `GH_TOKEN` only for GitHub API r
 
 ### Interpret coverage
 
-Release artifacts and the GitHub Actions step summary show npm coverage as `checked`, upstream coverage as `checked` or `partial`, mapped package-version counts, checked repository counts, coverage issues, and upstream-only findings. Findings identify their source as `npm-bulk` or `github-repository`; upstream findings also record matched locked versions. Even `checked` coverage is limited to these advisory sources, not comprehensive vulnerability clearance.
+Release artifacts and the GitHub Actions step summary show npm coverage as `checked`, upstream coverage as `checked` or `partial`, mapped package-version counts, checked repository counts, coverage issues, and upstream-only findings. Findings identify their source as `npm-bulk` or `github-repository`; upstream findings also record matched locked versions. Even `checked` coverage is limited to these advisory sources, not a guarantee that all vulnerabilities have been ruled out.
 
 The upstream scan has fixed bounds: 2,500 exact package versions, 4,000 HTTP requests, and five minutes per run. It uses four concurrent requests, up to five pages of 100 advisories per repository, and at most 10,000 advisories per run. Each response is limited to 2 MiB and each request to 15 seconds. It does not retry or reuse stale cached results.
 

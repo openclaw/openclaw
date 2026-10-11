@@ -148,7 +148,7 @@ function decodeBrowserControlResponseUtf8(body: Uint8Array, status: number): str
 
 function resolveBrowserFetchOperatorHint(url: string): string {
   if (isAbsoluteHttp(url)) {
-    return "If this is a sandboxed session, ensure the sandbox browser is running.";
+    return "If this is a sandboxed session, check that the sandbox browser is running.";
   }
   try {
     const cfg = getRuntimeConfig();
