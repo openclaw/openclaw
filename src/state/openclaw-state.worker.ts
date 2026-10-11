@@ -6,7 +6,11 @@ import {
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_PREPARE_COMMAND,
+  SQLITE_WORKER_OPERATION_CLEANUP,
+  SQLITE_WORKER_PREPARE_ADMITTED,
+} from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -91,6 +95,7 @@ let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") 
 let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
 let capture: typeof import("../proxy-capture/store.worker.js") | undefined;
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
+let publicationSource: typeof import("./github-publication-source.worker.js") | undefined;
 
 function stateDatabaseInitializationEnvironment(): NodeJS.ProcessEnv {
   const context = getSqliteWorkerStateContext();
@@ -143,6 +148,9 @@ function createSharedStateWorkerBackend(
   let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
   let closed = false;
   let secretSchemaAdmitted = false;
+  let publicationSourceReader:
+    | ReturnType<NonNullable<typeof publicationSource>["createGitHubPublicationSourceWorker"]>
+    | undefined;
   const retainedDatabase = (): OpenClawStateDatabase => {
     if (!nativeDatabase) {
       const opened = openOpenClawStateDatabase({
@@ -209,6 +217,20 @@ function createSharedStateWorkerBackend(
     );
   };
   return {
+    [SQLITE_WORKER_PREPARE_ADMITTED](command) {
+      const source =
+        command.type === "githubPublication.sourceFacts" ? command.input.source : undefined;
+      if (source) {
+        if (!publicationSource) {
+          throw new Error("GitHub publication source runtime is not prepared.");
+        }
+        publicationSourceReader ??= publicationSource.createGitHubPublicationSourceWorker();
+        publicationSourceReader.prepare(source, open().db);
+      }
+    },
+    [SQLITE_WORKER_OPERATION_CLEANUP]() {
+      publicationSourceReader?.close();
+    },
     async prepare(command) {
       if (command.type === "pluginState.executeOperation") {
         if (!pluginState) {
@@ -218,6 +240,13 @@ function createSharedStateWorkerBackend(
       }
     },
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (commandType === "githubPublication.sourceFacts") {
+        return publicationSource
+          ? undefined
+          : import("./github-publication-source.worker.js").then((loaded) => {
+              publicationSource = loaded;
+            });
+      }
       if (
         commandType.startsWith("deviceAuth.") ||
         commandType.startsWith("restartLifecycle.") ||
@@ -275,6 +304,12 @@ function createSharedStateWorkerBackend(
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
+      }
+      if (command.type === "githubPublication.sourceFacts") {
+        if (!publicationSourceReader) {
+          throw new Error("GitHub publication source is unavailable.");
+        }
+        return publicationSourceReader.read(command.input.source);
       }
       if (commandRegistry.has(command)) {
         return commandRegistry.execute(command, {
@@ -465,6 +500,7 @@ function createSharedStateWorkerBackend(
     async close() {
       closed = true;
       try {
+        publicationSourceReader?.close();
         updateRunWriter?.close();
       } finally {
         await borrow?.releaseAsync();
