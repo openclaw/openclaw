@@ -324,6 +324,35 @@
   height: 14px;
 }
 
+.chat-pane__versions-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-pane__versions-info {
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+}
+
+.chat-pane__versions-info svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-pane__versions-help {
+  --max-width: 280px;
+
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
 .chat-pane__branch-item {
   min-width: 260px;
   max-width: 360px;
