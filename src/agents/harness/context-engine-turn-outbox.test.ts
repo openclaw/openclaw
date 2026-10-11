@@ -549,13 +549,16 @@ describe("context-engine turn outbox", () => {
       ...payload.boundary.admission,
       logicalTurnId: "session-a:current",
     };
+    const runWarn = vi.fn();
 
     await drainPendingContextEngineTurnsBeforeRun({
       admission: currentAdmission,
       lease,
-      warn,
+      warn: runWarn,
     });
 
+    // The terminal marker was reported when it was blocked; later runs stay quiet.
+    expect(runWarn).not.toHaveBeenCalled();
     expect(engine.commitTurn).toHaveBeenCalledOnce();
     expect(engine.commitTurn).toHaveBeenCalledWith(
       expect.objectContaining({ advancementKey: "session-a:later-ready" }),
