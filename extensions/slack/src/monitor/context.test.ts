@@ -23,10 +23,12 @@ vi.mock("./media.runtime.js", async (importOriginal) => ({
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function createTestContext(params?: {
@@ -436,6 +438,72 @@ describe("createSlackMonitorContext channel metadata cache", () => {
     );
     await ctx.resolveUserName("U1");
     expect(usersInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("downloads the Slack-hosted fallback when the profile image is served through Gravatar", async () => {
+    const download = deferred<{ path: string }>();
+    saveRemoteMediaMock.mockReturnValue(download.promise);
+    const gravatarUrl =
+      "https://secure.gravatar.com/avatar/0123456789abcdef.jpg?s=192&d=https%3A%2F%2Fa.slack-edge.com%2Fdf10d%2Fimg%2Favatars%2Fava_0001-192.png";
+    const usersInfo = vi.fn().mockResolvedValue({
+      user: { profile: { display_name: "Sam Rivera", image_192: gravatarUrl } },
+    });
+    const ctx = createTestContext({
+      appClient: { users: { info: usersInfo } } as unknown as App["client"],
+    });
+
+    await ctx.resolveUserName("U2");
+    expect(ctx.resolveUserAvatar("U2")).toBeUndefined();
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+    expect(saveRemoteMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://a.slack-edge.com/df10d/img/avatars/ava_0001-192.png",
+        ssrfPolicy: {
+          allowedHostnames: ["avatars.slack-edge.com", "*.slack-edge.com"],
+          hostnameAllowlist: ["avatars.slack-edge.com", "*.slack-edge.com"],
+        },
+      }),
+    );
+
+    download.resolve({ path: "/media/inbound/slack-avatar-fallback.png" });
+    await download.promise;
+    expect(ctx.resolveUserAvatar("U2")).toBe("/media/inbound/slack-avatar-fallback.png");
+  });
+
+  it("never requests a profile image outside the allowlist", async () => {
+    const usersInfo = vi.fn().mockResolvedValue({
+      user: { profile: { display_name: "Lee Chen", image_192: "https://cdn.example.com/lee.png" } },
+    });
+    const ctx = createTestContext({
+      appClient: { users: { info: usersInfo } } as unknown as App["client"],
+    });
+
+    await ctx.resolveUserName("U3");
+    expect(ctx.resolveUserAvatar("U3")).toBeUndefined();
+    expect(ctx.resolveUserAvatar("U3")).toBeUndefined();
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("remembers a failed avatar download instead of retrying it on the next message", async () => {
+    const download = deferred<{ path: string }>();
+    saveRemoteMediaMock.mockReturnValue(download.promise);
+    const usersInfo = vi.fn().mockResolvedValue({
+      user: {
+        profile: { display_name: "Alex", image_192: "https://avatars.slack-edge.com/alex-192.png" },
+      },
+    });
+    const ctx = createTestContext({
+      appClient: { users: { info: usersInfo } } as unknown as App["client"],
+    });
+
+    await ctx.resolveUserName("U4");
+    expect(ctx.resolveUserAvatar("U4")).toBeUndefined();
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+
+    download.reject(new Error("download failed"));
+    await expect(download.promise).rejects.toThrow("download failed");
+    expect(ctx.resolveUserAvatar("U4")).toBeUndefined();
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips profile image downloads for GovSlack clients", async () => {
