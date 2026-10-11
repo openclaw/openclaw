@@ -273,6 +273,7 @@ describe("resolveMessageChannelSelection", () => {
       params: { cfg: {} as never, channel: "beta" },
       expected: {
         channel: "beta",
+        source: "explicit",
       },
       verify: ({ isConfigured }: { isConfigured?: ReturnType<typeof vi.fn> }) => {
         expect(isConfigured).not.toHaveBeenCalled();
@@ -282,6 +283,7 @@ describe("resolveMessageChannelSelection", () => {
       params: { cfg: {} as never, fallbackChannel: "gamma" },
       expected: {
         channel: "gamma",
+        source: "tool-context-fallback",
       },
     },
     {
@@ -293,6 +295,7 @@ describe("resolveMessageChannelSelection", () => {
       params: { cfg: {} as never },
       expected: {
         channel: "delta",
+        source: "single-configured",
       },
     },
   ])("resolves message channel selection for %j", async ({ setup, params, expected, verify }) => {

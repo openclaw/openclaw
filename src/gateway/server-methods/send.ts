@@ -66,6 +66,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
 import {
+  createGatewayMessageActionInput,
   createMessageActionRuntimeAuthority,
   resolveAgentRuntimeMessageActionAuthorization,
   resolveAgentRuntimeMessageActionConfig,
@@ -394,28 +395,20 @@ export const sendHandlers: GatewayRequestHandlers = {
               };
               let payload: unknown;
               try {
-                if (canonicalAction || messageAuthority.assertScheduledWriteCurrent) {
+                if (
+                  canonicalAction ||
+                  messageAuthority.assertScheduledWriteCurrent ||
+                  request.allowNativeChannelNamespace === false
+                ) {
                   const { runMessageAction } =
                     await import("../../infra/outbound/message-action-runner.js");
-                  const result = await runMessageAction({
-                    ...actionContext,
-                    gatewayOwnedDelivery: true,
-                    ...(request.action === "send"
-                      ? {
-                          // This RPC owns source-reply receipts and their transcript mirror.
-                          suppressTranscriptMirror: true,
-                          actionOrigin: trustedContext.runtimeAgentId
-                            ? ("message-tool" as const)
-                            : undefined,
-                        }
-                      : {}),
-                    params: {
-                      ...request.params,
-                      channel,
-                      ...(accountId ? { accountId } : {}),
-                      idempotencyKey: request.idempotencyKey,
-                    },
-                  });
+                  const result = await runMessageAction(
+                    createGatewayMessageActionInput({
+                      context: actionContext,
+                      request,
+                      runtimeAgentId: trustedContext.runtimeAgentId,
+                    }),
+                  );
                   payload = result.payload;
                 } else {
                   await messageAuthority.beforeDeliveryAttempt();

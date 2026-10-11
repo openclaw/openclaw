@@ -366,6 +366,9 @@ export async function executeGatewayAction(
         inboundTurnKind: ctx.input.inboundEventKind,
         agentId: ctx.agentId,
         ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
+        ...(ctx.input.allowNativeChannelNamespace === false
+          ? { allowNativeChannelNamespace: false }
+          : {}),
         idempotencyKey,
       },
     });

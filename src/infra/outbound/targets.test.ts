@@ -44,10 +44,10 @@ type LegacyDeliveryFixture = SessionEntry & {
   lastThreadId?: string | number;
 };
 
+type LegacyDeliveryParams<T> = Omit<T, "entry"> & { entry?: LegacyDeliveryFixture };
+
 function resolveSessionDeliveryTarget(
-  params: Omit<Parameters<typeof resolveCanonicalSessionDeliveryTarget>[0], "entry"> & {
-    entry?: LegacyDeliveryFixture;
-  },
+  params: LegacyDeliveryParams<Parameters<typeof resolveCanonicalSessionDeliveryTarget>[0]>,
 ) {
   return resolveCanonicalSessionDeliveryTarget({
     ...params,
@@ -56,9 +56,7 @@ function resolveSessionDeliveryTarget(
 }
 
 function resolveHeartbeatDeliveryTarget(
-  params: Omit<Parameters<typeof resolveCanonicalHeartbeatDeliveryTarget>[0], "entry"> & {
-    entry?: LegacyDeliveryFixture;
-  },
+  params: LegacyDeliveryParams<Parameters<typeof resolveCanonicalHeartbeatDeliveryTarget>[0]>,
 ) {
   return resolveCanonicalHeartbeatDeliveryTarget({
     ...params,
@@ -67,10 +65,9 @@ function resolveHeartbeatDeliveryTarget(
 }
 
 async function resolveHeartbeatDeliveryTargetWithSessionRoute(
-  params: Omit<
-    Parameters<typeof resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute>[0],
-    "entry"
-  > & { entry?: LegacyDeliveryFixture },
+  params: LegacyDeliveryParams<
+    Parameters<typeof resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute>[0]
+  >,
 ) {
   return await resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute({
     ...params,

@@ -248,6 +248,50 @@ describe("runMessageAction plugin dispatch", () => {
       expectUncalled(looksLikeId, resolveTarget, listGroups, listGroupsLive, handleAction);
     });
 
+    it("applies outbound target policy to message-action directory matches", async () => {
+      const outboundResolveTarget = vi.fn(() => ({
+        ok: false as const,
+        error: new Error("synthetic outbound target policy denial"),
+      }));
+      const handlePolicyCheckedAction = vi.fn(async () => jsonResult({ ok: true }));
+      registerExternalPlugin({
+        ...createActionPlugin("policychat", {
+          actions: ["edit"],
+          gatewayActions: [],
+          handleAction: handlePolicyCheckedAction,
+        }),
+        directory: {
+          listPeers: vi.fn(async () => [
+            { kind: "user" as const, id: "denied-room", name: "named-room" },
+          ]),
+        },
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: outboundResolveTarget,
+        },
+      });
+
+      await expect(
+        runMessageAction({
+          cfg: createEnabledMessageActionConfig("policychat"),
+          action: "edit",
+          params: {
+            channel: "policychat",
+            to: "named-room",
+            messageId: "message-1",
+            message: "updated",
+          },
+          defaultAccountId: "default",
+          conversationReadOrigin: "direct-operator",
+          dryRun: false,
+        }),
+      ).rejects.toThrow("synthetic outbound target policy denial");
+      expect(outboundResolveTarget).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "denied-room", mode: "explicit" }),
+      );
+      expect(handlePolicyCheckedAction).not.toHaveBeenCalled();
+    });
+
     it("authorizes Gateway dry runs before target lookup", async () => {
       const looksLikeId = vi.fn(() => true);
       registerExternalPlugin(

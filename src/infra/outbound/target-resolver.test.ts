@@ -107,6 +107,264 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     });
   });
 
+  it.each([
+    { input: "richchat", destinationPrefix: "rc" },
+    { input: "chatty", destinationPrefix: "rc" },
+    { input: "rc", destinationPrefix: "rc" },
+  ])(
+    "rejects inferred bare selected-channel namespace $input after an exact directory miss",
+    async ({ input, destinationPrefix }) => {
+      const base = createChannelTestPluginBase({
+        id: "richchat",
+        label: "Rich Chat",
+      });
+      const plugin = {
+        ...base,
+        meta: {
+          ...base.meta,
+          aliases: ["chatty"],
+        },
+        directory: {
+          listGroups: mocks.listGroups,
+        },
+        messaging: {
+          targetPrefixes: ["rc"],
+          normalizeTarget: (raw: string) => `richchat:${raw}`,
+          targetResolver: {
+            looksLikeId: () => true,
+            resolveTarget: mocks.resolveTarget,
+            hint: "<conversation>",
+          },
+        },
+      } satisfies ChannelPlugin;
+      mocks.listGroups.mockResolvedValue([]);
+
+      const result = await resolveMessagingTarget({
+        cfg,
+        channel: "richchat",
+        input,
+        preferredKind: "group",
+        allowNativeChannelNamespace: false,
+        plugin,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatchObject({
+          reasonCode: "message_target_missing",
+          policyRef: "message-target:destination-required",
+        });
+        expect(result.error.message).toContain("does not specify a destination");
+        expect(result.error.message).toContain(`${destinationPrefix}:<destination>`);
+      }
+      expect(mocks.listGroups).toHaveBeenCalled();
+      expect(mocks.resolveTarget).not.toHaveBeenCalled();
+    },
+  );
+
+  it("searches exact peers before rejecting a same-name channel namespace", async () => {
+    const outboundResolveTarget = vi.fn(({ to }: { to?: string }) => ({
+      ok: true as const,
+      to: to ?? "",
+    }));
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "richchat", label: "Rich Chat" }),
+      directory: { listPeers: mocks.listPeers, listGroups: mocks.listGroups },
+      outbound: { deliveryMode: "direct", resolveTarget: outboundResolveTarget },
+      messaging: {
+        targetPrefixes: ["rc"],
+        targetResolver: { resolveTarget: mocks.resolveTarget },
+      },
+    } satisfies ChannelPlugin;
+    mocks.listGroups.mockResolvedValue([]);
+    mocks.listPeers.mockResolvedValue([
+      { kind: "user", id: "peer-1", name: "richchat" } satisfies ChannelDirectoryEntry,
+    ]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "richchat",
+      preferredKind: "group",
+      allowNativeChannelNamespace: false,
+      nativeTargetMode: "explicit",
+      allowFrom: ["peer-1"],
+      plugin,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      target: {
+        to: "peer-1",
+        kind: "user",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+    expect(mocks.listGroups).toHaveBeenCalledWith(expect.objectContaining({ query: "richchat" }));
+    expect(mocks.listPeers).toHaveBeenCalledWith(expect.objectContaining({ query: "richchat" }));
+    expect(outboundResolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "peer-1", mode: "explicit", allowFrom: ["peer-1"] }),
+    );
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit plugin-native target over an exact same-name directory entry", async () => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "irc", label: "IRC" }),
+      directory: { listGroups: mocks.listGroups },
+      messaging: {
+        targetPrefixes: ["irc"],
+        normalizeTarget: (raw: string) => raw.trim(),
+        targetResolver: { looksLikeId: () => true },
+      },
+    } satisfies ChannelPlugin;
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "different-room", name: "irc" } satisfies ChannelDirectoryEntry,
+    ]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "irc",
+      input: "irc",
+      preferredKind: "group",
+      plugin,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      target: { to: "irc", source: "normalized", resolutionSource: "normalized" },
+    });
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { input: "richchat", name: "richchat" },
+    { input: "ops", name: "ops" },
+  ])(
+    "revalidates the $input directory result with the caller's outbound policy",
+    async ({ input, name }) => {
+      const outboundResolveTarget = vi.fn(({ to }: { to?: string }) =>
+        to === "denied-room"
+          ? { ok: false as const, error: new Error("denied by outbound policy") }
+          : { ok: true as const, to: to ?? "" },
+      );
+      const plugin = {
+        ...createChannelTestPluginBase({ id: "richchat", label: "Rich Chat" }),
+        directory: { listGroups: mocks.listGroups },
+        outbound: { deliveryMode: "direct", resolveTarget: outboundResolveTarget },
+        messaging: {
+          targetPrefixes: ["rc"],
+          targetResolver: { resolveTarget: mocks.resolveTarget },
+        },
+      } satisfies ChannelPlugin;
+      mocks.listGroups.mockResolvedValue([
+        { kind: "group", id: "denied-room", name } satisfies ChannelDirectoryEntry,
+      ]);
+
+      const result = await resolveMessagingTarget({
+        cfg,
+        channel: "richchat",
+        input,
+        preferredKind: "group",
+        nativeTargetMode: "explicit",
+        plugin,
+      });
+
+      expect(result).toMatchObject({ ok: false, error: { message: "denied by outbound policy" } });
+      expect(outboundResolveTarget).toHaveBeenLastCalledWith(
+        expect.objectContaining({ to: "denied-room", mode: "explicit" }),
+      );
+    },
+  );
+
+  it("preserves an explicit channel namespace accepted by the outbound resolver", async () => {
+    const outboundResolveTarget = vi.fn(() => ({ ok: true as const, to: "@richchat" }));
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "richchat", label: "Rich Chat" }),
+      outbound: { deliveryMode: "direct", resolveTarget: outboundResolveTarget },
+    } satisfies ChannelPlugin;
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "richchat",
+      plugin,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      target: { to: "@richchat", source: "normalized", resolutionSource: "normalized" },
+    });
+    expect(outboundResolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "richchat", mode: "explicit" }),
+    );
+  });
+
+  it("searches an exact directory destination after a native namespace miss", async () => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "richchat", label: "Rich Chat" }),
+      directory: { listGroups: mocks.listGroups },
+      messaging: {
+        normalizeTarget: (raw: string) => raw.trim(),
+        targetResolver: {
+          looksLikeId: () => true,
+          resolveTarget: mocks.resolveTarget,
+          hint: "<conversation>",
+        },
+      },
+    } satisfies ChannelPlugin;
+    mocks.resolveTarget.mockResolvedValue(undefined);
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "room-1", name: "richchat" } satisfies ChannelDirectoryEntry,
+    ]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "richchat",
+      preferredKind: "group",
+      plugin,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      target: {
+        to: "room-1",
+        kind: "group",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
+    expect(mocks.listGroups).toHaveBeenCalledWith(expect.objectContaining({ query: "richchat" }));
+  });
+
+  it("rejects a plugin-native channel namespace when its resolver misses", async () => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "richchat", label: "Rich Chat" }),
+      messaging: {
+        normalizeTarget: (raw: string) => raw.trim(),
+        targetResolver: {
+          looksLikeId: () => true,
+          resolveTarget: mocks.resolveTarget,
+          hint: "<conversation>",
+        },
+      },
+    } satisfies ChannelPlugin;
+    mocks.resolveTarget.mockResolvedValue(undefined);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "richchat",
+      plugin,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(mocks.resolveTarget).toHaveBeenCalled();
+  });
+
   it("uses live directory fallback and caches the result", async () => {
     const entry: ChannelDirectoryEntry = { kind: "group", id: "123456789", name: "support" };
     mocks.listGroups.mockResolvedValue([]);
@@ -430,7 +688,12 @@ describe("resolveMessagingTarget (directory fallback)", () => {
   });
 
   it("lets plugins override id-like target resolution before falling back to raw ids", async () => {
+    const outboundResolveTarget = vi.fn(({ to }: { to?: string }) => ({
+      ok: true as const,
+      to: to ?? "",
+    }));
     mocks.getChannelPlugin.mockReturnValue({
+      outbound: { deliveryMode: "direct", resolveTarget: outboundResolveTarget },
       messaging: {
         targetResolver: {
           looksLikeId: () => true,
@@ -448,6 +711,8 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       cfg,
       channel: "workspace",
       input: "dthcxgoxhifn3pwh65cut3ud3w",
+      nativeTargetMode: "explicit",
+      allowFrom: ["user:dm-user-id"],
     });
     expect(result.target).toEqual({
       to: "user:dm-user-id",
@@ -460,11 +725,22 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe(
       "dthcxgoxhifn3pwh65cut3ud3w",
     );
+    expect(outboundResolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "user:dm-user-id",
+        mode: "explicit",
+        allowFrom: ["user:dm-user-id"],
+      }),
+    );
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
 
   it("defaults bare id-like targets to user for direct-only channel plugins", async () => {
+    const outboundResolveTarget = vi.fn(({ to }: { to?: string }) => ({
+      ok: true as const,
+      to: to ?? "",
+    }));
     const directOnlyPlugin = {
       ...createChannelTestPluginBase({
         id: "openclaw-weixin",
@@ -475,6 +751,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
           looksLikeId: (raw: string) => raw.endsWith("@im.wechat"),
         },
       },
+      outbound: { deliveryMode: "direct", resolveTarget: outboundResolveTarget },
     } satisfies ChannelPlugin;
 
     const result = await expectOkResolution({
@@ -482,6 +759,8 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       channel: "openclaw-weixin",
       input: "wxid_abc123@im.wechat",
       plugin: directOnlyPlugin,
+      nativeTargetMode: "heartbeat",
+      allowFrom: ["wxid_abc123@im.wechat"],
     });
 
     expect(result.target).toEqual({
@@ -491,6 +770,13 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       source: "normalized",
       resolutionSource: "normalized",
     });
+    expect(outboundResolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "wxid_abc123@im.wechat",
+        mode: "heartbeat",
+        allowFrom: ["wxid_abc123@im.wechat"],
+      }),
+    );
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });

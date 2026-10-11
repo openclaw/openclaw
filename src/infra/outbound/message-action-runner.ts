@@ -555,8 +555,14 @@ async function runMessageActionWithAuthority(
         route.assertTargetAuthorityCurrent ?? input.assertDirectAdapterHandoff,
         async (): Promise<ResolvedActionContext> => {
           params = route.params;
-          const { channel, channelPlugin, accountId, dryRun, defersExternalTargetResolution } =
-            route;
+          const {
+            channel,
+            channelPlugin,
+            accountId,
+            dryRun,
+            defersExternalTargetResolution,
+            allowNativeChannelNamespace,
+          } = route;
 
           const extraActionMediaSourceParamKeys = await resolveExtraActionMediaSourceParamKeysAsync(
             {
@@ -638,6 +644,7 @@ async function runMessageActionWithAuthority(
             toolContext: input.toolContext,
             agentId: resolvedAgentId,
             deferExternalTargetResolution: defersExternalTargetResolution,
+            allowNativeChannelNamespace,
             plugin: channelPlugin,
           });
 
@@ -659,9 +666,13 @@ async function runMessageActionWithAuthority(
             accountId,
             dryRun,
             gateway,
-            input: route.assertTargetAuthorityCurrent
-              ? { ...input, assertDirectAdapterHandoff: route.assertTargetAuthorityCurrent }
-              : input,
+            input: {
+              ...input,
+              allowNativeChannelNamespace,
+              ...(route.assertTargetAuthorityCurrent
+                ? { assertDirectAdapterHandoff: route.assertTargetAuthorityCurrent }
+                : {}),
+            },
             agentId: resolvedAgentId,
             resolvedTarget,
             abortSignal: input.abortSignal,
