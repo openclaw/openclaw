@@ -22,6 +22,10 @@ accepted source revision and whether it came from a Gateway write or a file edit
 Later hot-reloadable writes do not erase a committed restart requirement while
 its application is pending.
 
+UI preferences remain in `ui.prefs`. Changing them preserves prepared model
+catalogs, provider authentication, and plugin registrations. Display changes
+still publish the updated config to consumers that read those settings.
+
 The `agents.create`, `agents.update`, and `agents.delete` Gateway methods wait
 for runtime application before reporting success. A successful response lets
 clients immediately create sessions or read the updated agent roster. If the

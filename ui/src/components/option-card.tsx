@@ -88,27 +88,27 @@ function OptionCardContent(input: BridgeProps & { host: OptionCardElement }) {
           </Show>
           <div class="option-card__question">{props().question}</div>
           <div class="option-card__choices" role="radiogroup">
-            <For each={options()}>
+            <For each={options()} keyed={(option) => option.value}>
               {(option, index) => (
                 <button
                   class={[
                     "option-card__choice",
                     {
                       "option-card__choice--recommended": index() === recommendedIndex(),
-                      "option-card__choice--selected": option.value === selected(),
+                      "option-card__choice--selected": option().value === selected(),
                     },
                   ]}
                   type="button"
                   role="radio"
-                  aria-checked={option.value === selected() ? "true" : "false"}
-                  data-option-value={option.value}
+                  aria-checked={option().value === selected() ? "true" : "false"}
+                  data-option-value={option().value}
                   disabled={props().disabled}
-                  onClick={() => select(option.value)}
+                  onClick={() => select(option().value)}
                 >
                   <span class="option-card__choice-copy">
-                    <strong>{option.label}</strong>
-                    <Show when={option.description}>
-                      <span class="option-card__description">{option.description}</span>
+                    <strong>{option().label}</strong>
+                    <Show when={option().description}>
+                      <span class="option-card__description">{option().description}</span>
                     </Show>
                   </span>
                   <Show when={index() === recommendedIndex()}>
