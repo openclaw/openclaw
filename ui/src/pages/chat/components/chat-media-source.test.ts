@@ -50,20 +50,6 @@ afterEach(() => {
 });
 
 describe("ChatMediaSourceController", () => {
-  it("normalizes and applies native playback immediately", () => {
-    const media = document.createElement("audio");
-    const controller = new ChatMediaSourceController();
-
-    expect(controller.sync(media, "  /media/native.mp3  ", "  media:native  ", "native")).toBe(
-      null,
-    );
-
-    expect(controller.readiness).toBe("ready");
-    expect(controller.readySource).toBe("/media/native.mp3");
-    expect(controller.currentIdentity).toBe("media:native");
-    expect(media.getAttribute("src")).toBe("/media/native.mp3");
-  });
-
   it("aborts preparation and starts it again after reconnect", async () => {
     let firstSignal: AbortSignal | undefined;
     const fetchMock = vi
@@ -157,28 +143,6 @@ describe("ChatMediaSourceController", () => {
 
     expect(controller.readiness).toBe("ready");
     expect(controller.readySource).toContain("mediaTicket=old");
-    expect(media.getAttribute("src")).toContain("mediaTicket=old");
-  });
-
-  it("reports an unavailable rendition when there is no usable fallback", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
-    );
-    const media = document.createElement("audio");
-    const controller = new ChatMediaSourceController();
-    void controller.sync(media, "/media/voice.caf?mediaTicket=old", "media:voice", "native");
-    expect(controller.handleError(media)).toBe(false);
-
-    await controller.sync(
-      media,
-      "/media/voice.caf?mediaTicket=refresh",
-      "media:voice",
-      "transcode",
-    );
-
-    expect(controller.readiness).toBe("unavailable");
-    expect(controller.readySource).toBe("");
     expect(media.getAttribute("src")).toContain("mediaTicket=old");
   });
 

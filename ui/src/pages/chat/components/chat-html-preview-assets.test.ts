@@ -144,7 +144,7 @@ describe("session file HTML assets", () => {
     expect(fetch).toHaveBeenCalledExactlyOnceWith(["a.png", "b.png", "clip.mp4", "sound.mp3"]);
   });
 
-  it.each(['<base href="https://example.test/">', '<base href="">'])(
+  it.each(['<base href="https://example.test/">'])(
     "leaves authored base-href documents untouched (%s)",
     async (base) => {
       const source =

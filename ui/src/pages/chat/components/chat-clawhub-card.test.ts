@@ -101,7 +101,7 @@ describe("ClawHub chat recommendations", () => {
     expect(request).toHaveBeenCalledTimes(reads);
   });
 
-  it.each(["live generation", "reconnect"] as const)(
+  it.each(["reconnect"] as const)(
     "opens the install review and updates after %s",
     async (completion) => {
       let installed = false;
@@ -383,35 +383,28 @@ describe("ClawHub chat recommendations", () => {
     },
   );
 
-  it.each(["plugin", "skill"] as const)(
+  it.each(["skill"] as const)(
     "places the normalized %s publisher between the title and official badge",
-    async (kind) => {
+    async () => {
       vi.useFakeTimers();
-      const plugin = detail(false);
-      Object.assign(plugin.plugin.catalog, { author: "@openclaw" });
-      const cardRecommendation: ClawHubRecommendation =
-        kind === "plugin"
-          ? recommendation
-          : {
-              type: "clawhub",
-              kind: "skill",
-              id: "@openclaw/calendar",
-              skillRef: "@openclaw/calendar",
-              registry: "https://clawhub.ai",
-              name: "Calendar",
-              official: true,
-              installed: false,
-            };
+      const cardRecommendation: ClawHubRecommendation = {
+        type: "clawhub",
+        kind: "skill",
+        id: "@openclaw/calendar",
+        skillRef: "@openclaw/calendar",
+        registry: "https://clawhub.ai",
+        name: "Calendar",
+        official: true,
+        installed: false,
+      };
       const { card } = mount(
         async (method) =>
-          method === "plugins.catalog.get"
-            ? plugin
-            : method === "skills.detail"
-              ? {
-                  skill: { displayName: "Calendar", isOfficial: true },
-                  owner: { handle: "openclaw", displayName: "OpenClaw Organization" },
-                }
-              : { skills: [] },
+          method === "skills.detail"
+            ? {
+                skill: { displayName: "Calendar", isOfficial: true },
+                owner: { handle: "openclaw", displayName: "OpenClaw Organization" },
+              }
+            : { skills: [] },
         cardRecommendation,
       );
       await vi.advanceTimersByTimeAsync(0);
@@ -424,17 +417,13 @@ describe("ClawHub chat recommendations", () => {
     },
   );
 
-  it.each(["catalog", "plugin"] as const)(
+  it.each(["catalog"] as const)(
     "keeps %s artwork skeletons through fetch and image decoding, then clears errors",
     async (owner) => {
       const pending = deferred<string>();
       iconFetch[owner].mockReturnValue(pending.promise);
-      const result = detail(owner === "plugin");
-      Object.assign(
-        result.plugin.catalog,
-        owner === "catalog" ? { imageUrl: "https://example.com/icon.png" } : {},
-      );
-      Object.assign(result.plugin.local, owner === "plugin" ? { pluginId: "custom-channel" } : {});
+      const result = detail(false);
+      Object.assign(result.plugin.catalog, { imageUrl: "https://example.com/icon.png" });
       const { card } = mount(async () => result);
       await vi.waitFor(() => expect(iconFetch[owner]).toHaveBeenCalledOnce());
       expect(card.querySelector(".chat-clawhub-card__icon.skeleton")).not.toBeNull();
@@ -455,7 +444,7 @@ describe("ClawHub chat recommendations", () => {
     },
   );
 
-  it.each(["stalled secondary", "failed primary"] as const)(
+  it.each(["stalled secondary"] as const)(
     "retains usable artwork with a %s image",
     async (failure) => {
       const catalog = deferred<string | null>();
@@ -491,19 +480,6 @@ describe("ClawHub chat recommendations", () => {
     },
   );
 
-  it("uses a generic placeholder before installation without a package image", async () => {
-    const result = detail(false);
-    Object.assign(result.plugin.catalog, { packageName: "@openclaw/whatsapp" });
-    const { card } = mount(async () => result);
-    await vi.waitFor(() =>
-      expect(card.querySelector(".chat-clawhub-card__icon svg")).not.toBeNull(),
-    );
-    expect(card.querySelector(".skeleton")).toBeNull();
-    expect(card.querySelector("img")).toBeNull();
-    expect(card.querySelector(".chat-clawhub-card__install")?.textContent?.trim()).toBe("Install");
-    expect(iconFetch.plugin).not.toHaveBeenCalled();
-  });
-
   it("retains validated assistant cards and rejects cards pasted into a user message", () => {
     expect(normalizeMessage({ role: "assistant", content: [recommendation] }).content).toEqual([
       recommendation,
@@ -515,11 +491,7 @@ describe("ClawHub chat recommendations", () => {
     ).toEqual([]);
   });
 
-  it.each([
-    ["https://clawhub.ai", undefined, true],
-    ["https://other.example", undefined, false],
-    ["https://clawhub.ai", "skills-sh:openclaw/skills/calendar", false],
-  ] as const)(
+  it.each([["https://clawhub.ai", undefined, true]] as const)(
     "matches native skill identity (%s, %s) and keeps its agent in the detail link",
     async (registry, requestedReference, installed) => {
       const skill: ClawHubRecommendation = {

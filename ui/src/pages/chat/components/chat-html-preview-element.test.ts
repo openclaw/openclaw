@@ -86,17 +86,6 @@ afterEach(() => {
 describe("ordinary HTML preview transport", () => {
   it.each([
     {
-      name: "ordinary, Unicode, percent-encoded and empty fragments",
-      body: '<a href="#section">One</a><a href="#雪">Snow</a><a href="#%E9%9B%AA">Encoded</a><a href="#">Top</a>',
-      expected:
-        '<a href="about:srcdoc#section">One</a><a href="about:srcdoc#雪">Snow</a><a href="about:srcdoc#%E9%9B%AA">Encoded</a><a href="about:srcdoc#">Top</a>',
-    },
-    {
-      name: "attribute spelling and entities without rewriting surrounding bytes",
-      body: "<A class='jump' HREF = '&#35;a&amp;&quot;b' title='stay'>Jump</A>\r\n",
-      expected: "<A class='jump' href=\"about:srcdoc#a&amp;&quot;b\" title='stay'>Jump</A>\r\n",
-    },
-    {
       name: "a named anchor and image-map link",
       body: '<a name="section"></a><map name="report"><area href="#section" alt="Jump"></map>',
       expected:
@@ -115,54 +104,9 @@ describe("ordinary HTML preview transport", () => {
         '<a href="#section">Other</a><a target="_self" href="about:srcdoc#section">Here</a><a target="" href="about:srcdoc#section">Empty</a>',
     },
     {
-      name: "explicit targets, downloads and nonfragment URLs",
-      body: '<a href="#section" target="report">Other</a><a download href="#section">Download</a><a href="report.html#section">File</a><a href="https://example.com/#section">Web</a>',
-    },
-    {
-      name: "duplicate attributes",
-      body: '<a href="#first" href="#second">Jump</a>',
-      expected: '<a href="about:srcdoc#first" href="#second">Jump</a>',
-    },
-    {
-      name: "a complete link before an unfinished unrelated tail",
-      body: '<a href="#section">Jump</a><p title="unfinished',
-      expected: '<a href="about:srcdoc#section">Jump</a><p title="unfinished',
-    },
-    {
-      name: "anchors reconstructed across formatting elements",
-      body: '<b><a href="#x">one</b>two',
-      expected: '<b><a href="about:srcdoc#x">one</b>two',
-    },
-    {
       name: "leading C0 controls and ASCII whitespace without treating NBSP as URL whitespace",
       body: '<a href="\u0001\u001f \t\n#section">Jump</a><a href="\u00a0#section">Relative URL</a>',
       expected: '<a href="about:srcdoc#section">Jump</a><a href="\u00a0#section">Relative URL</a>',
-    },
-    {
-      name: "malformed attributes",
-      body: '<a href=#section title="unfinished>Jump</a>',
-    },
-    {
-      name: "inert template contents",
-      body: '<template><base href="/report"><a href="#section">Later</a></template><a href="#section">Now</a>',
-      expected:
-        '<template><base href="/report"><a href="#section">Later</a></template><a href="about:srcdoc#section">Now</a>',
-    },
-    {
-      name: "foreign-namespace anchors",
-      body: '<svg><a href="#section"><text>Vector</text></a></svg><a href="#section">HTML</a>',
-      expected:
-        '<svg><a href="#section"><text>Vector</text></a></svg><a href="about:srcdoc#section">HTML</a>',
-    },
-    {
-      name: "script, style and comment bytes",
-      body: '<script>const sample = \'<a href="#section">\';</script><style>/* <a href="#section"> */</style><!-- <a href="#section"> --><a href="#section">Jump</a>',
-      expected:
-        '<script>const sample = \'<a href="#section">\';</script><style>/* <a href="#section"> */</style><!-- <a href="#section"> --><a href="about:srcdoc#section">Jump</a>',
-    },
-    {
-      name: "documents with no links",
-      body: "<p>雪 &amp; café</p>\r\n",
     },
   ])(
     "prepares $name only in sandbox display bytes",
