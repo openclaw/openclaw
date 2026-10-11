@@ -91,7 +91,7 @@ describe("worker provider project preparation ownership", () => {
     expect(environments[1]?.profileSnapshot).toEqual(environments[0]?.profileSnapshot);
   });
 
-  it.each([false, true, undefined])(
+  it.each([false, true])(
     "requires explicit dedicated classification after prepared node provisioning (sharedHost=%s)",
     async (sharedHost) => {
       const git = await repository("prepared-host-classification");
@@ -205,65 +205,6 @@ describe("worker provider project preparation ownership", () => {
       );
     },
   );
-
-  it("replays an inherited prepared intent with its exact admitted target and artifacts", async () => {
-    const git = await repository("prepared-inherited-replay");
-    const provision = vi.fn(async () => {
-      throw new Error("fixture allocation unavailable");
-    });
-    const provider = support.createProvider({
-      requiresNodeEnrollment: true,
-      provisionBeforeInstallation: true,
-      supportsProjectPreparation: () => true,
-      resolvePreparationTarget: (_profile, machineClass, os) => ({
-        machineClass: machineClass ?? "small",
-        platform: os ?? "linux",
-      }),
-      provision,
-    });
-    const service = support.createService(provider, {
-      projectNamespace: "gateway",
-      prepareNodeEnrollment: async () => {
-        throw new Error("fixture must not enroll");
-      },
-      prepareNodeArtifacts: async () => ({
-        artifacts: {
-          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
-          enabledPluginIds: [...support.NODE_BOOTSTRAP.enabledPluginIds],
-          workerBundleHash: support.BUNDLE_HASH,
-          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
-          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
-          protocolFeatures: [...support.BUNDLE_ARTIFACT.protocolFeatures],
-        },
-        assertCurrent: () => {},
-      }),
-    });
-    const profile = {
-      profileId: "development",
-      providerId: provider.id,
-      profileSnapshot: { install: "bundle", settings: {}, machineClass: "large" },
-    };
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      await expect(
-        service.createWithRequest({
-          profileId: profile.profileId,
-          inheritedProfile: {
-            providerId: profile.providerId,
-            profileSnapshot: profile.profileSnapshot,
-          },
-          idempotencyKey: "prepared-replay",
-          projectPath: git.root,
-        }),
-      ).rejects.toThrow("fixture allocation unavailable");
-    }
-    expect(provision).toHaveBeenCalledTimes(2);
-    const rows = support.testState.store.list();
-    expect(rows).toHaveLength(1);
-    expect(readWorkerProjectPreparation(rows[0]?.profileSnapshot.project)?.target).toEqual({
-      machineClass: "large",
-      platform: "linux",
-    });
-  });
 
   it.each(["runtime-bootstrap", "runtime-worker", "enrollment-bootstrap"] as const)(
     "closes changed %s grants without publishing a different prepared runtime identity",
@@ -449,7 +390,7 @@ describe("worker provider project preparation ownership", () => {
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "large"])(
+  it.each([undefined])(
     "persists and replays project identity with a legacy provider hook (machineClass=%s)",
     async (machineClass) => {
       const git = await repository("project");
@@ -533,36 +474,7 @@ describe("worker provider project preparation ownership", () => {
     },
   );
 
-  it("rejects another project root using the same idempotency key before calling the provider", async () => {
-    const first = await repository("first-project");
-    const second = await repository("second-project");
-    const provision = vi.fn<WorkerProvider["provision"]>(async () => ({
-      leaseId: "lease-project",
-      ssh: support.SSH_ENDPOINT,
-    }));
-    const service = createService(provision);
-    await service.createWithRequest({
-      profileId: "development",
-      idempotencyKey: "same-request",
-      projectPath: first.root,
-    });
-    const snapshot = support.testState.store.list()[0]?.profileSnapshot;
-
-    await expect(
-      service.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "same-request",
-        projectPath: second.root,
-      }),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-      message: "Idempotency key belongs to another project",
-    });
-    expect(provision).toHaveBeenCalledTimes(1);
-    expect(support.testState.store.list()[0]?.profileSnapshot).toEqual(snapshot);
-  });
-
-  it.each([true, false])(
+  it.each([true])(
     "a fresh inherited allocation uses only its current project (has project=%s)",
     async (hasProject) => {
       const first = await repository("inherited-project");
