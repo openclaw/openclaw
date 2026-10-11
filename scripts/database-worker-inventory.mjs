@@ -199,39 +199,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/agents/worktrees/registry.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["createWorktreeRemovalClaimsGuard", "releaseWorktreeRunLeaseRow"],
-        evidence:
-          "Synchronous removal-lock assertion immediately before filesystem/Git deletion and process-exit lock cleanup. Ordinary cleanup consumes the existing worker lease census.",
-      },
-    ],
-  ],
-  [
-    "src/agents/worktrees/run-lease-owner.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["collectLiveRunLeases"],
-        evidence:
-          "Native caller is registry.ts assertWorktreeRemovalAvailable, a removal lock primitive; ordinary runtime lease reads and writes dispatch through shared-state workers.",
-      },
-    ],
-  ],
-  [
-    "src/agents/worktrees/run-lease-store.kernel.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["releaseWorktreeRunLeaseInDatabase"],
-        evidence:
-          "Native invocation is registry.ts process-exit lock cleanup; normal release dispatches through registry-run-end.worker.ts.",
-      },
-    ],
-  ],
-  [
     "src/plugin-state/plugin-state-store.reads.ts",
     [
       {
@@ -1283,6 +1250,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
+        operations: ["createWorktreeRemovalClaimsGuard", "releaseWorktreeRunLeaseRow"],
+        evidence:
+          "Synchronous removal-lock assertion immediately before filesystem/Git deletion and process-exit lock cleanup. Ordinary cleanup consumes the existing worker lease census.",
+      },
+      {
+        tier: "T2",
         operations: [
           "listRegistryWorktreesForMigration",
           "rewriteRegistryWorktreePathsForMigration",
@@ -1303,6 +1276,12 @@ const reviewedOperations = new Map([
     "src/agents/worktrees/run-lease-owner.ts",
     [
       {
+        tier: "T2",
+        operations: ["collectLiveRunLeases"],
+        evidence:
+          "Native caller is registry.ts assertWorktreeRemovalAvailable, a removal lock primitive; ordinary runtime lease reads and writes dispatch through shared-state workers.",
+      },
+      {
         tier: "W",
         operations: ["readWorktreeRunLeaseStateInDatabase", "assertRegistryMutationCustody"],
         evidence:
@@ -1314,10 +1293,16 @@ const reviewedOperations = new Map([
     "src/agents/worktrees/run-lease-store.kernel.ts",
     [
       {
+        tier: "T2",
+        operations: ["releaseWorktreeRunLeaseInDatabase"],
+        evidence:
+          "Native invocation is registry.ts process-exit lock cleanup; normal release dispatches through registry-run-end.worker.ts.",
+      },
+      {
         tier: "W",
         operations: ["admitWorktreeRunLeaseInDatabase"],
         evidence:
-          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Shared release/lease cleanup remain T1.",
+          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Native exit cleanup is classified separately as a lock primitive.",
       },
     ],
   ],
