@@ -52,7 +52,7 @@ Think of the suites as "increasing realism" (and increasing flakiness/cost).
 - Scope:
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)
-  - Deterministic regressions for known bugs
+  - Repeatable regression tests for known bugs
 - Expectations:
   - Runs in CI
   - No real keys required
@@ -228,8 +228,8 @@ Native dependency policy:
       shards append the shard name so filtered shards can be tracked
       separately.
     - When one hot test still spends most of its time in startup imports,
-      keep heavy dependencies behind a narrow local `*.runtime.ts` seam and
-      mock that seam directly instead of deep-importing runtime helpers
+      keep heavy dependencies behind a narrow local `*.runtime.ts` module and
+      mock that module directly instead of deep-importing runtime helpers
       just to pass them through `vi.mock(...)`.
     - `pnpm test:perf:changed:bench -- --ref <git-ref>` compares routed
       `test:changed` against the native root-project path for that
@@ -279,7 +279,7 @@ Native dependency policy:
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`, and bundled-plugin E2E tests under `extensions/`
 - Runtime defaults:
   - Uses Vitest `threads` with `isolate: false`, matching the rest of the repo.
-  - Uses one worker by default to keep non-isolated gateway state deterministic.
+  - Uses one worker by default to avoid concurrent changes to shared Gateway state.
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:
   - `OPENCLAW_E2E_WORKERS=<n>` to opt into parallel workers (capped at 16).
@@ -302,13 +302,13 @@ Native dependency policy:
   - The two bundle-consuming projects lazily acquire one temporary UI bundle/preview per invocation; standalone projects own their fixture, source, or custom-build servers
   - Selecting only standalone suites skips the shared bundle build; new E2E files default to bundled ownership
   - Every selected project discovers Chromium and drives real pages through Playwright; the root config retains the complete discovery inventory
-  - Most suites replace the Gateway WebSocket with deterministic in-browser mocks; some start isolated real Gateways
+  - Most suites replace the Gateway WebSocket with fixed-response in-browser mocks; some start isolated real Gateways
 - Expectations:
   - Runs in CI as part of `pnpm test:e2e`; the resource groups add no CI jobs
   - No provider keys required; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes real-Gateway suites
   - Browser dependency must be present (`pnpm --dir ui exec playwright install chromium`)
 
-The dedicated real-Gateway CI lane uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm build` completes in each clean checkout. The separate artifact job retains SDK declaration validation. The planner balances existing serial files and selected standalone companions in one row, with the remaining audited parallel files in another. The companions share the existing two-worker phase after serial execution without an extra bundled preview. The real node/SSH desktop resize tour is release-only: when its file is selected by full manual/release validation or a direct spec edit, the first row runs `node --import tsx scripts/test-desktop-resize-real.mts` once for both carriers. The bootstrap remains required; invoking the desktop spec without its real fixture is not equivalent proof. Frequent resize, revocation, view-only filtering, takeover, and UI sizing tests remain in ordinary CI. Placement consumes the parallel-eligibility allowlist from `vitest.ui-paths.mjs` without changing Vitest scheduling. Each selected file has one CI owner; the desktop bootstrap executes each carrier once. Full manual and release selection retain the complete inventory. Prebuilt previews borrow the validated canonical Control UI assets without rebuilding or deleting them; default mocked Gateway hellos use the same artifact identity, and explicit mock identity overrides still apply. Ordinary local runs retain their private builds. Keep source and built outputs unchanged until all workers and children finish. Fixtures retain their private HOME, state, ports, cleanup, and existing worker limits. Readiness failures stop without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets and older planners retain one complete CI row and their own config/command. See [CI](/ci) for the resource policy and timing evidence.
+The dedicated real-Gateway CI lane uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm build` completes in each clean checkout. The separate artifact job retains SDK declaration validation. The planner balances existing serial files and selected standalone companions in one row, with the remaining audited parallel files in another. The companions share the existing two-worker phase after serial execution without an extra bundled preview. The real node/SSH desktop resize tour is release-only: when its file is selected by full manual/release validation or a direct spec edit, the first row runs `node --import tsx scripts/test-desktop-resize-real.mts` once for both carriers. The bootstrap remains required; invoking the desktop spec without its real fixture is not equivalent proof. Frequent resize, revocation, view-only filtering, takeover, and UI sizing tests remain in ordinary CI. Placement consumes the parallel-eligibility allowlist from `vitest.ui-paths.mjs` without changing Vitest scheduling. Each selected file has one CI owner; the desktop bootstrap executes each carrier once. Full manual and release selection retain the complete inventory. Prebuilt previews borrow the validated standard Control UI assets without rebuilding or deleting them; default mocked Gateway hellos use the same artifact identity, and explicit mock identity overrides still apply. Ordinary local runs retain their private builds. Keep source and built outputs unchanged until all workers and children finish. Fixtures retain their private HOME, state, ports, cleanup, and existing worker limits. Readiness failures stop without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets and older planners retain one complete CI row and their own config/command. See [CI](/ci) for the resource policy and timing evidence.
 
 ### Network-isolated local E2E
 
@@ -334,7 +334,7 @@ The adapter requires Linux, an existing rootless Podman installation with its na
 
 It runs Vitest, Chromium, the provider fixture, and the test Gateway in the same network-none namespace. Podman’s init owns PID 1 so detached test children are reaped after their launchers exit; the Node entrypoint still owns the test invocation and cleanup. Host proxy settings stay unchanged; host credentials, Gateway state, Git metadata, and private scratch are not exposed to the container. There are no published ports or external network access. Missing prerequisites fail with setup guidance instead of installing packages or weakening isolation.
 
-Use the ordinary local config, not the CI-only prebuilt config. The adapter uses the canonical test selection to prepare `qaRuntime` artifacts inside the container for tests that consume built runtime, including private-QA artifacts when required. Source-only selections do not pay for a runtime build and retain the 8 GiB container memory cap. Runs that prepare built artifacts use a bounded 16 GiB cap to accommodate the compiler heap and native build memory; CPU, network, filesystem, and process limits are unchanged. For the canonical Control UI E2E config, it retains the private-QA `ciArtifacts` build before admitting tests; backend readiness alone does not mean the dashboard assets are ready. The host’s live-Gateway artifact admission is unchanged. The isolated source snapshot uses tracked working-tree files, including staged new files; stage a new test before selecting it. Keep source and dependencies unchanged during the invocation, and keep dependency installation separate. The initial interface supports exact tracked test files, a tracked config, and console reporters; it does not export files from the disposable snapshot. This route is not suitable for live-provider tests or tests that must contact services outside their own container.
+Use the ordinary local config, not the CI-only prebuilt config. The adapter uses the standard test selection to prepare `qaRuntime` artifacts inside the container for tests that consume built runtime, including private-QA artifacts when required. Source-only selections do not pay for a runtime build and retain the 8 GiB container memory cap. Runs that prepare built artifacts use a bounded 16 GiB cap to accommodate the compiler heap and native build memory; CPU, network, filesystem, and process limits are unchanged. For the standard Control UI E2E config, it retains the private-QA `ciArtifacts` build before admitting tests; backend readiness alone does not mean the dashboard assets are ready. The host’s live-Gateway artifact admission is unchanged. The isolated source snapshot uses tracked working-tree files, including staged new files; stage a new test before selecting it. Keep source and dependencies unchanged during the invocation, and keep dependency installation separate. The initial interface supports exact tracked test files, a tracked config, and console reporters; it does not export files from the disposable snapshot. This route is not suitable for live-provider tests or tests that must contact services outside their own container.
 
 ### E2E: OpenShell backend smoke
 
@@ -346,7 +346,7 @@ Use the ordinary local config, not the CI-only prebuilt config. The adapter uses
   - Exercises remote and default mirrored OpenShell backends over real SSH
   - Creates an isolated non-default OpenShell workspace and custom workspace roots
   - Verifies nested mirrored file writes and excludes host Git metadata and hooks
-  - Verifies remote-canonical filesystem behavior through the sandbox fs bridge
+  - Verifies filesystem operations against the remote workspace through the sandbox fs bridge
 - Expectations:
   - Opt-in only; not part of the default `pnpm test:e2e` run
   - Requires a local `openshell` CLI plus a working Docker daemon
@@ -428,23 +428,32 @@ system-message model; release CI selects `claude-sonnet-5`. The fixture activate
 the root plugin registry, exercises real prepend/append prompt hooks, and updates
 the Skills, Temporal Context, and Runtime instructions. Before the fourth turn,
 it clears the in-memory prompt projection so the runner must rehydrate it from
-the persisted session. Before every turn it also closes the provider transport,
-forcing a full-history request with the same session cache key. The assertions
-require every warm turn to reuse at least 80% of the previous prompt's tokens,
-preserve the serialized prefix and cache identity, and report no tracked
-cache-input change. This covers the embedded agent pipeline with cold transport;
-it does not cover retained HTTP continuation requests or a Gateway process
-restart.
+the persisted session and closes the provider transport. Anthropic also closes
+the transport before the other turns. OpenAI retains it and calls a synthetic
+tool twice per turn, exercising stored-response continuations with the same
+session cache key. Its 2,048-section starting prefix and large tool results
+exercise long conversations. The assertions require every warm request to reuse
+at least 80% of the preceding prompt's tokens, preserve the effective prefix and
+cache identity, and report no tracked cache-input change. OpenAI's effective
+prefix includes inherited response output; its comparison ignores JSON object
+key order, optional provider item IDs/status on assistant messages and function
+calls, and response-only log-probability fields. Call IDs and tool-output
+envelopes remain exact, and outgoing request bodies remain unchanged. Each request reports input tokens, cached
+tokens, cache ratio, and request gap. This covers retained HTTP continuation and
+cold-transport replay through the embedded agent pipeline; it does not restart
+a Gateway process.
 
 Requests run consecutively without intentional delays or retries; the scenarios
 require gaps below 30 seconds. Each of the three checks has an eight-minute
 outer deadline within the thirty-minute job. The transport fixture starts near
 8,000–10,000 input tokens and caps output at 512 tokens per request. Its two
 Anthropic routes plus OpenAI make 12 requests; optional OpenRouter adds four.
-Use planning estimates of approximately $0.50 for the transport scenario and
-$0.50 for the eight live agent requests. These are fixture-based estimates,
-not measured run costs or spending caps. Actual billing depends on model
-selection, cache reuse, and current provider prices. The stored-baseline check
+Use a planning estimate of approximately $0.50 for the transport scenario. The
+agent scenario makes sixteen requests: twelve OpenAI tool-loop requests and
+four Anthropic requests. Its larger OpenAI prefix costs more than the transport
+fixture; use the reported token counts and current model prices when budgeting
+or recording a run. Actual billing depends on model selection and cache reuse.
+These are fixture descriptions, not spending caps. The stored-baseline check
 has its own cost.
 
 The transport check uses a synthetic conversation; the live agent scenario adds
@@ -534,8 +543,9 @@ These are "real pipeline" regressions without real providers:
 The prompt-cache fixture drives ten turns through the real embedded agent
 pipeline, transcript store, and provider serializers. It activates the root
 plugin registry and advertises its tools directly with tool search disabled.
-It also compares retained user-envelope digests before provider serialization,
-covering timestamps, idempotency keys, and metadata that wire serializers omit.
+It also compares retained user-envelope digests, including runtime carriers,
+before provider serialization, covering timestamps, idempotency keys, and
+metadata that wire serializers omit.
 Five tool results are individually truncated to about 16,000 characters each;
 together they exceed the 65,536-character aggregate budget. The intended
 invariant is that already-sent result bytes remain frozen under that pressure,
@@ -561,6 +571,14 @@ any breakpoint that includes transient runtime context, including during steerin
 The other three routes compare their complete retained history. Every other retained byte must
 remain identical. Failures identify the first differing segment and JSON field
 with digests and lengths, without printing content.
+
+The Responses fixture retains its transport and models the provider's stored
+response context. It verifies that the first tool continuation sends the
+five new tool outputs, references the completed response, and retains its cache
+key. Prefix comparisons include that response's inherited input and output,
+so a smaller continuation body cannot hide a changed conversation prefix.
+Implicit output omits provider item IDs and function-call status to match full
+replay; call IDs, content, and raw incoming request bodies remain exact.
 
 The admitted-agent matrix reopens the session database and clears in-memory
 prompt state without booting a Gateway socket server. The Gateway companion

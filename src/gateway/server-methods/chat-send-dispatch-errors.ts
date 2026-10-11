@@ -8,6 +8,7 @@ import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
@@ -354,6 +355,14 @@ export function createChatSendDispatchErrorLifecycle(params: {
   };
 
   const finalize = async () => {
+    if (params.isReplyDispatchRun?.() && activeRunAbort.entry) {
+      // Accepted lifecycle delivery still needs this exact registration and run context.
+      await waitForChatAbortTerminalPersistence(activeRunAbort.entry).catch((error: unknown) => {
+        context.logGateway.warn(
+          `webchat terminal lifecycle settlement failed: ${formatForLog(error)}`,
+        );
+      });
+    }
     const dispatchError = pendingDispatchLifecycleError;
     // Commands and reply-dispatch runtimes have already published their terminal.
     // Native agent events keep ownership until their own terminal delivery completes.

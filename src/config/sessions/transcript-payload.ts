@@ -349,6 +349,14 @@ export function transcriptEventNavigationSql(
   return storedProjectionSql("navigation", identity, alias);
 }
 
+export function transcriptEventRunIdSql(
+  alias: TranscriptPayloadAlias = "transcript_events",
+): RawBuilder<string | null> {
+  return /* kysely-allow-raw: Read run provenance from the canonical bounded navigation projection. */ sql<
+    string | null
+  >`json_extract(${transcriptEventNavigationSql(alias)}, '$.message.__openclaw.runId')`;
+}
+
 function storedProjectionSql(
   field: "navigation" | "reset" | "model",
   fallback: Expression<string>,

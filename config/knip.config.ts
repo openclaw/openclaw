@@ -218,6 +218,8 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
+  // Boundary lint loads this migration plugin by path; remove with that config entry.
+  "scripts/oxlint-solid-migration.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -761,7 +763,7 @@ const config = {
     "src/agents/harness/registry.ts": ["exports"],
     // Focused outbox tests seed and recover rows through these kernels; production
     // reaches them only through the agent database worker's command dispatcher.
-    "src/agents/harness/context-engine-turn-outbox.ts": ["exports"],
+    "src/agents/harness/context-engine-turn-outbox.kernel.worker.ts": ["exports"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],
@@ -772,6 +774,27 @@ const config = {
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
+    // The Lit/Solid presentation fixture and focused UI tests consume these seams;
+    // the full-tree companion scan continues to audit their actual consumers.
+    "ui/src/components/provider-icon.ts": ["exports"],
+    "ui/src/components/settings-ui.ts": ["exports"],
+    "ui/src/components/terminal/terminal-panel.ts": ["types"],
+    "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-child-attention.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-ci-automation-control.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-ci-details.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-clawhub-card.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-details.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-question-card{,-view}.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-skill-learned-notice.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-svg-attachment.tsx": ["exports"],
+    "ui/src/pages/chat/components/chat-summary-automations.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-tool-output{,-view}.{ts,tsx}": ["exports"],
+    "ui/src/pages/chat/components/session-diff-panel.tsx": ["exports"],
+    "ui/src/pages/model-providers/data.ts": ["exports"],
+    "ui/src/pages/plugins/credential-editor.tsx": ["types"],
+    "ui/src/pages/plugins/skill-preview.tsx": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],

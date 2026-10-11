@@ -1,5 +1,5 @@
 import "../../../styles/chat/side-panel.css";
-import "./chat-files-panel.ts";
+import "./chat-files-panel.tsx";
 import {
   html,
   nothing,
@@ -83,6 +83,13 @@ const HOSTED_TAB_REQUESTS = [
   ["link-reader", LINK_READER_PANEL_TOGGLE_EVENT, { open: true, newTab: true }],
   ["terminal", TERMINAL_PANEL_TOGGLE_EVENT, { open: true, newSession: true }],
 ] as const;
+
+// The Solid strip writes active before Web Awesome reflects its attribute.
+function activePanelTab(root: ParentNode | null | undefined) {
+  return [...(root?.querySelectorAll<HTMLElementTagNameMap["wa-tab"]>("wa-tab") ?? [])].find(
+    (tab) => tab.active,
+  );
+}
 
 class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) panelIdPrefix = "";
@@ -188,7 +195,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     this.focusedSurface = header;
     const restoreFocus = () => {
       if (this.layout.open && this.focusedSurface === header && header?.isConnected) {
-        header.querySelector<HTMLElement>("wa-tab[active]")?.focus();
+        activePanelTab(header)?.focus();
       }
     };
     const hosted = this.hostedTabsElement(active);
@@ -421,7 +428,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
 
   private renderHeaderActions(
     panelActions: TemplateResult | typeof nothing | null,
-    hostedActions: TemplateResult | typeof nothing,
+    hostedActions: TemplateResult | Node | typeof nothing,
   ) {
     const active = sidebarActivePanel(this.layout);
     const expanded = this.layout.expanded === true && this.layout.expandedSide === true;
@@ -625,7 +632,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           const now = document.activeElement;
           const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
           if (this.sideFocusLocked && !moved) {
-            side?.querySelector<HTMLElement>('[data-region-header="side"] wa-tab[active]')?.focus();
+            activePanelTab(side?.querySelector('[data-region-header="side"]'))?.focus();
           }
         });
       }

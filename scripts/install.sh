@@ -1922,7 +1922,7 @@ ensure_default_node_active_shell() {
     ui_error "Active Node.js must be ${NODE_SUPPORTED_VERSION_LABEL} but this shell is using ${active_version} (${active_path})"
     print_active_node_paths || true
 
-    echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} and ensure it is first on PATH, then rerun installer."
+    echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} and check that it is first on PATH, then rerun installer."
     return 1
 }
 
@@ -3403,6 +3403,11 @@ validate_bun_path() {
         ui_error "Bun executable does not match the OpenClaw fork checksum; stock Bun is unsupported here. Omit --bun-path to download the pinned fork."
         return 1
     fi
+    # Published Gateway installers require this basename when recording a runtime pin.
+    case "$(to_lowercase_ascii "${BUN_PATH##*/}")" in
+        bun|bun.exe) ;;
+        *) ui_error "--bun-path must name a bun or bun.exe executable so Gateway services can pin it. Rename the fork executable or omit --bun-path to download it."; return 1 ;;
+    esac
     local revision
     revision="$("$BUN_PATH" --revision)" || return 1
     if [[ ! "$revision" =~ ^[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]+\+[a-f0-9]+$ ||

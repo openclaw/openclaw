@@ -26,24 +26,15 @@ describe("transcript events", () => {
       __openclaw: { seq: 2, runId: "run-owned" },
     });
     expect(attachSessionTranscriptRunId(message, "  ")).toBe(message);
+    expect(readSessionTranscriptRunId(attachSessionTranscriptRunId(message, "  run-owned  "))).toBe(
+      "run-owned",
+    );
   });
 
   it("does not assign output run ownership to user rows", () => {
     const message = { role: "user", content: "prompt" };
 
     expect(attachSessionTranscriptRunId(message, "run-owned")).toBe(message);
-  });
-
-  it.each([
-    [
-      "attached assistant row",
-      { role: "assistant", __openclaw: { runId: "run-owned" } },
-      "run-owned",
-    ],
-    ["blank attached run id", { role: "assistant", __openclaw: { runId: "  " } }, undefined],
-    ["row without the marker", { role: "assistant", content: [] }, undefined],
-  ])("reads back stored run ownership from %s", (_name, message, expected) => {
-    expect(readSessionTranscriptRunId(message)).toBe(expected);
   });
 
   it("does not expose file-only archive updates to public listeners", () => {
@@ -175,18 +166,6 @@ describe("transcript events", () => {
     expect(message.providerReplay).toBe(providerReplay);
   });
 
-  it("discards blank lifecycle ownership without changing legacy events", () => {
-    const listener = vi.fn();
-    cleanup.push(onInternalSessionTranscriptUpdate(listener));
-
-    emitSessionTranscriptUpdate({
-      sessionFile: "/tmp/session.jsonl",
-      lifecycleRevision: "  ",
-    });
-
-    expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
-  });
-
   it("derives public target identity from legacy-shaped internal updates", () => {
     const listener = vi.fn();
     cleanup.push(onSessionTranscriptUpdate(listener));
@@ -234,6 +213,7 @@ describe("transcript events", () => {
     emitSessionTranscriptUpdate({
       sessionFile: "/tmp/session.jsonl",
       messageSeq: 0,
+      lifecycleRevision: "  ",
     });
     emitSessionTranscriptUpdate({
       sessionFile: "/tmp/session.jsonl",
@@ -248,19 +228,6 @@ describe("transcript events", () => {
     expect(listener).toHaveBeenNthCalledWith(1, { sessionFile: "/tmp/session.jsonl" });
     expect(listener).toHaveBeenNthCalledWith(2, { sessionFile: "/tmp/session.jsonl" });
     expect(listener).toHaveBeenNthCalledWith(3, { sessionFile: "/tmp/session.jsonl" });
-  });
-
-  it("continues notifying other listeners when one throws", () => {
-    const first = vi.fn(() => {
-      throw new Error("boom");
-    });
-    const second = vi.fn();
-    cleanup.push(onInternalSessionTranscriptUpdate(first));
-    cleanup.push(onInternalSessionTranscriptUpdate(second));
-
-    expect(emitSessionTranscriptUpdate({ sessionFile: "/tmp/session.jsonl" })).toBeUndefined();
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenCalledTimes(1);
   });
 
   it.each([

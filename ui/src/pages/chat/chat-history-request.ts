@@ -111,19 +111,16 @@ function updateChatHistoryOwnerRequestCount(
   requestKey: string,
   delta: 1 | -1,
 ) {
-  let counts = registry.ownerRequestCounts.get(owner);
-  const nextCount = (counts?.get(requestKey) ?? 0) + delta;
+  const counts = registry.ownerRequestCounts.get(owner) ?? new Map<string, number>();
+  const nextCount = (counts.get(requestKey) ?? 0) + delta;
   if (nextCount <= 0) {
-    counts?.delete(requestKey);
-    if (counts?.size === 0) {
+    counts.delete(requestKey);
+    if (counts.size === 0) {
       registry.ownerRequestCounts.delete(owner);
     }
     return;
   }
-  if (!counts) {
-    counts = new Map();
-    registry.ownerRequestCounts.set(owner, counts);
-  }
+  registry.ownerRequestCounts.set(owner, counts);
   counts.set(requestKey, nextCount);
 }
 
@@ -196,7 +193,6 @@ export function requestSharedHistory(
     };
     const controller = new AbortController();
     const consumers = new Set([consumer]);
-    const shouldContinue = () => [...consumers].some((entry) => entry.isCurrent());
     // A pane joining older shared work still owns a full retry window. Otherwise
     // it could inherit the first consumer's nearly expired startup deadline.
     const shouldRetry = () =>
@@ -225,7 +221,7 @@ export function requestSharedHistory(
         try {
           return await attempt();
         } catch (error) {
-          if (!shouldContinue() || !shouldRetry() || !isRetryableChatReadError(error, method)) {
+          if (!shouldRetry() || !isRetryableChatReadError(error, method)) {
             throw error;
           }
           for (const entry of consumers) {
@@ -235,7 +231,7 @@ export function requestSharedHistory(
             }
           }
           await sleepWithAbort(resolveGatewayReadRetryDelayMs(error, attemptNumber++), signal);
-          if (!shouldContinue() || !shouldRetry()) {
+          if (!shouldRetry()) {
             throw error;
           }
         }

@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-import { renderDreamingToggleConfirmation } from "./toggle-confirmation.ts";
+import { flush } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { renderDreamingToggleConfirmation } from "./toggle-confirmation.tsx";
+
+afterEach(() => cleanupSolid());
 
 type ToggleProps = Parameters<typeof renderDreamingToggleConfirmation>[0];
 
@@ -17,7 +20,8 @@ function renderToggle(overrides?: Partial<ToggleProps>): HTMLElement {
     ...overrides,
   };
   const host = document.createElement("div");
-  render(renderDreamingToggleConfirmation(props), host);
+  mountSolid(() => renderDreamingToggleConfirmation(props), { container: host });
+  flush();
   return host;
 }
 

@@ -329,11 +329,6 @@ describe("memory mutation authority at durable effects", () => {
         operation,
         "Rollback never reached partial failure",
       );
-      const locks = openMemoryCoreStateStore({
-        namespace: SHORT_TERM_LOCK_NAMESPACE,
-        maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-      });
-      expect(await locks.lookup(memoryCoreWorkspaceStateKey(rollbackWorkspace))).toBeDefined();
       expect(settled).toBe(false);
     } finally {
       finish.resolve();

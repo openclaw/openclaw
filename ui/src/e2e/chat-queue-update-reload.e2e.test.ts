@@ -7,6 +7,7 @@ import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Queued correction update recovery",
   trackBrowserContexts: true,
@@ -134,7 +135,8 @@ suite.define(() => {
           fullPage: true,
         });
         if (otherPage) {
-          await page.getByRole("link", { name: "Agents", exact: true }).click();
+          const pages = await openSidebarPages(page);
+          await pages.getByRole("link", { name: "Agents", exact: true }).click();
           await page.waitForURL((url) => url.pathname.endsWith("/agents"));
         }
         await page.getByRole("button", { name: "Review edit", exact: true }).click();

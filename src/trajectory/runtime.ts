@@ -380,9 +380,8 @@ export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeIn
       if (!boundedLine) {
         return;
       }
-      const boundedEvent = JSON.parse(boundedLine) as TrajectoryEvent;
       seq = nextSeq;
-      sink.write(boundedEvent, boundedLine);
+      sink.write(event, boundedLine);
     },
     flush: sink.flush,
     describeFlushState: sink.describeFlushState,

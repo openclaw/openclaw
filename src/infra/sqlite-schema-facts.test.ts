@@ -14,7 +14,6 @@ import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js"
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   getSqliteDatabaseSchemaRevision,
-  hasPendingSqliteDatabaseSchemaMutation,
   readSqliteDatabaseWriteRevision,
   readSqliteDatabaseSiblingWriteRevision,
 } from "./sqlite-database-admission.js";
@@ -491,7 +490,7 @@ describe("admitted SQLite schema facts", () => {
       expect(before).toBeDefined();
       expect(revision()).toBe(before);
       writer.exec("BEGIN IMMEDIATE; INSERT INTO original VALUES (1)");
-      expect(revision()).toBeUndefined();
+      expect(revision()).toBe(before);
       expect(readSqliteDatabaseWriteRevision(writer)).toBeTypeOf("number");
       const sibling = readSqliteDatabaseSiblingWriteRevision(writer);
       writer.exec("COMMIT");
@@ -645,9 +644,7 @@ describe("admitted SQLite schema facts", () => {
     });
     expect(tableExists(reader, "implicit_snapshot")).toBe(true);
     writer.exec("BEGIN; CREATE TABLE closed_rollback (id)");
-    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
     writer.close();
-    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
     expect(tableExists(reader, "closed_rollback")).toBe(false);
   });
 

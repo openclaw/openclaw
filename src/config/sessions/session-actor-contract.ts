@@ -1,3 +1,4 @@
+import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type {
   SessionActorTarget,
@@ -5,7 +6,7 @@ import type {
   SessionActorLifetime,
   SessionActorHotState,
 } from "./session-actor-state.types.js";
-import type { SessionEntryUsageUpdate } from "./session-entry-usage.js";
+import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
   SessionMetadataOperations,
@@ -35,28 +36,25 @@ export type {
   SessionActorSettlement,
 } from "./session-actor-state.types.js";
 
+/** Entry policy and physical/version identity; transcript indexes are not authority. */
+export type SessionActorAuthorityFacts = Pick<
+  SessionActorHotState,
+  "target" | "version" | "writeToken" | "dependencySessionIds" | "entry"
+>;
+
 /** Host-owned live authority, rechecked at both synchronous admission boundaries. */
 export type SessionActorAuthority = {
   assertCurrent(): void;
   authorize(
     stage: "transaction" | "commit",
-    facts: SessionActorHotState,
+    facts: SessionActorAuthorityFacts,
     /** Existing kernel source/custody evidence remains subject to its owner's checks. */
     publication?: unknown,
   ): void;
 };
 
 /** Serializable, pure bookkeeping. These reducers cannot change session identity or authority. */
-export type SessionActorReducer =
-  | { kind: "activity"; updatedAt: number }
-  | { kind: "usage"; update: SessionEntryUsageUpdate; updatedAt: number }
-  | { kind: "group-intro"; needsSystemIntro: boolean }
-  | { kind: "fallback-notice"; notice: SessionEntry["fallbackNotice"] }
-  | {
-      kind: "live-model";
-      expected: Pick<SessionEntry, "modelProvider" | "model" | "agentHarnessId">;
-      next: Pick<SessionEntry, "modelProvider" | "model" | "agentHarnessId">;
-    };
+export type SessionActorReducer = SessionEntryBookkeepingReducer;
 
 export type SessionActorCommandContext = {
   commandId: string;
@@ -110,23 +108,40 @@ export type SessionActorPendingFinalDelivery = NonNullable<SessionEntry["pending
   deliveries: NonNullable<NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"]>;
 };
 
+/** Already validated by the host; live authority is checked again at commit. */
+export type SessionActorDeliveryEvidence = {
+  claim: HarnessCompletionRecovery;
+  result?: { channel: string; target?: { id: string }; platformMessageId?: string };
+};
+
 export type SessionActorPhaseInputs = {
   acceptInput: {
-    pending: Extract<PendingInputMutation, { kind: "stage" }>;
     expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
-    /** Admission and adoption may share a durable point only before any intervening effect. */
-    turn?: SessionTurnPlan;
-    /** A retry adopts the canonical pending/transcript identity instead of appending twice. */
-    append?: SessionActorAppend;
     recovery?: SessionActorInputRecovery;
-  };
+  } & (
+    | {
+        pending: Extract<PendingInputMutation, { kind: "stage" }>;
+        /** Admission and adoption may share a durable point only before an intervening effect. */
+        turn?: SessionTurnPlan;
+        /** A retry adopts canonical pending/transcript identity instead of appending twice. */
+        append?: SessionActorAppend;
+      }
+    | {
+        /** Transcript custody before ACK does not require a queued-input row. */
+        pending?: never;
+        turn: SessionTurnPlan;
+        append?: never;
+      }
+  );
   adoptRun: {
     sessionId: string;
     expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
     /** Explicit writer adoption; omission preserves the existing lifecycle-only command. */
     runId?: string;
+    /** Consume accepted input and adopt its lifecycle at the same durable point. */
+    turn?: SessionTurnPlan;
   };
   appendToolResult:
     | { turn: SessionTurnPlan; append?: never }
@@ -141,20 +156,48 @@ export type SessionActorPhaseInputs = {
         append?: never;
       }
     | { append: SessionActorAppend; eventJson?: never };
-  completeTurn: {
-    turn: SessionTurnPlan;
+  completeTurn: (
+    | { turn: SessionTurnPlan; bookkeeping?: never }
+    | {
+        turn?: never;
+        /** The assistant transcript is already durable; this command must not append it again. */
+        bookkeeping: {
+          sessionId: string;
+          lifecycleRevision: string | null;
+          writerRunId: string | undefined;
+          expectedState: SessionTranscriptTurnExpectedState;
+          lifecycle?: SessionTranscriptTurnLifecyclePatch;
+        };
+      }
+  ) & {
     completion?: Extract<PendingInputMutation, { kind: "complete" }>;
     /** Exact delivery intent and payload IDs join terminal accounting in this commit. */
     pendingFinalDelivery?: SessionActorPendingFinalDelivery;
   };
-  deliveryPending: {
-    sessionId: string;
-    expectedState: SessionTranscriptTurnExpectedState;
-    lifecycle: SessionTranscriptTurnLifecyclePatch & {
-      restartRecoveryDeliveryReceiptState: "terminal-pending";
-    };
-  };
-  deliverySettled: { settlement: PendingFinalDeliverySettlementInput };
+  deliveryPending:
+    | {
+        sessionId: string;
+        expectedState: SessionTranscriptTurnExpectedState;
+        lifecycle: SessionTranscriptTurnLifecyclePatch & {
+          restartRecoveryDeliveryReceiptState: "terminal-pending";
+        };
+        claim?: never;
+      }
+    | { claim: RestartRecoveryTerminalDeliveryClaim; updatedAt: number };
+  deliverySettled:
+    | {
+        settlement: PendingFinalDeliverySettlementInput;
+        evidence?: SessionActorDeliveryEvidence;
+        restart?: never;
+      }
+    | {
+        settlement?: never;
+        restart: {
+          claim: RestartRecoveryTerminalDeliveryClaim;
+          outcome: "confirmed" | "not-sent";
+          updatedAt: number;
+        };
+      };
   patch: { reducers: readonly SessionActorReducer[] };
 };
 
@@ -162,20 +205,31 @@ export type SessionActorPhase = keyof SessionActorPhaseInputs;
 
 export type SessionActorPhaseResults = {
   acceptInput: {
-    inputId: string;
+    inputId?: string;
     turn?: SessionTurnCommitted;
     append?: SessionActorAppendCommitted;
     adoption?: Pick<PendingInputSnapshot, "existing" | "previous" | "committed">;
     pendingInputReceipt?: PendingInputMutationReceipt;
   };
-  adoptRun: undefined;
+  adoptRun: SessionTurnCommitted | undefined;
   appendToolResult: SessionTurnCommitted | SessionActorAppendCommitted;
   appendTranscriptEvent:
     | { anchor?: TranscriptEntryAnchor; projectionNeedsReconcile?: boolean }
     | SessionActorAppendCommitted;
-  completeTurn: SessionTurnCommitted;
-  deliveryPending: undefined;
-  deliverySettled: { state: PendingFinalDeliverySettlementInput["state"] | "stale" };
+  completeTurn: SessionTurnCommitted | { kind: "bookkeeping" };
+  deliveryPending:
+    | undefined
+    | {
+        disposition:
+          | "started"
+          | "already-delivered"
+          | "delivery-ambiguous"
+          | "stale"
+          | "not-applicable";
+      };
+  deliverySettled:
+    | { state: PendingFinalDeliverySettlementInput["state"] | "stale"; wakeRecovery: boolean }
+    | { disposition: "recorded" | "cleared" | "stale" };
   patch: undefined;
 };
 
@@ -183,6 +237,8 @@ export type SessionActorReducerOutcome = {
   index: number;
   kind: SessionActorReducer["kind"];
   changed: boolean;
+  /** Only pure best-effort usage preparation/reduction can be skipped. Writes remain atomic. */
+  failure?: { name: string; message: string };
 };
 
 export type SessionActorReceipt = {
@@ -214,9 +270,18 @@ export type SessionActorOutcome<Value> =
       value: Value;
       receipt: SessionActorReceipt;
       /** Publication/cleanup failure cannot erase a captured durable receipt. */
-      failure?: { name: string; message: string };
+      failure?: {
+        name: string;
+        message: string;
+        /** Only the command response was lost; native settlement and publication succeeded. */
+        origin?: "response";
+      };
     }
-  | { kind: "rolled-back"; error: { name: string; message: string } }
+  | {
+      kind: "rolled-back";
+      error: { name: string; message: string };
+      reason?: "stale-state";
+    }
   | {
       /** No mutation ran. A caller may retry once using this authorized postimage. */
       kind: "stale-version";

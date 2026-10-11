@@ -432,7 +432,6 @@ export async function createFullModelCatalogAccess(
         normalizeProvider,
         preparedSnapshot: readCatalog(),
         pluginRegistry: params.pluginGeneration.pluginRegistry,
-        isCurrent: isObservationCurrent,
         includesProvider: providerIds
           ? (provider) => providerIds.includes(normalizeProvider(provider))
           : undefined,

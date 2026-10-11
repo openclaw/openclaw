@@ -1,4 +1,7 @@
-import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type {
+  CompactionAccountingFact,
+  CompactionAccountingTarget,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
@@ -62,6 +65,8 @@ export type AgentTurnInternalResult =
 
 type SettledAgentTurnBase = {
   kind: "settled";
+  /** The runtime's claimed writer, independent of whether it compacted. */
+  sessionWriter?: CompactionAccountingTarget;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;

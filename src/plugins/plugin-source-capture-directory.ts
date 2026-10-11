@@ -17,10 +17,6 @@ import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import {
-  reclaimTokenlessPluginSourceCapture,
-  type TokenlessCaptureSweep,
-} from "./plugin-source-capture-cleanup.js";
-import {
   pluginSourceCaptureMaintenance,
   resolvePluginSourceCaptureStorage,
   runInPluginSourceCaptureContext,
@@ -57,7 +53,6 @@ const {
   retainLoadedPluginSourceCapture,
   retainPluginNativeCapturePath,
   sweeps,
-  warningBackoff,
 } = resolveGlobalSingleton(Symbol.for("openclaw.pluginSourceCaptureInstances"), () => {
   const instanceRoots = new Set<string>();
   const nativeCustody = createPluginNativeCaptureCustody(instanceRoots);
@@ -80,7 +75,6 @@ const {
     ownedRoots: instanceRoots,
     ...nativeCustody,
     sweeps: new Map<string, Promise<void>>(),
-    warningBackoff: new Map<string, { next: number; delay: number }>(),
   };
 });
 
@@ -144,7 +138,6 @@ async function reclaimInstances(
   legacy = false,
   nativeMaintenance?: NativeCaptureMaintenance,
   fallbackPrefix?: string,
-  tokenlessSweep: TokenlessCaptureSweep = {},
 ): Promise<void> {
   let entries: fs.Dirent[];
   try {
@@ -203,13 +196,18 @@ async function reclaimInstances(
         if (nativeStat) {
           continue;
         }
-        await reclaimTokenlessPluginSourceCapture(
-          canonical,
-          stat,
-          legacy,
-          tokenlessSweep,
-          nativeMaintenance?.assertCurrent,
-        );
+        await nativeMaintenance?.assertCurrent();
+        const current = fs.lstatSync(canonical);
+        if (
+          current.isDirectory() &&
+          current.dev === stat.dev &&
+          current.ino === stat.ino &&
+          current.uid === stat.uid &&
+          (!process.getuid || current.uid === process.getuid())
+        ) {
+          // Legacy producers surviving the grace period are best effort; managed captures retain tokens.
+          await fsPromises.rm(canonical, { recursive: true, force: true });
+        }
         continue;
       }
       await reclaimInstance(canonical, stat, nativeMaintenance);
@@ -263,7 +261,6 @@ export async function prunePluginNativeCaptureDirectories(
 ) {
   const removed: string[] = [];
   const warnings: string[] = [];
-  const tokenlessSweep: TokenlessCaptureSweep = {};
   await assertCurrent();
   const recordFailure = (error: unknown) => warnings.push(formatErrorMessage(error));
   const maintenance = { retainedPaths, assertCurrent, removed, ...options };
@@ -272,8 +269,6 @@ export async function prunePluginNativeCaptureDirectories(
     recordFailure,
     false,
     maintenance,
-    undefined,
-    tokenlessSweep,
   ).catch(recordFailure);
   await reclaimInstances(
     tmpdir(),
@@ -281,20 +276,15 @@ export async function prunePluginNativeCaptureDirectories(
     false,
     maintenance,
     resolvePluginSourceCaptureFallbackPrefix(stateDir),
-    tokenlessSweep,
   ).catch(recordFailure);
-  if (tokenlessSweep.unknownReason) {
-    warnings.push(`Tokenless temporary roots preserved: ${tokenlessSweep.unknownReason}`);
-  }
   return { removed, warnings };
 }
 
-/** Coalesce active scans, but throttle diagnostics independently of cleanup retries. */
+/** Coalesce active scans and report one summary per sweep. */
 function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
   const root = path.resolve(resolvePluginSourceCapturesDirectory(stateDir));
   let sweep = sweeps.get(root);
   if (!sweep) {
-    const tokenlessSweep: TokenlessCaptureSweep = {};
     let failures = 0;
     let firstFailure: unknown;
     const recordFailure = (error: unknown) => {
@@ -302,7 +292,7 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
         firstFailure = error;
       }
     };
-    sweep = reclaimInstances(root, recordFailure, false, undefined, undefined, tokenlessSweep)
+    sweep = reclaimInstances(root, recordFailure)
       .catch(recordFailure)
       .then(() =>
         reclaimInstances(
@@ -321,14 +311,7 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
             const directory = await fsPromises.realpath(candidate);
             if (!visited.has(directory)) {
               visited.add(directory);
-              await reclaimInstances(
-                directory,
-                recordFailure,
-                true,
-                undefined,
-                undefined,
-                tokenlessSweep,
-              );
+              await reclaimInstances(directory, recordFailure, true);
             }
           } catch (error) {
             if (!hasErrnoCode(error, "ENOENT")) {
@@ -338,30 +321,9 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
         }
       })
       .then(() => {
-        if (tokenlessSweep.unknownReason) {
-          warn(`Tokenless temporary roots preserved: ${tokenlessSweep.unknownReason}`);
-        }
         if (failures === 0) {
-          warningBackoff.delete(root);
           return;
         }
-        const now = Date.now();
-        const previous = warningBackoff.get(root);
-        if (previous && now < previous.next) {
-          return;
-        }
-        const delay = Math.min(
-          (previous?.delay ?? CAPTURE_GRACE_MS / 2) * 2,
-          24 * CAPTURE_GRACE_MS,
-        );
-        // Bound diagnostics for processes that inspect many independent profiles.
-        if (!previous && warningBackoff.size >= 32) {
-          const oldest = warningBackoff.keys().next().value;
-          if (oldest !== undefined) {
-            warningBackoff.delete(oldest);
-          }
-        }
-        warningBackoff.set(root, { next: now + delay, delay });
         warn(
           `${failures} cleanup failure(s) in ${root}; will retry. First: ${formatErrorMessage(firstFailure)}`,
         );

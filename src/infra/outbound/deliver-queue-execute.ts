@@ -49,7 +49,6 @@ import {
   emitOutboundAuditLifecycle,
   emitOutboundAuditTerminals,
   failedOutboundAuditTerminals,
-  uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 
@@ -178,39 +177,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     if (await rejectQueuedDelivery(owner, rejection, params, terminals)) {
       await finishAck(() => terminals);
     }
-  };
-  let releaseCancelledPreparation: (() => Promise<void>) | undefined;
-  let cancelledPreparationRetirement: Promise<void> | undefined;
-  const cancelBeforeSend = (): void => {
-    if (
-      !queueOwner ||
-      platformSendStarted ||
-      queuedPostSendState !== undefined ||
-      cancelledPreparationRetirement
-    ) {
-      return;
-    }
-    cancelledPreparationRetirement = (async () => {
-      await producerLease?.stop();
-      try {
-        releaseCancelledPreparation = await queueOwner.retireUnsent();
-        if (releaseCancelledPreparation) {
-          // Preparation stays attached until its late token and resources settle.
-          queuedPostSendState = "acked";
-          emitTerminals(() =>
-            uniformOutboundAuditTerminals(payloadCount, {
-              outcome: "failed",
-              failureStage: "queue",
-            }),
-          );
-        }
-      } catch (error) {
-        log.warn(`failed to retire cancelled delivery ${queueId}: ${formatErrorMessage(error)}`);
-      }
-    })();
-    void cancelledPreparationRetirement.catch((error: unknown) => {
-      log.warn(`failed to stop cancelled delivery ${queueId}: ${formatErrorMessage(error)}`);
-    });
   };
   let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
   const assertPlatformSendAuthorized = (): void => {
@@ -347,10 +313,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   let platformResultsReturned = false;
 
   try {
-    params.abortSignal?.addEventListener("abort", cancelBeforeSend, { once: true });
-    if (params.abortSignal?.aborted) {
-      cancelBeforeSend();
-    }
     throwIfProducerLeaseLost();
     if (params.sessionGeneration !== undefined) {
       generation = await prepareOutboundDeliveryGeneration(params.sessionGeneration);
@@ -378,11 +340,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       throwIfProducerLeaseLost();
     }
     const results = await deliverOutboundPayloadsCore(wrappedParams);
-    params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
-    await cancelledPreparationRetirement;
-    if (releaseCancelledPreparation) {
-      throwIfAborted(params.abortSignal);
-    }
     // Core reconciles adapter progress objects with hook-bearing final results.
     deliveredResults = results;
     const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
@@ -527,13 +484,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   } catch (caughtError) {
     let err = caughtError;
     try {
-      params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
-      await cancelledPreparationRetirement;
       throwIfProducerLeaseLost();
-      if (releaseCancelledPreparation) {
-        flushMessageSentEvents();
-        throw err;
-      }
       if (isOutboundDeliveryAdmissionClosedError(err)) {
         throw err;
       }
@@ -695,16 +646,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
   } finally {
     generation?.release();
-    params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
-    // Both result and error exits already joined cancellation, including a failed stop.
-    if (!cancelledPreparationRetirement) {
-      await producerLease?.stop();
-    }
+    await producerLease?.stop();
     for (const outcome of payloadOutcomes) {
       if (outcome.status === "failed" && params.deliveryQueueOwner) {
         outcome.error = params.deliveryQueueOwner.project(outcome.error);
       }
     }
-    await releaseCancelledPreparation?.();
   }
 }
