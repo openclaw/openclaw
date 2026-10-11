@@ -87,7 +87,10 @@ function publishPersistedUserEnvelope(
   }
   Object.assign(runtime, persisted, { content });
   if (imageFactIndexes) {
-    runtime.__openclaw = { ...runtime.__openclaw, mediaImageBlockFactIndexes: imageFactIndexes };
+    runtime["__openclaw"] = {
+      ...runtime["__openclaw"],
+      mediaImageBlockFactIndexes: imageFactIndexes,
+    };
   }
 }
 
