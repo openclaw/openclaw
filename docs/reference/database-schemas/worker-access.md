@@ -235,9 +235,10 @@ This changes no schemas, retention, stored bytes, or update behavior.
 Gateway combined listings, search preparation, cron owner discovery, delivery
 context recovery, and ordered runtime candidate selection await the existing
 session history/discovery worker. Target selection returns logical and physical
-store facts together; the Gateway consumes them without native SQLite reads.
+store facts together; durable reads do not run SQLite on the Gateway thread.
 Combined topology and row reads share the federation policy used by the native
-maintenance entrypoint. Incognito rows remain with their process-held actor.
+maintenance entrypoint. Bound incognito rows remain with their process-held actor;
+unbound incognito stores retain their existing process-local native owner.
 
 Ordinary discovery keeps one captured roster and listing through completion.
 Later registry, path, or row changes are observed on the next owner preparation;
