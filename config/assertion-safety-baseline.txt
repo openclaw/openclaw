@@ -2685,17 +2685,14 @@ ui/src/components/connect-command.ts	2
 ui/src/components/desktop/desktop-client.ts	2
 ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/dock-panel-layout.ts	3
-ui/src/components/exec-approval.ts	1
 ui/src/components/input-dialog.ts	1
 ui/src/components/lobster-dex.ts	2
-ui/src/components/login-gate.ts	2
 ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/mcp-server-form.ts	1
 ui/src/components/model-picker.ts	1
-ui/src/components/onboarding-memory-import.ts	1
 ui/src/components/select-picker.ts	2
 ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	1

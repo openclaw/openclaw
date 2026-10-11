@@ -158,7 +158,12 @@ export const MemoryImportPage = defineSolidBridge(
         const connectionChanged = previous[0] !== client;
         const targetChanged = connectionChanged || previous[2] !== agentId;
         if (targetChanged || previous[3] !== overwrite) {
-          resetMutationState({ preserveAttemptedImport: connectionChanged });
+          // A temporarily missing roster is not a new destination; retain the unknown apply's key.
+          resetMutationState({
+            preserveAttemptedImport:
+              previous[3] === overwrite &&
+              (agentId === null || agentId === state.pendingImport?.agentId),
+          });
         }
         if (targetChanged) {
           resetBackfillState();
@@ -218,7 +223,7 @@ export const MemoryImportPage = defineSolidBridge(
     }
 
     function resetMutationState(options: { preserveAttemptedImport?: boolean } = {}) {
-      // A disconnected apply has an unknown outcome. Keep its key so reconnect retries can
+      // An interrupted apply has an unknown outcome. Keep its key so retries can
       // recover the cached server result instead of repeating side effects.
       const pendingImport =
         options.preserveAttemptedImport && state.pendingImport?.attempted

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   createSqliteQueryCache,
@@ -13,10 +12,7 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import {
-  getSqliteReadScopeRevision,
-  type SqliteReadScopeRevision,
-} from "../../infra/sqlite-schema-facts.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-contract.js";
@@ -38,6 +34,10 @@ import {
   publishSessionTranscriptAuthority,
   type SessionTranscriptAuthority,
 } from "./session-transcript-authority.js";
+import {
+  readTranscriptContextFacts,
+  retainTranscriptContextFacts,
+} from "./session-transcript-context-facts.js";
 import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
@@ -105,46 +105,10 @@ const transcriptContextVersionQuery = createSqliteQueryCache((database) => {
   );
 });
 
-// Only the current transaction's last transcript is retained. Native writes and
-// rollback retire its revision; committed facts never become a turn-long cache.
-const contextFacts = new WeakMap<
-  DatabaseSync,
-  {
-    sessionId: string;
-    revision: SqliteReadScopeRevision;
-    version: SessionTranscriptContextVersion;
-    cold?: boolean;
-  }
->();
-
-function readContextFacts(database: Pick<OpenClawAgentDatabase, "db">, sessionId: string) {
-  const revision = database.db.isTransaction ? getSqliteReadScopeRevision(database.db) : undefined;
-  const retained = contextFacts.get(database.db);
-  return revision && retained?.revision === revision && retained.sessionId === sessionId
-    ? retained
-    : undefined;
-}
-
-function retainContextFacts(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionId: string,
-  version: SessionTranscriptContextVersion,
-  revision: SqliteReadScopeRevision | undefined,
-  cold?: boolean,
-) {
-  if (
-    database.db.isTransaction &&
-    revision &&
-    getSqliteReadScopeRevision(database.db) === revision
-  ) {
-    contextFacts.set(database.db, { sessionId, revision, version: { ...version }, cold });
-  }
-}
-
 function readContextState(database: Pick<OpenClawAgentDatabase, "db">, sessionId: string) {
   const revision = getSqliteReadScopeRevision(database.db);
   const { cold, ...version } = transcriptContextVersionQuery(database.db)(sessionId)!;
-  retainContextFacts(database, sessionId, version, revision, Boolean(cold));
+  retainTranscriptContextFacts(database, sessionId, version, revision, Boolean(cold));
   return { version, cold: Boolean(cold) };
 }
 
@@ -157,7 +121,7 @@ export function readTranscriptContextVersionInTransaction(
     return { ...actor.hot.transcript.version };
   }
   return {
-    ...(readContextFacts(database, sessionId)?.version ??
+    ...(readTranscriptContextFacts(database, sessionId)?.version ??
       readContextState(database, sessionId).version),
   };
 }
@@ -174,7 +138,7 @@ export function readTranscriptContextStateInTransaction(
       version: { ...actor.hot.transcript.version },
     };
   }
-  const retained = readContextFacts(database, sessionId);
+  const retained = readTranscriptContextFacts(database, sessionId);
   const state = retained?.cold === undefined ? readContextState(database, sessionId) : retained;
   return {
     coldArchive: state.cold ? readSessionColdTranscript(database.db, sessionId) : undefined,
@@ -587,7 +551,7 @@ export function advanceTranscriptMutationAtInTransaction(
         .$assertType<SessionTranscriptAuthority>(),
     );
     if (context) {
-      retainContextFacts(
+      retainTranscriptContextFacts(
         database,
         sessionId,
         {

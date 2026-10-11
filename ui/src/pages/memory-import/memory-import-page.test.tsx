@@ -413,56 +413,70 @@ describe("MemoryImportPage", () => {
     expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
   });
 
-  it("preserves an attempted import key across a gateway disconnect", async () => {
-    const result = createApplyResult();
-    let finishFirstApply!: (value: typeof result) => void;
-    let applyRequests = 0;
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "migrations.memory.plan") {
-        return createPlan();
-      }
-      if (method === "migrations.memory.apply") {
-        applyRequests += 1;
-        if (applyRequests === 1) {
-          return await new Promise<typeof result>((resolve) => {
-            finishFirstApply = resolve;
-          });
+  it.each(["disconnect", "roster loss"] as const)(
+    "preserves an attempted import key across %s",
+    async (interruption) => {
+      const result = createApplyResult();
+      let finishFirstApply!: (value: typeof result) => void;
+      let applyRequests = 0;
+      const request = vi.fn(async (method: string, _params?: unknown) => {
+        if (method === "migrations.memory.plan") {
+          return createPlan();
         }
-        return result;
+        if (method === "migrations.memory.apply") {
+          applyRequests += 1;
+          if (applyRequests === 1) {
+            return await new Promise<typeof result>((resolve) => {
+              finishFirstApply = resolve;
+            });
+          }
+          return result;
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const context = createContext(request);
+      const roster = context.agents.state.agentsList;
+      const page = await mountPage(context);
+
+      await openImportConfirmation(page);
+      page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
+      await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
+      const firstApply = request.mock.calls[1]?.[1] as { idempotencyKey?: string } | undefined;
+
+      if (interruption === "disconnect") {
+        context.gateway.snapshot.phase = "stopped";
+        context.gateway.snapshot.client = null;
+      } else {
+        context.agents.state.agentsList = null;
+        context.agents.state.agentsError = "Agent roster unavailable";
       }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const context = createContext(request);
-    const page = await mountPage(context);
+      context.notify();
+      flush();
+      expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
+      finishFirstApply(result);
+      await Promise.resolve();
 
-    await openImportConfirmation(page);
-    page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
-    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
-    const firstApply = request.mock.calls[1]?.[1] as { idempotencyKey?: string } | undefined;
+      if (interruption === "disconnect") {
+        const replacementClient = { request } as unknown as GatewayBrowserClient;
+        context.gateway.snapshot.client = replacementClient;
+        context.gateway.snapshot.phase = "connected";
+      } else {
+        context.agents.state.agentsList = roster;
+        context.agents.state.agentsError = null;
+      }
+      context.notify();
+      await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
+      await waitForMemoryImport(() =>
+        expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
+      );
+      page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
+      await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(4));
 
-    context.gateway.snapshot.phase = "stopped";
-    context.gateway.snapshot.client = null;
-    context.notify();
-    flush();
-    expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
-    finishFirstApply(result);
-    await Promise.resolve();
-
-    const replacementClient = { request } as unknown as GatewayBrowserClient;
-    context.gateway.snapshot.client = replacementClient;
-    context.gateway.snapshot.phase = "connected";
-    context.notify();
-    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
-    await waitForMemoryImport(() =>
-      expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
-    );
-    page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
-    await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(4));
-
-    const retryApply = request.mock.calls[3]?.[1] as { idempotencyKey?: string } | undefined;
-    expect(firstApply?.idempotencyKey).toMatch(/\S/u);
-    expect(retryApply).toEqual(firstApply);
-  });
+      const retryApply = request.mock.calls[3]?.[1] as { idempotencyKey?: string } | undefined;
+      expect(firstApply?.idempotencyKey).toMatch(/\S/u);
+      expect(retryApply).toEqual(firstApply);
+    },
+  );
 
   it.each(["import", "rollback"] as const)(
     "retires %s confirmation when the shared agent changes and its next plan fails",

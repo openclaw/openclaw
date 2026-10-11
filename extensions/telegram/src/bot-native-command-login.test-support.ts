@@ -87,7 +87,7 @@ export async function prepareTelegramLoginSessionStore(
   return { store, scope, queries };
 }
 
-export function registerLoginCommand(params: {
+export async function registerLoginCommand(params: {
   cfg: OpenClawConfig;
   loginFlow: TelegramLoginFlow;
   accountId?: string;
@@ -123,7 +123,7 @@ export function registerLoginCommand(params: {
     const result = await botHarness.bot.api.sendMessage(100, text, {});
     return { messageId: String(result.message_id), chatId: "100" };
   });
-  const { nativeCommandCallbackDispatcher } = withPluginRuntimeRegistryScope(
+  const { nativeCommandCallbackDispatcher } = await withPluginRuntimeRegistryScope(
     createEmptyPluginRegistry(),
     () =>
       registerTelegramNativeCommands({
@@ -247,7 +247,7 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
           return snapshot.sourceConfig.agents?.defaults?.modelPolicy?.allow;
         };
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        const first = registerLoginCommand({ cfg, loginFlow, runtime });
+        const first = await registerLoginCommand({ cfg, loginFlow, runtime });
         const deliveredButtons = (calls: Parameters<typeof first.bot.api.sendMessage>[]) =>
           calls.flatMap((call) => {
             const markup = call[2]?.reply_markup;
@@ -298,7 +298,12 @@ export async function exerciseDeferredModelAccess(choice: "all" | "keep" | "canc
           throw new Error("expected a delivered model-access command");
         }
         expect(await readPolicy()).toEqual(["openai/gpt-5.4"]);
-        const fresh = registerLoginCommand({ cfg, loginFlow, runtime, accountId: first.accountId });
+        const fresh = await registerLoginCommand({
+          cfg,
+          loginFlow,
+          runtime,
+          accountId: first.accountId,
+        });
         const dispatch = fresh.nativeCommandCallbackDispatcher;
         if (!dispatch) {
           throw new Error("expected native callback dispatcher");
