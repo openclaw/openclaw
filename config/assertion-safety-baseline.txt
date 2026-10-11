@@ -2786,7 +2786,6 @@ ui/src/pages/config/view-appearance-preferences.ts	2
 ui/src/pages/config/view-diff.ts	2
 ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	3
-ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/debug/view.ts	3
 ui/src/pages/labs/labs-registry.ts	4
