@@ -29,8 +29,8 @@ describe("native context window provenance", () => {
     const model = await mapLimits({ max_prompt_tokens: 777_000, max_output_tokens: 128_000 });
     // The real prompt limit survives and the estimate cannot clamp it.
     expect(model.contextTokens).toBe(777_000);
-    expect(model.contextWindow).toBe(777_000);
-    expect(model.contextWindowSource).toBe("synthetic");
+    expect(model.contextWindow).toBeUndefined();
+    expect(model).not.toHaveProperty("contextWindowSource");
     expect(model.maxTokens).toBe(128_000);
   });
 
@@ -40,10 +40,10 @@ describe("native context window provenance", () => {
     ["negative", { max_context_window_tokens: -1 }],
     ["non-numeric", { max_context_window_tokens: "400000" }],
     ["fractional", { max_context_window_tokens: 1.5 }],
-  ])("marks an %s native window as a synthetic estimate", async (_name, limits) => {
+  ])("leaves an %s native window unknown in catalog metadata", async (_name, limits) => {
     const model = await mapLimits(limits);
-    expect(model.contextWindow).toBe(128_000);
-    expect(model.contextWindowSource).toBe("synthetic");
+    expect(model.contextWindow).toBeUndefined();
+    expect(model).not.toHaveProperty("contextWindowSource");
     expect(model.contextTokens).toBeUndefined();
   });
 
@@ -54,7 +54,7 @@ describe("native context window provenance", () => {
     });
     // Provenance is reported by the provider, never inferred from the value 128k.
     expect(model.contextWindow).toBe(128_000);
-    expect(model.contextWindowSource).toBeUndefined();
+    expect(model).not.toHaveProperty("contextWindowSource");
     expect(model.contextTokens).toBe(777_000);
   });
 });

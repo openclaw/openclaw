@@ -120,8 +120,13 @@ Custom live builders can use `runLiveProviderCatalog` at their catalog hook
 to report successful acquisition and convert acquisition errors into outcomes.
 Returning provider configuration alone does not establish a live discovery outcome.
 
-For an unknown-model estimate only, set `contextWindowSource: "synthetic"`.
-Accepted account discovery can then replace that estimate for the same provider,
+Catalog hooks should omit `contextWindow` when the provider does not report it;
+keep a reported `contextTokens` prompt limit separately. Cached catalogs preserve
+that omission. Runtime construction supplies an estimate and marks it with
+`contextWindowSource: "synthetic"`; dynamic runtime resolvers may mark their own
+unknown-model estimates the same way. This marker is runtime-only, never config
+or persisted catalog metadata. Accepted account discovery can replace that
+estimate for the same provider,
 exact model ID, and transport API (and endpoint, when the fallback binds one).
 Do not mark curated static limits or authored caps as synthetic. Failed discovery
 keeps the estimate unless the catalog owner can retain the same account's inventory.

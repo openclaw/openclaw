@@ -879,7 +879,7 @@ describe("fetchCopilotModelCatalog", () => {
     expect(expectDefined(out[0], "GitHub Copilot model").name).toBe("GPT-5.5");
   });
 
-  it("falls back from malformed live token limits", async () => {
+  it("omits malformed native limits while retaining the output fallback", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       makeResponse(200, {
         data: [
@@ -922,16 +922,16 @@ describe("fetchCopilotModelCatalog", () => {
     expect(out).toHaveLength(2);
     expect(out[0]).toMatchObject({
       id: "gpt-bad-window",
-      contextWindow: 128000,
       maxTokens: 8192,
     });
     expect(out[0]).not.toHaveProperty("contextTokens");
+    expect(out[0]).not.toHaveProperty("contextWindow");
     expect(out[1]).toMatchObject({
       id: "gpt-bad-output",
-      contextWindow: 128000,
       maxTokens: 8192,
     });
     expect(out[1]).not.toHaveProperty("contextTokens");
+    expect(out[1]).not.toHaveProperty("contextWindow");
   });
 
   it.each(["redirect", "metadata DNS"] as const)(
