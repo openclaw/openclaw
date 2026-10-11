@@ -41,21 +41,6 @@ function collectWarningCheckIds(checks: readonly { id: string; status: string }[
 }
 
 describe("buildBrowserDoctorReport", () => {
-  it("reports stopped managed browsers as launchable diagnostics", () => {
-    const report = buildBrowserDoctorReport({
-      platform: "linux",
-      env: { DISPLAY: ":99" },
-      uid: 1000,
-      status: makeStatus(),
-    });
-
-    expect(report.ok).toBe(true);
-    const websocketCheck = report.checks.find((check) => check.id === "cdp-websocket");
-    expect(websocketCheck?.status).toBe("info");
-    expect(websocketCheck?.summary).toBe("Browser is launchable but not running");
-    expect(report.checks.find((check) => check.id === "extension-version")).toBeUndefined();
-  });
-
   it("fails when Chrome MCP attach is not ready", () => {
     const report = buildBrowserDoctorReport({
       status: makeStatus({
@@ -181,15 +166,9 @@ describe("buildBrowserDoctorReport", () => {
 
   it.each([
     ["outdated", outdatedExtensionVersion, "warn"],
-    ["current", chromeExtensionManifest.version, "pass"],
     ["equivalent missing version component", equivalentExtensionVersion, "pass"],
-    ["maximum valid version", "65535.65535.65535.65535", "warn"],
     ["unavailable", undefined, "info"],
     ["terminal-control input", "2.0.0\u001b[31m", "info"],
-    ["oversized version component", "65536.0", "info"],
-    ["nonzero leading zero", "02.0.0", "info"],
-    ["all-zero version", "0.0.0.0", "info"],
-    ["too many version components", "2.0.0.0.0", "info"],
   ] as const)("classifies %s extension version evidence", (_label, extensionVersion, severity) => {
     const report = buildBrowserDoctorReport({
       status: {

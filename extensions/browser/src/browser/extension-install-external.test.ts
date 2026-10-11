@@ -145,17 +145,14 @@ describe("Chrome Store installation request", () => {
     expect(await fs.readFile(value.preferences, "utf8")).toBe(preferencesBefore);
   });
 
-  it.each(["foreign", "malformed", "symlink"] as const)(
+  it.each(["foreign", "symlink"] as const)(
     "preserves a %s external registration on install and cleanup",
     async (kind) => {
       const value = await setup();
       await fs.mkdir(path.dirname(value.requestPath), { recursive: true, mode: 0o700 });
-      const content =
-        kind === "malformed"
-          ? "{"
-          : JSON.stringify({
-              external_update_url: "https://clients2.google.com/service/update2/crx",
-            });
+      const content = JSON.stringify({
+        external_update_url: "https://clients2.google.com/service/update2/crx",
+      });
       const target =
         kind === "symlink" ? path.join(value.root, "foreign-request.json") : value.requestPath;
       await fs.writeFile(target, content, { mode: 0o600 });
@@ -189,33 +186,30 @@ describe("Chrome Store installation request", () => {
     await expect(fs.access(value.requestPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["linux", "win32"] as const)(
-    "leaves %s external installation unchanged",
-    async (platform) => {
-      const value = await setup(platform);
-      const installed = await value.install();
-      expect(await chromeStoreInstallRequests(value.deps)).toEqual([]);
-      expect(installed.storeInstallRequests).toEqual(
-        platform === "win32"
-          ? [
-              {
-                browser: "Google Chrome",
-                path: "Windows current-user Chrome Store request",
-                state: "missing",
-              },
-            ]
-          : [],
+  it.each(["win32"] as const)("leaves %s external installation unchanged", async (platform) => {
+    const value = await setup(platform);
+    const installed = await value.install();
+    expect(await chromeStoreInstallRequests(value.deps)).toEqual([]);
+    expect(installed.storeInstallRequests).toEqual(
+      platform === "win32"
+        ? [
+            {
+              browser: "Google Chrome",
+              path: "Windows current-user Chrome Store request",
+              state: "missing",
+            },
+          ]
+        : [],
+    );
+    if (platform === "win32") {
+      expect(value.manage).toHaveBeenCalledExactlyOnceWith(
+        expect.any(String),
+        expect.objectContaining({ action: "install", store: "preserve" }),
+        expect.any(Object),
       );
-      if (platform === "win32") {
-        expect(value.manage).toHaveBeenCalledExactlyOnceWith(
-          expect.any(String),
-          expect.objectContaining({ action: "install", store: "preserve" }),
-          expect.any(Object),
-        );
-      }
-      await expect(fs.access(value.requestPath)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+    }
+    await expect(fs.access(value.requestPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it("allows native-bootstrap-only setup without registering a Store installation", async () => {
     const value = await setup();

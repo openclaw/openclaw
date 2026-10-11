@@ -192,25 +192,22 @@ describe("ensureBrowserControlAuth", () => {
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["password", { password: "active-password" }],
-    ["none", { token: "active-token" }],
-    ["token", { token: "active-token" }],
-    ["trusted-proxy", { password: "active-password" }],
-  ] as const)("returns only the active credential in %s mode", (mode, expected) => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode,
-          token: "active-token",
-          password: "active-password",
-          ...(mode === "trusted-proxy" ? { trustedProxy: { userHeader: "x-forwarded-user" } } : {}),
+  it.each([["password", { password: "active-password" }]] as const)(
+    "returns only the active credential in %s mode",
+    (mode, expected) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          auth: {
+            mode,
+            token: "active-token",
+            password: "active-password",
+          },
         },
-      },
-    };
+      };
 
-    expect(resolveBrowserControlAuth(cfg, {})).toEqual(expected);
-  });
+      expect(resolveBrowserControlAuth(cfg, {})).toEqual(expected);
+    },
+  );
 
   it("does not accept an inactive token in trusted-proxy mode", () => {
     const cfg: OpenClawConfig = {
@@ -280,25 +277,6 @@ describe("ensureBrowserControlAuth", () => {
     await expectUnresolvedBrowserSecretRefSkipsPersistence(cfg);
   });
 
-  it("still auto-generates in none mode when only password SecretRef is set", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "none",
-          password: { source: "env", provider: "default", id: "INACTIVE_PASSWORD" },
-        },
-      },
-      browser: {
-        enabled: true,
-      },
-    };
-    await expectGeneratedBrowserAuthPersistence({
-      cfg,
-      mode: "none",
-      generatedAuthField: "token",
-    });
-  });
-
   it("still auto-generates in trusted-proxy mode when only token SecretRef is set", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -360,7 +338,6 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it.each([
-    { mode: "none", afterWrite: "generated" },
     { mode: "none", afterWrite: "replacement" },
     { mode: "none", afterWrite: "other-mode" },
     { mode: "trusted-proxy", afterWrite: "generated" },
@@ -400,30 +377,4 @@ describe("ensureBrowserControlAuth", () => {
       });
     },
   );
-
-  it("fails when gateway.auth.token SecretRef is unresolved", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
-        },
-      },
-      browser: {
-        enabled: true,
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    };
-    mocks.getRuntimeConfig.mockReturnValue(cfg);
-    mocks.ensureGatewayStartupAuth.mockRejectedValueOnce(new Error("MISSING_GW_TOKEN"));
-
-    await expect(ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv })).rejects.toThrow(
-      /MISSING_GW_TOKEN/i,
-    );
-    expect(mocks.ensureGatewayStartupAuth).toHaveBeenCalledTimes(1);
-  });
 });

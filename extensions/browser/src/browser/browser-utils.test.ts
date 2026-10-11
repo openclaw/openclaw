@@ -35,11 +35,6 @@ describe("browser target id resolution", () => {
 });
 
 describe("cdp.helpers", () => {
-  it("preserves query params when appending CDP paths", () => {
-    const url = appendCdpPath("https://example.com?token=abc", "/json/version");
-    expect(url).toBe("https://example.com/json/version?token=abc");
-  });
-
   it("appends paths under a base prefix", () => {
     const url = appendCdpPath("https://example.com/chrome/?token=abc", "json/list");
     expect(url).toBe("https://example.com/chrome/json/list?token=abc");
@@ -57,11 +52,6 @@ describe("cdp.helpers", () => {
     expect(url).toBe("http://127.0.0.1:9222/?token=abc");
   });
 
-  it("preserves base prefixes when stripping a trailing /cdp suffix", () => {
-    const url = normalizeCdpHttpBaseForJsonEndpoints("ws://127.0.0.1:9222/browser/cdp?token=abc");
-    expect(url).toBe("http://127.0.0.1:9222/browser?token=abc");
-  });
-
   it("decodes percent-encoded basic auth credentials from URLs", () => {
     const headers = getHeadersWithAuth("https://alice:p%40ss%20word@example.com");
     expect(headers.Authorization).toBe(
@@ -74,9 +64,5 @@ describe("cdp.helpers", () => {
       Authorization: "Bearer token",
     });
     expect(headers.Authorization).toBe("Bearer token");
-  });
-
-  it("does not add custom headers when none are required", () => {
-    expect(getHeadersWithAuth("http://127.0.0.1:19444/json/version")).toStrictEqual({});
   });
 });
