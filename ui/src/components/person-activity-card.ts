@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, render } from "lit";
 import { Directive, directive } from "lit/directive.js";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -288,3 +288,15 @@ class PersonActivityCard extends Directive {
 }
 
 export const renderPersonActivityCard = directive(PersonActivityCard);
+
+/** The card owner keeps its Lit children separate from either host renderer. */
+export function updatePersonActivityCard(container: HTMLElement, input?: PersonCardInput | string) {
+  render(
+    typeof input === "string"
+      ? html`<div class="person-reference__status" role="status">${input}</div>`
+      : input
+        ? renderPersonActivityCard(input)
+        : nothing,
+    container,
+  );
+}

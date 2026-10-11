@@ -3176,6 +3176,16 @@ installation. Cold installation commits separately from the business operation.
 A confirmed schema-only receipt permits its next dispatch with fresh grants;
 an unknown write outcome never permits replay.
 
+Memory managers retain index metadata, chunk presence, and revision facts from
+their publication worker. Source and metadata writes return those facts with the
+existing native commit token; other in-process writes invalidate them through
+the database's write receipts. The next sync refreshes invalidated facts in one
+bounded worker query, then reuses them for provider generation, index identity,
+and vector setup. Publication-worker recreation reuses the connection policy
+captured at first creation. Full-reindex revision conflicts and forgotten-session
+checks remain at their committing writer. Schemas, stored bytes, durability, and
+update behavior are unchanged.
+
 Ordinary human chat prepares initial skill selections and authoring presentation
 in one shared-state snapshot. Both consumers retain the original requester and
 profile/library invalidation checks. Standalone empty-seed reads reuse admitted
