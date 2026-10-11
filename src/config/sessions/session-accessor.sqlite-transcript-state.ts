@@ -399,7 +399,7 @@ const transcriptMutationStateQuery = createSqliteQueryCache((database) => {
 });
 
 export function readTranscriptMutationStateInTransaction(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ): { observedAt: number | null; updatedAt: number | null } {
   const row = transcriptMutationStateQuery(database.db)(sessionId);

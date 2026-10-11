@@ -72,6 +72,19 @@ suite.define(() => {
         expect(await panel.isVisible()).toBe(false);
         expect(await activePane.locator(".chat-pane__actions").getByRole("button").count()).toBe(3);
 
+        const details = activePane.locator(".chat-pane__header-trailing > openclaw-chat-details");
+        await details.getByRole("button", { name: "Details", exact: true }).click();
+        await details.getByRole("dialog", { name: "Details", exact: true }).waitFor();
+        expect(
+          await activePane
+            .locator(".chat-main__conversation-frame > openclaw-chat-details")
+            .count(),
+        ).toBe(0);
+        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        await details
+          .getByRole("dialog", { name: "Details", exact: true })
+          .waitFor({ state: "hidden" });
+
         const prompt = "Review the backend in a subagent.";
         await activePane.locator(".agent-chat__composer-combobox textarea").fill(prompt);
         await activePane.getByRole("button", { name: "Send message", exact: true }).click();

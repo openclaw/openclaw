@@ -12,6 +12,13 @@ sidebarTitle: "Plugins"
 
 Manage Gateway plugins, hook packs, and compatible bundles.
 
+Install, uninstall, enable, disable, and reload use their existing Gateway routes
+when a Gateway is running. Local fallbacks require exclusive offline state ownership.
+Stop the Gateway through its service owner before running `plugins update`,
+`plugins registry --refresh`, marketplace feed refreshes, or hook-pack install
+fallbacks. `plugins marketplace entries --offline` reads the saved feed without
+refreshing it. Refused commands report how to retry.
+
 `plugins enable` and `plugins disable` accept case-insensitive plugin IDs, including
 when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
 policy keys in config use the canonical lowercase form.

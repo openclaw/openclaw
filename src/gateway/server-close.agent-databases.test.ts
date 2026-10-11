@@ -630,8 +630,9 @@ it.skipIf(process.platform !== "linux")(
           started.resolve(server);
           return server;
         },
-        runtime: { log() {}, error() {}, exit },
-      }).catch(started.reject);
+      })
+        .then(exit)
+        .catch(started.reject);
       const server = await started.promise;
       await nextTurn();
       stop = process.listeners("SIGTERM").find((listener) => !previousStops.has(listener));

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createSqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -11,7 +10,6 @@ import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-c
 import {
   sessionSharingEntriesEqual,
   type SessionEntryProjectionFacts,
-  type SessionEntryReplacementPostimage,
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
@@ -148,33 +146,6 @@ export function prepareSessionEntryReplacementPublication(
   const changedKeys = [
     ...new Set([...result.previous.keys(), ...result.current.keys(), ...archived]),
   ];
-  const receipt =
-    source &&
-    createSqliteCommitReceipt<SessionEntryReplacementPostimage, typeof source>({
-      source,
-      domain: "session-entry-replacement",
-      keys: changedKeys,
-      readFact(key) {
-        const entry = current.get(key);
-        const facts = projection.get(key);
-        if (entry && facts) {
-          return {
-            kind: "postimage",
-            value: {
-              entry,
-              ...(fullEntries ? { fullEntry: fullEntries.get(key) } : {}),
-              projection: facts,
-            },
-          };
-        }
-        if (entry && unavailableParticipantKeys.has(key)) {
-          return { kind: "postimage", value: { entry, participantProjectionUnavailable: true } };
-        }
-        return result.previous.has(key) && !current.has(key)
-          ? { kind: "absent" }
-          : { kind: "unknown" };
-      },
-    });
   const publication: SessionEntryReplacementPublication = {
     kind: "session-entry-replacements",
     transcriptPublication: readStagedSessionTranscriptAuthority(database),
@@ -214,7 +185,7 @@ export function prepareSessionEntryReplacementPublication(
         previousEntry: result.previous.get(sessionKey),
       }),
     ),
-    ...(source ? { source, receipt } : {}),
+    ...(source ? { source } : {}),
     changedKeys,
   };
   boundSessionEntryReplacementPublication(publication);
@@ -232,14 +203,6 @@ export function boundSessionEntryReplacementPublication(
   delete publication.fullEntries;
   if (publication.source) {
     delete publication.source.writeToken;
-  }
-  if (publication.receipt) {
-    delete publication.receipt.source.writeToken;
-    for (const fact of publication.receipt.facts.values()) {
-      if (fact.kind === "postimage") {
-        delete fact.value.fullEntry;
-      }
-    }
   }
 }
 

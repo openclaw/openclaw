@@ -97,6 +97,7 @@ type ChatPaneHeaderProps = {
   onToggleSidePanel?: () => void;
   onCloseSidePanel?: (slot: SidebarSlotId) => void;
   runningSubagentCount?: number;
+  detailsControl?: TemplateResult | typeof nothing;
   runAction?: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
@@ -394,6 +395,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${props.placementControl ?? nothing} ${props.presence ?? nothing}
       </div>
       <div class="chat-pane__header-trailing">
+        ${props.detailsControl ?? nothing}
         ${
           !props.catalog && props.branches.length > 1
             ? html`

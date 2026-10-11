@@ -135,6 +135,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     sidebarLayout?: SidebarLayout,
     panelDefinitions = sidebarPanelDefinitions(),
     subagentStop: TemplateResult | typeof nothing = nothing,
+    detailsControl: TemplateResult | typeof nothing = nothing,
     panelControls?: {
       openPanelSlot: (slot: SidebarSlotId) => void;
       closePanelSlot: (slot: SidebarSlotId) => void;
@@ -575,6 +576,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onLayoutChange: (layout, options) => this.state?.updateSidebarLayout(layout, options),
       onToggleSidePanel: toggleSidePanel,
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
+      detailsControl,
       runAction: subagentStop,
       presence: viewers?.length
         ? html`<openclaw-viewer-facepile

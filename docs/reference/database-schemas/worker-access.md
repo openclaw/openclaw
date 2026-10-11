@@ -536,9 +536,10 @@ The Gateway retains bounded plugin-state observation rows from these receipts.
 Repeated observations reuse the stored JSON image without a worker request;
 expiry still turns a row into absence, and callers receive freshly decoded values.
 Pending writes suspend cache reads, and unknown settlement drops cached facts.
-Comparisons carry the current cached image to the writer, whose conditional
-update or delete matches its stored bytes and timestamps. A changed row returns
-a conflict; insertion still checks current absence and capacity in the write
+Comparisons reread the authoritative row inside the write transaction, including
+no-op comparisons. Native binding settlement invalidates its affected observation
+keys because its compound receipt does not carry plugin-state postimages. A changed
+row returns a conflict; insertion checks current absence and capacity in the write
 transaction. Same-value sets retain their age and TTL refresh behavior. This
 changes no stored format, schema version, update migration, or SDK signature.
 

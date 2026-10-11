@@ -5,14 +5,16 @@ import {
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
 import {
+  appendTranscriptEvent,
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import * as agentDatabase from "../../state/openclaw-agent-db.js";
+import * as transcriptReader from "../../config/sessions/session-transcript-anchor-read.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
+import * as sessionReader from "../session-utils-store-worker.js";
 
 type PatchParams = Parameters<typeof buildAgentSessionPatch>[0];
 const now = 120_001;
@@ -45,12 +47,73 @@ function buildReusePatch(input: Partial<PatchParams>) {
     visibleRequest: true,
     fallbackSessionId: "replacement",
     touchInteraction: true,
-    failedSessionTranscriptMissing: () => false,
     ...input,
   });
 }
 
 describe("agent session reuse at mutation", () => {
+  it.each(["killed", "failed"] as const)(
+    "refreshes %s session reuse after a transcript append without replacing the prepared row",
+    async (status) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const cfg = { session: { reset: { mode: "idle" as const, idleMinutes: 60 } } };
+        await state.writeConfig(cfg);
+        const timestamp = Date.now();
+        const sessionKey = "agent:main:main";
+        const sessionId = `original-${status}`;
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId,
+            status,
+            updatedAt: timestamp,
+            sessionStartedAt: timestamp,
+            lastInteractionAt: timestamp,
+          },
+        );
+        const prepared = await prepareAgentSession({
+          cfg,
+          requestedSessionKey: sessionKey,
+          request: { message: "continue", idempotencyKey: `append-${status}` },
+          canUseCronRunContinuation: false,
+          lifecycleGeneration: "append-reuse",
+          respond: () => {
+            throw new Error("Unexpected preparation rejection");
+          },
+        });
+        if (!prepared?.entry) {
+          throw new Error("Session preparation did not return the stored row");
+        }
+        expect(prepared.isNewSession).toBe(status === "failed");
+        expect(
+          await appendTranscriptEvent(
+            {
+              agentId: "main",
+              sessionKey,
+              sessionId,
+              storePath: prepared.storePath,
+            },
+            { type: "custom", timestamp: new Date(timestamp).toISOString() },
+          ),
+        ).toBe(true);
+
+        const result = await buildAgentSessionPatch({
+          ...prepared,
+          freshEntry: prepared.entry,
+          initialEntry: prepared.entry,
+          sessionAgentId: "main",
+          canonicalSessionKey: prepared.canonicalKey,
+          normalizedSpawned: {},
+          requestDeliveryHint: undefined,
+          hasRestoredCronContinuation: false,
+          fallbackSessionId: "after-append",
+        });
+        expect(result.isNewSession).toBe(status === "killed");
+        expect(result.patch.sessionId).toBe(status === "killed" ? "after-append" : sessionId);
+      });
+    },
+  );
+
   it("backfills the current candidate header while new windows start at the current time", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const scope = {
@@ -134,8 +197,8 @@ describe("agent session reuse at mutation", () => {
       name: "missing failed transcript",
       input: {
         freshEntry: { ...freshEntry, status: "failed" },
-        failedSessionTranscriptMissing: () => true,
       },
+      transcriptMissing: true,
       sessionId: "replacement",
       isNew: true,
     },
@@ -160,12 +223,25 @@ describe("agent session reuse at mutation", () => {
   ] satisfies Array<{
     name: string;
     input: Partial<PatchParams>;
+    transcriptMissing?: boolean;
     sessionId: string;
     isNew: boolean;
-  }>)("preserves $name", async ({ input, sessionId, isNew }) => {
-    const result = await buildReusePatch(input);
-    expect(result.patch.sessionId).toBe(sessionId);
-    expect(result.isNewSession).toBe(isNew);
+  }>)("preserves $name", async (scenario) => {
+    const read = vi.spyOn(transcriptReader, "readSessionTranscriptAnchorsAsync").mockResolvedValue({
+      anchors: [],
+      metadata: {
+        present: !("transcriptMissing" in scenario && scenario.transcriptMissing),
+        observedAt: null,
+        updatedAt: null,
+      },
+    });
+    try {
+      const result = await buildReusePatch(scenario.input);
+      expect(result.patch.sessionId).toBe(scenario.sessionId);
+      expect(result.isNewSession).toBe(scenario.isNew);
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("keeps a concurrent replacement after preparing a rotation from the stored row", async () => {
@@ -226,7 +302,7 @@ describe("agent session reuse at mutation", () => {
     });
   });
 
-  it("refuses a replaced expected session after database admission yields", async () => {
+  it("refuses a replaced expected session after the worker read yields", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = {};
       await state.writeConfig(cfg);
@@ -236,12 +312,12 @@ describe("agent session reuse at mutation", () => {
         storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
       };
       await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "original" });
-      const open = agentDatabase.withOpenClawAgentDatabaseRuntime;
+      const read = sessionReader.loadGatewaySessionEntryReadOnlyInWorker;
       const admission = vi
-        .spyOn(agentDatabase, "withOpenClawAgentDatabaseRuntime")
+        .spyOn(sessionReader, "loadGatewaySessionEntryReadOnlyInWorker")
         .mockImplementationOnce(async (...args) => {
           await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "successor" });
-          return open(...args);
+          return read(...args);
         });
       const respond = vi.fn();
       try {

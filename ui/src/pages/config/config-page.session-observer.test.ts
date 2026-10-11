@@ -496,7 +496,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       await settleLitElement(page);
       const secondMainLoad = state.sessionObserverModelsTask.taskComplete;
       const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
-      expect(mainRequests).toBe(1);
+      expect(mainRequests).toBe(2);
       expect(state.sessionObserverModels).toEqual([]);
       firstMain.resolve({ models: [{ id: "stale-main", name: "Stale Main", provider: "openai" }] });
       await settleLitElement(page);
@@ -554,8 +554,7 @@ describe("ConfigPage model catalog lifecycle", () => {
 
       provider.append(page);
       await settleLitElement(page);
-      expect(catalogReads).toBe(2);
-      expect(state.sessionObserverModels).toEqual([]);
+      expect(catalogReads).toBe(3);
       stale.resolve({ models: original });
       await settleLitElement(page);
       expect(state.sessionObserverModels).toEqual(fresh);

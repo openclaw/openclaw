@@ -7,8 +7,10 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contrac
 import { openSlot } from "../sidebar-layout.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
+import "../../../styles/chat/layout.css";
 import "../../../styles/chat/split-view.css";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
+import "./chat-details.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 
 describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
@@ -97,6 +99,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         const { container } = mountChatPaneHeader(containers, {
           narrow: true,
           runningSubagentCount: 12,
+          detailsControl: html`<openclaw-chat-details .presented=${true}></openclaw-chat-details>`,
           sidebarLayout: { columns: [] },
           onLayoutChange: vi.fn(),
           onToggleSidePanel: vi.fn(),
@@ -115,10 +118,14 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         });
         container.style.width = `${width}px`;
         const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
+        await container.querySelector<HTMLElementTagNameMap["openclaw-chat-details"]>(
+          "openclaw-chat-details",
+        )?.updateComplete;
         await expect.element(page.elementLocator(header)).toBeVisible();
         expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
         const bounds = header.getBoundingClientRect();
         for (const selector of [
+          ".chat-details-toggle",
           '[aria-label="Share"]',
           ".chat-pane__layout-trigger",
           '[aria-label="Session actions"]',
