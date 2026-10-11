@@ -337,6 +337,85 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
+  it("rejects an ordinary hook rewrite after trusted policy approval", async () => {
+    trustedPolicy(approvalResult({ pluginId: "trusted-policy" }));
+    runBeforeToolCallMock.mockResolvedValue({
+      params: { command: "unapproved" },
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-policy",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "bash",
+        params: { command: "approved" },
+      }),
+    ).resolves.toMatchObject({
+      blocked: true,
+      deniedReason: "plugin-approval",
+      reason: "Tool call parameters changed after trusted approval",
+      params: { command: "approved" },
+    });
+  });
+
+  it("rejects an in-place ordinary hook mutation after trusted policy approval", async () => {
+    trustedPolicy(approvalResult({ pluginId: "trusted-policy" }));
+    runBeforeToolCallMock.mockImplementation((event) => {
+      event.params.command = "unapproved";
+      return Promise.resolve(undefined);
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-policy",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "bash",
+        params: { command: "approved" },
+      }),
+    ).resolves.toMatchObject({
+      blocked: true,
+      deniedReason: "plugin-approval",
+      reason: "Tool call parameters changed after trusted approval",
+      params: { command: "approved" },
+    });
+  });
+
+  it("allows an ordinary hook rewrite after a separate approval", async () => {
+    trustedPolicy(approvalResult({ pluginId: "trusted-policy" }));
+    runBeforeToolCallMock.mockResolvedValue({
+      params: { code: "return 'separately-approved';" },
+      requireApproval: {
+        title: "Rewrite approval",
+        description: "Approve the rewritten command",
+      },
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({
+        id: "trusted-approval",
+        decision: PluginApprovalResolutions.ALLOW_ONCE,
+      })
+      .mockResolvedValueOnce({
+        id: "rewrite-approval",
+        decision: PluginApprovalResolutions.ALLOW_ONCE,
+      });
+
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        params: { code: "return 'approved';", command: "return 'approved';" },
+      }),
+    ).resolves.toEqual({
+      blocked: false,
+      params: { code: "return 'separately-approved';", command: "return 'separately-approved';" },
+      approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+  });
+
   it("preserves trusted policy params when before_tool_call hooks leave params unchanged", async () => {
     trustedPolicy({ params: { command: "patched" } });
     runBeforeToolCallMock.mockResolvedValue(undefined);

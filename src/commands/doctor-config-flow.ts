@@ -201,7 +201,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     applyConfigMutation(
       {
         config: state.candidate,
-        changes: ["Prepared the canonical agent roster for persistence."],
+        changes: ["Prepared the agent roster for persistence."],
       },
       `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
       { emitWarnings: false },

@@ -169,7 +169,7 @@ export async function preflightClawPackage(
     return {
       ok: false,
       code: "plugin_artifact_inspection_unavailable",
-      message: `Plugin ${pkg.ref}@${pkg.version} did not return canonical artifact inspection.`,
+      message: `Plugin ${pkg.ref}@${pkg.version} did not return artifact inspection.`,
     };
   }
   if (probe.artifactInspection.format === "agent") {

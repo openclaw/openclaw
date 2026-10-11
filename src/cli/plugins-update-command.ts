@@ -39,6 +39,7 @@ import {
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import { configReferencesNpmInstallPath } from "../plugins/installs.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../plugins/official-runtime-plugins.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   withPluginLifecycleLease,
@@ -49,6 +50,7 @@ import {
   pluginPackageUpdateMayMutateConfig,
   reconcilePluginPackageUpdateConfig,
 } from "../plugins/plugin-package-update.js";
+import { resolveOfficialPluginCohortNpmSpecs } from "../plugins/plugin-version-drift.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
   isClawHubTrustSkippedOutcome,
@@ -459,6 +461,12 @@ async function runPluginUpdateCommandUnlocked(
                 officialPluginUpdateChannel,
                 syncOfficialPluginInstalls: params.opts.all ? true : undefined,
                 coreVersion: VERSION,
+                versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+                npmInstallSpecOverrides: resolveOfficialPluginCohortNpmSpecs({
+                  gatewayVersion: VERSION,
+                  installRecords: pluginInstallRecords,
+                  config: cfgWithPluginInstallRecords,
+                }),
                 ...installPolicyWarningAcknowledgement,
                 ...resolvePluginCapabilityConsentCliOptions({
                   acceptCapabilities: params.opts.acceptCapabilities,
