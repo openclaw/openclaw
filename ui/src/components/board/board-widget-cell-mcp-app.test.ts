@@ -186,7 +186,7 @@ describe("board MCP App cell lifecycle", () => {
     );
     await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
 
-    expect(cell.querySelector("mcp-app-view") as TestMcpAppView).toMatchObject({
+    expect(cell.querySelector("mcp-app-view")).toMatchObject({
       fillContainer: true,
       sessionKey: "agent:main:test",
       viewId: "fixed-view",
@@ -270,8 +270,8 @@ describe("board MCP App cell lifecycle", () => {
     }));
     const cell = await mount(widget(), callbacks({ refreshWidgetAppView }));
     await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
-    const view = cell.querySelector("mcp-app-view") as TestMcpAppView;
-    view.teardown.mockImplementation(() => retired.promise);
+    const view = cell.querySelector("mcp-app-view")!;
+    vi.spyOn(view, "teardown").mockImplementation(() => retired.promise);
     view.dispatchEvent(
       new CustomEvent("openclaw-mcp-app-view-expired", { bubbles: true, composed: true }),
     );

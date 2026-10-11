@@ -1,9 +1,15 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
+import type { ApplicationContext } from "../../app/context.ts";
 import { REDACTED_SENTINEL, type JsonSchema } from "../../lib/config-form-utils.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
 import { PluginSettingsEditor, type PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-view.tsx";
@@ -93,42 +99,57 @@ describe("grouped plugin settings", () => {
     const onPatch = vi.fn((_path: Array<string | number>, next: unknown) => {
       setValue({ plugins: { label: String(next) } });
     });
-    const mounted = mountSolid(() => (
-      <PluginSettingsInventory
-        tab="advanced"
-        query=""
-        result={null}
-        connected
-        loading={false}
-        error={null}
-        busy={{}}
-        messages={{}}
-        iconUrls={{}}
-        canMutate
-        mutationBlockedReason={null}
-        configValue={value()}
-        configHints={{}}
-        configUnsupportedPaths={[]}
-        advancedSchema={schema}
-        canEditConfig
-        configBusy={false}
-        configSchemaLoading={false}
-        configError={null}
-        onConfigPatch={onPatch}
-        onConfigRemove={vi.fn()}
-        onConfigReadRetry={vi.fn()}
-        onConfigWriteRetry={vi.fn()}
-        onConfigReload={vi.fn()}
-        onRefresh={vi.fn()}
-        onTabChange={vi.fn()}
-        onQueryChange={vi.fn()}
-        onIconError={vi.fn()}
-        onSetEnabled={vi.fn()}
-        onUninstall={vi.fn()}
-        pluginHref={() => "#"}
-        onOpenPlugin={vi.fn()}
-      />
-    ));
+    const { gateway } = createApplicationGateway();
+    const plugins = new ControlUiPluginRuntime(() => context);
+    onTestFinished(() => plugins.dispose());
+    // The inventory consumes this fixture's Gateway and real, empty plugin registry.
+    const context = {
+      gateway,
+      plugins,
+      basePath: "",
+      resourceBasePath: "",
+      navigate: vi.fn(),
+    } as ApplicationContext;
+    const provider = createSolidApplicationContextProvider(context);
+    const mounted = mountSolid(
+      () => (
+        <PluginSettingsInventory
+          tab="advanced"
+          query=""
+          result={null}
+          connected
+          loading={false}
+          error={null}
+          busy={{}}
+          messages={{}}
+          iconUrls={{}}
+          canMutate
+          mutationBlockedReason={null}
+          configValue={value()}
+          configHints={{}}
+          configUnsupportedPaths={[]}
+          advancedSchema={schema}
+          canEditConfig
+          configBusy={false}
+          configSchemaLoading={false}
+          configError={null}
+          onConfigPatch={onPatch}
+          onConfigRemove={vi.fn()}
+          onConfigReadRetry={vi.fn()}
+          onConfigWriteRetry={vi.fn()}
+          onConfigReload={vi.fn()}
+          onRefresh={vi.fn()}
+          onTabChange={vi.fn()}
+          onQueryChange={vi.fn()}
+          onIconError={vi.fn()}
+          onSetEnabled={vi.fn()}
+          onUninstall={vi.fn()}
+          pluginHref={() => "#"}
+          onOpenPlugin={vi.fn()}
+        />
+      ),
+      { wrapper: provider.wrapper },
+    );
     await settle();
     const input = mounted.container.querySelector<HTMLInputElement>('input[aria-label="Label"]')!;
     input.focus();
