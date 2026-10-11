@@ -117,6 +117,7 @@ class DevicesPageController {
       gateway && client ? client.request("system-presence", {}, { signal }) : undefined,
     onComplete: (response) => {
       if (Array.isArray(response)) {
+        // SAFETY: system-presence returns listSystemPresence() rows conforming to PresenceEntry.
         this.presence = response as PresenceEntry[];
         this.publish();
       }

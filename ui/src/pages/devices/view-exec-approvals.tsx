@@ -289,8 +289,8 @@ function ExecApprovalsTarget(props: ExecApprovalsState) {
             aria-label={t("devices.execApprovals.host")}
             value={props.target}
             disabled={props.disabled}
-            onChange={(event: Event) => {
-              const target = event.target as HTMLSelectElement;
+            onChange={(event) => {
+              const target = event.currentTarget;
               const value = target.value;
               if (value === "node") {
                 const first = props.targetNodes[0]?.id ?? null;
@@ -320,11 +320,10 @@ function ExecApprovalsTarget(props: ExecApprovalsState) {
               aria-label={t("devices.execApprovals.node")}
               value={nodeValue()}
               disabled={props.disabled || !hasNodes()}
-              onChange={(event: Event) => {
-                const target = event.target as HTMLSelectElement;
+              onChange={(event) => {
+                const target = event.currentTarget;
                 const value = target.value.trim();
                 props.onSelectTarget("node", value ? value : null);
-                target.value = nodeValue();
                 target.value = nodeValue();
               }}
             >
@@ -440,8 +439,8 @@ function ExecApprovalsPolicy(props: ExecApprovalsState) {
                   aria-label={t(field.ariaLabelKey)}
                   value={currentValue()}
                   disabled={props.disabled}
-                  onChange={(event: Event) => {
-                    const value = (event.target as HTMLSelectElement).value;
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
                     if (!isDefaults() && value === "__default__") {
                       props.onRemove([...basePath(), field.key]);
                     } else {
@@ -564,8 +563,8 @@ function ExecApprovalsAllowlist(props: ExecApprovalsState) {
                       aria-label={t("devices.execApprovals.pattern")}
                       value={entry().pattern ?? ""}
                       disabled={props.disabled}
-                      onInput={(event: Event) => {
-                        const target = event.target as HTMLInputElement;
+                      onInput={(event) => {
+                        const target = event.currentTarget;
                         props.onPatch([...allowlistPath(), index, "pattern"], target.value);
                       }}
                     />

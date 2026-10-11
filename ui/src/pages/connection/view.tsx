@@ -1,4 +1,5 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Show, createMemo } from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
@@ -164,8 +165,12 @@ export function ConnectionView(props: ConnectionProps) {
   const busy = () => ["connecting", "starting", "reconnecting"].includes(props.phase);
   const submitting = () => busy() && !props.dirty;
   const reloadRequired = () => props.phase === "reload-required";
-  const authMode = () =>
-    (props.hello?.snapshot as { authMode?: GatewayAuthMode } | undefined)?.authMode;
+  const authMode = () => {
+    const mode = asOptionalRecord(props.hello?.snapshot)?.authMode;
+    return mode === "none" || mode === "token" || mode === "password" || mode === "trusted-proxy"
+      ? mode
+      : undefined;
+  };
   const draftAuthMode = createMemo(() =>
     gatewayCredentialScope(props.settings.gatewayUrl) ===
     gatewayCredentialScope(props.liveGatewayUrl)

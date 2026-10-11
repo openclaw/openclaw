@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, For } from "solid-js";
 import { parseNodeList } from "../../../../src/shared/node-list-parse.js";
@@ -167,21 +168,21 @@ function BindingSelect(props: BindingState & { agent: BindingAgent | null }) {
     }
     return result;
   });
-  const onChange = (event: Event) => {
-    const value = (event.target as HTMLSelectElement).value.trim();
-    if (props.agent === null) {
-      props.onBindDefault(value || null);
-    } else {
-      props.onBindAgent(props.agent.id, value === "__default__" ? null : value);
-    }
-  };
+
   return (
     <select
       class="settings-select"
       aria-label={t(isDefault() ? "devices.binding.node" : "devices.binding.binding")}
       value={selected()}
       disabled={props.disabled || (props.nodes.length === 0 && selected() === sentinel())}
-      onChange={onChange}
+      onChange={(event) => {
+        const value = event.currentTarget.value.trim();
+        if (props.agent === null) {
+          props.onBindDefault(value || null);
+        } else {
+          props.onBindAgent(props.agent.id, value === "__default__" ? null : value);
+        }
+      }}
     >
       <option value={sentinel()} selected={selected() === sentinel()}>
         {t(isDefault() ? "devices.binding.anyNode" : "devices.binding.useDefault")}
@@ -207,13 +208,13 @@ function resolveAgentBindings(config: Record<string, unknown> | null) {
   if (!config) {
     return { defaultBinding: null, agents: [fallbackAgent] };
   }
-  const tools = (config.tools ?? {}) as Record<string, unknown>;
-  const exec = (tools.exec ?? {}) as Record<string, unknown>;
+  const tools = isRecord(config.tools) ? config.tools : {};
+  const exec = isRecord(tools.exec) ? tools.exec : {};
   const defaultBinding = normalizeNullableString(exec.node);
 
   const agents = resolveConfigAgents(config).map((entry) => {
-    const toolsEntry = (entry.record.tools ?? {}) as Record<string, unknown>;
-    const execEntry = (toolsEntry.exec ?? {}) as Record<string, unknown>;
+    const toolsEntry = isRecord(entry.record.tools) ? entry.record.tools : {};
+    const execEntry = isRecord(toolsEntry.exec) ? toolsEntry.exec : {};
     return {
       id: entry.id,
       name: entry.name,
