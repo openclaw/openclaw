@@ -190,7 +190,7 @@ export const telegramIngressSpoolMigration = {
           ],
         });
         if (result.conflicts.length) {
-          throw new Error("canonical SQLite ingress contains a different event; kept both copies");
+          throw new Error("current SQLite ingress contains a different event; kept both copies");
         }
         const imported = result.imported.includes(entry.id);
         if (!imported && !result.present.includes(entry.id)) {
@@ -216,7 +216,7 @@ export const telegramIngressSpoolMigration = {
         const outcome = imported
           ? `Imported Telegram spool ${first.accountId}/${first.id} as ${entry.status}`
           : removedSources === backups.length
-            ? `Retired redundant Telegram spool source ${first.accountId}/${first.id}; preserved canonical ingress state and import history`
+            ? `Retired redundant Telegram spool source ${first.accountId}/${first.id}; preserved current ingress state and import history`
             : `Confirmed prior Telegram spool import ${first.accountId}/${first.id}; source cleanup remains pending`;
         changes.push(
           `${outcome}; original bytes: ${backups.map((backup) => backup.backupPath).join(", ")}`,

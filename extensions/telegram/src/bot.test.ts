@@ -1265,7 +1265,7 @@ describe("createTelegramBot", () => {
       commandText: "echo canonical",
       telegram: { capabilities: ["vision"] },
       terminalTitle: "ℹ️ Approval already resolved",
-      terminalResult: "Canonical result: Allowed once",
+      terminalResult: "Recorded result: Allowed once",
       editFails: false,
     },
     {
@@ -1278,7 +1278,7 @@ describe("createTelegramBot", () => {
       commandText: "echo denied",
       telegram: {},
       terminalTitle: "✅ Approval resolved here",
-      terminalResult: "Canonical result: Denied",
+      terminalResult: "Recorded result: Denied",
       editFails: true,
     },
   ] satisfies Array<{
@@ -1406,7 +1406,7 @@ describe("createTelegramBot", () => {
       firstError: "resolved",
       secondOutcome: "canonical",
       expectedCalls: 2,
-      expectedTerminal: "Canonical result: Denied",
+      expectedTerminal: "Recorded result: Denied",
       secondOwner: "canonical-exec",
     },
     {
@@ -1419,7 +1419,7 @@ describe("createTelegramBot", () => {
       secondOutcome: "missing",
       expectedCalls: 2,
       expectedTerminal:
-        "It was already resolved or expired; the canonical decision is unavailable here.",
+        "It was already resolved or expired; the recorded decision is unavailable here.",
     },
     {
       name: "resolves opaque plugin ids without inferring kind from spelling",

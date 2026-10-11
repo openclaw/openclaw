@@ -124,12 +124,12 @@ describe("LINE doctor state migration", () => {
 
       const detected = await migration.detectLegacyState(migrationParams(stateDir, config));
       expect(detected?.preview).toEqual([
-        '- LINE pre-drain spool rows (account "work"): 1 row(s) -> canonical ingress contract',
+        '- LINE pre-drain spool rows (account "work"): 1 row(s) -> current ingress format',
       ]);
 
       const result = await migration.migrateLegacyState(migrationParams(stateDir, config));
       expect(result.changes).toEqual([
-        'Migrated LINE pre-drain spool rows (account "work"): 1 queued under the canonical contract, 0 dead-lettered at the identity fence',
+        'Migrated LINE pre-drain spool rows (account "work"): 1 queued under the current format, 0 dead-lettered at the identity fence',
       ]);
       expect(result.warnings).toEqual([]);
 
@@ -153,14 +153,14 @@ describe("LINE doctor state migration", () => {
 
       const detected = await migration.detectLegacyState(migrationParams(stateDir, {}));
       expect(detected?.preview).toEqual([
-        '- LINE pre-drain spool rows (account "default"): 1 row(s) -> canonical ingress contract',
-        '- LINE pre-drain spool rows (account "retired"): 1 row(s) -> canonical ingress contract',
+        '- LINE pre-drain spool rows (account "default"): 1 row(s) -> current ingress format',
+        '- LINE pre-drain spool rows (account "retired"): 1 row(s) -> current ingress format',
       ]);
 
       const result = await migration.migrateLegacyState(migrationParams(stateDir, {}));
       expect(result.changes).toEqual([
-        'Migrated LINE pre-drain spool rows (account "default"): 1 queued under the canonical contract, 0 dead-lettered at the identity fence (account not currently configured, so these stay queued until it is restored)',
-        'Migrated LINE pre-drain spool rows (account "retired"): 1 queued under the canonical contract, 0 dead-lettered at the identity fence (account not currently configured, so these stay queued until it is restored)',
+        'Migrated LINE pre-drain spool rows (account "default"): 1 queued under the current format, 0 dead-lettered at the identity fence (account not currently configured, so these stay queued until it is restored)',
+        'Migrated LINE pre-drain spool rows (account "retired"): 1 queued under the current format, 0 dead-lettered at the identity fence (account not currently configured, so these stay queued until it is restored)',
       ]);
       expect(result.warnings).toEqual([]);
 

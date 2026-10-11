@@ -114,7 +114,7 @@ function assertSafeIMessageOutboundMarkup(text: string): void {
         (OPAQUE_PRIVATE_RUNTIME_CONTEXT_BLOCK_RE.test(text.slice(cursor)) ||
           REMOVABLE_PRIVATE_MARKUP_TAG_RE.test(text.slice(cursor)))
       ) {
-        throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
+        throw new Error("iMessage outbound runtime markup exceeded its limit");
       }
     }
   }
@@ -131,7 +131,7 @@ function findIMessageMarkupEnd(
   let bracketDepth = 0;
   for (let index = start + contentOffset; index <= text.length - terminator.length; index += 1) {
     if (kind === "private" && index - start > MAX_PRIVATE_MARKDOWN_UNWRAP_PASSES ** 2) {
-      throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
+      throw new Error("iMessage outbound runtime markup exceeded its limit");
     }
     const character = text[index];
     if (quote) {
@@ -145,7 +145,7 @@ function findIMessageMarkupEnd(
     } else if (kind === "declaration" && character === "]" && bracketDepth > 0) {
       bracketDepth -= 1;
     } else if (kind === "private" && character === "<") {
-      throw new Error("iMessage outbound runtime scaffolding is malformed");
+      throw new Error("iMessage outbound runtime markup is malformed");
     } else if (bracketDepth === 0 && text.startsWith(terminator, index)) {
       return index + terminator.length;
     }
@@ -203,7 +203,7 @@ function stripIMessageBalancedPrivateRuntimeBlocks(
       terminated: Boolean(closing),
     });
     if (rawTextHtml.length > MAX_PRIVATE_MARKDOWN_UNWRAP_PASSES ** 2) {
-      throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
+      throw new Error("iMessage outbound runtime markup exceeded its limit");
     }
   }
   const opaqueHtml: HtmlRegion[] = [];
@@ -244,7 +244,7 @@ function stripIMessageBalancedPrivateRuntimeBlocks(
       continue;
     }
     if (opaqueHtml.length >= MAX_PRIVATE_MARKDOWN_UNWRAP_PASSES ** 2) {
-      throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
+      throw new Error("iMessage outbound runtime markup exceeded its limit");
     }
     const terminated = end >= 0;
     const regionEnd = terminated ? end + delimiterLength : text.length;
@@ -283,28 +283,28 @@ function stripIMessageBalancedPrivateRuntimeBlocks(
       continue;
     }
     if (enclosingBlock?.codeRegion && enclosingBlock.codeRegion !== codeRegion) {
-      throw new Error("iMessage outbound runtime scaffolding is malformed");
+      throw new Error("iMessage outbound runtime markup is malformed");
     }
     if (++scannedTags > MAX_PRIVATE_MARKDOWN_UNWRAP_PASSES ** 2) {
-      throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
+      throw new Error("iMessage outbound runtime markup exceeded its limit");
     }
 
     const end = findIMessageMarkupEnd(text, start, "private", token[0].length);
     if (end < 0) {
-      throw new Error("iMessage outbound runtime scaffolding is malformed");
+      throw new Error("iMessage outbound runtime markup is malformed");
     }
 
     if (enclosingBlock?.codeRegion && enclosingBlock.codeRegion === codeRegion) {
       if (!enclosingBlock.nestedCodeRegions) {
         const nestedCodeLength = codeRegion.end - enclosingBlock.end;
         if (nestedCodeLength > MAX_PRIVATE_MARKDOWN_UNWRAP_PASSES ** 3) {
-          throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
+          throw new Error("iMessage outbound runtime markup exceeded its limit");
         }
         enclosingBlock.nestedCodeRegions = findCodeRegions(
           text.slice(enclosingBlock.end, codeRegion.end),
         );
         if (enclosingBlock.nestedCodeRegions.length > MAX_PRIVATE_MARKDOWN_UNWRAP_PASSES ** 2) {
-          throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
+          throw new Error("iMessage outbound runtime markup exceeded its limit");
         }
       }
 
@@ -330,7 +330,7 @@ function stripIMessageBalancedPrivateRuntimeBlocks(
     const name = (token[2] ?? "").toLowerCase();
     if (!closing) {
       if (openBlocks.length >= MAX_PRIVATE_MARKDOWN_UNWRAP_PASSES) {
-        throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
+        throw new Error("iMessage outbound runtime markup exceeded its limit");
       }
       const parent = openBlocks.at(-1);
       if (parent) {
@@ -346,7 +346,7 @@ function stripIMessageBalancedPrivateRuntimeBlocks(
       continue;
     }
     if (opening.name !== name) {
-      throw new Error("iMessage outbound runtime scaffolding is malformed");
+      throw new Error("iMessage outbound runtime markup is malformed");
     }
     openBlocks.pop();
     completedBlocks.push({ start: opening.start, end });
@@ -359,7 +359,7 @@ function stripIMessageBalancedPrivateRuntimeBlocks(
         (region) => !region.terminated && openBlocks[0]!.start < region.start,
       ))
   ) {
-    throw new Error("iMessage outbound runtime scaffolding is malformed");
+    throw new Error("iMessage outbound runtime markup is malformed");
   }
   const orphan = openBlocks[0];
   if (orphan) {
@@ -410,7 +410,7 @@ function stripIMessagePrivateRuntimeScaffolding(
       return current;
     }
   }
-  throw new Error("iMessage outbound runtime scaffolding exceeded its limit");
+  throw new Error("iMessage outbound runtime markup exceeded its limit");
 }
 
 // Delivery owns the complete assistant-scaffolding policy, but its final trim is not a raw

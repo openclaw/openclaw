@@ -210,12 +210,12 @@ describe("sanitizeOutboundText", () => {
         sanitizeIMessageFinalOutboundText(
           `<${name}><plaintext></${name}>RAW_TEXT_PRIVATE_SECRET</${name}>`,
         ),
-      ).toThrow("iMessage outbound runtime scaffolding is malformed");
+      ).toThrow("iMessage outbound runtime markup is malformed");
       expect(() =>
         sanitizeIMessageFinalOutboundText(
           `<${name}><PLAINTEXT /></${name}>RAW_TEXT_PRIVATE_SECRET</${name}>`,
         ),
-      ).toThrow("iMessage outbound runtime scaffolding is malformed");
+      ).toThrow("iMessage outbound runtime markup is malformed");
     }
     expect(sanitizeIMessageFinalOutboundText("<script>ordinary unfinished user example").text).toBe(
       "<script>ordinary unfinished user example",
@@ -293,12 +293,12 @@ describe("sanitizeOutboundText", () => {
       "<system-reminder><! unfinished bogus declaration OUTER_PRIVATE_SECRET",
     ]) {
       expect(() => sanitizeIMessageFinalOutboundText(source)).toThrow(
-        "iMessage outbound runtime scaffolding is malformed",
+        "iMessage outbound runtime markup is malformed",
       );
     }
     expect(() =>
       sanitizeIMessageFinalOutboundText("<system-reminder>".repeat(33) + "private"),
-    ).toThrow("iMessage outbound runtime scaffolding exceeded its limit");
+    ).toThrow("iMessage outbound runtime markup exceeded its limit");
     expect(sanitizeIMessageFinalOutboundText("<system-reminder>visible orphan").text).toBe(
       "visible orphan",
     );
@@ -319,7 +319,7 @@ describe("sanitizeOutboundText", () => {
       expect(
         () => sanitizeIMessageFinalOutboundText(source),
         JSON.stringify({ malformed, wrapper, source }),
-      ).toThrow("iMessage outbound runtime scaffolding is malformed");
+      ).toThrow("iMessage outbound runtime markup is malformed");
     }
   });
 

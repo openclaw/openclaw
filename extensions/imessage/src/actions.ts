@@ -325,7 +325,7 @@ function effectIdFromParam(raw?: string): string | undefined {
   throw new Error(
     `iMessage sendWithEffect rejected unknown effect "${raw}". ` +
       "Use one of: slam, loud, gentle, invisibleink, confetti, lasers, fireworks, balloon, heart, " +
-      "echo, happybirthday, shootingstar, sparkles, spotlight (or the canonical com.apple.MobileSMS.expressivesend.* / com.apple.messages.effect.* identifier).",
+      "echo, happybirthday, shootingstar, sparkles, spotlight (or the full com.apple.MobileSMS.expressivesend.* / com.apple.messages.effect.* identifier).",
   );
 }
 

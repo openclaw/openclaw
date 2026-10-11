@@ -357,7 +357,7 @@ function formatTelegramMenuLocaleLedgerRepairDiagnostic(params: {
     );
   }
   const detail = details.length > 0 ? ` (${details.join("; ")})` : "";
-  return `Telegram command menu locale ledger for bot ${params.botId} was ${action}; the unshipped ledger contained non-canonical data${detail}.`;
+  return `Telegram command menu locale ledger for bot ${params.botId} was ${action}; the unshipped ledger contained invalid data${detail}.`;
 }
 
 export async function readTelegramMenuLocaleLedger(params: {
