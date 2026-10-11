@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import type { LitElement } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { renderChatView, requireElement } from "./chat-view.test-helpers.ts";
 import {
@@ -79,6 +79,16 @@ describe("chat Swarm progress", () => {
   });
 });
 
+async function connectApprovalCard(container: HTMLElement) {
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  const host = expectDefined(
+    container.querySelector<SolidBridgeElement<object>>("openclaw-exec-approval-card"),
+    "inline approval host",
+  );
+  await host.updateComplete;
+}
+
 describe("inline approval card", () => {
   it("renders between the transcript and composer and enforces its grant projection", async () => {
     const onApprovalDecision = vi.fn();
@@ -102,23 +112,19 @@ describe("inline approval card", () => {
       onApprovalDecision,
     });
 
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    onTestFinished(() => nowSpy.mockRestore());
+    await connectApprovalCard(container);
     const card = container.querySelector(".chat-inline-approval .exec-approval-card");
     const inlineSurface = requireElement(container, ".chat-inline-approval", "inline approval");
     expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
     expectFooterContext(container, inlineSurface);
     const countdown = expectDefined(
-      container.querySelector<LitElement>(".exec-approval-countdown"),
+      container.querySelector<SolidBridgeElement<object>>(".exec-approval-countdown"),
       "inline approval countdown",
     );
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    document.body.append(container);
-    try {
-      await countdown.updateComplete;
-      expect(countdown.textContent?.trim()).toBe("expires in 01:00");
-    } finally {
-      container.remove();
-      nowSpy.mockRestore();
-    }
+    await countdown.updateComplete;
+    expect(countdown.textContent?.trim()).toBe("expires in 01:00");
     expect(container.querySelector(".exec-approval-command-span")?.textContent).toBe("rm -r");
     expect(container.querySelector(".exec-approval-error")?.textContent).toBe(
       "Approval failed: gateway unavailable",
@@ -139,6 +145,7 @@ describe("inline approval card", () => {
       approvalCanGrant: true,
       onApprovalDecision,
     });
+    await connectApprovalCard(authorizedContainer);
     authorizedContainer.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
     expect(onApprovalDecision).toHaveBeenCalledWith("approval-inline", "allow-once");
   });

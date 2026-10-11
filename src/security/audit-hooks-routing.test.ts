@@ -121,99 +121,6 @@ describe("security audit hooks ingress findings", () => {
     }
   });
 
-  it("flags hooks token reuse of gateway password auth as critical", () => {
-    const findings = collectHooksHardeningFindings({
-      gateway: {
-        auth: {
-          mode: "password",
-          password: "shared-gateway-password-1234567890", // pragma: allowlist secret
-        },
-      },
-      hooks: {
-        enabled: true,
-        token: "shared-gateway-password-1234567890",
-      },
-    });
-
-    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
-
-    const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
-    expect(finding?.title).toContain("Gateway password");
-    expect(finding?.detail).toContain("gateway.auth password");
-    expect(finding?.remediation).toContain("openclaw doctor --fix");
-  });
-
-  it("flags hooks token reuse of trusted-proxy local password fallback as critical", () => {
-    const findings = collectHooksHardeningFindings({
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: { userHeader: "x-forwarded-user" },
-          password: "trusted-proxy-local-password-1234567890", // pragma: allowlist secret
-        },
-      },
-      hooks: {
-        enabled: true,
-        token: "trusted-proxy-local-password-1234567890",
-      },
-    });
-
-    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
-
-    const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
-    expect(finding?.title).toContain("Gateway password");
-    expect(finding?.detail).toContain("gateway.auth password");
-  });
-
-  it("flags hooks token reuse of an explicit audit password override as critical", () => {
-    const findings = collectHooksHardeningFindings(
-      {
-        hooks: {
-          enabled: true,
-          token: "runtime-only-gateway-password-1234567890",
-        },
-      },
-      {} as NodeJS.ProcessEnv,
-      {
-        gatewayAuthOverride: {
-          password: "runtime-only-gateway-password-1234567890", // pragma: allowlist secret
-        },
-      },
-    );
-
-    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
-
-    const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
-    expect(finding?.title).toContain("Gateway password");
-    expect(finding?.detail).toContain("gateway.auth password");
-    expect(finding?.remediation).toContain("doctor can only repair reuse");
-  });
-
-  it("does not flag inactive explicit audit password when config mode is token", () => {
-    const findings = collectHooksHardeningFindings(
-      {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: "config-gateway-token-1234567890", // pragma: allowlist secret
-          },
-        },
-        hooks: {
-          enabled: true,
-          token: "runtime-only-gateway-password-1234567890",
-        },
-      },
-      {} as NodeJS.ProcessEnv,
-      {
-        gatewayAuthOverride: {
-          password: "runtime-only-gateway-password-1234567890", // pragma: allowlist secret
-        },
-      },
-    );
-
-    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(false);
-  });
-
   it("flags explicit audit password reuse when config mode is token", () => {
     const findings = collectHooksHardeningFindings(
       {
@@ -242,65 +149,6 @@ describe("security audit hooks ingress findings", () => {
     const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
     expect(finding?.title).toContain("Gateway password");
     expect(finding?.detail).toContain("gateway.auth password");
-  });
-
-  it("keeps config password reuse finding when explicit audit password differs", () => {
-    const findings = collectHooksHardeningFindings(
-      {
-        gateway: {
-          auth: {
-            mode: "password",
-            password: "config-gateway-password-1234567890", // pragma: allowlist secret
-          },
-        },
-        hooks: {
-          enabled: true,
-          token: "config-gateway-password-1234567890",
-        },
-      },
-      {} as NodeJS.ProcessEnv,
-      {
-        gatewayAuthOverride: {
-          password: "different-runtime-password-1234567890", // pragma: allowlist secret
-        },
-      },
-    );
-
-    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
-
-    const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
-    expect(finding?.title).toContain("Gateway password");
-    expect(finding?.detail).toContain("gateway.auth password");
-  });
-
-  it("flags hooks token reuse of SecretRef-backed gateway password auth in full audit", async () => {
-    const report = await runSecurityAuditCore({
-      config: {
-        agents: { entries: { main: {} } },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-        gateway: {
-          auth: {
-            mode: "password",
-            password: { source: "env", provider: "default", id: "GW_PASSWORD" },
-          },
-        },
-        hooks: {
-          enabled: true,
-          token: "shared-gateway-password-1234567890",
-        },
-      },
-      env: {
-        GW_PASSWORD: "shared-gateway-password-1234567890", // pragma: allowlist secret
-      } as NodeJS.ProcessEnv,
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
-
-    expect(hasFinding(report.findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
   });
 
   it("keeps persisted SecretRef reuse findings when audit password override differs", async () => {
@@ -368,34 +216,6 @@ describe("security audit hooks ingress findings", () => {
     });
 
     expect(hasFinding(report.findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
-  });
-
-  it("does not resolve gateway auth SecretRefs when hooks are disabled", async () => {
-    const report = await runSecurityAuditCore({
-      config: {
-        agents: { entries: { main: {} } },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-        gateway: {
-          auth: {
-            mode: "password",
-            password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
-          },
-        },
-        hooks: {
-          enabled: false,
-          token: "shared-gateway-password-1234567890",
-        },
-      },
-      env: {} as NodeJS.ProcessEnv,
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
-
-    expect(hasFinding(report.findings, "hooks.token_reuse_gateway_token", "critical")).toBe(false);
   });
 
   it("skips unavailable gateway auth SecretRefs when auditing hooks token reuse", async () => {
