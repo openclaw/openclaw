@@ -6,17 +6,14 @@ import {
 } from "./kysely-sync-cache-state.js";
 import {
   beginSqliteDatabaseAdmissionOperation,
-  beginSqliteDatabaseSchemaMutation,
   beginSqliteDatabaseWrite,
   discardSqliteDatabaseTransactionAdmissions,
   getSqliteDatabaseAdmission,
   getSqliteDatabaseSchemaRevision,
-  finishSqliteDatabaseSchemaMutation,
   finishSqliteDatabaseWrite,
-  hasPendingSqliteDatabaseSchemaMutation,
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseAdmission,
-  prepareSqliteDatabaseWriter,
+  publishSqliteDatabaseSchemaChange,
   readSqliteDatabaseWriteRevision,
   suspendSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
@@ -35,11 +32,8 @@ import {
 import { observeSchemaLifetime } from "./sqlite-schema-lifetime.js";
 import { canPreserveTransactionSnapshot } from "./sqlite-schema-mutation.js";
 import {
-  bindSqliteSchemaScope as bindScope,
   finishSqliteReadScope,
   observeSqliteTransactionState as observeTransactionState,
-  releaseSqliteSchemaScope,
-  publishSqliteSchemaChange as publishSchemaChange,
   type SqliteSchemaOwner as SchemaOwner,
   type SchemaMutationListener,
   type SqliteReadOperationRevision,
@@ -80,7 +74,6 @@ function invalidateSchemaFacts(
       owner.transactionMutationRevision = undefined;
     }
     if (changesMain) {
-      beginSqliteDatabaseSchemaMutation(database);
       invalidateLocalSqliteSchemaAdmissions(database);
     }
     if (changesMain && database.isTransaction && !owner.transactionalSchema) {
@@ -91,15 +84,12 @@ function invalidateSchemaFacts(
         listener(undefined);
       }
     }
-    // Capture physical identity before DDL, while the caller owns cleanup on admission failure.
-    bindScope(database, owner);
     invalidate(owner);
     owner.transactionalSchema ||= changesMain && database.isTransaction;
     owner.transactionalTempSchema ||= change === "temp" && database.isTransaction;
     owner.pendingSchema ||= changesMain && owner.nativeDepth > 0;
     if (publish && changesMain && !database.isTransaction && owner.nativeDepth === 0) {
-      publishSchemaChange(database, owner);
-      finishSqliteDatabaseSchemaMutation(database);
+      publishSqliteDatabaseSchemaChange(database);
     }
   }
 }
@@ -134,6 +124,7 @@ function trackSchemaChanges(
   database: DatabaseSync,
   owner: SchemaOwner,
   native: NativeSqlite,
+  writable: boolean,
 ): void {
   const settle = (boundary = false, rolledBack = false) => {
     if (rolledBack) {
@@ -162,7 +153,7 @@ function trackSchemaChanges(
     ) {
       if (owner.transactionalSchema) {
         // A local first-use writer must publish to already-admitted sibling connections.
-        publishSchemaChange(database, owner);
+        publishSqliteDatabaseSchemaChange(database);
       }
       invalidate(owner);
       // A batch may commit one transaction and leave another containing DDL open.
@@ -183,14 +174,8 @@ function trackSchemaChanges(
     const snapshot = phase === "bind" ? undefined : getSqlitePinnedReadSnapshot(database);
     const iterator = phase !== "bind" && !snapshot && !owner.capturing ? {} : undefined;
     const newSnapshot = snapshot && snapshot !== owner.snapshot && !owner.capturing;
-    const pinRevision = newSnapshot ? getSqliteDatabaseSchemaRevision(database) : undefined;
-    const pendingPin = Boolean(newSnapshot && hasPendingSqliteDatabaseSchemaMutation(database));
     if (newSnapshot) {
-      if (
-        !owner.transactionCatalogBound &&
-        (hasPendingSqliteDatabaseSchemaMutation(database) ||
-          (database.isTransaction && owner.transactionRead))
-      ) {
+      if (!owner.transactionCatalogBound && database.isTransaction && owner.transactionRead) {
         invalidate(owner);
         owner.transactionalFacts = true;
       } else {
@@ -205,21 +190,19 @@ function trackSchemaChanges(
         }
       }
       owner.snapshot = snapshot;
-      owner.qualifiedSnapshot = undefined;
-    }
-    if (owner.transactionalSchema && !owner.scope) {
-      bindScope(database, owner);
+      owner.qualifiedSnapshot = snapshot;
     }
     if (owner.nativeDepth === 0) {
       settle();
     }
     const wasTransaction = database.isTransaction;
     if (
-      owner.writable &&
+      writable &&
       !wasTransaction &&
       (control?.kind === "BEGIN" || control?.kind === "SAVEPOINT")
     ) {
-      prepareSqliteDatabaseWriter(database);
+      // Discover the physical admission before SQLite holds a transaction lock.
+      getSqliteDatabaseSchemaRevision(database);
     }
     const openingMutationRevision =
       !wasTransaction && control?.kind === "BEGIN" && control.single
@@ -270,14 +253,15 @@ function trackSchemaChanges(
       owner.transactionRead = true;
     }
     const changesReadScope = schemaChange || dataChange || control !== undefined;
-    if (changesReadScope) {
-      owner.mutationDepth += 1;
-    }
     const temporaryWrite = mutation.temporaryWriteTables?.every((table) =>
       owner.isolatedTempTables.has(table),
     );
     if ((dataChange && !temporaryWrite) || mainSchemaChange) {
-      beginSqliteDatabaseWrite(database);
+      beginSqliteDatabaseWrite(database, mainSchemaChange || owner.nativeDepth > 0);
+    }
+    // Writer admission can throw before a native operation owns the matching decrement.
+    if (changesReadScope) {
+      owner.mutationDepth += 1;
     }
     owner.nativeDepth += 1;
     const finishAdmissions = beginSqliteDatabaseAdmissionOperation(database);
@@ -286,18 +270,10 @@ function trackSchemaChanges(
       owner.schemaMutationRevision += 1;
     }
     owner.pendingSchema ||= mainSchemaChange;
-    let firstStep = true;
     if (iterator) {
       owner.unmanagedSnapshots.add(iterator);
     }
     return {
-      expire: () => {
-        if (iterator) {
-          if (owner.iteratorFacts) {
-            invalidate(owner);
-          }
-        }
-      },
       stepped: () => {
         if (
           database.isTransaction &&
@@ -305,23 +281,9 @@ function trackSchemaChanges(
           !owner.transactionRead &&
           !owner.transactionCatalogBound &&
           owner.facts &&
-          !hasPendingSqliteDatabaseSchemaMutation(database) &&
           owner.processRevision === getSqliteDatabaseSchemaRevision(database)
         ) {
           owner.transactionCatalogBound = true;
-        }
-        if (!newSnapshot || !firstStep) {
-          return;
-        }
-        firstStep = false;
-        if (
-          pendingPin ||
-          hasPendingSqliteDatabaseSchemaMutation(database) ||
-          pinRevision !== getSqliteDatabaseSchemaRevision(database)
-        ) {
-          invalidate(owner);
-        } else if (owner.facts) {
-          owner.qualifiedSnapshot = snapshot;
         }
       },
       finish: (succeeded, abandoned) => {
@@ -353,7 +315,6 @@ function trackSchemaChanges(
         if (rolledBack) {
           settle(false, true);
           owner.pendingSchema = false;
-          finishSqliteDatabaseSchemaMutation(database);
         }
         if (owner.nativeDepth === 0) {
           owner.settling = true;
@@ -365,7 +326,7 @@ function trackSchemaChanges(
               !database.isTransaction &&
               !owner.transactionalSchema
             ) {
-              publishSchemaChange(database, owner);
+              publishSqliteDatabaseSchemaChange(database);
             }
             if (!rolledBack) {
               settle(expiresRead);
@@ -384,9 +345,6 @@ function trackSchemaChanges(
             }
             owner.pendingSchema = false;
           } finally {
-            if (!database.isTransaction) {
-              finishSqliteDatabaseSchemaMutation(database);
-            }
             owner.settling = false;
           }
         }
@@ -398,7 +356,8 @@ function trackSchemaChanges(
           succeeded,
           openingMutationRevision,
         );
-        if (owner.nativeDepth === 0 && !database.isTransaction) {
+        // A parked read cursor cannot retain custody of a settled sibling statement's write.
+        if (owner.mutationDepth === 0 && !database.isTransaction) {
           finishSqliteDatabaseWrite(database);
         }
         // A control batch may open a transaction and read before returning, even on error.
@@ -407,7 +366,6 @@ function trackSchemaChanges(
     };
   });
   observeSqliteNativeClose(database, () => {
-    finishSqliteDatabaseSchemaMutation(database);
     finishSqliteDatabaseWrite(database);
   });
   owner.installTempTrackingSchema = (schema) => {
@@ -418,7 +376,8 @@ function trackSchemaChanges(
         schemaChange: unexpected,
         mainSchemaChange: unexpected,
         temporaryTableSchemaChange: false,
-        dataChange: true,
+        // Known generation triggers change no rows and must not revoke in-flight reads.
+        dataChange: unexpected || schema.kind !== "generation",
         temporaryWriteTables: [],
         control: undefined,
       });
@@ -445,7 +404,6 @@ function trackSchemaChanges(
     owner.readRevision = undefined;
     owner.transactionSnapshot = undefined;
     // Native close can still fail; transaction settlement retains pending DDL publication.
-    releaseSqliteSchemaScope(owner);
   });
 }
 
@@ -588,11 +546,10 @@ export function readSqliteDataVersion(database: DatabaseSync): number {
 export function trackSqliteSchema(
   database: DatabaseSync,
   native: NativeSqlite,
-  writable: boolean,
+  writable = true,
 ): void {
   if (!owners.has(database)) {
     const owner: SchemaOwner = {
-      writable,
       admitted: false,
       revision: 0,
       readDepth: 0,
@@ -616,7 +573,7 @@ export function trackSqliteSchema(
       iteratorFacts: false,
     };
     owners.set(database, owner);
-    trackSchemaChanges(database, owner, native);
+    trackSchemaChanges(database, owner, native, writable);
     const retained = getSqliteDatabaseAdmission(database, schemaAdmission, { existingOnly: true });
     if (retained) {
       owner.admitted = true;
@@ -679,21 +636,13 @@ export function getAdmittedSqliteSchemaFacts(
   const unknownSnapshot =
     (database.isTransaction && owner.transactionRead && !owner.transactionCatalogBound) ||
     owner.unmanagedSnapshots.size > 0;
-  const pendingSchema = hasPendingSqliteDatabaseSchemaMutation(database);
-  if (
-    pendingSchema &&
-    !owner.transactionCatalogBound &&
-    (!snapshot || snapshot !== owner.qualifiedSnapshot)
-  ) {
-    invalidate(owner);
-  }
   const scopeChanged = observeSchemaLifetime(database, owner, snapshot);
   if (!owner.facts) {
     owner.snapshot = snapshot;
     // Managed operations refresh on their next admission. Unmanaged snapshots and
     // sibling publications observed inside a transaction cannot outlive that snapshot.
     owner.transactionalFacts ||= database.isTransaction && (owner.readDepth === 0 || scopeChanged);
-    const localSnapshot = unknownSnapshot || Boolean(snapshot) || pendingSchema;
+    const localSnapshot = unknownSnapshot || Boolean(snapshot) || owner.transactionalSchema;
     const retained =
       owner.transactionalSchema || localSnapshot
         ? undefined

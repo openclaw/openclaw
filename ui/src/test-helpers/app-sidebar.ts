@@ -335,6 +335,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     get revision() {
       return revision;
     },
+    captureBootRoster: () => null,
     get state() {
       return state;
     },

@@ -1,3 +1,4 @@
+import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/core";
 import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
@@ -73,4 +74,17 @@ it("retains synchronous account-manager binding and expiry lookup results", () =
   expectTypeOf<ReturnType<Manager["getByConversationId"]>>().toEqualTypeOf<Binding | undefined>();
   expectTypeOf<ReturnType<Manager["listBySessionKey"]>>().toEqualTypeOf<Binding[]>();
   expectTypeOf<ReturnType<Manager["stop"]>>().toEqualTypeOf<void>();
+});
+
+it("retains v2026.9.8 synchronous Gateway approval publishers without an async callback", () => {
+  type Publisher = NonNullable<GatewayRequestHandlerOptions["context"]["approvalEvents"]>;
+  const releasedPublisher = {
+    publishRequested: (): number => 1,
+    publishResolved: (): void => {},
+  } satisfies Publisher;
+  expectTypeOf(releasedPublisher).toExtend<Publisher>();
+  expectTypeOf<ReturnType<Publisher["publishRequested"]>>().toEqualTypeOf<number>();
+  expectTypeOf<ReturnType<NonNullable<Publisher["publishRequestedAsync"]>>>().toEqualTypeOf<
+    Promise<number>
+  >();
 });

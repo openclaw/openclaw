@@ -336,7 +336,7 @@ export function createDispatchReplyOperationCoordinator(params: {
         resetTriggered: dispatchResetTriggered,
         allowRestartTombstoneParentFork,
         allowRestartTombstoneReset,
-      } = resolveDispatchResetAdmission({
+      } = await resolveDispatchResetAdmission({
         agentId: params.agentId,
         cfg: params.cfg,
         ctx: params.ctx,

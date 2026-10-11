@@ -1,7 +1,6 @@
 import { fstatSync, readdirSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { hasErrnoCode } from "./errno.js";
 import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
 
@@ -240,32 +239,4 @@ export function isSoleDatabaseFileDescriptor(descriptor: number, file: BigIntSta
   } catch {
     return false;
   }
-}
-
-/** Resolve file URI creation policy before retaining a physical admission. */
-export function resolveSqliteAdmissionPath(
-  location: string,
-  requestedCreate?: boolean,
-): { filename: string; create: boolean | undefined } | undefined {
-  let create = requestedCreate;
-  let filename = location;
-  if (!filename || filename === ":memory:") {
-    return undefined;
-  }
-  if (filename.startsWith("file:")) {
-    const url = new URL(filename);
-    if (url.searchParams.get("mode") === "memory") {
-      return undefined;
-    }
-    if (["ro", "rw"].includes(url.searchParams.get("mode") ?? "")) {
-      create = false;
-    }
-    // SQLite also accepts relative filenames and encoded Windows namespaces, not only file URLs.
-    const [uriFilename = ""] = filename.slice("file:".length).split(/[?#]/u, 1);
-    filename = uriFilename.startsWith("/") ? fileURLToPath(url) : decodeURIComponent(uriFilename);
-    if (!filename || filename === ":memory:") {
-      return undefined;
-    }
-  }
-  return { filename, create };
 }

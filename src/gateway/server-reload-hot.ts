@@ -2,6 +2,7 @@ import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { listAgentIds } from "../agents/agent-roster.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeConfig,
   beginPreparedModelRuntimePluginDrain,
@@ -11,7 +12,7 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
-import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -100,6 +101,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const nextState = { ...state };
     const candidateEnv = publication?.runtimeEnv ?? process.env;
     const committedConfig = getRuntimeConfig();
+    const committedSourceConfig = projectConfigOntoRuntimeSourceSnapshot(committedConfig);
     const refreshModelRuntime = doesReloadAffectProviderAuth(plan, committedConfig, nextConfig);
     const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds([
       ...plan.changedPaths,
@@ -642,9 +644,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     try {
       if (refreshModelRuntime) {
+        await mrReload.pruneRemovedProviderModelCatalogs(
+          committedSourceConfig,
+          publication?.sourceConfig ?? nextConfig,
+        );
         await refreshModelRuntimeSnapshots(nextConfig);
       }
     } catch (err) {
+      if (err instanceof PreparedModelRuntimePublicationSupersededError) {
+        // Credential writes can retire models before their queued config applies.
+        // The replacement owns publication; cancellation creates no restart debt.
+        throw createReloadCancellationError(true);
+      }
       scheduleRecoveryRestart("prepared model runtime reload", err);
       return "applied-restart-required";
     } finally {

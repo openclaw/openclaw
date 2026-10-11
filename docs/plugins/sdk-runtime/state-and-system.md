@@ -303,6 +303,13 @@ Returning `undefined` from an updater leaves the entry unchanged. `update`,
 `deleteIf`, `lookupMany`, and `count` remain optional in public store types, so preserve
 capability checks for supported older hosts and third-party adapters.
 
+Thread-binding adapters that preserve deprecated cache mutations can import
+`warnPluginSdkDeprecation` from `openclaw/plugin-sdk/thread-bindings-session-runtime`.
+Call it at the legacy operation with static `family`, `method`, and `replacement`
+descriptions, plus the known `pluginId` and an accurate `compatibility` description.
+It shares the host's warning budget; a cache mutation that defers persistence
+must describe that timing rather than claim the write has already committed.
+
 For new atomic mutations, use `observe` and `compareAndApply`, which are required
 on V2 stores and optional only in the legacy structural store contract.
 `observe(key)` prepares a mutation through canonical writable database
@@ -471,14 +478,19 @@ stored data, and retention are unchanged during this migration.
 ## Per-agent SQLite writes
 
 Bundled and official plugins that already use the private `sqlite-runtime`
-facade can import `withOpenClawAgentDatabaseWrite` from
-`openclaw/plugin-sdk/sqlite-runtime`. This remains an internal runtime facade,
-not a typed public SDK entrypoint for third-party plugins.
+facade use `openOpenClawAgentSqliteWorkerStoreV2` with required live authority.
+Send serializable domain commands to its paired backend, explicitly await
+`prepare()` when creation is required, and close the store after accepted work
+settles. `executeExisting` preserves absence. See the
+[native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+This remains an internal runtime facade, not a typed public SDK entrypoint for
+third-party plugins.
 
-Call it from an asynchronous producer before entering synchronous SQLite. It
-shares the agent database's in-process write admission with session writers and
-off-thread reclamation, leaving the Gateway thread available to authorize a
-reclamation commit.
+The deprecated `withOpenClawAgentDatabaseWrite` and raw-handle exports retain
+their native callback ordering until the next Plugin SDK major. Awaiting their
+admission does not move callbacks off the host. Actual legacy use shares the
+per-plugin capability-family warning budget; explicit read-only inspection,
+offline maintenance, and worker kernels keep their scoped contracts.
 
 Asynchronous AgentSession message, model, compaction, and tree operations use
 this admission for their transcript writes. Embedded prompt preparation, replay

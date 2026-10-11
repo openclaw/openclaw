@@ -14,7 +14,6 @@ import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js"
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   getSqliteDatabaseSchemaRevision,
-  hasPendingSqliteDatabaseSchemaMutation,
   readSqliteDatabaseWriteRevision,
   readSqliteDatabaseSiblingWriteRevision,
 } from "./sqlite-database-admission.js";
@@ -35,6 +34,23 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 describe("admitted SQLite schema facts", () => {
   const { tempDirs, openDatabase, databases } = useSqliteSchemaTestFixture();
+
+  it("keeps read receipts stable for mutation words while tracking callback writes", () => {
+    const database = openDatabase();
+    const before = readSqliteDatabaseWriteRevision(database);
+    database
+      .prepare("SELECT 'openclaw.system-update', 'it''s DELETE', 1 AS [INSERT] /* REPLACE */")
+      .get();
+    expect(readSqliteDatabaseWriteRevision(database)).toBe(before);
+
+    database.function("mutate", () => {
+      database.exec("INSERT INTO original VALUES (9)");
+      return 9;
+    });
+    database.prepare("SELECT mutate()").get();
+    expect(readSqliteDatabaseWriteRevision(database)).not.toBe(before);
+    expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 9 }]);
+  });
 
   it("serves admitted runtime schema checks without executing SQL", () => {
     const database = openDatabase(
@@ -474,7 +490,7 @@ describe("admitted SQLite schema facts", () => {
       expect(before).toBeDefined();
       expect(revision()).toBe(before);
       writer.exec("BEGIN IMMEDIATE; INSERT INTO original VALUES (1)");
-      expect(revision()).toBeUndefined();
+      expect(revision()).toBe(before);
       expect(readSqliteDatabaseWriteRevision(writer)).toBeTypeOf("number");
       const sibling = readSqliteDatabaseSiblingWriteRevision(writer);
       writer.exec("COMMIT");
@@ -628,9 +644,7 @@ describe("admitted SQLite schema facts", () => {
     });
     expect(tableExists(reader, "implicit_snapshot")).toBe(true);
     writer.exec("BEGIN; CREATE TABLE closed_rollback (id)");
-    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
     writer.close();
-    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
     expect(tableExists(reader, "closed_rollback")).toBe(false);
   });
 

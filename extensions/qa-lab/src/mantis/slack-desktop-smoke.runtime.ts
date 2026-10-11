@@ -3,10 +3,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { toQaError } from "../errors.js";
-import {
-  acquireQaCredentialLease,
-  startQaCredentialLeaseHeartbeat,
-} from "../live-transports/shared/credential-lease.runtime.js";
 import { resolveLiveTransportQaScenarioIds } from "../live-transports/shared/scenario-selection.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
@@ -27,6 +23,12 @@ import {
   createSlackDesktopArtifactOwner,
   type MantisApprovalCheckpointArtifacts,
 } from "./slack-desktop-smoke.artifacts.js";
+import {
+  buildCrabboxEnv,
+  prepareGatewayCredentialEnv,
+  type SlackGatewayCredentialHeartbeat,
+  type SlackGatewayCredentialLease,
+} from "./slack-desktop-smoke.credentials.js";
 
 export type MantisSlackDesktopSmokeOptions = MantisCrabboxLeaseOptions & {
   alternateModel?: string;
@@ -56,17 +58,6 @@ type MantisSlackDesktopHydrateMode = "prehydrated" | "source";
 type MantisSlackDesktopSmokeResult = MantisCrabboxRunResult & {
   approvalCheckpointScreenshotPaths?: string[];
 };
-
-type SlackGatewayCredentialPayload = {
-  channelId: string;
-  sutAppToken: string;
-  sutBotToken: string;
-};
-
-type SlackGatewayCredentialLease = Awaited<
-  ReturnType<typeof acquireQaCredentialLease<SlackGatewayCredentialPayload>>
->;
-type SlackGatewayCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
 
 type MantisSlackDesktopSmokeSummary = MantisCrabboxReportSummary & {
   artifacts: MantisCrabboxReportSummary["artifacts"] & {
@@ -165,98 +156,6 @@ function resolveScenarioIds(params: {
   return scenarioIds;
 }
 
-function buildCrabboxEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const next = { ...env };
-  for (const [target, source] of [
-    ["OPENCLAW_LIVE_OPENAI_KEY", "OPENAI_API_KEY"],
-    ["OPENCLAW_MANTIS_SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN"],
-    ["OPENCLAW_MANTIS_SLACK_BOT_TOKEN", "OPENCLAW_QA_SLACK_SUT_BOT_TOKEN"],
-    ["OPENCLAW_MANTIS_SLACK_APP_TOKEN", "SLACK_APP_TOKEN"],
-    ["OPENCLAW_MANTIS_SLACK_APP_TOKEN", "OPENCLAW_QA_SLACK_SUT_APP_TOKEN"],
-    ["OPENCLAW_MANTIS_SLACK_CHANNEL_ID", "OPENCLAW_QA_SLACK_CHANNEL_ID"],
-  ] as const) {
-    if (!trimToValue(next[target]) && trimToValue(next[source])) {
-      next[target] = next[source];
-    }
-  }
-  return next;
-}
-
-function readSlackGatewayCredentialPayload(
-  payload: Record<string, unknown>,
-  missingFieldsMessage: string,
-): SlackGatewayCredentialPayload {
-  const channelId = trimToValue(payload.channelId);
-  const sutBotToken = trimToValue(payload.sutBotToken);
-  const sutAppToken = trimToValue(payload.sutAppToken);
-  if (!channelId || !sutBotToken || !sutAppToken) {
-    throw new Error(missingFieldsMessage);
-  }
-  return { channelId, sutAppToken, sutBotToken };
-}
-
-function resolveSlackGatewayEnvPayload(env: NodeJS.ProcessEnv): SlackGatewayCredentialPayload {
-  return readSlackGatewayCredentialPayload(
-    {
-      channelId: env.OPENCLAW_QA_SLACK_CHANNEL_ID,
-      sutBotToken: env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN,
-      sutAppToken: env.OPENCLAW_QA_SLACK_SUT_APP_TOKEN,
-    },
-    "Gateway setup requires OPENCLAW_QA_SLACK_CHANNEL_ID, OPENCLAW_QA_SLACK_SUT_BOT_TOKEN, and OPENCLAW_QA_SLACK_SUT_APP_TOKEN when using --credential-source env.",
-  );
-}
-
-function parseSlackGatewayCredentialPayload(payload: unknown): SlackGatewayCredentialPayload {
-  if (!payload || typeof payload !== "object") {
-    throw new Error("Slack credential payload must be an object.");
-  }
-  return readSlackGatewayCredentialPayload(
-    payload as Record<string, unknown>,
-    "Slack credential payload must include channelId, sutBotToken, and sutAppToken.",
-  );
-}
-
-async function prepareGatewayCredentialEnv(params: {
-  credentialRole: string;
-  credentialSource: string;
-  env: NodeJS.ProcessEnv;
-  gatewaySetup: boolean;
-}) {
-  if (!params.gatewaySetup) {
-    return {};
-  }
-  if (
-    trimToValue(params.env.OPENCLAW_MANTIS_SLACK_BOT_TOKEN) &&
-    trimToValue(params.env.OPENCLAW_MANTIS_SLACK_APP_TOKEN)
-  ) {
-    return {};
-  }
-  const credentialLease = await acquireQaCredentialLease<SlackGatewayCredentialPayload>({
-    env: params.env,
-    kind: "slack",
-    source: params.credentialSource,
-    role: params.credentialRole,
-    resolveEnvPayload: () => resolveSlackGatewayEnvPayload(params.env),
-    parsePayload: parseSlackGatewayCredentialPayload,
-  });
-  const leaseHeartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
-  const payload = credentialLease.payload;
-  params.env.OPENCLAW_MANTIS_SLACK_BOT_TOKEN = payload.sutBotToken;
-  params.env.OPENCLAW_MANTIS_SLACK_APP_TOKEN = payload.sutAppToken;
-  params.env.OPENCLAW_MANTIS_SLACK_CHANNEL_ID =
-    trimToValue(params.env.OPENCLAW_MANTIS_SLACK_CHANNEL_ID) ?? payload.channelId;
-  params.env.OPENCLAW_QA_SLACK_CHANNEL_ID =
-    trimToValue(params.env.OPENCLAW_QA_SLACK_CHANNEL_ID) ?? payload.channelId;
-  params.env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN =
-    trimToValue(params.env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN) ?? payload.sutBotToken;
-  params.env.OPENCLAW_QA_SLACK_SUT_APP_TOKEN =
-    trimToValue(params.env.OPENCLAW_QA_SLACK_SUT_APP_TOKEN) ?? payload.sutAppToken;
-  return {
-    credentialLease,
-    leaseHeartbeat,
-  };
-}
-
 function renderRemoteScript(params: {
   alternateModel: string;
   approvalCheckpoints: boolean;
@@ -343,7 +242,7 @@ const response = await fetch("https://slack.com/api/auth.test", {
 });
 const body = await response.json();
 process.stdout.write(JSON.stringify({ ok: body.ok, team_id: body.team_id, user_id: body.user_id }));
-if (!body.ok) process.exit(1);
+process.exitCode = body.ok ? 0 : 1;
 MANTIS_SLACK_AUTH
   team_id="$(node --input-type=module -e 'import fs from "node:fs"; const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(value.team_id || "");' "$out/slack-auth-test.json" || true)"
 fi
@@ -391,7 +290,7 @@ run_mantis_remote_body() {
   echo "remote pwd: $(pwd)"
   node_supports_type_stripping() {
     node_probe="$(mktemp --suffix=.ts)"
-    printf 'const value: number = 1;\nif (value !== 1) process.exit(1);\n' >"$node_probe"
+    printf 'const value: number = 1;\nif (value !== 1) process.exitCode = 1;\n' >"$node_probe"
     node --experimental-strip-types "$node_probe" >/dev/null 2>&1
     probe_status=$?
     rm -f "$node_probe"
@@ -442,8 +341,11 @@ run_mantis_remote_body() {
   read -r pnpm_version pnpm_sha512 < <(node -e '
 const value = require("./package.json").packageManager ?? "";
 const match = /^pnpm@([0-9]+\\.[0-9]+\\.[0-9]+)\\+sha512\\.([0-9a-f]{128})$/.exec(value);
-if (!match) process.exit(1);
-console.log(match[1] + " " + match[2]);
+if (!match) {
+  process.exitCode = 1;
+} else {
+  console.log(match[1] + " " + match[2]);
+}
 ')
   active_pnpm_version="$(pnpm --version 2>/dev/null || true)"
   if [ "$active_pnpm_version" != "$pnpm_version" ]; then

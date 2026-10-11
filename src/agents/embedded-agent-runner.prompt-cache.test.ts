@@ -5,8 +5,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { stableStringify } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertStableProviderPrefix,
   snapshotProviderPrefix,
@@ -25,6 +26,7 @@ import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { bindSessionMcpRuntimeTestScheduler } from "./agent-bundle-mcp-manager.test-support.js";
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
+import * as promptCacheRequestObserver from "./embedded-agent-runner/prompt-cache-request-observer.js";
 import { queueEmbeddedAgentMessageWithOutcomeAsync } from "./embedded-agent-runner/runs.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import type { AgentInternalEvent } from "./internal-events.js";
@@ -46,7 +48,12 @@ const cases = [
 ] satisfies Array<{ api: Api; provider: string; model: string; route: string }>;
 const PNG = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 }).toString("base64");
 
-function responseFor(api: Api, model: string, request: number, tool: boolean): Response {
+function responseFor(
+  api: Api,
+  model: string,
+  request: number,
+  tool: boolean,
+): { response: Response; output: Array<Record<string, unknown>> } {
   const id = `cache_${request}`;
   const text = `answer ${request}`;
   const calls = tool
@@ -57,6 +64,7 @@ function responseFor(api: Api, model: string, request: number, tool: boolean): R
       }))
     : [];
   let events: Array<Record<string, unknown>>;
+  let output: Array<Record<string, unknown>> = [];
   if (api === "anthropic-messages") {
     const blocks = tool
       ? calls.map((call) => ({ type: "tool_use", id: call.id, name: call.name, input: {} }))
@@ -133,12 +141,13 @@ function responseFor(api: Api, model: string, request: number, tool: boolean): R
       : [
           {
             type: "message",
-            id: `msg_${id}`,
             role: "assistant",
-            status: "completed",
             content: [{ type: "output_text", text, annotations: [] }],
+            status: "completed",
+            id: `msg_${id}`,
           },
         ];
+    output = items;
     events = [
       ...items.flatMap((item, output_index) => [
         {
@@ -162,7 +171,7 @@ function responseFor(api: Api, model: string, request: number, tool: boolean): R
       },
     ];
   }
-  return new Response(
+  const response = new Response(
     events
       .map(
         (event) =>
@@ -171,6 +180,7 @@ function responseFor(api: Api, model: string, request: number, tool: boolean): R
       .join("") + (api === "anthropic-messages" ? "" : "data: [DONE]\n\n"),
     { headers: { "content-type": "text/event-stream" } },
   );
+  return { response, output };
 }
 
 afterEach(async () => {
@@ -282,16 +292,88 @@ describe("provider prefix across admitted Gateway agent turns", () => {
             turn: number;
             payload: unknown;
             prefix: ReturnType<typeof snapshotProviderPrefix>;
+            userEnvelopes: Map<string, string>;
           }> = [];
+          const responseHistory = new Map<string, unknown[]>();
+          let userEnvelopes = new Map<string, string>();
           let turn = 0;
           let requestsThisTurn = 0;
           let providerFailure: Error | undefined;
+          const createObserver = promptCacheRequestObserver.createPromptCacheRequestObserver;
+          const observerSpy = vi
+            .spyOn(promptCacheRequestObserver, "createPromptCacheRequestObserver")
+            .mockImplementation((...args) => {
+              const observer = createObserver(...args);
+              return {
+                ...observer,
+                onModelRequest: (runtimeModel, context) => {
+                  const occurrences = new Map<string, number>();
+                  let userAnchor = "";
+                  userEnvelopes = new Map(
+                    context.messages.flatMap<readonly [string, string]>((message) => {
+                      if (
+                        message.role !== "user" ||
+                        message.operatorMessage ||
+                        // Legacy transient carriers intentionally refresh beyond the cache boundary.
+                        (message.runtimeContextCarrier && !message.runtimeContextCarrierRetained)
+                      ) {
+                        return [];
+                      }
+                      const { content, ...envelope } = message;
+                      // Text identifies retained turns across the permitted image cleanup;
+                      // the wire-prefix oracle below separately protects their content.
+                      const text =
+                        typeof content === "string"
+                          ? content
+                          : content
+                              .flatMap((block) => (block.type === "text" ? [block.text] : []))
+                              .join("\n");
+                      const textDigest = createHash("sha256").update(text).digest("hex");
+                      // Match identical carriers within their preceding user position;
+                      // a newly appended carrier must not replace an earlier occurrence.
+                      const identity = message.runtimeContextCarrier
+                        ? `${userAnchor}:${textDigest}`
+                        : textDigest;
+                      if (!message.runtimeContextCarrier) {
+                        userAnchor = textDigest;
+                      }
+                      const occurrence = occurrences.get(identity) ?? 0;
+                      occurrences.set(identity, occurrence + 1);
+                      return [
+                        [
+                          `${identity}:${occurrence}`,
+                          createHash("sha256").update(stableStringify(envelope)).digest("hex"),
+                        ],
+                      ];
+                    }),
+                  );
+                  return observer.onModelRequest(runtimeModel, context);
+                },
+              };
+            });
           configureAiTransportHost({
             ...host,
             buildModelFetch: () => async (input, init) => {
               try {
                 const payload: unknown = await new Request(input, init).json();
-                const prefix = snapshotProviderPrefix(api, payload);
+                let effectivePayload = payload;
+                let effectiveInput: unknown[] | undefined;
+                if (api === "openai-responses") {
+                  assert(payload && typeof payload === "object" && "input" in payload);
+                  assert(Array.isArray(payload.input));
+                  const previousId =
+                    "previous_response_id" in payload ? payload.previous_response_id : undefined;
+                  if (previousId !== undefined) {
+                    assert.equal(typeof previousId, "string");
+                    const inherited = responseHistory.get(previousId as string);
+                    assert(inherited, "continuation references an existing provider response");
+                    effectiveInput = [...inherited, ...payload.input];
+                  } else {
+                    effectiveInput = payload.input;
+                  }
+                  effectivePayload = { ...payload, input: effectiveInput };
+                }
+                const prefix = snapshotProviderPrefix(api, effectivePayload);
                 if (route === "messages") {
                   const runtimeIndex = prefix.history.findIndex((item) =>
                     item.includes(RUNTIME_CONTEXT_HEADER),
@@ -316,7 +398,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                   prefix.tools.includes('"name":"cache_probe"'),
                   "synthetic provider only calls an advertised tool",
                 ).toBe(true);
-                requests.push({ turn, payload, prefix });
+                requests.push({ turn, payload, prefix, userEnvelopes });
                 requestsThisTurn++;
                 if (turn === 6 && requestsThisTurn === 1) {
                   const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
@@ -328,12 +410,26 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                 if (requestsThisTurn > 4) {
                   throw new Error(`Unexpected provider retry in synthetic turn ${turn}`);
                 }
-                return responseFor(
+                const result = responseFor(
                   api,
                   model,
                   requests.length,
                   turn === 1 && requestsThisTurn === 1,
                 );
+                if (effectiveInput) {
+                  // Full replay omits provider item IDs. Function calls also omit
+                  // status; assistant messages retain their completed status.
+                  const output = result.output.map((item) => {
+                    const { id: _id, ...withoutId } = item;
+                    if (item.type === "function_call") {
+                      const { status: _status, ...call } = withoutId;
+                      return call;
+                    }
+                    return withoutId;
+                  });
+                  responseHistory.set(`cache_${requests.length}`, [...effectiveInput, ...output]);
+                }
+                return result.response;
               } catch (error) {
                 providerFailure = toErrorObject(error, "Mock provider request failed");
                 throw error;
@@ -416,9 +512,8 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                   internalEvents,
                   preparedRunAdmission: admission,
                   onExecutionPhase: ({ phase }) => {
-                    // A stateless mock provider must receive the complete serialized prefix,
-                    // including tool continuations, instead of an HTTP response-id delta.
-                    if (phase === "model_call_started") {
+                    // Responses keeps real continuation state; the other fixtures are stateless.
+                    if (phase === "model_call_started" && api !== "openai-responses") {
                       cleanupSessionResources(sessionId);
                     }
                   },
@@ -486,6 +581,25 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               }
             }
             expect(requests.length).toBe(12);
+            if (api === "openai-responses") {
+              const continuation = requests[1]!.payload as Record<string, unknown>;
+              expect(
+                continuation.previous_response_id,
+                "tool results continue the first response",
+              ).toBe("cache_1");
+              const input = continuation.input as Array<Record<string, unknown>>;
+              // The runner may append fresh runtime context alongside the tool results.
+              expect(input.filter((item) => item.type === "function_call_output")).toHaveLength(5);
+              expect(input.filter((item) => item.type === "function_call")).toEqual([]);
+              expect(
+                continuation.prompt_cache_key,
+                "tool continuations retain the session affinity key",
+              ).toBe((requests[0]!.payload as Record<string, unknown>).prompt_cache_key);
+            }
+            expect(
+              requests[0]!.userEnvelopes.size,
+              "raw user envelope capture reached the request observer",
+            ).toBeGreaterThan(0);
             const firstPrefix = requests[0]!.prefix.history.join("");
             expect(
               firstPrefix.includes("hook before"),
@@ -529,6 +643,14 @@ describe("provider prefix across admitted Gateway agent turns", () => {
             for (let index = 1; index < requests.length; index++) {
               const previous = requests[index - 1]!;
               const current = requests[index]!;
+              for (const [textDigest, envelopeDigest] of previous.userEnvelopes) {
+                if (current.userEnvelopes.has(textDigest)) {
+                  expect(
+                    current.userEnvelopes.get(textDigest),
+                    `${route} request ${index + 1}, turn ${current.turn}: retained user envelope ${textDigest}`,
+                  ).toBe(envelopeDigest);
+                }
+              }
               // The documented image batch retires the first image on turn five.
               const cleanup = current.turn === 5 && previous.turn === 4;
               const firstImageIndex = previous.prefix.history.findIndex((item) =>
@@ -614,6 +736,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               });
             }
           } finally {
+            observerSpy.mockRestore();
             cleanupSessionResources(sessionId);
             configureAiTransportHost(host);
             clearEmbeddedSessionPromptStates([sessionId]);

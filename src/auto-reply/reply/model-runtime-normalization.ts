@@ -100,6 +100,8 @@ export async function prepareModelSelectionRuntime(params: {
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
   hydrateThinkingCatalog?: boolean;
+  /** Idle model-only host changes need no thinking policy refresh. */
+  thinkingPolicyRequired?: boolean;
   profileOverride?: string;
   sessionEntry?: Pick<
     SessionEntry,
@@ -195,7 +197,16 @@ export async function prepareModelSelectionRuntime(params: {
           sessionEntry: runtimeEntry,
         });
   let hydratedSelection: ModelCatalogEntry | undefined;
-  if (params.hydrateThinkingCatalog !== false && params.cfg.plugins?.enabled !== false) {
+  const needsThinkingObservation =
+    params.thinkingPolicyRequired !== false ||
+    agentRuntime !== "openclaw" ||
+    !selected ||
+    (selected.nativeRuntime !== undefined && selected.nativeRuntime !== "openclaw");
+  if (
+    params.hydrateThinkingCatalog !== false &&
+    params.cfg.plugins?.enabled !== false &&
+    needsThinkingObservation
+  ) {
     // The selected route owns its capabilities. A prepared default-provider row cannot
     // supply thinking or context metadata for an explicit cross-provider selection.
     const { loadProviderScopedThinkingCatalog } =

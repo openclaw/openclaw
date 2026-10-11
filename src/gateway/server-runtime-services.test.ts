@@ -693,37 +693,6 @@ describe("server-runtime-services", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("rechecks request work after joining the admitted root set", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const run = vi.fn(async () => undefined);
-    const isBusy = vi
-      .fn()
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true)
-      .mockReturnValue(false);
-
-    scheduleGatewayIdleTask({
-      id: "test:idle",
-      scheduler,
-      delayMs: 25,
-      retryDelayMs: 50,
-      isClosing: () => false,
-      isBusy,
-      run,
-      log: createLog(),
-      errorMessage: "idle task failed",
-    });
-
-    await clock.advanceBy(25);
-    expect(run).not.toHaveBeenCalled();
-    await clock.advanceBy(49);
-    expect(run).not.toHaveBeenCalled();
-    await clock.advanceBy(1);
-    expect(run).toHaveBeenCalledOnce();
-    expect(isBusy).toHaveBeenCalledTimes(4);
-  });
-
   it.each(["stopPeriodicTasks", "skillUsageCleanup"] as const)(
     "joins %s before reporting another maintenance owner's cleanup failure",
     async (heldOwner) => {

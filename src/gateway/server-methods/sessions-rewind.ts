@@ -258,17 +258,7 @@ async function mutatePreparedSessionAtMessage({
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
   const upstreamContext = captureSessionUpstreamLinkReadSource();
-  const initialPlacementError = resolveSessionWorkerPlacementMutationError({
-    action,
-    context,
-    key: sessionKey,
-    sessionId: initial.entry.sessionId,
-  });
-  if (initialPlacementError) {
-    reject(initialPlacementError.message);
-    return;
-  }
-  const preparedUpstreamLink =
+  const upstreamLink =
     action === "fork"
       ? await prepareSessionUpstreamLink(upstreamContext, initial.canonicalKey, initial.agentId)
       : undefined;
@@ -290,22 +280,12 @@ async function mutatePreparedSessionAtMessage({
     defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
     signal: options.signal,
   });
-  let targetStillCurrent = true;
   let blockedByActiveRun = false;
   await runExclusiveSessionLifecycleMutation(action, {
     scope: initial.storePath,
     identities: lifecycleIdentities,
     prepare: async () => {
       const current = await loadCurrent();
-      targetStillCurrent =
-        current.entry?.sessionId === initialSessionId &&
-        current.entry.lifecycleRevision === initialLifecycleRevision &&
-        current.storePath === initial.storePath &&
-        current.canonicalKey === initial.canonicalKey &&
-        current.agentId === initial.agentId;
-      if (!targetStillCurrent) {
-        return;
-      }
       // A message cut cannot disturb its source or invalidate queued work on failure.
       // Reject live work before transcript mutation instead of interrupting it.
       blockedByActiveRun =
@@ -328,10 +308,6 @@ async function mutatePreparedSessionAtMessage({
       // A queued sharing mutation can revoke participation without rotating the source identity.
       // Revalidate under the shared lifecycle fence before delegating or writing history.
       assertMutationCurrent();
-      if (!targetStillCurrent) {
-        reject(`Session ${sessionKey} changed; retry ${action}.`);
-        return;
-      }
       if (blockedByActiveRun) {
         reject(
           action === "switch"
@@ -356,7 +332,6 @@ async function mutatePreparedSessionAtMessage({
         return;
       }
       upstreamContext.assertCurrent();
-      const upstreamLink = preparedUpstreamLink;
       const archived = current.entry.archivedAt !== undefined;
       if ((archived || upstreamLink) && action !== "fork") {
         const message = archived
@@ -402,12 +377,10 @@ async function mutatePreparedSessionAtMessage({
               commitGuard: assertMutationCurrent,
               context,
               forkHarness: upstreamForkHarness,
-              link: upstreamLink,
               requestedAgentId,
               sessionKey,
               source: current,
               targetKey,
-              upstreamContext,
             })
           : { assertCurrent: assertMutationCurrent, assertRollbackCurrent: assertMutationCurrent };
       if (upstreamForkHarness) {

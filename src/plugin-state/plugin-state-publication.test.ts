@@ -10,6 +10,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   capturePluginStateReadDependencies,
@@ -22,7 +23,10 @@ import {
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
 import type { PluginStateRow } from "./plugin-state-store.kernel.js";
-import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
+import {
+  clearPluginStateStoreForTests,
+  seedPluginStateEntriesForTests,
+} from "./plugin-state-store.test-helpers.js";
 import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 import { executePluginStateCommand } from "./plugin-state.worker.js";
 
@@ -51,37 +55,96 @@ function observe() {
 }
 
 describe("plugin state committed facts", () => {
-  it("keeps a prepared read current only until its exact dependency commits", async () => {
-    await withOpenClawTestState({ label: "plugin-state-read-dependencies" }, async ({ env }) => {
-      const options = { namespace: "bindings", maxEntries: 10, env };
-      const worker = createPluginStateKeyedStore("receipt-test", options);
-      const native = createPluginStateSyncKeyedStore("receipt-test", options);
-      const unrelated = createPluginStateSyncKeyedStore("receipt-test", {
-        namespace: "unrelated",
+  it("serves warm keyed reads from committed receipts across worker and native writes", async () => {
+    await withOpenClawTestState({ label: "plugin-state-keyed-read-receipts" }, async ({ env }) => {
+      const options = { namespace: "receipts", maxEntries: 10, env };
+      const store = createPluginStateKeyedStore<{ count: number }>("receipt-test", options);
+      const native = createPluginStateSyncKeyedStore<{ count: number }>("receipt-test", options);
+      await store.register("key", { count: 1 });
+      const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+      const read = async (expected: { count: number } | undefined) => {
+        dispatch.mockClear();
+        expect(await store.lookup("key")).toEqual(expected);
+        expect(await store.lookupMany(["key", "key"])).toEqual([
+          { ok: true, value: expected },
+          { ok: true, value: expected },
+        ]);
+        expect(dispatch).not.toHaveBeenCalled();
+      };
+      await read({ count: 1 });
+      const first = await store.lookup("key");
+      first!.count = 99;
+      await read({ count: 1 });
+      native.register("key", { count: 2 });
+      await read({ count: 2 });
+      await store.register("key", { count: 3 });
+      await read({ count: 3 });
+      await store.delete("key");
+      await read(undefined);
+      native.register("key", { count: 4 });
+      await read({ count: 4 });
+      await store.clear();
+      await read(undefined);
+    });
+  });
+
+  it("publishes fixture cleanup to warm observations and ownership reads", async () => {
+    await withOpenClawTestState({ label: "plugin-state-clear-publication" }, async ({ env }) => {
+      const store = createPluginStateKeyedStore("receipt-test", {
+        namespace: "bindings",
         maxEntries: 10,
         env,
       });
-      await worker.register("session", { model: "first" });
-      const captured = await capturePluginStateReadDependencies(() => worker.lookup("session"));
+      await store.register("session", { model: "first" });
+      const captured = await capturePluginStateReadDependencies(() => store.observe("session"));
       try {
-        expect(captured.value).toEqual({ model: "first" });
-        unrelated.register("session", { model: "unrelated" });
-        native.register("another-session", { model: "another" });
-        expect(captured.isCurrent()).toBe(true);
-
-        native.register("session", { model: "replacement" });
+        clearPluginStateStoreForTests();
         expect(captured.isCurrent()).toBe(false);
-        expect(() => captured.assertCurrent()).toThrow("Plugin state changed");
+        expect((await store.observe("session")).value).toBeUndefined();
       } finally {
         captured.release();
       }
-      const replacement = await capturePluginStateReadDependencies(() => worker.lookup("session"));
-      expect(replacement.value).toEqual({ model: "replacement" });
-      expect(replacement.isCurrent()).toBe(true);
-      replacement.release();
-      expect(() => replacement.assertCurrent()).toThrow("Plugin state changed");
     });
   });
+
+  it.each(["lookup", "observe"] as const)(
+    "keeps a prepared %s current only until its exact dependency commits",
+    async (method) => {
+      await withOpenClawTestState({ label: "plugin-state-read-dependencies" }, async ({ env }) => {
+        const options = { namespace: "bindings", maxEntries: 10, env };
+        const worker = createPluginStateKeyedStore("receipt-test", options);
+        const native = createPluginStateSyncKeyedStore("receipt-test", options);
+        const unrelated = createPluginStateSyncKeyedStore("receipt-test", {
+          namespace: "unrelated",
+          maxEntries: 10,
+          env,
+        });
+        await worker.register("session", { model: "first" });
+        const read = () =>
+          method === "observe"
+            ? worker.observe("session").then(({ value }) => value)
+            : worker.lookup("session");
+        const captured = await capturePluginStateReadDependencies(read);
+        try {
+          expect(captured.value).toEqual({ model: "first" });
+          unrelated.register("session", { model: "unrelated" });
+          native.register("another-session", { model: "another" });
+          expect(captured.isCurrent()).toBe(true);
+
+          native.register("session", { model: "replacement" });
+          expect(captured.isCurrent()).toBe(false);
+          expect(() => captured.assertCurrent()).toThrow("Plugin state changed");
+        } finally {
+          captured.release();
+        }
+        const replacement = await capturePluginStateReadDependencies(read);
+        expect(replacement.value).toEqual({ model: "replacement" });
+        expect(replacement.isCurrent()).toBe(true);
+        replacement.release();
+        expect(() => replacement.assertCurrent()).toThrow("Plugin state changed");
+      });
+    },
+  );
 
   it("invalidates a captured legacy absence when its database is first created", async () => {
     await withOpenClawTestState(

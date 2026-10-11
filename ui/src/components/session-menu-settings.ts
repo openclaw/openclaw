@@ -52,7 +52,7 @@ type SessionMenuSettingsOptions = {
 export class SessionMenuSettings {
   private settingsActive = false;
   private readonly settingsDetails;
-  private communicationState() {
+  communicationState() {
     const state = this.options.readState();
     return { ...state, session: this.settingsDetails.row ?? state.session };
   }
@@ -101,6 +101,10 @@ export class SessionMenuSettings {
         }
       },
     });
+  }
+
+  get error(): string | null {
+    return this.settingsDetails.error;
   }
 
   get communicationAvailable(): boolean {

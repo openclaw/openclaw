@@ -58,7 +58,7 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       return loadPluginsRouteData(context, options);
     },
     component: () =>
-      import("./plugins-page.ts").then(() => ({
+      import("./plugins-page.tsx").then(() => ({
         header: true,
         render: (data: PluginsRouteData | undefined) =>
           html`<openclaw-plugins-page

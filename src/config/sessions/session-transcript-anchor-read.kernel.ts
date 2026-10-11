@@ -8,6 +8,7 @@ import {
   readExactSessionEntryRow,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionTranscriptMetadataInDatabase } from "./session-accessor.sqlite-metadata-read.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
 import {
   readCurrentProjectionSnapshot,
@@ -43,6 +44,7 @@ export type SessionTranscriptAnchorSelection = {
   includeHeader?: boolean;
   includeWatermark?: boolean;
   includeMessagePresence?: boolean;
+  includeMetadata?: boolean;
   contextValidation?: Parameters<typeof validateSessionTranscriptContextInDatabase>[2];
   contextAuthority?: true | { permissionMode: InternalSessionEntry["permissionMode"] };
   replayValidation?: Pick<
@@ -163,6 +165,9 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       );
     }
     const validated = {
+      ...(selection.includeMetadata
+        ? { metadata: readSessionTranscriptMetadataInDatabase(database, resolved.sessionId) }
+        : {}),
       ...(selection.includeMessagePresence
         ? { messagePresence: hasSessionTranscriptMessageInDatabase(database, resolved.sessionId) }
         : {}),

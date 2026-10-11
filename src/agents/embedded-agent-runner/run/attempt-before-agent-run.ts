@@ -6,7 +6,7 @@ import {
 } from "../../harness/before-agent-run.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { log } from "../logger.js";
 import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -59,7 +59,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   ) {
     try {
       await input.withOwnedTranscriptWrite(() =>
-        withSessionManagerWrite(input.sessionManager, async () => {
+        withSessionManagerAppend(input.sessionManager, async () => {
           await input.sessionManager.appendMessageAsync(redactedUserMessage);
           input.sessionManager.flushPendingPersistence();
         }),

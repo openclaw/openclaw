@@ -1,11 +1,3 @@
-import {
-  prepareCronReceiptAuthorityPublication,
-  readCronReceiptAuthorityAttachment,
-} from "../cron/store/receipt-authority-publication.js";
-import type {
-  CronReceiptAuthorityAttachment,
-  CronReceiptAuthorityPublication,
-} from "../cron/store/receipt-authority.types.js";
 import { execApprovalsPublication } from "../infra/exec-approvals-publication.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import {
@@ -29,7 +21,6 @@ export type OperatorApprovalCommitReceipt = {
   type?: "operatorApprovals.resolve";
   resolutionKey?: string;
   grantUse?: CronStandingGrantRecord;
-  receiptAuthority?: CronReceiptAuthorityPublication;
   approvalFacts?: ReturnType<typeof operatorApprovalPublication.bound>;
   standingGrantFacts?: ReturnType<typeof operatorStandingGrantPublication.bound>;
   execFacts?: ReturnType<typeof execApprovalsPublication.bound>;
@@ -37,7 +28,6 @@ export type OperatorApprovalCommitReceipt = {
 type Context = Pick<WorkerOperationContext, "open" | "stateOptions"> & {
   native?: {
     assertCurrent: () => void;
-    receiptAuthority: CronReceiptAuthorityAttachment;
     onCommitted: (receipt: OperatorApprovalCommitReceipt) => void;
   };
 };
@@ -52,9 +42,6 @@ function transact<Payload, Result>(
   apply: (input: Payload & { databaseOptions: OpenClawStateDatabaseOptions }) => Result,
   receiptOf?: (result: Result) => OperatorApprovalCommitReceipt | undefined,
 ): Result {
-  const attachment = context.native
-    ? context.native.receiptAuthority
-    : readCronReceiptAuthorityAttachment();
   const options = { ...context.stateOptions(), database: context.open() };
   const assertCurrent = (stage: "transaction" | "commit") =>
     context.native
@@ -72,14 +59,8 @@ function transact<Payload, Result>(
     const standing = approval.result;
     const exec = standing.result;
     const result = exec.result;
-    const receiptAuthority = attachment
-      ? context.native
-        ? { nonce: attachment.nonce, sequence: 1 }
-        : prepareCronReceiptAuthorityPublication(database.db, attachment)
-      : undefined;
     const receipt = {
       ...receiptOf?.(result),
-      ...(receiptAuthority ? { receiptAuthority } : {}),
       approvalFacts: operatorApprovalPublication.bound(approval.receipt),
       standingGrantFacts: operatorStandingGrantPublication.bound(standing.receipt),
       execFacts: execApprovalsPublication.bound(exec.receipt),

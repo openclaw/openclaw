@@ -78,47 +78,6 @@ export function groupDefaultsKey(data?: NewSessionRouteData): string {
     data?.groupStatus ?? "",
     data?.groupCwd ?? "",
     data?.groupWorktree === true,
-    data?.groupCatalogGeneration ?? -1,
-    data?.groupDefaultsStatus ?? "idle",
-  ]);
-}
-
-function groupRouteNeedsRevalidation(
-  data: NewSessionRouteData | undefined,
-  sessions: SessionCapability,
-): boolean {
-  const groupName = data?.group?.trim();
-  if (!groupName) {
-    return false;
-  }
-  const generation = sessions.groupsGeneration();
-  const status = sessions.groupsStatus();
-  if (data?.groupCatalogGeneration !== generation || data.groupDefaultsStatus !== status) {
-    return true;
-  }
-  if (status !== "ready") {
-    return false;
-  }
-  const current = sessions.state.groupSettings.find((group) => group.name === groupName);
-  return current
-    ? data.groupStatus !== "resolved" ||
-        (data.groupCwd ?? "") !== (current.cwd ?? "") ||
-        data.groupWorktree !== (current.worktree === true)
-    : data.groupStatus === "resolved";
-}
-
-function groupRouteCatalogKey(
-  data: NewSessionRouteData | undefined,
-  sessions: SessionCapability,
-): string {
-  const current = sessions.state.groupSettings.find((group) => group.name === data?.group);
-  return JSON.stringify([
-    data?.group ?? "",
-    sessions.groupsGeneration(),
-    sessions.groupsStatus(),
-    Boolean(current),
-    current?.cwd ?? "",
-    current?.worktree === true,
   ]);
 }
 
@@ -126,7 +85,7 @@ export function isGroupRoutePending(
   data: NewSessionRouteData | undefined,
   sessions: SessionCapability | undefined,
 ): boolean {
-  return Boolean(data?.group && (!sessions || groupRouteNeedsRevalidation(data, sessions)));
+  return Boolean(data?.group && (!sessions || data.groupStatus !== "resolved"));
 }
 
 export function isRoutePending(
@@ -143,41 +102,6 @@ export function resolvedGroupName(
   return data?.groupStatus === "resolved" && !isGroupRoutePending(data, sessions)
     ? data.group
     : undefined;
-}
-
-export class GroupRouteRevalidation {
-  private pending: Promise<unknown> | null = null;
-  private lastKey = "";
-
-  constructor(
-    private readonly readData: () => NewSessionRouteData | undefined,
-    private readonly revalidate: () => Promise<unknown> | undefined,
-  ) {}
-
-  synchronize(sessions: SessionCapability) {
-    if (this.pending) {
-      return;
-    }
-    const data = this.readData();
-    const key = groupRouteCatalogKey(data, sessions);
-    if (this.lastKey === key || !groupRouteNeedsRevalidation(data, sessions)) {
-      return;
-    }
-    const pending = this.revalidate();
-    if (!pending) {
-      return;
-    }
-    this.lastKey = key;
-    this.pending = pending;
-    void pending
-      .catch(() => undefined)
-      .finally(() => {
-        if (this.pending === pending) {
-          this.pending = null;
-          this.synchronize(sessions);
-        }
-      });
-  }
 }
 
 export function resolveAgentId(
@@ -235,7 +159,6 @@ type CatalogTargetDiscoveryState =
   | {
       status: "loading";
       owner: CatalogTargetOwner;
-      controller: AbortController;
     }
   | { status: "ready"; owner: CatalogTargetOwner; targets: ChatModelPickerTargetGroup["options"] }
   | { status: "error"; owner: CatalogTargetOwner };
@@ -248,28 +171,26 @@ export class CatalogTargetDiscovery {
   clear() {
     const previous = this.state;
     this.state = { status: "idle" };
-    if (previous.status === "loading") {
-      previous.controller.abort();
-    }
     if (previous.status !== "idle") {
       this.notify();
     }
   }
 
   private startRequest(owner: CatalogTargetOwner) {
-    const controller = new AbortController();
-    const pending = { status: "loading", owner, controller } as const;
-    this.state = pending;
+    this.state = { status: "loading", owner };
     this.notify();
     void owner.client
-      .request<SessionsCatalogListResult>(
-        "sessions.catalog.list",
-        { agentId: owner.agentId, metadataOnly: true },
-        { signal: controller.signal },
-      )
+      .request<SessionsCatalogListResult>("sessions.catalog.list", {
+        agentId: owner.agentId,
+        metadataOnly: true,
+      })
       .then(
         (result) => {
-          if (this.state !== pending) {
+          if (
+            this.state.status === "idle" ||
+            this.state.owner.client !== owner.client ||
+            this.state.owner.agentId !== owner.agentId
+          ) {
             return;
           }
           this.state = {
@@ -282,11 +203,10 @@ export class CatalogTargetDiscovery {
           this.notify();
         },
         () => {
-          if (this.state !== pending) {
-            return;
+          if (this.state.status !== "idle" && this.state.owner === owner) {
+            this.state = { status: "error", owner };
+            this.notify();
           }
-          this.state = { status: "error", owner };
-          this.notify();
         },
       );
   }

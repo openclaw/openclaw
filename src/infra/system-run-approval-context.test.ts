@@ -11,6 +11,9 @@ describe("resolveSystemRunApprovalRequestContext", () => {
       resolveSystemRunApprovalRequestContext({
         host: "node",
         command: "jq --version",
+        cwd: "/fallback",
+        agentId: "fallback",
+        sessionKey: "agent:fallback:main",
         systemRunPlan: {
           argv: ["./env", "sh", "-c", "jq --version"],
           cwd: "/tmp",

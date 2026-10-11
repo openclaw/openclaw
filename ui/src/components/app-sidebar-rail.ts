@@ -23,12 +23,13 @@ import { personActivityLink, personActivityRouting } from "./person-activity-lin
 import { renderSessionLeadingState } from "./session-leading-indicator.ts";
 import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
 import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
+import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 
 export function renderSidebarRail(host: AppSidebarRenderHost) {
   const zone = host.reconciledSidebarZone();
-  const pins = (normalizeSidebarEntries(host.sidebarEntries) ?? []).map((entry) =>
-    parseSidebarEntry(entry)!,
-  );
+  const pins = (
+    normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []
+  ).map((entry) => parseSidebarEntry(entry)!);
   const views = [
     { id: "pages", label: t("nav.pages"), icon: icons.layoutGrid },
     { id: "sessions", label: titleForRoute("sessions"), icon: icons.messageCircle },
@@ -92,7 +93,10 @@ function renderRailPin(
       : undefined;
   const online =
     entry.type === "person"
-      ? projectOnlinePresenceViewers(host.sessionData.presencePayload).find(
+      ? (
+          host.sidebarSnapshot?.onlineUsers ??
+          projectOnlinePresenceViewers(host.sessionData.presencePayload)
+        ).find(
           (person) => person.identity?.type === "profile" && person.identity.id === entry.profileId,
         )
       : undefined;
@@ -106,7 +110,10 @@ function renderRailPin(
       ? titleForRoute(entry.route)
       : entry.type === "person"
         ? owner?.label || (online ? presenceViewerLabel(online) : t("nav.owner"))
-        : session?.label || plugin?.value.label || tab?.label || t("presence.sessions.unavailable");
+        : session?.label ||
+          plugin?.value.label ||
+          tab?.label ||
+          t(entry.type === "session" ? "sessionsView.openSession" : "tabs.plugin");
   const person =
     entry.type === "person"
       ? personActivityLink(
@@ -169,22 +176,26 @@ function renderRailPin(
   return html`<div
     class="sidebar-rail__pin ${drop?.entry === serialized ? `sidebar-zone-entry--drop-${drop.position}` : ""}"
     data-sidebar-entry=${serialized}
-    draggable="true"
+    draggable=${String(!host.sidebarSnapshot)}
     @dragstart=${(event: DragEvent) => host.sessionOrganizer.startSidebarEntryDrag(event, entry)}
     @dragend=${() => host.sessionOrganizer.finishSidebarEntryDrag()}
     @dragover=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDragOver(event, serialized)}
     @drop=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDrop(event, serialized)}
   >
     <openclaw-tooltip .content=${label}>${content}</openclaw-tooltip>
-    ${renderSidebarReorderMenu({
-      label,
-      kind: "entry",
-      onRemove: () => host.sessionOrganizer.removeSidebarEntry(serialized),
-      onMove: async (target, position) => {
-        host.sessionOrganizer.writeSidebarEntryAt(serialized, target, position);
-        await host.updateComplete;
-      },
-    })}
+    ${
+      host.sidebarSnapshot
+        ? nothing
+        : renderSidebarReorderMenu({
+            label,
+            kind: "entry",
+            onRemove: () => host.sessionOrganizer.removeSidebarEntry(serialized),
+            onMove: async (target, position) => {
+              host.sessionOrganizer.writeSidebarEntryAt(serialized, target, position);
+              await host.updateComplete;
+            },
+          })
+    }
   </div>`;
 }
 
@@ -193,8 +204,15 @@ export function renderSidebarPages(host: AppSidebarRenderHost) {
   const zone = host.reconciledSidebarZone();
   const dashboards = host.navigationCatalog.dashboards;
   const rows = new Map(zone.sessionRows);
-  for (const row of dashboards?.result?.sessions ?? []) {
-    rows.set(row.key, host.getSessionNavigationState().toSidebarSession(row));
+  const dashboardRows = host.sidebarSnapshot
+    ? host.sidebarSnapshot.pages.map((row) =>
+        restoreSnapshotSession(row, host.getRouteSessionKey()),
+      )
+    : (dashboards?.result?.sessions ?? []).map((row) =>
+        host.getSessionNavigationState().toSidebarSession(row),
+      );
+  for (const row of dashboardRows) {
+    rows.set(row.key, row);
   }
   const entries: SidebarZoneEntry[] = [
     ...SIDEBAR_NAV_ROUTES.filter((route) => host.sidebarMenus.isRouteEnabled(route)).map(
@@ -202,7 +220,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost) {
     ),
     ...new Set([...zone.pluginTabs.keys(), ...host.pluginNavigation().map((entry) => entry.key)]),
   ].map((entry) => (typeof entry === "string" ? { type: "plugin", key: entry } : entry));
-  for (const row of dashboards?.result?.sessions ?? []) {
+  for (const row of dashboardRows) {
     entries.push({ type: "session", key: row.key });
   }
   return html`<nav
@@ -221,6 +239,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost) {
         <button
           type="button"
           class="sidebar-pages__pin"
+          ?disabled=${Boolean(host.sidebarSnapshot)}
           aria-label=${t(host.sidebarEntries.includes(serializeSidebarEntry(entry)) ? "nav.unpin" : "nav.pin")}
           @click=${() => {
             const key = serializeSidebarEntry(entry);
@@ -242,12 +261,15 @@ export function renderSidebarPages(host: AppSidebarRenderHost) {
 
 export function renderSidebarScope(host: AppSidebarRenderHost) {
   const allFilter = host.sessionOwnerFilter;
+  const ownerId = host.sidebarSnapshot ? host.sidebarSnapshot.ownerId : allFilter.ownerId;
+  const involvingMe = host.sidebarSnapshot?.involvingMe ?? allFilter.involvingMe;
+  const selfId =
+    host.sidebarSnapshot?.footer?.id ?? host.sessionDataContext?.gateway.snapshot.selfUser?.id;
   if (
     host.sessionsStatusFilter === "active" &&
-    host.navigationCatalog.scopesEquivalent &&
-    !allFilter.involvingMe &&
-    (!allFilter.ownerId ||
-      allFilter.ownerId === host.sessionDataContext?.gateway.snapshot.selfUser?.id)
+    (host.sidebarSnapshot?.scopesEquivalent ?? host.navigationCatalog.scopesEquivalent) &&
+    !involvingMe &&
+    (!ownerId || ownerId === selfId)
   ) {
     return nothing;
   }

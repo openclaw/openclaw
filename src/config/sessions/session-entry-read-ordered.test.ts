@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -10,6 +11,7 @@ import {
 } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveInternalSessionEffectsIdentity } from "./internal-session-key.js";
+import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -73,7 +75,7 @@ it("retains exact reads without dispatch, isolates agent stores, and evicts the 
     const requests = observeEntryReaderRequests();
     try {
       expect((await read(keys.slice(0, 64))).entries).toHaveLength(64);
-      expect((await read(keys.slice(64, 128))).entries).toHaveLength(64);
+      expect((await read(keys.slice(64, 127))).entries).toHaveLength(63);
       expect((await readOther()).entries[0]?.entry.sessionId).toBe("other-store");
       expect(requests.count()).toBeGreaterThan(0);
       requests.clear();
@@ -218,9 +220,30 @@ it("observes native and worker entry, participant, and membership writes after c
       });
     const requests = observeEntryReaderRequests();
     try {
-      expect((await read()).entries[0]?.entry.sessionId).toBe("same-session");
+      const initial = await read();
+      expect(initial.entries[0]?.entry.sessionId).toBe("same-session");
       requests.clear();
       expect((await read()).members?.[sessionKey]).toEqual([]);
+      expect(requests.count()).toBe(0);
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:unrelated" },
+        { sessionId: "unrelated", updatedAt: 2 },
+      );
+      expect(await read()).toEqual(initial);
+      expect(requests.count()).toBe(0);
+      replaceSessionEntrySync(scope, {
+        sessionId: "same-session",
+        updatedAt: 3,
+        label: "receipt-only",
+      });
+      expect(
+        (await readSessionEntriesFromStoreInWorker({ ...scope, sessionKeys: [sessionKey] }))
+          .entries[0]?.entry.label,
+      ).toBe("receipt-only");
+      expect(requests.count()).toBe(1);
+      expect((await read()).entries[0]?.entry.label).toBe("receipt-only");
+      requests.clear();
+      expect((await read()).entries[0]?.entry.label).toBe("receipt-only");
       expect(requests.count()).toBe(0);
       expect((await readMissing()).entries).toEqual([]);
       requests.clear();
@@ -278,6 +301,33 @@ it("observes native and worker entry, participant, and membership writes after c
     } finally {
       requests.restore();
     }
+  });
+});
+
+it("keeps an ordered read current when session generation tracking initializes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const options = { agentId: "main", env };
+    const seeded = openOpenClawAgentDatabase(options);
+    const sessionKey = "agent:main:cold-generation";
+    writeSessionEntry(seeded, sessionKey, { sessionId: "original", updatedAt: 1 });
+    await closeOpenClawAgentDatabaseByPathAsync(seeded.path, seeded.agentId);
+    const database = openOpenClawAgentDatabase(options);
+    await expect(
+      withSessionEntriesFromStoresInWorker(
+        [{ ...options, storePath: database.path, sessionKeys: [sessionKey] }],
+        ([read]) => {
+          read!.assertCurrent();
+          return read!.result.entries[0]?.entry.sessionId;
+        },
+        {
+          ordered: true,
+          onReadAdmitted: () => {
+            expect(database.db.prepare("SELECT name FROM temp.sqlite_schema").all()).toEqual([]);
+            expect(readSessionNodesGeneration(database.db)).toBe(0);
+          },
+        },
+      ),
+    ).resolves.toBe("original");
   });
 });
 

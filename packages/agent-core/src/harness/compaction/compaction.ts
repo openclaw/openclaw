@@ -3,7 +3,6 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
@@ -11,6 +10,11 @@ import { isRuntimeContextCarrier } from "../messages.js";
 import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import { CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
+import {
+  type CompactionDetails,
+  MAX_LATEST_USER_REQUEST_CHARS,
+  parseCompactionDetails,
+} from "./compaction-details.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
 import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
@@ -25,36 +29,7 @@ import {
   stringifyCompactionValue,
 } from "./utils.js";
 
-/** File-operation details stored on generated compaction entries. */
-export interface CompactionDetails {
-  readFiles: string[];
-  modifiedFiles: string[];
-  /** Run-owned request that remains active across another compaction generation. */
-  latestUnresolvedUserRequest?: string;
-}
-
-function parseCompactionDetails(value: unknown): CompactionDetails | undefined {
-  const details = asOptionalRecord(value);
-  if (
-    !details ||
-    !Array.isArray(details.readFiles) ||
-    !details.readFiles.every((file): file is string => typeof file === "string") ||
-    !Array.isArray(details.modifiedFiles) ||
-    !details.modifiedFiles.every((file): file is string => typeof file === "string")
-  ) {
-    return undefined;
-  }
-  const request = details.latestUnresolvedUserRequest;
-  const latestUnresolvedUserRequest =
-    typeof request === "string" && request.length <= MAX_LATEST_USER_REQUEST_CHARS
-      ? request
-      : undefined;
-  return {
-    readFiles: details.readFiles,
-    modifiedFiles: details.modifiedFiles,
-    ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
-  };
-}
+export type { CompactionDetails } from "./compaction-details.js";
 
 function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage | undefined {
   if (entry.type === "compaction") {
@@ -79,7 +54,6 @@ export interface CompactionResult<T = unknown> {
 export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const TURN_CONTEXT_PREFIX = "\n\n---\n\n**Turn Context (split turn):**\n\n";
-const MAX_LATEST_USER_REQUEST_CHARS = 800;
 const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
 const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
 const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";

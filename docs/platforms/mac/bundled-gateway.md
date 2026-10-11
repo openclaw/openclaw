@@ -58,7 +58,7 @@ retain their existing startup policies.
 
 When the native app creates identity, device-auth, or approval tables before
 the worker starts, node startup completes that recognized version-zero database
-through the canonical initializer before plugins read their state. Existing
+through the shared initializer before plugins read their state. Existing
 native rows are preserved. This does not migrate an already-versioned shared
 Gateway database or adopt unknown or occupied bootstrap state.
 

@@ -13,15 +13,30 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe 0.25.0 release and native helpers; remove after 2026-10-15T21:23:59.079Z.
-  - "@openclaw/fs-safe@0.25.0"
-  - "@openclaw/fs-safe-darwin-arm64@0.25.0"
-  - "@openclaw/fs-safe-darwin-x64@0.25.0"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.25.0"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.25.0"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.25.0"
-  - "@openclaw/fs-safe-linux-x64-musl@0.25.0"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.25.0"
+  # Reviewed fs-safe 0.26.0 release and native helpers; remove after 2026-10-17T20:00:18.006Z.
+  - "@openclaw/fs-safe@0.26.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.26.0"
+  - "@openclaw/fs-safe-darwin-x64@0.26.0"
+  - "@openclaw/fs-safe-freebsd-arm64@0.26.0"
+  - "@openclaw/fs-safe-freebsd-x64@0.26.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.26.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.26.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.26.0"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.26.0"
+  # Reviewed proc-safe 0.2.0 release and native helpers; remove after 2026-10-18T04:40:03.765Z.
+  - "@openclaw/proc-safe@0.2.0"
+  - "@openclaw/proc-safe-darwin-arm64@0.2.0"
+  - "@openclaw/proc-safe-darwin-x64@0.2.0"
+  - "@openclaw/proc-safe-freebsd-arm64@0.2.0"
+  - "@openclaw/proc-safe-freebsd-x64@0.2.0"
+  - "@openclaw/proc-safe-linux-arm64-gnu@0.2.0"
+  - "@openclaw/proc-safe-linux-arm64-musl@0.2.0"
+  - "@openclaw/proc-safe-linux-x64-gnu@0.2.0"
+  - "@openclaw/proc-safe-linux-x64-musl@0.2.0"
+  - "@openclaw/proc-safe-win32-arm64-msvc@0.2.0"
+  - "@openclaw/proc-safe-win32-x64-msvc@0.2.0"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
