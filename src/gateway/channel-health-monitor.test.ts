@@ -122,7 +122,9 @@ async function expectRestartedChannel(
 ) {
   const monitor = await startAndRunCheck(manager);
   expect(manager.stopChannel).toHaveBeenCalledWith(channel, accountId, { manual: false });
-  expect(manager.startChannel).toHaveBeenCalledWith(channel, accountId);
+  expect(manager.startChannel).toHaveBeenCalledWith(channel, accountId, {
+    reason: "health-monitor",
+  });
   monitor.stop();
 }
 
@@ -215,7 +217,9 @@ describe("channel-health-monitor", () => {
 
       reloadingChannels.clear();
       await clock.advanceBy(DEFAULT_CHECK_INTERVAL_MS);
-      expect(manager.startChannel).toHaveBeenCalledExactlyOnceWith("discord", "default");
+      expect(manager.startChannel).toHaveBeenCalledExactlyOnceWith("discord", "default", {
+        reason: "health-monitor",
+      });
       expect(manager.resetRestartAttempts).toHaveBeenCalledExactlyOnceWith("discord", "default");
     } finally {
       monitor.stop();
@@ -272,7 +276,9 @@ describe("channel-health-monitor", () => {
 
     expect(recoverAutostartSuppression).toHaveBeenCalled();
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
-    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default", {
+      reason: "health-monitor",
+    });
     monitor.stop();
   });
 
@@ -337,7 +343,9 @@ describe("channel-health-monitor", () => {
     });
     const monitor = await startAndRunCheck(manager);
     expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
-    expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("slack", "default", {
+      reason: "health-monitor",
+    });
     monitor.stop();
   });
 
@@ -370,9 +378,11 @@ describe("channel-health-monitor", () => {
     );
     const monitor = await startAndRunCheck(manager);
     expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default", { manual: false });
-    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default", {
+      reason: "health-monitor",
+    });
     expect(manager.stopChannel).not.toHaveBeenCalledWith("discord", "quiet", { manual: false });
-    expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet");
+    expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet", expect.anything());
     monitor.stop();
   });
 
@@ -560,7 +570,9 @@ describe("channel-health-monitor", () => {
     // becomes the account's last restart owner again.
     autoRestartScheduled = false;
     await advanceHealthCheck();
-    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default", {
+      reason: "health-monitor",
+    });
     monitor.stop();
   });
 
@@ -775,7 +787,9 @@ describe("channel-health-monitor", () => {
         timing: { staleEventThresholdMs: customThreshold },
       });
       expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
-      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default", {
+        reason: "health-monitor",
+      });
       monitor.stop();
     });
   });

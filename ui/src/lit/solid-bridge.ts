@@ -1,12 +1,10 @@
 import { insert, render, spread } from "@solidjs/web";
-import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
   createRenderEffect,
   createRoot,
   createSignal,
   flush,
-  getOwner,
   onCleanup,
   runWithOwner,
   untrack,
@@ -16,6 +14,7 @@ import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
+import { mountLitContent } from "./solid-content.tsx";
 
 type Property<T> = {
   default: T;
@@ -331,7 +330,6 @@ export function LitContent(props: {
   tag?: "span" | "div" | "code";
   class?: string;
 }) {
-  const owner = getOwner();
   // Host shape stays fixed while the template updates.
   const tag = untrack(() => props.tag ?? "span");
   const host = document.createElement(tag);
@@ -342,17 +340,14 @@ export function LitContent(props: {
   if (className) {
     host.className = className;
   }
-  let part: ReturnType<typeof renderLit> | undefined;
-  // Lit directives may create Solid resources; retain the adapter's owner during commit.
+  const mount = mountLitContent(undefined, host, { host });
+  // Commit Lit descendants before post-render observers inspect the host.
   createRenderEffect(
     () => props.render(),
     (template) => {
-      part = runWithOwner(owner, () => renderLit(template, host, { host }));
+      mount.update(template);
     },
   );
-  onCleanup(() => {
-    part?.setConnected(false);
-    renderLit(nothing, host);
-  });
+  onCleanup(mount.dispose);
   return host;
 }
