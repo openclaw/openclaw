@@ -10,7 +10,10 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
-import type { SessionToolOverrides } from "../../config/sessions/types.js";
+import type {
+  SessionToolCatalogClientFacts,
+  SessionToolOverrides,
+} from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -62,6 +65,11 @@ export type AgentRunClientContext = {
   bootstrapUserProfileId?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /**
+   * Session-recorded client facts for harnesses with a thread-stable tool catalog. They
+   * shape declarations only; executable tools follow clientCaps and taskSuggestionDeliveryMode.
+   */
+  toolCatalogClientFacts?: SessionToolCatalogClientFacts;
   gatewayUiCommandTarget?: import("../../gateway/ui-command-target.types.js").GatewayUiCommandTarget;
   /** Host-admitted dashboard authoring without an originating inline renderer. */
   pinnedWidgetAuthoring?: boolean;

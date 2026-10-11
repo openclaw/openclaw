@@ -728,6 +728,11 @@ async function initSessionStateAttemptLocked(
     delivery,
     groupActivation: entry?.groupActivation,
     groupActivationNeedsSystemIntro: entry?.groupActivationNeedsSystemIntro,
+    // The latest interactive Gateway client defines the catalog internal turns declare;
+    // channel and system turns keep the recorded facts, and a new session starts without them.
+    ...(ctx.GatewayToolCatalogClientFacts
+      ? { toolCatalogClientFacts: ctx.GatewayToolCatalogClientFacts }
+      : {}),
   };
   const metaPatch = deriveSessionMetaPatch({
     ctx: sessionCtxForState,

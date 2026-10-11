@@ -1073,6 +1073,30 @@ describe("initSessionState RawBody", () => {
     },
   );
 
+  it("records interactive tool catalog facts until a reset starts a new session", async () => {
+    const storePath = await makeStorePath("openclaw-tool-catalog-facts-");
+    const cfg = { session: { store: storePath, resetTriggers: ["/new"] } } as OpenClawConfig;
+    const sessionKey = "agent:main:main";
+    const facts = {
+      clientCaps: ["inline-widgets", "ui-commands"],
+      taskSuggestionDeliveryMode: "gateway" as const,
+    };
+    const turn = async (ctx: Record<string, unknown>) => {
+      const result = await initSessionState({
+        ctx: { Body: "hello", ChatType: "direct", SessionKey: sessionKey, ...ctx },
+        cfg,
+      });
+      return { result, facts: loadSessionEntry({ storePath, sessionKey })?.toolCatalogClientFacts };
+    };
+
+    expect((await turn({ GatewayToolCatalogClientFacts: facts })).facts).toEqual(facts);
+    // Channel and system turns have no client surface, so the recorded facts stay.
+    expect((await turn({ Provider: "telegram" })).facts).toEqual(facts);
+    const reset = await turn({ Body: "/new" });
+    expect(reset.result.resetTriggered).toBe(true);
+    expect(reset.facts).toBeUndefined();
+  });
+
   it("supports a bounded Body-only legacy envelope without searching flat history", async () => {
     const storePath = await makeStorePath("openclaw-body-only-reset-");
     const cfg = {

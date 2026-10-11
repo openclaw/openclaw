@@ -1,4 +1,14 @@
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+/**
+ * Client caps that gate core tools (`show_widget`, `screen`). Sessions record
+ * them from interactive clients so internal turns declare the same catalog.
+ */
+export const TOOL_CATALOG_CLIENT_CAPS: readonly string[] = [
+  GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+  GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+];
 
 /**
  * Drops tools whose requiredClientCaps the originating gateway client did not

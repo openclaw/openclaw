@@ -1,4 +1,10 @@
-import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
+import path from "node:path";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import {
+  onAgentEvent,
+  type AgentEventPayload,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createProcessPollDeliveryContract,
   createRequiredExecRuntimeContract,
@@ -18,13 +24,19 @@ import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
+  createAppServerHarness,
+  createParams,
   createTestParams,
   createCodexRuntimePlanFixture,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
+  fastWait,
   runCodexAppServerAttempt,
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
+  tempDir,
+  threadStartResult,
+  turnStartResult,
 } from "./run-attempt-test-harness.js";
 
 function callTool(
@@ -427,5 +439,154 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         toolCallId: "call-echo-1",
       }),
     );
+  });
+});
+
+type CatalogCaller = Partial<
+  Pick<
+    EmbeddedRunAttemptParams,
+    "clientCaps" | "taskSuggestionDeliveryMode" | "toolCatalogClientFacts" | "messageChannel"
+  >
+>;
+
+const CONTROL_UI_CALLER: CatalogCaller = {
+  clientCaps: ["tool-events", "inline-widgets", "ui-commands", "task-suggestions"],
+  taskSuggestionDeliveryMode: "gateway",
+};
+const RECORDED_CONTROL_UI_FACTS = {
+  clientCaps: ["inline-widgets", "ui-commands"],
+  taskSuggestionDeliveryMode: "gateway" as const,
+};
+const CLIENT_GATED_TOOLS = ["dismiss_task", "screen", "show_widget", "suggest_task"];
+
+function createCatalogSessionHarness() {
+  let threads = 0;
+  let turns = 0;
+  return createAppServerHarness(
+    async (method, requestParams) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "thread/start") {
+        return threadStartResult(`thread-${++threads}`);
+      }
+      if (method === "thread/resume") {
+        return threadStartResult((requestParams as { threadId: string }).threadId);
+      }
+      if (method === "turn/start") {
+        return turnStartResult(`turn-${++turns}`);
+      }
+      return {};
+    },
+    { persistedThreads: ["thread-1", "thread-2"] },
+  );
+}
+
+type CatalogSessionHarness = ReturnType<typeof createCatalogSessionHarness>;
+
+// Each turn ran on this thread; a catalog rotation shows up as a second thread id.
+function turnThreadIds(harness: CatalogSessionHarness): string[] {
+  return harness.requests
+    .filter(({ method }) => method === "turn/start")
+    .map(({ params }) => (params as { threadId: string }).threadId);
+}
+
+function declaredToolNames(harness: CatalogSessionHarness): string[] {
+  const start = harness.requests.find(({ method }) => method === "thread/start");
+  return [...JSON.stringify(start?.params).matchAll(/"name":"([^"]+)"/g)].map((match) => match[1]!);
+}
+
+// Runs one turn of the shared session with real core tool assembly, narrowed to
+// the client-gated tools plus one ungated tool.
+async function runCatalogTurn(
+  harness: CatalogSessionHarness,
+  index: number,
+  caller: CatalogCaller,
+  duringTurn?: (threadId: string) => Promise<void>,
+) {
+  const params = createParams(
+    path.join(tempDir, "session.jsonl"),
+    path.join(tempDir, "workspace"),
+    {
+      prompt: `turn ${index}`,
+      runId: `run-${index}`,
+    },
+  );
+  Object.assign(params, caller);
+  setCodexTestToolFactory(params, (options) =>
+    createOpenClawCodingTools(options).filter((tool) =>
+      [...CLIENT_GATED_TOOLS, "message"].includes(tool.name),
+    ),
+  );
+  params.runtimePlan = createCodexRuntimePlanFixture();
+  setCodexTestModelSupportsTools(params, true);
+  const run = runCodexAppServerAttempt(params);
+  await vi.waitFor(() => expect(turnThreadIds(harness)).toHaveLength(index), fastWait);
+  const threadId = turnThreadIds(harness).at(-1)!;
+  await duringTurn?.(threadId);
+  await harness.completeTurn({ threadId, turnId: `turn-${index}` });
+  await run;
+}
+
+describe("runCodexAppServerAttempt tool catalog across callers", () => {
+  it("keeps one thread across Control UI and internal turns and refuses UI-only tools", async () => {
+    const harness = createCatalogSessionHarness();
+
+    await runCatalogTurn(harness, 1, CONTROL_UI_CALLER);
+    await runCatalogTurn(
+      harness,
+      2,
+      { clientCaps: [], toolCatalogClientFacts: RECORDED_CONTROL_UI_FACTS },
+      async (threadId) => {
+        expect(threadId).toBe("thread-1");
+        for (const tool of CLIENT_GATED_TOOLS) {
+          const call = { callId: `call-${tool}`, namespace: "openclaw", tool, arguments: {} };
+          const response = await harness.handleServerRequest({
+            id: `request-${tool}`,
+            method: "item/tool/call",
+            params: { threadId, turnId: "turn-2", ...call },
+          });
+          expect(response).toEqual({
+            success: false,
+            contentItems: [
+              { type: "inputText", text: `OpenClaw tool is not available for this turn: ${tool}` },
+            ],
+          });
+          // Codex settles the call item after accepting the response.
+          await harness.notify({
+            method: "item/completed",
+            params: {
+              threadId,
+              turnId: "turn-2",
+              item: {
+                type: "dynamicToolCall",
+                id: call.callId,
+                status: "failed",
+                ...call,
+                ...response,
+              },
+            },
+          });
+        }
+      },
+    );
+
+    expect(declaredToolNames(harness)).toEqual(expect.arrayContaining(CLIENT_GATED_TOOLS));
+    expect(turnThreadIds(harness)).toEqual(["thread-1", "thread-1"]);
+  });
+
+  it("keeps a session without recorded client facts on its channel catalog", async () => {
+    const harness = createCatalogSessionHarness();
+
+    await runCatalogTurn(harness, 1, { messageChannel: "telegram" });
+    await runCatalogTurn(harness, 2, { messageChannel: "telegram", clientCaps: [] });
+
+    expect(declaredToolNames(harness).filter((name) => CLIENT_GATED_TOOLS.includes(name))).toEqual(
+      [],
+    );
+    expect(turnThreadIds(harness)).toEqual(["thread-1", "thread-1"]);
   });
 });

@@ -23,6 +23,7 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
+import type { SessionToolCatalogClientFacts } from "../../config/sessions/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   isProgressCardRefreshInputProvenance,
@@ -32,14 +33,14 @@ import {
   readProviderReviewAcknowledgment,
   type ProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
-import {
-  isBrowserCopilotClient,
-  isBrowserOperatorUiClient,
-  isOperatorUiClient,
-} from "../../utils/message-channel.js";
+import { isBrowserCopilotClient, isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import type { ChatAttachment } from "../chat-attachments.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import {
+  resolveInteractiveToolCatalogClientFacts,
+  supportsGatewayTaskSuggestions,
+} from "../session-tool-catalog-client-facts.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeChatHumanMentions } from "./chat-human-mentions.js";
 import {
@@ -66,6 +67,8 @@ export type NormalizedChatSendRequest = {
   chatSendReceivedAtMs: number;
   clientInfo?: GatewayClientInfo;
   supportsTaskSuggestions: boolean;
+  /** Absent for synthetic callers, which have no client surface to record. */
+  toolCatalogClientFacts?: SessionToolCatalogClientFacts;
   p: ChatSendRequestParams;
   explicitOrigin?: ChatSendExplicitOrigin;
   inboundMessage: string;
@@ -100,10 +103,8 @@ export function normalizeChatSendRequest(params: {
   const reject = (error: string) => ({ ok: false as const, error });
   const client = params.client;
   const clientInfo = client?.connect?.client;
-  const supportsTaskSuggestions =
-    isOperatorUiClient(clientInfo) &&
-    params.client?.connect?.scopes?.includes("operator.admin") === true &&
-    hasGatewayClientCap(params.client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
+  const supportsTaskSuggestions = supportsGatewayTaskSuggestions(client);
+  const toolCatalogClientFacts = resolveInteractiveToolCatalogClientFacts(client);
   const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params.params, clientInfo);
   if (!validateChatSendParams(controlUiReconnectResume.params)) {
     return reject(
@@ -295,6 +296,7 @@ export function normalizeChatSendRequest(params: {
     chatSendReceivedAtMs,
     clientInfo,
     supportsTaskSuggestions,
+    ...(toolCatalogClientFacts ? { toolCatalogClientFacts } : {}),
     p,
     ...(params.providerReviewAcknowledgment
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }

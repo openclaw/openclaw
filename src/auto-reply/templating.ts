@@ -1,5 +1,6 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { SessionToolCatalogClientFacts } from "../config/sessions/types.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
@@ -382,6 +383,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   GatewayClientScopes?: string[];
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
+  /** Catalog facts of the originating interactive Gateway client, recorded on its session. */
+  GatewayToolCatalogClientFacts?: SessionToolCatalogClientFacts;
   /** Server-bound requesting browser; never sourced from message text or rendered into prompts. */
   GatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Run-scoped plugin tool bindings; never rendered into prompt text. */

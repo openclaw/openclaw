@@ -1,7 +1,3 @@
-import {
-  GATEWAY_CLIENT_CAPS,
-  hasGatewayClientCap,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import {
@@ -35,7 +31,6 @@ import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gatewa
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
-import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { runWithChatAbortExecution } from "../chat-abort-lifecycle-internal.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -47,6 +42,10 @@ import { resolveChatSendCallerContext } from "../server-methods/gateway-client-i
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { prepareSessionWorkspaceForRun } from "../server-methods/session-create-project.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
+import {
+  resolveDeclaredToolCatalogClientFacts,
+  supportsGatewayTaskSuggestions,
+} from "../session-tool-catalog-client-facts.js";
 import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import { buildAbortedAgentPayload, setGatewayDedupeEntries } from "./agent-dedupe.js";
@@ -422,10 +421,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         const callerContext = resolveChatSendCallerContext(params.client);
         const clientCaps = [...callerContext.GatewayClientCaps];
         const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
-        const supportsTaskSuggestions =
-          isOperatorUiClient(params.client?.connect.client) &&
-          params.client?.connect.scopes?.includes("operator.admin") === true &&
-          hasGatewayClientCap(clientCaps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
+        const supportsTaskSuggestions = supportsGatewayTaskSuggestions(params.client);
         const gatewayContext = params.context.resolveGatewayContext?.();
         const skillLibraryAuthoring =
           gatewayContext && params.resolvedSessionKey
@@ -488,6 +484,8 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 gatewayUiCommandTarget,
                 approvalReviewerDeviceId: callerContext.ApprovalReviewerDeviceId,
                 taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
+                // Declarations only; executable tools keep this caller's own caps.
+                toolCatalogClientFacts: resolveDeclaredToolCatalogClientFacts(params),
                 ...(prepared.userTurn.bashElevated
                   ? { bashElevated: prepared.userTurn.bashElevated }
                   : {}),

@@ -52,6 +52,14 @@ export type { SessionSystemPromptReport } from "./session-system-prompt-report.j
 
 export type { SessionScope } from "../types.base.js";
 export type SessionChatType = ChatType;
+
+/** Gateway client facts that shape a session's model-visible tool catalog. */
+export type SessionToolCatalogClientFacts = {
+  /** Catalog-gating client caps in canonical order (`inline-widgets`, `ui-commands`). */
+  clientCaps: string[];
+  /** Present when the client could receive follow-up task suggestions. */
+  taskSuggestionDeliveryMode?: "gateway";
+};
 export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 
@@ -329,6 +337,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     observerDigest?: SessionObserverDigest;
     /** Versioned, reconstructible Activity recap; never authoritative task status. */
     activitySummary?: import("./activity-summary.js").SessionActivitySummary;
+    /** Catalog-gating facts of the latest interactive Gateway client; internal turns declare the same tools. */
+    toolCatalogClientFacts?: SessionToolCatalogClientFacts;
     /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
     markedUnreadAt?: number;
     /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */

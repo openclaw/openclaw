@@ -337,6 +337,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       ? []
       : await buildDynamicTools({
           ...commonToolParams,
+          params: withRecordedToolCatalogClientFacts(dynamicToolParams),
           forceHeartbeatTool: true,
           ignoreDisableMessageTool: true,
           ignoreRuntimePlan: true,
@@ -687,6 +688,25 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     await disposeTools("error");
     throw error;
   }
+}
+
+// Thread-stable declarations follow the session's recorded client surface. The
+// executable build keeps this caller's own caps, so a declared tool the caller
+// cannot use is refused as unavailable for this turn.
+function withRecordedToolCatalogClientFacts<
+  T extends Pick<
+    EmbeddedRunAttemptParams,
+    "clientCaps" | "taskSuggestionDeliveryMode" | "toolCatalogClientFacts"
+  >,
+>(params: T): T {
+  const facts = params.toolCatalogClientFacts;
+  return facts
+    ? {
+        ...params,
+        clientCaps: facts.clientCaps,
+        taskSuggestionDeliveryMode: facts.taskSuggestionDeliveryMode,
+      }
+    : params;
 }
 
 export type CodexAttemptTools = Awaited<ReturnType<typeof prepareCodexAttemptTools>>;

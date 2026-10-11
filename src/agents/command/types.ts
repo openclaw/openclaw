@@ -8,6 +8,7 @@ import type {
 } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { SessionToolCatalogClientFacts } from "../../config/sessions/types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent as LlmImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -107,6 +108,8 @@ export type AgentCommandOpts = {
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Follow-up task action sink admitted by the originating Gateway client. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  /** Session-recorded client facts for the declared tool catalog of a turn without a client surface. */
+  toolCatalogClientFacts?: SessionToolCatalogClientFacts;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Internal trusted exec approval follow-up elevated defaults. */
@@ -267,6 +270,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
   gatewayUiCommandTarget: undefined,
   toolBindings: undefined,
   taskSuggestionDeliveryMode: undefined,
+  toolCatalogClientFacts: undefined,
   runtimeContextFragments: undefined,
   senderIsOwner: false,
   mainRestartRecoveryOwnerLease: undefined,

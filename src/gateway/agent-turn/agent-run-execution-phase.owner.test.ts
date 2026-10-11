@@ -43,6 +43,7 @@ import { createChatAbortContext } from "../server-methods/chat.abort.test-helper
 import * as sessionChange from "../server-methods/session-change-event.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import * as agentHandlerHelpers from "./agent-handler-helpers.js";
@@ -675,6 +676,41 @@ describe("startAgentRunExecution Gateway ownership", () => {
     const runContext = resolveAgentRunContext(dispatch.ingressOpts);
     expect(runContext.messageChannel).toBe(testCase.expectedChannel);
     expect(runContext.currentChannelId).toBeUndefined();
+  });
+
+  it.each([
+    { name: "a synthetic in-process caller", synthetic: true },
+    { name: "an interactive client", synthetic: false },
+  ])("declares the recorded tool catalog only for $name", async ({ synthetic }) => {
+    const recorded = {
+      clientCaps: ["inline-widgets", "ui-commands"],
+      taskSuggestionDeliveryMode: "gateway" as const,
+    };
+    const execution = createExecution();
+    execution.params.client = synthetic
+      ? createSyntheticPluginRuntimeClient()
+      : {
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "cli", mode: "cli", version: "test", platform: "test" },
+            caps: ["tool-events"],
+          },
+        };
+    execution.params.sessionEntry = {
+      sessionId: "source-session",
+      updatedAt: 1,
+      toolCatalogClientFacts: recorded,
+    };
+    dispatchAgentRunFromGateway.mockResolvedValueOnce(undefined);
+
+    await startAgentRunExecution(execution.params);
+
+    const ingress = dispatchAgentRunFromGateway.mock.calls[0]?.[0].ingressOpts;
+    // Recorded facts shape declarations only; executable tools keep this caller's caps.
+    expect(ingress?.toolCatalogClientFacts).toEqual(synthetic ? recorded : undefined);
+    expect(ingress?.clientCaps).toEqual(synthetic ? [] : ["tool-events"]);
+    expect(ingress?.taskSuggestionDeliveryMode).toBeUndefined();
   });
 
   it.each([

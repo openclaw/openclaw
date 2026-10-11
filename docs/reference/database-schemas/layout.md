@@ -125,6 +125,12 @@ Payload version 1 records the recap text, generation time, session ID and lifecy
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
 
+### Tool catalog client facts
+
+The optional `toolCatalogClientFacts` object in `session_nodes.entry_json` records the catalog-gating capabilities of the session's latest interactive Gateway client: its `inline-widgets` and `ui-commands` client caps, and whether it could receive follow-up task suggestions. Internal turns, such as subagent completion wakes dispatched in process, have no client of their own. Harnesses with a thread-stable tool catalog, such as Codex, declare the recorded tools for those turns so the native thread is not replaced. Execution still follows the current caller: an internal turn that calls `screen`, `show_widget`, `suggest_task`, or `dismiss_task` gets an unavailable-for-this-turn result. The [approved design](https://github.com/openclaw/openclaw/issues/167277) adds no SQL table, column, or database schema-version change.
+
+Interactive `chat.send` turns record the facts in the session initialization write that every turn already makes, so recording adds no write. Channel and system turns keep the recorded value. A reset starts the new session without it, and deleting the session removes it with the node. Interactive clients with different capabilities on one session, such as the TUI and the Control UI, record different facts, so alternating between them can still start a new Codex thread. Current and `v2026.9.4` metadata serializers preserve unknown optional fields. Removing or ignoring the field is a rollback path that needs no migration; internal turns then declare only their own caller's tools.
+
 ### User-turn model prompt projections
 
 Canonical user messages may include the optional private field

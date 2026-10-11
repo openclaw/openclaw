@@ -5087,5 +5087,45 @@ describe("chat.send local operator client sender context", () => {
     });
     expect(mockState.lastTaskSuggestionDeliveryMode).toBe(expected);
   });
+
+  it.each([
+    {
+      name: "an admin Control UI client",
+      internal: undefined,
+      expected: {
+        clientCaps: [GATEWAY_CLIENT_CAPS.INLINE_WIDGETS, GATEWAY_CLIENT_CAPS.UI_COMMANDS],
+        taskSuggestionDeliveryMode: "gateway",
+      },
+    },
+    {
+      name: "a synthetic in-process caller",
+      internal: { syntheticClient: true },
+      expected: undefined,
+    },
+  ])("records tool catalog facts for $name", async ({ internal, expected }) => {
+    await createChatRequestFixture().send({
+      idempotencyKey: `idem-tool-catalog-${internal ? "synthetic" : "control-ui"}`,
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            version: "dev",
+            platform: "web",
+          },
+          caps: [
+            GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+            GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+            GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+            GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+          ],
+          scopes: ["operator.admin"],
+        },
+        internal,
+      },
+      expectBroadcast: false,
+    });
+    expect(mockState.lastDispatchCtx?.GatewayToolCatalogClientFacts).toEqual(expected);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

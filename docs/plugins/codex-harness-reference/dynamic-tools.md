@@ -48,6 +48,16 @@ toward native `spawn_agent` for Codex-native subagent work, while
 Message-tool-only source replies also stay direct, since that is a
 turn-control contract.
 
+Codex accepts dynamic tools only when a thread starts, so OpenClaw starts a new
+Codex thread when a turn declares a different catalog than the bound thread.
+Some tools depend on the calling client: `screen` and `show_widget` need Control
+UI capabilities, and `suggest_task` and `dismiss_task` need task-suggestion
+delivery. Internal turns, such as subagent completion wakes, declare the tools
+that the session's latest interactive client recorded, so they keep the thread.
+When such a turn calls one of those tools, the call returns
+`OpenClaw tool is not available for this turn`. See
+[tool catalog client facts](/reference/database-schemas/layout#tool-catalog-client-facts).
+
 Codex Code Mode projects generic OpenClaw dynamic-tool results as text. Parse a
 JSON result before reading fields. Nested dynamic calls are serialized by the
 Codex runtime, so `Promise.all` does not submit them concurrently; use a
