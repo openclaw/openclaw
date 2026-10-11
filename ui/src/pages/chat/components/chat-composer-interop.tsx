@@ -20,6 +20,7 @@ export function LitContent(props: { value: unknown }) {
   return (
     <Show when={hasComposerContent(props.value)}>
       <span
+        class="chat-composer-lit-content"
         style={{ display: "contents" }}
         ref={(node) => {
           element = node;

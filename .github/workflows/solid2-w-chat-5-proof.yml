@@ -187,6 +187,8 @@ jobs:
             ui/src/pages/chat/chat-composer-undo-redo.browser.test.ts \
             --maxWorkers=1
           composer_regressions() {
+            local overflow_test=ui/src/pages/chat/chat-composer-overflow.browser.test.ts
+            if [[ -f "$1/${overflow_test}x" ]]; then overflow_test="${overflow_test}x"; fi
             (cd "$1" && pnpm test \
             ui/src/components/web-awesome-migration.node.test.ts \
             ui/src/pages/chat/chat-composer-suggestions.test.ts \
@@ -197,7 +199,8 @@ jobs:
             ui/src/pages/chat/chat-pasted-text-sidebar.test.ts \
             ui/src/pages/chat/chat-composer-emoji.test.ts \
             ui/src/pages/chat/chat-view.attachment-paste.test.ts \
-            ui/src/pages/chat/chat-composer-overflow.browser.test.tsx \
+            ui/src/pages/chat/chat-footer-layout.browser.test.ts \
+            "$overflow_test" \
             ui/src/pages/chat/components/chat-model-catalog-state.test.ts \
             ui/src/pages/chat/components/chat-effort-picker.browser.test.ts \
             --maxWorkers=1)
@@ -209,6 +212,7 @@ jobs:
             ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts \
             ui/src/e2e/chat-composer-input-measurement.e2e.test.ts \
             ui/src/e2e/chat-flow.composer-shortcuts.e2e.test.ts \
+            ui/src/e2e/new-session-page.instant-thread.e2e.test.ts \
             --maxWorkers=1
           base_chat_gates() {
             (cd "$BASE_WORKTREE"
@@ -217,6 +221,7 @@ jobs:
                ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts \
                ui/src/e2e/chat-composer-input-measurement.e2e.test.ts \
                ui/src/e2e/chat-flow.composer-shortcuts.e2e.test.ts \
+               ui/src/e2e/new-session-page.instant-thread.e2e.test.ts \
                --maxWorkers=1)
           }
           run_phase base-chat-transcript-gates base_chat_gates
