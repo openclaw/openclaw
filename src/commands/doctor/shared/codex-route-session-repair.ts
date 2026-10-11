@@ -52,7 +52,7 @@ import {
   resolveLegacyRuntimeModelProviderAlias,
 } from "./legacy-runtime-model-providers.js";
 import { bindProviderRenameAuthProfiles } from "./provider-rename-auth.js";
-import { rewriteRenamedSessionModelPair, type ProviderRename } from "./provider-rename.js";
+import { rewriteRenamedSessionRoutes, type ProviderRename } from "./provider-rename.js";
 import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
 import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
 import { repairRetiredSessionModelRef } from "./retired-session-model-repair.js";
@@ -264,6 +264,7 @@ function repairCodexSessionStoreRoutes(params: {
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   authProfileIdMap?: ReadonlyMap<string, string>;
   authProfileOnly?: boolean;
+  providerRenameOnly?: boolean;
   retirement?: SessionModelRetirement;
   providerRenames?: readonly ProviderRename[];
   providerRenameChanges?: Set<string>;
@@ -286,7 +287,9 @@ function repairCodexSessionStoreRoutes(params: {
       }
       continue;
     }
-    const changedCliBinding = migrateLegacyClaudeSessionField(entry, sessionKey, params.warnings);
+    const changedCliBinding = params.providerRenameOnly
+      ? false
+      : migrateLegacyClaudeSessionField(entry, sessionKey, params.warnings);
     if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       // Only the binding representation changes; locked identity, route and recency stay owned.
       if (changedCliBinding) {
@@ -301,28 +304,22 @@ function repairCodexSessionStoreRoutes(params: {
     const runtimeWasExplicit =
       entry.agentRuntimeOverride !== undefined &&
       normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) !== "auto";
-    const changedProviderModel = params.providerRenames?.length
-      ? rewriteRenamedSessionModelPair(
+    const changedProviderRoute = params.providerRenames?.length
+      ? rewriteRenamedSessionRoutes({
           entry,
-          "modelProvider",
-          "model",
-          params.providerRenames,
-          `session.${JSON.stringify([params.providerRenameAgentId, sessionKey])}`,
-          params.providerRenameChanges,
-          params.providerRenameAgentId,
-        )
+          renames: params.providerRenames,
+          path: `session.${JSON.stringify([params.providerRenameAgentId, sessionKey])}`,
+          changes: params.providerRenameChanges,
+          agentId: params.providerRenameAgentId,
+        })
       : false;
-    const changedProviderOverride = params.providerRenames?.length
-      ? rewriteRenamedSessionModelPair(
-          entry,
-          "providerOverride",
-          "modelOverride",
-          params.providerRenames,
-          `session.${JSON.stringify([params.providerRenameAgentId, sessionKey])}`,
-          params.providerRenameChanges,
-          params.providerRenameAgentId,
-        )
-      : false;
+    if (params.providerRenameOnly) {
+      if (changedProviderRoute) {
+        entry.updatedAt = now;
+        sessionKeys.push(sessionKey);
+      }
+      continue;
+    }
     const runtimeModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "modelProvider",
@@ -380,8 +377,7 @@ function repairCodexSessionStoreRoutes(params: {
         )
       : false;
     if (
-      !changedProviderModel &&
-      !changedProviderOverride &&
+      !changedProviderRoute &&
       !changedModelRoute &&
       !changedFallbackNotice &&
       !changedRuntimePins &&
@@ -484,12 +480,14 @@ export async function maybeRepairCodexSessionRoutes(params: {
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
   authProfileOnly?: boolean;
+  providerRenameOnly?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   authProfileIdMap?: ReadonlyMap<string, string>;
   providerRenames?: readonly ProviderRename[];
 }): Promise<CodexSessionRouteRepairSummary> {
   const env = params.env ?? process.env;
-  const authProfileOnly = !params.shouldRepair && params.authProfileOnly === true;
+  const authProfileOnly =
+    !params.providerRenameOnly && !params.shouldRepair && params.authProfileOnly === true;
   const shouldRepair = params.shouldRepair || authProfileOnly;
   const warnings: string[] = [];
   const previewProviderChanges = new Set<string>();
@@ -509,16 +507,17 @@ export async function maybeRepairCodexSessionRoutes(params: {
         sessionTargets.map((target) => target.agentId),
       )
     : undefined;
-  const resolveRetired = authProfileOnly
-    ? undefined
-    : createRetiredModelRefRepairResolver({
-        cfg: params.cfg,
-        checkModelPolicy: true,
-        retiredModelRefConfig: params.retiredModelRefConfig,
-        env,
-        warnings,
-        agentIds: [...new Set(sessionTargets.map((target) => target.agentId))],
-      });
+  const resolveRetired =
+    authProfileOnly || params.providerRenameOnly
+      ? undefined
+      : createRetiredModelRefRepairResolver({
+          cfg: params.cfg,
+          checkModelPolicy: true,
+          retiredModelRefConfig: params.retiredModelRefConfig,
+          env,
+          warnings,
+          agentIds: [...new Set(sessionTargets.map((target) => target.agentId))],
+        });
   const targets = sessionTargets.flatMap((target) => {
     const defaultModelRef = resolveRetired
       ? resolveAgentEffectiveModelPrimary(params.cfg, target.agentId)
@@ -542,12 +541,14 @@ export async function maybeRepairCodexSessionRoutes(params: {
       agentId: target.agentId,
       env,
     };
-    const authProfileIdMap = resolveVerifiedSessionAuthProfileIdMap({
-      agentId: target.agentId,
-      cfg: params.cfg,
-      env,
-      authProfileIdMap: params.authProfileIdMap,
-    });
+    const authProfileIdMap = params.providerRenameOnly
+      ? undefined
+      : resolveVerifiedSessionAuthProfileIdMap({
+          agentId: target.agentId,
+          cfg: params.cfg,
+          env,
+          authProfileIdMap: params.authProfileIdMap,
+        });
     if (authProfileOnly && !authProfileIdMap?.size) {
       return [];
     }
@@ -557,6 +558,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
         blockedModelIdentities: params.blockedModelIdentities,
         authProfileIdMap,
         authProfileOnly,
+        providerRenameOnly: params.providerRenameOnly,
         retirement,
         providerRenames,
         providerRenameChanges: committedProviderChanges,
@@ -570,6 +572,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
         blockedModelIdentities: params.blockedModelIdentities,
         authProfileIdMap,
         authProfileOnly,
+        providerRenameOnly: params.providerRenameOnly,
         retirement,
         providerRenames,
         providerRenameChanges: previewProviderChanges,

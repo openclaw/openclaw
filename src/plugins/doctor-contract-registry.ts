@@ -4,7 +4,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { shouldIncludeChannelSetupFeatureForConfig } from "../channels/plugins/bundled-setup-policy.js";
-import { bindProviderRenameAuthProfiles } from "../commands/doctor/shared/provider-rename-auth.js";
 import type { ProviderRename } from "../commands/doctor/shared/provider-rename.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { discoverConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
@@ -360,12 +359,11 @@ export function listPluginDoctorLegacyConfigRules(
 export function resolvePluginDoctorProviderRenames(
   params: PluginDoctorRegistryParams,
 ): ProviderRename[] {
-  const declarations = resolvePluginDoctorContracts({
+  return resolvePluginDoctorContracts({
     ...params,
     pluginIds: params.pluginIds ?? collectRelevantDoctorPluginIds(params.config ?? {}),
     surface: "configRepair",
   }).flatMap((entry) => entry.providerRenames);
-  return bindProviderRenameAuthProfiles(params.config ?? {}, declarations, params.env);
 }
 
 export function listPluginDoctorSessionRouteStateOwners(

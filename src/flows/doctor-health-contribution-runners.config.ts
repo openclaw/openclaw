@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { note as showDoctorNote } from "../../packages/terminal-core/src/note.js";
+import { maybeRepairCodexSessionRoutes } from "../commands/doctor/shared/codex-route-session-repair.js";
+import { bindProviderRenameAuthProfiles } from "../commands/doctor/shared/provider-rename-auth.js";
 import { maybeRepairProviderRenameCronJobs } from "../commands/doctor/shared/provider-rename-state.js";
+import { applyProviderRenames } from "../commands/doctor/shared/provider-rename.js";
 import { shouldSkipLegacyUpdateDoctorConfigWrite } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
@@ -66,8 +69,11 @@ export async function runWriteConfigHealth(
   const { recordDoctorHealthWarnings } = await import("./doctor-health-contribution.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
+  const providerRenames = ctx.configResult.providerRenames ?? [];
+  const providerRenamePending = ctx.prompter.shouldRepair && providerRenames.length > 0;
   const configResultWritePending =
-    ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
+    (ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true) ||
+    providerRenamePending;
   const shouldWriteConfig =
     configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (resolveIsConfigReadOnly(ctx.env ?? process.env)) {
@@ -78,6 +84,40 @@ export async function runWriteConfigHealth(
     }
     if (ctx.externalConfigRepairsPending) {
       return false;
+    }
+  }
+  if (shouldWriteConfig && shouldSkipLegacyUpdateDoctorConfigWrite(ctx.env ?? process.env)) {
+    ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
+    return false;
+  }
+  if (providerRenamePending) {
+    const renamedCron = await maybeRepairProviderRenameCronJobs({
+      cfg: ctx.cfg,
+      renames: providerRenames,
+      env: ctx.env,
+      shouldRepair: true,
+    });
+    noteDoctorRepairResult(renamedCron, showDoctorNote);
+    const renamedSessions = await maybeRepairCodexSessionRoutes({
+      cfg: ctx.cfg,
+      providerRenames,
+      providerRenameOnly: true,
+      env: ctx.env,
+      shouldRepair: true,
+    });
+    noteDoctorRepairResult(renamedSessions, showDoctorNote);
+    if (renamedCron.warnings.length > 0 || renamedSessions.warnings.length > 0) {
+      throw new Error(
+        "Provider references could not be fully repaired. Config was preserved; rerun openclaw doctor --fix.",
+      );
+    }
+    const migration = applyProviderRenames(
+      ctx.cfg,
+      bindProviderRenameAuthProfiles(ctx.cfg, providerRenames, ctx.env),
+    );
+    ctx.cfg = migration.config;
+    if (migration.changes.length > 0) {
+      (ctx.configResult.pendingChangePanels ??= []).push(migration.changes.join("\n"));
     }
   }
   if (shouldWriteConfig) {
@@ -110,10 +150,6 @@ export async function runWriteConfigHealth(
         command: "doctor",
         mode: resolveDoctorMode(ctx.cfg),
       });
-    }
-    if (shouldSkipLegacyUpdateDoctorConfigWrite(ctx.env ?? process.env)) {
-      ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
-      return false;
     }
     const legacyParentVersionOverride =
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
@@ -468,9 +504,10 @@ export async function runWriteConfigHealth(
         pending: getDeferredPluginMigrationConfigFacts(committed.nextConfig) ?? [],
       }),
     );
-    if (ctx.configResult.shouldWriteConfig === true) {
+    if (ctx.configResult.shouldWriteConfig === true || providerRenamePending) {
       ctx.configResultWriteCommitted = true;
     }
+    delete ctx.configResult.providerRenames;
     // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);
     const preUpdateSnapshotPath = `${ctx.configPath}.pre-update`;
@@ -509,20 +546,10 @@ export async function runWriteConfigHealth(
   if (
     (!ctx.prompter.shouldRepair &&
       !ctx.configResult.openAICodexAuthProfileIdMap?.size &&
-      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true &&
-      !ctx.configResult.providerRenames?.length) ||
+      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true) ||
     ctx.postConfigWriteRepairsCommitted === true
   ) {
     return true;
-  }
-  if (ctx.configResult.providerRenames?.length) {
-    const renamed = await maybeRepairProviderRenameCronJobs({
-      cfg: ctx.cfg,
-      renames: ctx.configResult.providerRenames,
-      env: ctx.env ?? process.env,
-      shouldRepair: ctx.prompter.shouldRepair,
-    });
-    noteDoctorRepairResult(renamed, showDoctorNote);
   }
   // The config write above must finish before cron rows are rewritten against
   // the now-durable model policy; otherwise a failed write could corrupt them.
@@ -553,7 +580,8 @@ export async function runInitialConfigWriteHealth(ctx: DoctorHealthFlowContext):
   if (
     ctx.configResult.shouldWriteConfig !== true &&
     !ctx.configResult.modelBillingRouteWarnings?.length &&
-    ctx.configResult.modelRetirementRepairRan !== true
+    ctx.configResult.modelRetirementRepairRan !== true &&
+    !ctx.configResult.providerRenames?.length
   ) {
     return;
   }

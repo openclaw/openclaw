@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  readPersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "../../../agents/auth-profiles/sqlite.js";
+import { AuthProfileStoreUnreadableError } from "../../../agents/auth-profiles/store-unreadable-error.js";
 import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -115,6 +120,7 @@ describe("provider rename saved-auth binding", () => {
             targetAuthProfileId: alphaSelected,
           },
         ]);
+        const sharedSelected = shared.length === 1 ? shared[0] : undefined;
         const expectedRef = (selected: string | undefined) =>
           selected ? `ollama-cloud/model@${selected}` : "ollama-cloud/model";
         const expectedModel = (own: string, ids: string[], selected: string | undefined) => ({
@@ -127,14 +133,14 @@ describe("provider rename saved-auth binding", () => {
         });
         const result = applyProviderRenames(config, bound);
         expect(result.config.agents?.defaults?.model).toEqual(
-          expectedModel("alpha", alpha, alphaSelected),
+          expectedModel("alpha", shared, sharedSelected),
         );
         expect(result.config.agents?.entries).toEqual({
           alpha: { model: expectedModel("alpha", alpha, alphaSelected) },
           beta: { model: expectedModel("beta", beta, betaSelected) },
         });
         expect(result.config).toMatchObject({
-          model: alphaSelected ? `ollama-cloud/global@${alphaSelected}` : "ollama-cloud/global",
+          model: sharedSelected ? `ollama-cloud/global@${sharedSelected}` : "ollama-cloud/global",
         });
         expect(result.config.auth).toEqual(config.auth);
         expect(rewriteProviderModelRef("ollama/model@ollama:default", bound)).toBe(
@@ -146,6 +152,88 @@ describe("provider rename saved-auth binding", () => {
         for (const [name, bytes] of before) {
           expect(fs.readFileSync(path.join(state.stateDir, name))).toEqual(bytes);
         }
+      });
+    },
+  );
+
+  it.each(["main", "alpha"])(
+    "reads legacy credential fields from %s without rewriting the stored credentials",
+    async (agentId) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await state.writeAuthProfiles({ version: 1, profiles: {} }, agentId);
+        const agentDir = state.agentDir(agentId);
+        const raw = {
+          version: 1,
+          profiles: {
+            "ollama-cloud:default": {
+              type: "api_key",
+              provider: "ollama-cloud",
+              apiKey: "synthetic-legacy-key",
+            },
+          },
+        };
+        writePersistedAuthProfileStoreRaw(raw, agentDir);
+        const config: OpenClawConfig = {
+          agents: { defaults: { systemAgent: { agentId: "alpha" } }, entries: { alpha: {} } },
+        };
+        const [bound] = bindProviderRenameAuthProfiles(config, [declaration], state.env);
+        expect(bound?.targetAuthProfileId).toBe("ollama-cloud:default");
+        expect(bound?.sharedAuthProfiles?.targetAuthProfileId).toBe(
+          agentId === "main" ? "ollama-cloud:default" : undefined,
+        );
+        expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(raw);
+        writePersistedAuthProfileStoreRaw({ version: 1, profiles: null }, agentDir);
+        expect(() => bindProviderRenameAuthProfiles(config, [declaration], state.env)).toThrow(
+          AuthProfileStoreUnreadableError,
+        );
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "does not pin beta's inherited default to alpha's local credential (shadowed shared ID: %s)",
+    async (shadowed) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const cloud = {
+          type: "api_key",
+          provider: "ollama-cloud",
+          key: "synthetic-cloud-key",
+        };
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: shadowed ? { "ollama-cloud:default": cloud } : {},
+        });
+        await state.writeAuthProfiles(
+          { version: 1, profiles: { "ollama-cloud:default": cloud } },
+          "alpha",
+        );
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: shadowed ? { "ollama-cloud:default": { ...cloud, provider: "ollama" } } : {},
+          },
+          "beta",
+        );
+        const config: OpenClawConfig = {
+          models: { providers: { ollama: { baseUrl: "https://ollama.com", models: [] } } },
+          agents: {
+            defaults: {
+              systemAgent: { agentId: "alpha" },
+              model: "ollama/model@ollama:default",
+            },
+            entries: { alpha: { model: "ollama/model@ollama:default" }, beta: {} },
+          },
+        };
+        const bound = bindProviderRenameAuthProfiles(config, [declaration], state.env);
+        const result = applyProviderRenames(config, bound);
+        expect(result.config.agents?.defaults?.model).toBe("ollama-cloud/model");
+        expect(result.config.agents?.entries?.beta).toEqual({});
+        expect(result.config.agents?.entries?.alpha?.model).toBe(
+          "ollama-cloud/model@ollama-cloud:default",
+        );
+        expect(rewriteProviderModelRef("ollama/model@ollama:default", bound)).toBe(
+          "ollama-cloud/model@ollama-cloud:default",
+        );
       });
     },
   );

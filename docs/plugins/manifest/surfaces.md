@@ -47,8 +47,9 @@ non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
 `openclaw/plugin-sdk/runtime-doctor-migrations`. Both provider IDs must belong
 to the plugin. The host matches the source provider's URL origin, moves its
 catalog, and rewrites model references through the shared Doctor owners.
-Cron and session references follow only after config publication. This
-contract does not rename auth profiles or migrate credentials.
+Doctor repairs cron and session references before publishing the provider
+rename in config, making interrupted runs retryable from the still-authored
+source entry. This contract does not rename auth profiles or migrate credentials.
 
 The config-repair module can export `historicalWebhookListener` to describe a
 retired default endpoint. The existing compatibility normalizer reports eligible

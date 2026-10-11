@@ -91,21 +91,26 @@ export function applyProviderRenames(
   }
   const changes: string[] = [];
   let changedAuthPin = false;
-  const normalize = (agentId?: string) => (ref: string) => {
-    const rewritten = rewriteProviderModelRef(ref, renames, agentId);
-    if (
-      rewritten !== undefined &&
-      splitTrailingAuthProfile(ref).profile !== splitTrailingAuthProfile(rewritten).profile
-    ) {
-      changedAuthPin = true;
-    }
-    return rewritten ?? null;
-  };
+  const normalize =
+    (scopedRenames: readonly ProviderRename[], agentId?: string) => (ref: string) => {
+      const rewritten = rewriteProviderModelRef(ref, scopedRenames, agentId);
+      if (
+        rewritten !== undefined &&
+        splitTrailingAuthProfile(ref).profile !== splitTrailingAuthProfile(rewritten).profile
+      ) {
+        changedAuthPin = true;
+      }
+      return rewritten ?? null;
+    };
+  // Inherited references must remain usable by every agent, not just the system agent.
+  const globalRenames = renames.map((rename) =>
+    rename.sharedAuthProfiles ? { ...rename, ...rename.sharedAuthProfiles } : rename,
+  );
   const entries = config.agents?.entries;
   const globalConfig = entries
     ? { ...config, agents: { ...config.agents, entries: undefined } }
     : config;
-  let rewritten = rewriteModelRefs(globalConfig, "config", changes, normalize())
+  let rewritten = rewriteModelRefs(globalConfig, "config", changes, normalize(globalRenames))
     .value as OpenClawConfig;
   if (entries) {
     rewritten = {
@@ -115,8 +120,12 @@ export function applyProviderRenames(
         entries: Object.fromEntries(
           Object.entries(entries).map(([agentId, entry]) => [
             agentId,
-            rewriteModelRefs(entry, `config.agents.entries.${agentId}`, changes, normalize(agentId))
-              .value as typeof entry,
+            rewriteModelRefs(
+              entry,
+              `config.agents.entries.${agentId}`,
+              changes,
+              normalize(renames, agentId),
+            ).value as typeof entry,
           ]),
         ),
       },
@@ -147,10 +156,10 @@ export function applyProviderRenames(
   };
 }
 
-export function rewriteRenamedSessionModelPair(
-  entry: SessionEntry,
-  providerKey: "modelProvider" | "providerOverride",
-  modelKey: "model" | "modelOverride",
+function rewriteRenamedSessionModelPair<ProviderKey extends string, ModelKey extends string>(
+  entry: Partial<Record<ProviderKey | ModelKey, string>>,
+  providerKey: ProviderKey,
+  modelKey: ModelKey,
   renames: readonly ProviderRename[],
   path: string,
   changes?: Set<string>,
@@ -165,25 +174,75 @@ export function rewriteRenamedSessionModelPair(
   if (provider && !renames.some((rename) => rename.from === provider)) {
     return false;
   }
-  const normalize = (ref: string) => rewriteProviderModelRef(ref, renames, agentId) ?? null;
-  const scopedChanges: string[] = [];
+  const scopedModel = rewriteProviderModelRef(model, renames, agentId);
   const pairChanges: string[] = [];
-  const scoped = rewriteModelRefs(model, `${path}.model`, scopedChanges, normalize);
-  const pair = rewriteModelRefs({ provider, model }, `${path}.${modelKey}`, pairChanges, normalize);
-  if (!scoped.changed && !pair.changed) {
+  const pair = rewriteModelRefs(
+    { provider, model },
+    `${path}.${modelKey}`,
+    pairChanges,
+    (ref) => rewriteProviderModelRef(ref, renames, agentId) ?? null,
+  );
+  if (scopedModel === undefined && !pair.changed) {
     return false;
   }
   const rewritten = pair.value as { provider?: string; model: string };
   if (pair.changed) {
     entry[providerKey] = rewritten.provider;
   }
-  entry[modelKey] = scoped.changed ? (scoped.value as string) : rewritten.model;
-  for (const change of scoped.changed ? scopedChanges : pairChanges) {
+  entry[modelKey] = scopedModel ?? rewritten.model;
+  if (scopedModel !== undefined) {
     changes?.add(
-      scoped.changed && modelKey === "modelOverride"
-        ? change.replace(`${path}.model `, `${path}.modelOverride `)
-        : change,
+      `Upgraded ${path}.${modelKey} from ${JSON.stringify(model)} to ${JSON.stringify(scopedModel)}.`,
     );
+  } else {
+    for (const change of pairChanges) {
+      changes?.add(change);
+    }
   }
   return true;
+}
+
+export function rewriteRenamedSessionRoutes(params: {
+  entry: SessionEntry;
+  renames: readonly ProviderRename[];
+  path: string;
+  changes?: Set<string>;
+  agentId?: string;
+}): boolean {
+  let changed = false;
+  for (const [providerKey, modelKey] of [
+    ["modelProvider", "model"],
+    ["providerOverride", "modelOverride"],
+    ["modelOverrideFallbackOriginProvider", "modelOverrideFallbackOriginModel"],
+  ] as const) {
+    changed =
+      rewriteRenamedSessionModelPair(
+        params.entry,
+        providerKey,
+        modelKey,
+        params.renames,
+        params.path,
+        params.changes,
+        params.agentId,
+      ) || changed;
+  }
+  if (params.entry.modelFallback) {
+    for (const [providerKey, modelKey] of [
+      ["prevProvider", "prevModel"],
+      ["prevProviderOverride", "prevModelOverride"],
+      ["prevModelOverrideFallbackOriginProvider", "prevModelOverrideFallbackOriginModel"],
+    ] as const) {
+      changed =
+        rewriteRenamedSessionModelPair(
+          params.entry.modelFallback,
+          providerKey,
+          modelKey,
+          params.renames,
+          `${params.path}.modelFallback`,
+          params.changes,
+          params.agentId,
+        ) || changed;
+    }
+  }
+  return changed;
 }

@@ -141,7 +141,7 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
     env: ctx.env ?? process.env,
-    ...(!ctx.configWriteRefusal && ctx.configResult.providerRenames?.length
+    ...(!ctx.prompter.shouldRepair && ctx.configResult.providerRenames?.length
       ? { providerRenames: ctx.configResult.providerRenames }
       : {}),
     shouldRepair: ctx.prompter.shouldRepair,

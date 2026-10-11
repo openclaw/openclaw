@@ -1,3 +1,4 @@
+import { bindProviderRenameAuthProfiles } from "../commands/doctor/shared/provider-rename-auth.js";
 import {
   applyProviderRenames,
   planProviderRenames,
@@ -33,7 +34,10 @@ export const finalConfigValidationCheck: DoctorHealthCheck = {
             resolvePluginDoctorProviderRenames({ config: ctx.cfg, env: ctx.env }),
           )
         : [];
-    const migration = applyProviderRenames(ctx.cfg, renames);
+    const migration = applyProviderRenames(
+      ctx.cfg,
+      bindProviderRenameAuthProfiles(ctx.cfg, renames, ctx.env),
+    );
     return [
       ...configValidationIssuesToHealthFindings(snap.issues),
       ...configValidationWarningsToHealthFindings(snap.warnings),

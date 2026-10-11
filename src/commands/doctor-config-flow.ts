@@ -51,7 +51,7 @@ import { listDoctorConfiguredChannelIds } from "./doctor/shared/configured-chann
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import { LEGACY_AGENT_ROSTER_RULES } from "./doctor/shared/legacy-config-migrations.runtime.entries.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
-import { resolveDoctorProviderRenames } from "./doctor/shared/provider-rename-recovery.js";
+import { planProviderRenames } from "./doctor/shared/provider-rename.js";
 import { canWriteDoctorInclude } from "./doctor/shared/roster-include-write.js";
 
 async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
@@ -162,17 +162,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   };
   const finalizeMigrationResult = prepareDoctorConfigMigrationResult(preflight, snapshot);
-  const providerRenameRecovery = runWithCurrentPluginMetadata(state.candidate, () =>
-    resolveDoctorProviderRenames({
-      config: snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
-      snapshot,
-      declarations: resolvePluginDoctorProviderRenames({ config: state.candidate }),
-    }),
+  const plannedProviderRenames = runWithCurrentPluginMetadata(state.candidate, () =>
+    planProviderRenames(
+      snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
+      resolvePluginDoctorProviderRenames({ config: state.candidate }),
+    ),
   );
-  if (providerRenameRecovery.warnings.length > 0) {
-    emitDoctorNotes({ note, warningNotes: providerRenameRecovery.warnings });
-    configRepairWarnings.push(...providerRenameRecovery.warnings);
-  }
 
   const sourceRosterConfig = snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
   const rosterMigrationNeeded =
@@ -632,13 +627,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // them as "Doctor changes" only after the atomic write commits. A blocked
   // write drops them — its blocking note already states nothing was changed.
   const pendingChangePanels = changesPanelSink.drain();
-  const providerRenames = providerRenameRecovery.renames.filter(
-    ({ from, to }) =>
-      !shouldRepair ||
-      (!legacyStep.blocksWrite &&
-        !cfg.models?.providers?.[from] &&
-        Boolean(cfg.models?.providers?.[to])),
-  );
+  const providerRenames = legacyStep.blocksWrite ? [] : plannedProviderRenames;
 
   return {
     ...finalized,

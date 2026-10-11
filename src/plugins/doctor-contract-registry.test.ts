@@ -16,7 +16,7 @@ import {
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
-// Registry tests own plugin selection; real persisted auth reads are covered by binder tests.
+// mock-isolation: Registry tests own plugin selection; binder tests cover persisted auth reads.
 vi.mock("../commands/doctor/shared/provider-rename-auth.js", () => ({
   bindProviderRenameAuthProfiles: (_config: OpenClawConfig, renames: readonly ProviderRename[]) =>
     renames,
@@ -45,6 +45,7 @@ const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 const doctorContractWarnMock = vi.hoisted(() => vi.fn());
 const retainedConfigDoctorMock = vi.hoisted(() => vi.fn());
+// mock-isolation: Script retained artifacts without loading real bundled plugin modules.
 vi.mock("./public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: retainedConfigDoctorMock,
 }));
@@ -253,7 +254,7 @@ describe("doctor-contract-registry module loader", () => {
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });
 
-  it("runs the Ollama rename before local-marker cleanup without changing saved auth", async () => {
+  it("preserves hosted Ollama auth during preflight compatibility repair", async () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
     const contract = await vi.importActual("../../extensions/ollama/doctor-contract-api.js");
@@ -282,17 +283,11 @@ describe("doctor-contract-registry module loader", () => {
       env: {},
       pluginIds: ["ollama"],
     });
-    expect(result.config.models?.providers?.["ollama-cloud"]?.apiKey).toBe("OLLAMA_API_KEY");
-    expect(result.config.models?.providers?.ollama).toBeUndefined();
-    expect(result.config.agents?.defaults?.model).toBe("ollama-cloud/model:cloud");
-    expect(result.config.auth).toEqual(config.auth);
-    expect(config.models?.providers?.ollama?.apiKey).toBe("OLLAMA_API_KEY");
-    expect(
-      applyPluginDoctorCompatibilityMigrations(result.config, {
-        env: {},
-        pluginIds: ["ollama"],
-      }).changes,
-    ).toEqual([]);
+    expect(result.config).toEqual(config);
+    expect(result.changes).toEqual([]);
+    expect(resolvePluginDoctorProviderRenames({ config, env: {} })).toEqual([
+      { from: "ollama", to: "ollama-cloud", baseUrl: "https://ollama.com" },
+    ]);
   });
 
   it.each([false, true])("isolates a normalizer-only config repair (throws=%s)", (throws) => {

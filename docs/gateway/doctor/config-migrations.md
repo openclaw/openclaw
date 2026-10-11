@@ -37,22 +37,23 @@ allowlists, per-agent settings, heartbeat, utility, subagent and compaction
 models, cron jobs, and session overrides. URL paths and trailing slashes do not
 change the hosted classification. An existing `ollama-cloud` catalog keeps its
 models and gains missing migrated models without duplicates.
+Role model-policy allow and deny rules move together, preserving restrictions.
 
 Localhost, LAN, and custom endpoints stay unchanged, including cloud models
 served through a signed-in local Ollama daemon. Other provider keys also stay
 unchanged. Doctor does not infer hosted routing from a model name.
 
-Both providers use `OLLAMA_API_KEY`, so environment-backed credentials and
-SecretRefs keep working without a credential-store migration. Doctor leaves
-saved `ollama` auth profiles untouched; if the key exists only in that saved
-profile, run `openclaw onboard --auth-choice ollama-cloud` to configure Cloud
-authentication.
+Both providers use `OLLAMA_API_KEY`, so environment-backed URLs, credentials, and
+SecretRefs keep their authored references without a credential-store migration.
+Doctor leaves saved `ollama` auth profiles untouched; if the key exists only in
+that saved profile, run `openclaw onboard --auth-choice ollama-cloud` to configure
+Cloud authentication.
 
 Old `@ollama:...` model-reference pins never cross into the Cloud provider.
 Doctor chooses from the owning agent's visible saved profiles: shared profiles
 plus that agent's local profiles, never another agent's local profiles. Defaults
-and global references use the configured system agent's visible profiles, or only
-shared profiles when no system agent is selected. An existing valid Cloud pin
+and other inherited references use only shared profiles visible to every agent.
+An existing valid Cloud pin
 is preserved; otherwise Doctor selects `ollama-cloud:default` when visible, then
 the sole visible Cloud profile. With no Cloud profile or an ambiguous choice, it
 removes the suffix so normal environment or later sign-in resolution can apply.
@@ -60,12 +61,13 @@ Doctor lists each changed pin and explains how to re-pin a model explicitly;
 the credential store is not modified or migrated.
 
 Use `openclaw doctor --lint --json` to preview, or `openclaw doctor --fix` to
-apply the migration. Updates use the same repair. Config is backed up before
-publication; cron and session references are repaired through their existing
-state owners afterward. If interrupted between those steps, rerun Doctor.
-It recovers the rename from the config backup only while the recorded provider
-topology still matches; it does not search through later provider edits or
-reinterpret historical includes.
+apply the migration. Updates use the same repair. Doctor repairs cron and session
+references through their existing state owners, then backs up and publishes the
+config last. The Cloud provider is already available through the Ollama plugin.
+If interrupted before config publication, the hosted `ollama` entry remains and
+the next Doctor run finishes the idempotent repair. Once config publication
+completes, new local Ollama selections are left alone; Doctor never replays old
+config backups to infer a provider rename.
 
 ## Claude CLI model routing
 

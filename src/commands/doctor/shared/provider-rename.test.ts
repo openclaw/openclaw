@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { prepareOperatorModelPolicy } from "../../../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import {
@@ -195,6 +196,35 @@ describe("provider rename config migration", () => {
       },
     });
   });
+
+  it.each(["ollama/blocked", "ollama/blocked*"])(
+    "preserves role model denials after renaming %s",
+    (denied) => {
+      const config = configFor("https://ollama.com");
+      config.gateway = {
+        roles: {
+          default: "restricted",
+          definitions: {
+            restricted: {
+              agents: "*",
+              scopes: ["operator.write"],
+              sessions: { others: "none" },
+              modelPolicy: { allow: ["ollama/*"], deny: [denied] },
+            },
+          },
+        },
+      };
+      const { config: migrated } = applyProviderRenames(config, declarations);
+      const policy = prepareOperatorModelPolicy({
+        cfg: migrated,
+        policy: migrated.gateway!.roles!.definitions.restricted!.modelPolicy,
+        manifestPlugins: [],
+      });
+      expect(policy?.allows({ provider: "ollama-cloud", model: "blocked" })).toBe(false);
+      expect(policy?.allows({ provider: "ollama-cloud", model: "allowed" })).toBe(true);
+      expect(policy?.allows({ provider: "custom", model: "allowed" })).toBe(false);
+    },
+  );
 
   it.each([
     { ids: [], selected: undefined, expected: "ollama-cloud/model" },

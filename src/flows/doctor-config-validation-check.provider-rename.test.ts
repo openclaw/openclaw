@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
 
+// mock-isolation: Supply plugin declarations without real plugin discovery or persisted auth reads.
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
   resolvePluginDoctorProviderRenames: () => [
     { from: "ollama", to: "ollama-cloud", baseUrl: "https://ollama.com" },

@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../../../agents/auth-profiles/persisted.js";
+import { createAgentPatchedSessionModelRunGuard } from "../../../agents/session-model-auto-revert.js";
+import { hashConfigRaw } from "../../../config/io.read-helpers.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -10,27 +12,119 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { makeCronJob } from "../../../cron/delivery.test-helpers.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
+import { runInitialConfigWriteHealth } from "../../../flows/doctor-health-contribution-runners.config.js";
+import { runCodexSessionRouteHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
+import type { DoctorHealthFlowContext } from "../../../flows/doctor-health-contribution-types.js";
 import { acquireGatewayStateOwner } from "../../../infra/gateway-state-owner.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createDoctorPrompter } from "../../doctor-prompter.js";
 import { inspectCronJobsForDoctor } from "../cron/store-repair.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
-import { resolveDoctorProviderRenames } from "./provider-rename-recovery.js";
 import { maybeRepairProviderRenameCronJobs } from "./provider-rename-state.js";
-import { applyProviderRenames, type ProviderRename } from "./provider-rename.js";
+import {
+  applyProviderRenames,
+  planProviderRenames,
+  type ProviderRename,
+} from "./provider-rename.js";
 
 const renames: readonly ProviderRename[] = [
   { from: "ollama", to: "ollama-cloud", baseUrl: "https://ollama.com" },
 ];
 
+function createSessionRepairContext(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  configPath: string,
+  configResult: Omit<DoctorHealthFlowContext["configResult"], "cfg">,
+): DoctorHealthFlowContext {
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const options = { repair: true, nonInteractive: true };
+  return {
+    cfg,
+    cfgForPersistence: structuredClone(cfg),
+    configResult: { cfg, ...configResult },
+    configPath,
+    sourceConfigValid: true,
+    env,
+    runtime,
+    options,
+    prompter: createDoctorPrompter({ runtime, options }),
+  };
+}
+
 describe("persisted provider rename", () => {
-  it("resumes after config publication and repairs all cron partitions with a backup", async () => {
+  it.each([
+    {
+      name: "externally managed config",
+      env: { OPENCLAW_CONFIG_READONLY: "1" },
+      externalConfigRepairsPending: true,
+    },
+    {
+      name: "legacy update handoff",
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "0",
+      },
+      externalConfigRepairsPending: undefined,
+    },
+  ])(
+    "keeps session references unchanged when publication is skipped for $name",
+    async (scenario) => {
+      await withOpenClawTestState(
+        { label: "provider-rename-unpublished", env: scenario.env },
+        async (state) => {
+          const source: OpenClawConfig = {
+            plugins: { enabled: false },
+            agents: { entries: { main: {} } },
+            models: {
+              providers: {
+                ollama: { baseUrl: "https://ollama.com", api: "ollama", models: [] },
+              },
+            },
+          };
+          await state.writeConfig(source);
+          const configBefore = await fs.readFile(state.configPath);
+          const sessionScope = {
+            storePath: path.join(state.sessionsDir(), "sessions.json"),
+            sessionKey: "agent:main:unpublished",
+            env: state.env,
+          };
+          await replaceSessionEntry(sessionScope, {
+            sessionId: "unpublished",
+            updatedAt: 1,
+            modelProvider: "ollama",
+            model: "model:cloud",
+            providerOverride: "ollama",
+            modelOverride: "fallback:cloud",
+          });
+          const sessionBefore = loadSessionEntry(sessionScope);
+          const candidate = applyProviderRenames(source, renames).config;
+          const ctx = createSessionRepairContext(candidate, state.env, state.configPath, {
+            shouldWriteConfig: true,
+            providerRenames: renames,
+          });
+          ctx.cfgForPersistence = source;
+
+          await runInitialConfigWriteHealth(ctx);
+          expect(ctx.configResultWriteCommitted).not.toBe(true);
+          expect(ctx.configWriteRefusal).toBeUndefined();
+          expect(ctx.externalConfigRepairsPending).toBe(scenario.externalConfigRepairsPending);
+          await runCodexSessionRouteHealth(ctx);
+
+          expect(loadSessionEntry(sessionScope)).toEqual(sessionBefore);
+          expect(await fs.readFile(state.configPath)).toEqual(configBefore);
+        },
+      );
+    },
+  );
+
+  it("resumes after reference repair and never replays a completed migration onto new local selections", async () => {
     await withOpenClawTestState({ label: "provider-rename-cron" }, async (state) => {
       const source: OpenClawConfig = {
         plugins: { enabled: false },
         agents: { entries: { main: {} } },
-        cron: { store: state.statePath("cron", "jobs.json") },
         models: {
           providers: {
             ollama: {
@@ -83,25 +177,9 @@ describe("persisted provider rename", () => {
           ],
         });
       }
-      const cfg = applyProviderRenames(source, renames).config;
+      const cfg = source;
       await state.writeConfig(source);
-      // Preserve the source backup, then simulate interruption before either state repair.
-      await fs.copyFile(state.configPath, `${state.configPath}.bak`);
-      await expect(
-        (async () => {
-          await state.writeConfig(cfg);
-          throw new Error("interrupted after config publication");
-        })(),
-      ).rejects.toThrow("interrupted after config publication");
-      const published = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-      const recovered = resolveDoctorProviderRenames({
-        config: published,
-        snapshot: { path: state.configPath, parsed: published },
-        declarations: renames,
-      });
-      expect(recovered.warnings).toEqual([]);
-      expect(recovered.renames).toEqual(renames);
-      const activeRenames = recovered.renames;
+      const activeRenames = planProviderRenames(source, renames);
       const before = await inspectCronJobsForDoctor({ env: state.env });
       const db = openOpenClawStateDatabase();
       const backups = async () =>
@@ -172,13 +250,13 @@ describe("persisted provider rename", () => {
               lastRunStatus: "ok",
             });
           }
-          const sessionResult = await maybeRepairCodexSessionRoutes({
+          await maybeRepairCodexSessionRoutes({
             cfg,
             providerRenames: activeRenames,
+            providerRenameOnly: true,
             env: state.env,
             shouldRepair: true,
           });
-          expect(sessionResult.repairedSessions).toBe(1);
           expect(loadSessionEntry(sessionScope)).toEqual({
             ...sessionBefore,
             updatedAt: expect.any(Number),
@@ -205,9 +283,53 @@ describe("persisted provider rename", () => {
             ).repairedSessions,
           ).toBe(0);
           expect(loadSessionEntry(sessionScope)).toEqual(sessionAfter);
-          expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(published);
+          // An interrupted run leaves the hosted source as the retry marker.
+          expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(source);
+          await runInitialConfigWriteHealth(
+            createSessionRepairContext(source, state.env, state.configPath, {
+              providerRenames: planProviderRenames(source, renames),
+              confirmedConfigSource: {
+                path: state.configPath,
+                hash: hashConfigRaw(await fs.readFile(state.configPath, "utf8")),
+              },
+            }),
+          );
+          const published = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+          expect(published.models.providers.ollama).toBeUndefined();
+          expect(published.models.providers["ollama-cloud"]).toBeDefined();
           expect(JSON.parse(await fs.readFile(`${state.configPath}.bak`, "utf8"))).toEqual(source);
           expect(await backups()).toHaveLength(1);
+
+          const localSelection = {
+            ...published,
+            agents: { entries: { main: {} }, defaults: { model: "ollama/local-model" } },
+          };
+          await state.writeConfig(localSelection);
+          await replaceSessionEntry(sessionScope, {
+            sessionId: "new-local",
+            updatedAt: Date.now(),
+            modelProvider: "ollama",
+            model: "local-model",
+          });
+          const localJob = makeCronJob({
+            id: "new-local",
+            payload: { kind: "agentTurn", message: "local", model: "ollama/local-model" },
+          });
+          await saveCronJobsStore(state.statePath("cron", "jobs.json"), {
+            version: 1,
+            jobs: [localJob],
+          });
+          const laterPlans = planProviderRenames(localSelection, renames);
+          expect(laterPlans).toEqual([]);
+          await runInitialConfigWriteHealth(
+            createSessionRepairContext(localSelection, state.env, state.configPath, {
+              providerRenames: laterPlans,
+            }),
+          );
+          expect(loadSessionEntry(sessionScope)?.modelProvider).toBe("ollama");
+          expect(
+            (await loadCronJobsStore(state.statePath("cron", "jobs.json"))).jobs[0]?.payload,
+          ).toEqual(localJob.payload);
         });
       } finally {
         await maintenance.close();
@@ -653,6 +775,115 @@ describe("persisted provider rename", () => {
         await maintenance.close();
         owner.release();
       }
+    });
+  });
+
+  it("repairs persisted fallback routes before a failed model selection rolls back", async () => {
+    await withOpenClawTestState({ label: "provider-rename-rollback" }, async (state) => {
+      const source: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: { entries: { main: {} } },
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "https://ollama.com",
+              api: "ollama",
+              models: ["previous", "override", "origin"].map((id) => ({
+                id,
+                name: id,
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8192,
+                maxTokens: 4096,
+              })),
+            },
+          },
+        },
+      };
+      const plans = planProviderRenames(source, renames);
+      const cfg = applyProviderRenames(source, plans).config;
+      await state.writeConfig(cfg);
+      const scope = {
+        agentId: "main",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+        sessionKey: "agent:main:rollback",
+        env: state.env,
+      };
+      const marker = {
+        prevProvider: "ollama",
+        prevModel: "previous",
+        prevProviderOverride: "ollama",
+        prevModelOverride: "ollama/override",
+        prevModelOverrideSource: "auto" as const,
+        prevModelOverrideFallbackOriginProvider: "ollama",
+        prevModelOverrideFallbackOriginModel: "origin",
+        prevAuthProfileOverride: "custom:saved",
+        prevAuthProfileOverrideSource: "user" as const,
+        prevThinkingLevel: "high",
+        prevContextWindow: "8192",
+        ts: 123,
+        source: "agent-patch" as const,
+      };
+      await replaceSessionEntry(scope, {
+        sessionId: "rollback",
+        updatedAt: 1,
+        modelProvider: "custom",
+        model: "failed",
+        providerOverride: "custom",
+        modelOverride: "failed",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "ollama",
+        modelOverrideFallbackOriginModel: "origin",
+        modelFallback: marker,
+        authProfileOverride: "custom:current",
+        agentRuntimeOverride: "openclaw",
+      });
+      const before = loadSessionEntry(scope);
+      const result = await maybeRepairCodexSessionRoutes({
+        cfg,
+        env: state.env,
+        providerRenames: plans,
+        shouldRepair: true,
+        providerRenameOnly: true,
+      });
+      expect(result.repairedSessions).toBe(1);
+      expect(loadSessionEntry(scope)).toEqual({
+        ...before,
+        updatedAt: expect.any(Number),
+        modelOverrideFallbackOriginProvider: "ollama-cloud",
+        modelFallback: {
+          ...marker,
+          prevProvider: "ollama-cloud",
+          prevProviderOverride: "ollama-cloud",
+          prevModelOverride: "ollama-cloud/override",
+          prevModelOverrideFallbackOriginProvider: "ollama-cloud",
+        },
+      });
+
+      const guard = await createAgentPatchedSessionModelRunGuard({
+        cfg,
+        ...scope,
+        onError: (error) => {
+          throw error;
+        },
+      });
+      await guard.fail(new Error("selected model does not exist"), "model_not_found");
+      expect(loadSessionEntry(scope)).toMatchObject({
+        modelProvider: "ollama-cloud",
+        model: "previous",
+        providerOverride: "ollama-cloud",
+        modelOverride: "ollama-cloud/override",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "ollama-cloud",
+        modelOverrideFallbackOriginModel: "origin",
+        authProfileOverride: "custom:saved",
+        authProfileOverrideSource: "user",
+        thinkingLevel: "high",
+        contextWindow: "8192",
+        agentRuntimeOverride: "openclaw",
+      });
+      expect(loadSessionEntry(scope)?.modelFallback).toBeUndefined();
     });
   });
 });

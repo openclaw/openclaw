@@ -49,7 +49,7 @@ type DoctorConfigResult = {
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   /** Transient pre-retirement alias/default interpretation; current config owns auth and routes. */
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
-  /** Source or backup-proven provider renames awaiting durable cron/session repair. */
+  /** Matched source providers whose references must move before config publication. */
   providerRenames?: readonly ProviderRename[];
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;

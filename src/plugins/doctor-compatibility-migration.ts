@@ -1,10 +1,5 @@
 import type { ChannelDoctorConfigMutation } from "../channels/plugins/types.adapters.js";
 import { applyHistoricalWebhookPins } from "../commands/doctor/shared/legacy-webhook-pins.js";
-import { bindProviderRenameAuthProfiles } from "../commands/doctor/shared/provider-rename-auth.js";
-import {
-  applyProviderRenames,
-  planProviderRenames,
-} from "../commands/doctor/shared/provider-rename.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -102,26 +97,7 @@ export function applyResolvedPluginDoctorCompatibilityMigrations(
       }
       return {
         pluginId: entry.pluginId,
-        normalizeCompatibilityConfig: entry.providerRenames.length
-          ? ({ cfg }: { cfg: OpenClawConfig }) => {
-              // Move the provider before plugin-local legacy auth-marker cleanup.
-              const active = planProviderRenames(cfg, entry.providerRenames);
-              const renamed = applyProviderRenames(
-                cfg,
-                bindProviderRenameAuthProfiles(cfg, active, params.env),
-              );
-              const normalized = entry.normalizeCompatibilityConfig?.({
-                cfg: cloneConfigWithResolutionFacts(renamed.config),
-              });
-              return normalized
-                ? {
-                    ...normalized,
-                    config: normalized.changes.length ? normalized.config : renamed.config,
-                    changes: [...renamed.changes, ...normalized.changes],
-                  }
-                : renamed;
-            }
-          : entry.normalizeCompatibilityConfig,
+        normalizeCompatibilityConfig: entry.normalizeCompatibilityConfig,
         transform: params.historicalWebhookListeners
           ? (mutation: ChannelDoctorConfigMutation) => {
               if (entry.historicalWebhookNormalizer) {

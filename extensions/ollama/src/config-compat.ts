@@ -21,6 +21,19 @@ type LegacyConfigRule = {
 
 function isLegacyOllamaLocalConfig(provider: unknown, root?: Record<string, unknown>): boolean {
   const providerRecord = asObjectRecord(provider);
+  const baseUrl = providerRecord?.baseUrl;
+  if (typeof baseUrl === "string") {
+    if (baseUrl.includes("${")) {
+      return false;
+    }
+    try {
+      if (new URL(baseUrl).origin === "https://ollama.com") {
+        return false;
+      }
+    } catch {
+      // An invalid endpoint is handled by config validation.
+    }
+  }
   const auth = asObjectRecord(root?.auth);
   const profiles = asObjectRecord(auth?.profiles);
   const profile = asObjectRecord(profiles?.[LEGACY_OLLAMA_PROFILE_ID]);
