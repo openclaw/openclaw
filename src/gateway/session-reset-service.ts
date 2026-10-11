@@ -734,8 +734,7 @@ async function performPreparedGatewaySessionReset({
     // Mark the mutation first, then interrupt outside the identity lock. This
     // lets aborted runs finish admission cleanup without deadlocking reset.
     prepare: async () => {
-      params.assertCurrent?.();
-      params.assertAuthorizedInstance?.();
+      assertReadAuthorized();
       const { entry: currentEntry, canonicalKey: currentCanonicalKey } =
         await loadResetSession(assertReadAuthorized);
       // Check the locked generation before interrupting any work; a replaced
@@ -798,11 +797,12 @@ async function performPreparedGatewaySessionReset({
       // Drain first so a legitimate local turn can release its claim. Retire only
       // after every non-destructive guard is rechecked; a placement race must abort
       // before hooks, runtime cleanup, or session mutation begins.
-      const placementRetirementError = retireSessionWorkerPlacementBeforeMutation({
+      const placementRetirementError = await retireSessionWorkerPlacementBeforeMutation({
         action: "reset",
         context: workerPlacementContext,
         key: params.key,
         sessionId: normalizeOptionalString(entry?.sessionId),
+        assertCurrent: assertReadAuthorized,
       });
       if (placementRetirementError) {
         return invalidSessionRequest(placementRetirementError.message);
