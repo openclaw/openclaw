@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createMemoryRuntime } from "../../extensions/memory-core/runtime-api.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -41,12 +42,6 @@ vi.mock("./host-hook-cleanup-timeout.js", async (importOriginal) => {
     },
   };
 });
-
-const { createMemoryRuntime } = await vi.importActual<{
-  createMemoryRuntime: (host: {
-    runInBackgroundContext: <T>(run: () => T) => T;
-  }) => MemoryPluginRuntime;
-}>("../../extensions/memory-core/runtime-api.js");
 
 it("keeps persistent managers isolated between memory runtime instances with the same agent", async () => {
   const state = await createOpenClawTestState({
@@ -96,7 +91,7 @@ function registerMemoryOwner(config: OpenClawConfig, options: { legacy?: boolean
   owner.registry.plugins.push(record);
   const api = owner.createApi(record, { config });
   assert(api.lifecycle.runInBackgroundContext);
-  const runtimeImplementation = createMemoryRuntime({
+  const runtimeImplementation: MemoryPluginRuntime = createMemoryRuntime({
     runInBackgroundContext: api.lifecycle.runInBackgroundContext,
   });
   if (options.legacy) {
