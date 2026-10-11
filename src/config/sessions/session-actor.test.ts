@@ -11,10 +11,18 @@ import {
   type SqliteWorkerOperationSettlement,
 } from "../../infra/sqlite-worker-operation-settlement.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import {
+  readExactSessionEntryRow,
+  writeSessionEntry,
+} from "./session-accessor.sqlite-entry-store.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
@@ -30,6 +38,37 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
+
+it("declines native incognito without changing its existing owner", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = {
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+      env,
+    };
+    const sessionKey = "agent:main:dashboard:incognito-declined";
+    const owner = runOpenClawAgentWriteTransaction((opened) => {
+      writeSessionEntry(opened, sessionKey, {
+        sessionId: "native-session",
+        updatedAt: 1,
+        incognito: true,
+      });
+      return opened;
+    }, database);
+    const actor = await createDurableSessionActorFactory(database).acquire(
+      { sessionKey, database: { kind: "native-incognito" } },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    expect(actor).toEqual({ kind: "not-actor-owned" });
+    expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(owner);
+    expect(readExactSessionEntryRow(owner, sessionKey)?.entry).toMatchObject({
+      sessionId: "native-session",
+      updatedAt: 1,
+      incognito: true,
+    });
+    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
+  });
+});
 
 it("acquires the exact cold durable execution owner and installs a real worker commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -55,6 +94,9 @@ it("acquires the exact cold durable execution owner and installs a real worker c
       },
       { assertCurrent() {}, assertReadable() {} },
     );
+    if ("kind" in actor) {
+      throw new Error("Durable session must be actor-owned");
+    }
     try {
       const result = await actor.patch(
         {

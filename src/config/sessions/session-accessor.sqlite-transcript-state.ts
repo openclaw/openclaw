@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { InsertResult, UpdateResult } from "kysely";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -383,35 +384,30 @@ export function ensureTranscriptSessionRoot(
           }
         }
       }
-      if (actor?.window) {
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .updateTable("session_windows")
-            .set({ updated_at: updatedAt })
-            .where("session_id", "=", scope.sessionId),
-        );
-      } else {
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .insertInto("session_windows")
-            .values({
-              session_id: scope.sessionId,
-              session_key: scope.sessionKey,
-              previous_session_id: null,
-              reason: null,
-              session_scope: "conversation",
-              created_at: updatedAt,
-              updated_at: updatedAt,
-            })
-            .onConflict((conflict) =>
-              conflict.column("session_id").doUpdateSet({
+      executeSqliteQuerySync<InsertResult | UpdateResult>(
+        database.db,
+        actor?.window
+          ? db
+              .updateTable("session_windows")
+              .set({ updated_at: updatedAt })
+              .where("session_id", "=", scope.sessionId)
+          : db
+              .insertInto("session_windows")
+              .values({
+                session_id: scope.sessionId,
+                session_key: scope.sessionKey,
+                previous_session_id: null,
+                reason: null,
+                session_scope: "conversation",
+                created_at: updatedAt,
                 updated_at: updatedAt,
-              }),
-            ),
-        );
-      }
+              })
+              .onConflict((conflict) =>
+                conflict.column("session_id").doUpdateSet({
+                  updated_at: updatedAt,
+                }),
+              ),
+      );
       if (actor?.window) {
         actor.window.updated_at = updatedAt;
       }
@@ -529,22 +525,24 @@ export function advanceTranscriptMutationAtInTransaction(
             : transcriptUpdatedAt,
       }))
       .where("session_id", "=", sessionId);
-    if (actor?.window || !findOpenClawAgentDatabaseIdentity(database)) {
+    if (!findOpenClawAgentDatabaseIdentity(database)) {
       executeSqliteQuerySync(database.db, update);
-      if (actor?.window) {
-        actor.window.transcript_updated_at = transcriptUpdatedAt;
-        actor.hot.transcript.version.updatedAt = transcriptUpdatedAt;
-        const projection = actor.transcript.projection;
-        publishSessionTranscriptAuthority(database, {
-          ...actor.hot.transcript.version,
-          sessionId,
-          sessionKey: actor.hot.target.sessionKey,
-          leafEventId: projection?.leafEventId ?? null,
-          indexedSeq: projection?.indexedSeq ?? null,
-          activeMessageCount: projection?.activeMessageCount ?? null,
-          needsRebuild: projection ? (projection.needsRebuild ? 1 : 0) : null,
-        });
-      }
+      return;
+    }
+    if (actor?.window) {
+      executeSqliteQuerySync(database.db, update);
+      actor.window.transcript_updated_at = transcriptUpdatedAt;
+      actor.hot.transcript.version.updatedAt = transcriptUpdatedAt;
+      const projection = actor.transcript.projection;
+      publishSessionTranscriptAuthority(database, {
+        ...actor.hot.transcript.version,
+        sessionId,
+        sessionKey: actor.hot.target.sessionKey,
+        leafEventId: projection?.leafEventId ?? null,
+        indexedSeq: projection?.indexedSeq ?? null,
+        activeMessageCount: projection?.activeMessageCount ?? null,
+        needsRebuild: projection ? (projection.needsRebuild ? 1 : 0) : null,
+      });
       return;
     }
     const context = executeSqliteQueryTakeFirstSync(
