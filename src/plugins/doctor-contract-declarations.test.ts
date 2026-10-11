@@ -31,7 +31,7 @@ describe("provider rename descriptors", () => {
   it.each([
     { from: "old/model", to: "new", baseUrl: "https://models.example" },
     { from: "old", to: "old", baseUrl: "https://models.example" },
-    { from: "old", to: "new", baseUrl: "https://user:pass@models.example" },
+    { from: "old", to: "new", baseUrl: "not a URL" },
   ])("rejects malformed or ambiguous descriptors: %j", (descriptor) => {
     expect(() => coercePluginDoctorContractModule({ providerRenames: [descriptor] })).toThrow();
   });

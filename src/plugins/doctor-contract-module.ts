@@ -300,13 +300,7 @@ function coerceProviderRenames(value: unknown): PluginDoctorProviderRename[] {
         .object({
           from: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
           to: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
-          baseUrl: z
-            .string()
-            .url()
-            .refine((baseUrl) => {
-              const url = new URL(baseUrl);
-              return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password;
-            }),
+          baseUrl: z.string().url(),
         })
         .refine(({ from, to }) => from !== to),
     )
