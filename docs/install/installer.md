@@ -166,15 +166,20 @@ checks also default to five minutes.
 curl -fsSL https://openclaw.ai/install.sh | bash -s -- --runtime bun
 ```
 
-The Bun path resolves the npm version or dist-tag without Node, reads that
+The Bun path resolves dist-tags from npm’s small tag document without Node
+(exact versions skip that lookup), reads that
 release's Bun pin, verifies archive and executable SHA-256 hashes and the fork
 revision, then stages the runtime at
 `~/.openclaw/tools/bun-<tag>/bun` (`OPENCLAW_HOME` replaces the home directory).
 It installs with `bun add -g --trust`, verifies the package's matching pin and
 Bun launcher, and gives Bun's global bin directory priority in the shell PATH.
-A missing or mismatched packaged pin fails verification; `2026.10.1` omitted
-that file. Re-running with a newer release stages its new pin and re-pins an
+A mismatched packaged pin fails verification. Published releases that omit
+that file, including `2026.10.1`, use the verified pin from their exact release
+tag and must report the requested version through the generated launcher.
+Custom package specs still require a bundled pin. Re-running with a newer release stages its new pin and re-pins an
 existing Gateway service without resetting configuration.
+These service re-pins leave state and configuration untouched; run Doctor
+separately when you need repairs or migrations.
 
 On macOS, the installer uses `OPENCLAW_SQLITE_LIBRARY` when set; otherwise it
 ensures Homebrew SQLite is installed and exports `HOMEBREW_PREFIX`. It validates

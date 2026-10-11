@@ -79,8 +79,9 @@ Node remains the default when `--runtime` is omitted. The Bun path installs no
 Node runtime: it resolves the published OpenClaw version, downloads that release's
 pinned [OpenClaw Bun fork](/install/bun-compatibility), and verifies the archive,
 executable, revision, and installed package pin. On macOS it installs Homebrew
-SQLite if needed, or uses `OPENCLAW_SQLITE_LIBRARY`. Releases that omit the
-packaged Bun pin cannot pass verification, including `2026.10.1`.
+SQLite if needed, or uses `OPENCLAW_SQLITE_LIBRARY`. Published releases that predate the packaged Bun pin, including `2026.10.1`,
+use the verified pin from their exact release tag and must report the requested
+version through the generated launcher. Custom packages must include their pin.
 
 Use `--version <version-or-dist-tag>` to select a release, `--dry-run` to inspect
 its runtime plan (only metadata is fetched), or `--no-onboard` to skip setup.

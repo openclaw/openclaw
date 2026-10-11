@@ -3327,67 +3327,42 @@ retire_git_wrapper_after_npm_install() {
     ui_success "Previous git wrapper retired"
 }
 
-# Read a string at an exact JSON object path without a bootstrap runtime. The
-# registry contains nested version fields and escaped prose; regex extraction
-# cannot distinguish them. Only the selected metadata must be printable ASCII.
-bun_json_string() {
+# These metadata documents contain only objects and unescaped ASCII strings.
+# Reject other JSON forms and duplicate keys instead of guessing their meaning.
+bun_metadata_string() {
     LC_ALL=C awk -v wanted="$2" '
-    function fail() { bad=1; exit 1 }
-    function space() { while (substr(json,pos,1) ~ /^[ \t\r\n]$/) pos++ }
-    function string(    result,c,e,h,n,i) {
-        if (substr(json,pos++,1) != "\"") fail()
-        while (pos <= length(json)) {
-            c=substr(json,pos++,1)
-            if (c == "\"") return result
-            if (c ~ /[[:cntrl:]]/) fail()
-            if (c == "\\") {
-                e=substr(json,pos++,1)
-                if (e == "u") {
-                    h=substr(json,pos,4); pos+=4
-                    if (length(h)!=4 || h ~ /[^0-9a-fA-F]/) fail()
-                    n=0
-                    for (i=1;i<=4;i++) n=n*16+index("0123456789abcdef",tolower(substr(h,i,1)))-1
-                    c=(n>=32 && n<=126) ? sprintf("%c",n) : "\\u" h
-                } else if (e == "\"" || e == "\\" || e == "/") c=e
-                else if (e ~ /^[bfnrt]$/) c="\\" e
-                else fail()
-            }
-            result=result c
-        }
-        fail()
-    }
-    function value(path,    c,key,text,start,idx) {
-        space(); c=substr(json,pos,1)
-        if (c == "{" || c == "[") {
-            pos++; space()
-            if (substr(json,pos,1) == (c=="{" ? "}" : "]")) { pos++; return }
-            while (1) {
-                if (c == "{") { space(); key=string(); space(); if(substr(json,pos++,1)!=":") fail() }
-                else key=idx++
-                value(path "/" key); space()
-                text=substr(json,pos++,1)
-                if(text == (c=="{" ? "}" : "]")) return
-                if(text != ",") fail()
-            }
-        }
-        if (c == "\"") text=string()
-        else {
-            start=pos
-            while (pos<=length(json) && substr(json,pos,1) !~ /[ \t\r\n,}\]]/) pos++
-            text=substr(json,start,pos-start)
-            if(text !~ /^(true|false|null|-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?)$/) fail()
-        }
-        if(path==wanted) {
-            if(c!="\"" || ++found!=1 || text ~ /[^ -~]/ || text ~ /\\[ubfnrt]/) fail()
-            selected=text
-        }
-    }
+    function fail() { exit 1 }
     { json=json $0 "\n" }
     END {
-        if(bad) exit 1
-        pos=1; value(""); space()
-        if(bad || pos<=length(json) || found!=1) exit 1
-        print selected
+        while (length(json)) {
+            if (match(json, /^[ \t\r\n]+/)) { json=substr(json,RLENGTH+1); continue }
+            if (done) fail()
+            quoted=match(json, /^"[A-Za-z0-9_.+\/-]*"/)
+            token=quoted ? substr(json,2,RLENGTH-2) : substr(json,1,1)
+            json=substr(json,quoted ? RLENGTH+1 : 2)
+            if (quoted) {
+                if (!depth) fail()
+                if (state[depth]=="first" || state[depth]=="key") {
+                    if (token ~ /\// || seen[path[depth] "/" token]++) fail()
+                    key[depth]=token; state[depth]="colon"
+                } else if (state[depth]=="value") {
+                    if (path[depth] "/" key[depth]==wanted) { result=token; found++ }
+                    state[depth]="end"
+                } else fail()
+            } else if (token=="{") {
+                if (depth && state[depth]!="value") fail()
+                child=depth ? path[depth] "/" key[depth] : ""
+                state[depth]="end"; depth++; path[depth]=child; state[depth]="first"
+                if (depth>3) fail()
+            } else if (token=="}") {
+                if (!depth || (state[depth]!="first" && state[depth]!="end")) fail()
+                if (!--depth) done=1
+            } else if (token==":" && depth && state[depth]=="colon") state[depth]="value"
+            else if (token=="," && depth && state[depth]=="end") state[depth]="key"
+            else fail()
+        }
+        if (!done || depth || found!=1) fail()
+        print result
     }' "$1"
 }
 
@@ -3401,12 +3376,12 @@ bun_sha256() {
 
 read_bun_pin() {
     local pin="$1"
-    if ! { BUN_TAG="$(bun_json_string "$pin" /tag)" &&
-        BUN_REVISION="$(bun_json_string "$pin" /revision)" &&
-        BUN_ASSET="$(bun_json_string "$pin" "/artifacts/$BUN_PLATFORM/asset")" &&
-        BUN_ARCHIVE_SHA="$(bun_json_string "$pin" "/artifacts/$BUN_PLATFORM/sha256")" &&
-        BUN_EXECUTABLE="$(bun_json_string "$pin" "/artifacts/$BUN_PLATFORM/executable")" &&
-        BUN_EXECUTABLE_SHA="$(bun_json_string "$pin" "/artifacts/$BUN_PLATFORM/executableSha256")"; }; then
+    if ! { BUN_TAG="$(bun_metadata_string "$pin" /tag)" &&
+        BUN_REVISION="$(bun_metadata_string "$pin" /revision)" &&
+        BUN_ASSET="$(bun_metadata_string "$pin" "/artifacts/$BUN_PLATFORM/asset")" &&
+        BUN_ARCHIVE_SHA="$(bun_metadata_string "$pin" "/artifacts/$BUN_PLATFORM/sha256")" &&
+        BUN_EXECUTABLE="$(bun_metadata_string "$pin" "/artifacts/$BUN_PLATFORM/executable")" &&
+        BUN_EXECUTABLE_SHA="$(bun_metadata_string "$pin" "/artifacts/$BUN_PLATFORM/executableSha256")"; }; then
         ui_error "Missing or invalid Bun pin for ${BUN_PLATFORM}. Choose a published OpenClaw version with a Bun artifact, or use --runtime node."
         return 1
     fi
@@ -3531,8 +3506,8 @@ ensure_bun_sqlite() {
 # receives the package-owned Bun launcher, even on a machine with Node installed.
 bun_package_path() {
     local work dir file name projected="" index=0
-    work="$(mktemp -d)"
-    TMPFILES+=("$work")
+    work="$TMPDIR/package-path"
+    mkdir "$work"
     local -a dirs=()
     IFS=: read -r -a dirs <<< "$PATH"
     for dir in "${dirs[@]}"; do
@@ -3591,23 +3566,27 @@ install_with_bun() {
     if [[ "$custom_spec" != true ]]; then
         local requested="$OPENCLAW_VERSION"
         if [[ "$USE_BETA" == 1 ]]; then requested=beta; fi
-        if ! download_file "$registry/openclaw/$requested" "$version"; then
-            if [[ "$USE_BETA" == 1 ]]; then
-                download_file "$registry/openclaw/latest" "$version"
-            else
-                ui_error "Cannot resolve published OpenClaw version. Check --version and your registry connection."
+        if [[ "$requested" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?)$ ]]; then
+            resolved="${requested#v}"
+        else
+            download_file "$registry/-/package/openclaw/dist-tags" "$version" || {
+                ui_error "Cannot resolve OpenClaw dist-tags. Check your registry connection."
                 return 1
-            fi
+            }
+            resolved="$(bun_metadata_string "$version" "/$requested")" || {
+                if [[ "$USE_BETA" == 1 ]]; then
+                    resolved="$(bun_metadata_string "$version" /latest)" || return 1
+                else
+                    ui_error "Missing or invalid OpenClaw dist-tag: ${requested}. Choose a published version or tag."
+                    return 1
+                fi
+            }
         fi
-        resolved="$(bun_json_string "$version" /version)" || {
-            ui_error "Invalid npm registry version metadata. Check OPENCLAW_INSTALL_NPM_REGISTRY or retry."
-            return 1
-        }
         if [[ ! "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$ ]]; then
             ui_error "Registry did not return an exact published npm version."
             return 1
         fi
-        [[ "$custom_spec" == true ]] || OPENCLAW_VERSION="$resolved"
+        OPENCLAW_VERSION="$resolved"
         local pin_url="${OPENCLAW_INSTALL_BUN_PIN_URL:-https://raw.githubusercontent.com/openclaw/openclaw/v$resolved/scripts/lib/openclaw-bun.json}"
         pin_url="${pin_url//\{version\}/$resolved}"
         download_file "$pin_url" "$pin" || {
@@ -3660,22 +3639,25 @@ install_with_bun() {
     fi
     package_root="$(sed -n 's/^#openclaw-entry=\(.*\)\/openclaw.mjs$/\1/p' "$OPENCLAW_BIN")"
     installed_pin="$package_root/scripts/lib/openclaw-bun.json"
-    if [[ ! -f "$installed_pin" ]]; then
-        ui_error "Installed package lacks scripts/lib/openclaw-bun.json. Choose a newer published version that includes its Bun pin; this version cannot pass runtime verification."
+    if [[ -f "$installed_pin" ]]; then
+        if [[ "$custom_spec" == true ]]; then
+            read_bun_pin "$installed_pin"
+            validate_bun_path || return 1
+        fi
+        if [[ "$(bun_metadata_string "$installed_pin" /tag)" != "$BUN_TAG" ||
+              "$(bun_metadata_string "$installed_pin" /revision)" != "$BUN_REVISION" ||
+              "$(bun_metadata_string "$installed_pin" "/artifacts/$BUN_PLATFORM/asset")" != "$BUN_ASSET" ||
+              "$(bun_metadata_string "$installed_pin" "/artifacts/$BUN_PLATFORM/executable")" != "$BUN_EXECUTABLE" ||
+              "$(bun_metadata_string "$installed_pin" "/artifacts/$BUN_PLATFORM/sha256")" != "$BUN_ARCHIVE_SHA" ||
+              "$(bun_metadata_string "$installed_pin" "/artifacts/$BUN_PLATFORM/executableSha256")" != "$BUN_EXECUTABLE_SHA" ]]; then
+            ui_error "Installed package Bun pin differs from the staged runtime. Retry with a matching published version and --bun-path, or omit --bun-path."
+            return 1
+        fi
+    elif [[ "$custom_spec" == true ]]; then
+        ui_error "Custom package lacks scripts/lib/openclaw-bun.json. Include its matching Bun pin before installing."
         return 1
-    fi
-    if [[ "$custom_spec" == true ]]; then
-        read_bun_pin "$installed_pin"
-        validate_bun_path || return 1
-    fi
-    if [[ "$(bun_json_string "$installed_pin" /tag)" != "$BUN_TAG" ||
-          "$(bun_json_string "$installed_pin" /revision)" != "$BUN_REVISION" ||
-          "$(bun_json_string "$installed_pin" "/artifacts/$BUN_PLATFORM/asset")" != "$BUN_ASSET" ||
-          "$(bun_json_string "$installed_pin" "/artifacts/$BUN_PLATFORM/executable")" != "$BUN_EXECUTABLE" ||
-          "$(bun_json_string "$installed_pin" "/artifacts/$BUN_PLATFORM/sha256")" != "$BUN_ARCHIVE_SHA" ||
-          "$(bun_json_string "$installed_pin" "/artifacts/$BUN_PLATFORM/executableSha256")" != "$BUN_EXECUTABLE_SHA" ]]; then
-        ui_error "Installed package Bun pin differs from the staged runtime. Retry with a matching published version and --bun-path, or omit --bun-path."
-        return 1
+    else
+        ui_info "Package predates its bundled Bun pin; verified against the v${resolved} tag pin."
     fi
     local output
     output="$("$OPENCLAW_BIN" --version)"

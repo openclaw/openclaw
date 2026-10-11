@@ -58,7 +58,7 @@ case "$1" in
     shift
     printf 'cli:%s\\n' "$*" >> "$FIXTURE_ROOT/effects"
     case "$1" in
-      --version) echo 'OpenClaw ${version}' ;;
+      --version) echo "OpenClaw \${CLI_VERSION:-${version}}" ;;
       daemon) printf '{"service":{"loaded":%s}}\\n' "\${SERVICE_LOADED:-false}" ;;
     esac
     ;;
@@ -86,10 +86,7 @@ esac
     ),
   };
   writeFileSync(join(root, "pin.json"), JSON.stringify(pin));
-  writeFileSync(
-    join(root, "registry.json"),
-    `{"nested":{"version":"0.0.0"},"description":"quoted \\"version\\"", "vers\\u0069on":"${version}"}`,
-  );
+  writeFileSync(join(root, "registry.json"), JSON.stringify({ latest: version, beta: version }));
   executable(
     join(bin, "curl"),
     `#!/bin/bash
@@ -101,7 +98,7 @@ while [[ $# -gt 1 ]]; do
 done
 printf '%s\\n' "$1" >> "$FIXTURE_ROOT/requests"
 case "$1" in
-  https://registry.test/openclaw/*) cp "$FIXTURE_ROOT/registry.json" "$out" ;;
+  https://registry.test/-/package/openclaw/dist-tags) cp "$FIXTURE_ROOT/registry.json" "$out" ;;
   https://pin.test/v${version}/pin.json) cp "$FIXTURE_ROOT/pin.json" "$out" ;;
   https://release.test/*/bun.zip) cp "$FIXTURE_ROOT/bun.zip" "$out" ;;
   *) echo "Unexpected network request: $1" >&2; exit 90 ;;
@@ -169,7 +166,7 @@ describe("install.sh Bun runtime", () => {
     );
 
     expect(readFileSync(join(f.root, "requests"), "utf8").split("\n").filter(Boolean)).toEqual([
-      "https://registry.test/openclaw/latest",
+      "https://registry.test/-/package/openclaw/dist-tags",
       `https://pin.test/v${version}/pin.json`,
     ]);
     expect(existsSync(join(f.root, "effects"))).toBe(false);
@@ -208,16 +205,21 @@ describe("install.sh Bun runtime", () => {
     expect(existsSync(join(f.root, "effects"))).toBe(false);
   });
 
-  it.each(["{", '{"version":"2026.10.1","version":"2026.10.2"}', '{"version":"../bad"}'])(
-    "refuses invalid or ambiguous registry metadata: %s",
-    (json) => {
-      const f = fixture();
-      writeFileSync(join(f.root, "registry.json"), json);
-      const result = f.run(["--runtime", "bun", "--dry-run"]);
-      expect(result.status, output(result)).not.toBe(0);
-      expect(existsSync(join(f.root, "effects"))).toBe(false);
-    },
-  );
+  it.each([
+    "{",
+    '{"latest":"2026.10.1","latest":"2026.10.2"}',
+    '{"latest":"../bad"}',
+    '{"nested":{"latest":"2026.10.1"}}',
+    '{"latest":"2026.10.1",}',
+    '{"latest":"2026.10.1","unknown":[]}',
+    String.raw`{"latest":"2026.10.\u0031"}`,
+  ])("refuses invalid or ambiguous registry metadata: %s", (json) => {
+    const f = fixture();
+    writeFileSync(join(f.root, "registry.json"), json);
+    const result = f.run(["--runtime", "bun", "--dry-run"]);
+    expect(result.status, output(result)).not.toBe(0);
+    expect(existsSync(join(f.root, "effects"))).toBe(false);
+  });
 
   it.each(["archive", "executable", "revision", "missing artifact"])(
     "refuses a bad %s before executing a package",
@@ -322,12 +324,50 @@ describe("install.sh Bun runtime", () => {
     expect(existsSync(join(f.root, "effects"))).toBe(false);
   });
 
-  it("refuses a published package that omits its runtime pin", () => {
+  it("accepts a historical published package using its verified release tag pin", () => {
     const f = fixture();
-    const result = f.run(["--runtime", "bun", "--no-onboard"], { OMIT_PACKAGE_PIN: "1" });
+    const result = f.run(["--runtime", "bun", "--version", version, "--no-onboard"], {
+      OMIT_PACKAGE_PIN: "1",
+    });
+    expect(result.status, output(result)).toBe(0);
+    expect(output(result).match(/Package predates its bundled Bun pin/g)).toHaveLength(1);
+    expect(output(result)).toContain(`verified against the v${version} tag pin`);
+    expect(readFileSync(join(f.root, "requests"), "utf8")).not.toContain("registry.test");
+    expect(readFileSync(join(f.root, "effects"), "utf8")).toContain("cli:--version");
+    expect(readFileSync(join(f.root, "effects"), "utf8")).not.toContain("cli:gateway");
+  });
+
+  it.each(["missing custom pin", "wrong published version"])("refuses %s", (fault) => {
+    const f = fixture();
+    const args = ["--runtime", "bun", "--no-onboard"];
+    if (fault === "missing custom pin") {
+      args.push("--version", "./local.tgz", "--bun-path", f.bun);
+    }
+    const result = f.run(args, { OMIT_PACKAGE_PIN: "1", CLI_VERSION: "2026.9.9" });
     expect(result.status, output(result)).not.toBe(0);
-    expect(output(result)).toContain("Installed package lacks scripts/lib/openclaw-bun.json");
-    expect(readFileSync(join(f.root, "effects"), "utf8")).not.toContain("cli:");
+    expect(output(result)).toContain(
+      fault === "missing custom pin" ? "Custom package lacks" : "unexpected version",
+    );
+    expect(readFileSync(join(f.root, "effects"), "utf8")).not.toContain("cli:gateway");
+  });
+
+  it.each(["duplicate key", "escaped value", "path key"])("rejects ambiguous pin: %s", (fault) => {
+    const f = fixture();
+    let pin = JSON.stringify(f.pin);
+    if (fault === "duplicate key") {
+      pin = pin.replace("{", '{"tag":"other",');
+    }
+    if (fault === "escaped value") {
+      pin = pin.replace(tag, "openclaw-" + String.raw`\u0066` + "ixture");
+    }
+    if (fault === "path key") {
+      pin = pin.replace('"artifacts":', '"artifacts/linux-x64":');
+    }
+    writeFileSync(join(f.root, "pin.json"), pin);
+    const result = f.run(["--runtime", "bun", "--dry-run"]);
+    expect(result.status, output(result)).not.toBe(0);
+    expect(output(result)).toContain("Missing or invalid Bun pin");
+    expect(existsSync(join(f.root, "effects"))).toBe(false);
   });
 
   it("refuses stock Bun and invalid macOS SQLite before package installation", () => {
