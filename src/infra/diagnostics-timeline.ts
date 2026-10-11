@@ -370,7 +370,7 @@ export async function measureDiagnosticsTimelineSpan<T>(
   run: () => Promise<T> | T,
   options: DiagnosticsTimelineSpanOptions = {},
 ): Promise<T> {
-  using _observation = observeSpan(name, options);
+  using _ = observeSpan(name, options);
   const span = startDiagnosticsTimelineSpan(name, options);
   if (!span) {
     return await runWithMainThreadTask(name, run);
@@ -391,7 +391,7 @@ export function measureDiagnosticsTimelineSpanSync<T>(
   run: () => T,
   options: DiagnosticsTimelineSpanOptions = {},
 ): T {
-  using _observation = observeSpan(name, options);
+  using _ = observeSpan(name, options);
   const span = startDiagnosticsTimelineSpan(name, options);
   if (!span) {
     return runWithMainThreadTask(name, run);

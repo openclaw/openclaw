@@ -63,7 +63,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       }
       for (const phase of [
         ...PHASES,
-        ...[...totals.keys()].filter((name) => name.startsWith("detail.")).sort(),
+        ...[...totals.keys()].filter((name) => name.startsWith("detail.")).toSorted(),
       ]) {
         const durationMs = totals.get(phase);
         if (durationMs === undefined) {
@@ -134,9 +134,9 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
   };
   return {
     scope,
-    observeSpan(name: string, attributes: Record<string, unknown> | undefined) {
-      const stage = name === "agent.prepare" ? attributes?.stage : name;
-      return typeof stage === "string" ? scope(`detail.${stage}`)?.finish : undefined;
+    observeSpan: (name: string, attributes: Record<string, unknown> | undefined) => {
+      const spanName = name === "agent.prepare" ? attributes?.stage : name;
+      return typeof spanName === "string" ? scope(`detail.${spanName}`)?.finish : undefined;
     },
     acknowledge(disposition: PostAckStage = "startup") {
       if (!finished && stage === "request") {
