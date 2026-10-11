@@ -8,7 +8,6 @@ import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/li
 import { resolveTerminalMainSessionTranscriptRegistryCheck } from "../../config/sessions/lifecycle.js";
 import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
-import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -63,10 +62,6 @@ type AgentSessionReuseInput = {
   requestedSessionId?: string;
   isSystemGatewayRun: boolean;
   visibleRequest: boolean;
-  preparedTranscript?: {
-    entry: SessionEntry;
-    metadata: SessionTranscriptAnchorFacts["metadata"];
-  };
 };
 
 /** Re-evaluate the entry from each read; callers retain admission and concurrent-rotation fencing. */
@@ -111,28 +106,22 @@ export async function evaluateAgentSessionReuse(params: AgentSessionReuseInput) 
   const failedSession =
     params.freshEntry?.status === "failed" && Boolean(params.freshEntry.sessionId?.trim());
   const needsMetadata = failedSession || terminalCheck !== undefined;
-  // A new mutation candidate gets fresh facts; only the original prepared row is reused.
-  const preparedTranscript =
+  // Transcript facts can change independently of the session row.
+  const metadata =
     params.freshEntry && needsMetadata
-      ? params.preparedTranscript?.entry === params.freshEntry
-        ? params.preparedTranscript
-        : {
-            entry: params.freshEntry,
-            metadata: await readSessionTranscriptAnchorsAsync(
-              {
-                agentId: params.sessionAgentId,
-                sessionId: params.freshEntry.sessionId,
-                sessionKey: params.canonicalSessionKey,
-                storePath: params.storePath,
-              },
-              { entryIds: [], includeMetadata: true },
-            ).then(
-              (facts) => facts.metadata,
-              () => undefined,
-            ),
-          }
+      ? await readSessionTranscriptAnchorsAsync(
+          {
+            agentId: params.sessionAgentId,
+            sessionId: params.freshEntry.sessionId,
+            sessionKey: params.canonicalSessionKey,
+            storePath: params.storePath,
+          },
+          { entryIds: [], includeMetadata: true },
+        ).then(
+          (facts) => facts.metadata,
+          () => undefined,
+        )
       : undefined;
-  const metadata = preparedTranscript?.metadata;
   const terminalMainTranscriptNewerThanRegistry = Boolean(
     terminalCheck &&
     metadata?.updatedAt != null &&
@@ -160,7 +149,6 @@ export async function evaluateAgentSessionReuse(params: AgentSessionReuseInput) 
     (!canReuseSession && !usableRequestedSessionId) ||
     Boolean(usableRequestedSessionId && params.freshEntry?.sessionId !== usableRequestedSessionId);
   return {
-    preparedTranscript,
     lifecycleTimestamps,
     freshness,
     recoverableTerminalSession,

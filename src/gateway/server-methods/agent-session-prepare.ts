@@ -227,6 +227,5 @@ async function prepareAdmittedAgentSession(
     sessionPersistedBeforeGatewayAdmission: entry !== undefined,
     effectiveBootstrapContextRunKind,
     restoredCronContinuationIdentity,
-    preparedTranscript: reuse.preparedTranscript,
   };
 }
