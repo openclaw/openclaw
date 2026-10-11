@@ -198,6 +198,7 @@ export function findSettingsSearchBlocks(params: {
       ...(routeId === "memory"
         ? {
             pathname: pathForMemoryTab("settings", params.basePath),
+            ...(matchesAdvanced ? { search: "?advanced=1" } : {}),
             hash: editorHash,
           }
         : routeId === "plugin-settings"
