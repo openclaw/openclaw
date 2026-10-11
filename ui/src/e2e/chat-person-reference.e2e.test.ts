@@ -44,7 +44,7 @@ suite.define(() => {
     { width: 1280, colorScheme: "light" as const, scale: 1, font: "var(--font-body)" },
     { width: 390, colorScheme: "dark" as const, scale: 1.5, font: "Georgia, serif" },
   ])(
-    "aligns mention initials without probing unadvertised images at $width px",
+    "keeps advertised mention photos and absent-avatar initials aligned at $width px",
     async (viewport) => {
       await suite.withPage(
         { viewport: { width: viewport.width, height: 900 }, colorScheme: viewport.colorScheme },
@@ -52,9 +52,13 @@ suite.define(() => {
           const avatarRequests: string[] = [];
           await page.route("**/api/users/**/avatar*", async (route) => {
             avatarRequests.push(route.request().url());
-            await route.fulfill({ status: 404 });
+            await route.fulfill({
+              contentType: "image/png",
+              body: readFileSync("ui/public/apple-touch-icon.png"),
+            });
           });
-          await installMockGateway(page, {
+          const gateway = await installMockGateway(page, {
+            deferredMethods: ["users.list"],
             historyMessages: [
               {
                 ...historyMessages[0],
@@ -93,12 +97,50 @@ suite.define(() => {
                 return box.top + box.height / 2 - (textBox.top + textBox.height / 2);
               }),
             );
+          await gateway.waitForRequest("users.list");
           await expect.poll(() => references.locator('[data-avatar-state="none"]').count()).toBe(2);
           expect(await references.locator("img").count()).toBe(0);
           expect(avatarRequests).toEqual([]);
+          const before = await references.evaluateAll((elements) =>
+            elements.map((element) => {
+              const { x, y, width, height } = element.getBoundingClientRect();
+              return { x, y, width, height };
+            }),
+          );
+          await captureUiProof(suite, page, "mention-directory", `${viewport.width}-before.png`);
+          await gateway.resolveDeferred("users.list", {
+            profiles: [
+              { ...profile, id: "profile-photo", displayName: "Photo Person", hasAvatar: true },
+              { ...profile, id: "profile-missing", displayName: "Missing Person" },
+            ],
+          });
+          await expect
+            .poll(() => references.first().locator('[data-avatar-state="loaded"]').count())
+            .toBe(1);
+          await expect
+            .poll(() =>
+              references
+                .first()
+                .locator("img")
+                .evaluate((image: HTMLImageElement) => image.naturalWidth),
+            )
+            .toBeGreaterThan(0);
+          expect(await references.nth(1).locator("img").count()).toBe(0);
+          expect(avatarRequests.map((url) => new URL(url).pathname + new URL(url).search)).toEqual([
+            "/api/users/profile-photo/avatar?v=2",
+          ]);
+          expect(
+            await references.evaluateAll((elements) =>
+              elements.map((element) => {
+                const { x, y, width, height } = element.getBoundingClientRect();
+                return { x, y, width, height };
+              }),
+            ),
+          ).toEqual(before);
           for (const offset of await geometry()) {
             expect(Math.abs(offset)).toBeLessThanOrEqual(1);
           }
+          await captureUiProof(suite, page, "mention-directory", `${viewport.width}-after.png`);
           expect(await references.allTextContents()).toEqual([label, label]);
         },
       );
@@ -254,7 +296,7 @@ suite.define(() => {
               .evaluate((node) => node.getBoundingClientRect().width),
           ).toBe(0);
           const avatar = reference.locator(".markdown-person-reference__avatar");
-          expect(await avatar.locator("img").count()).toBe(0);
+          await expect.poll(() => avatar.locator("img").count()).toBe(1);
           expect(await avatar.getAttribute("aria-hidden")).toBe("true");
           expect(
             await reference.evaluate((node) => {
@@ -288,7 +330,7 @@ suite.define(() => {
               .locator("xpath=ancestor::*[contains(@class, 'chat-bubble')]")
               .getAttribute("data-message-text"),
           ).toBe(text);
-          expect(await gateway.getRequests("users.list")).toHaveLength(0);
+          expect(await gateway.getRequests("users.list")).toHaveLength(1);
           if (input === "keyboard") {
             await reference.focus();
           } else if (input === "mouse") {
@@ -335,6 +377,36 @@ suite.define(() => {
     },
   );
 
+  it.each(["failed", "missing"] as const)(
+    "retries a %s initial directory lookup when a person card opens",
+    async (outcome) => {
+      await suite.withPage({}, async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          historyMessages,
+          deferredMethods: ["users.list"],
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const reference = page.locator(".markdown-person-reference");
+        await reference.waitFor();
+        await gateway.waitForRequest("users.list");
+        if (outcome === "failed") {
+          await gateway.rejectDeferred("users.list", {
+            code: "UNAVAILABLE",
+            message: "Directory temporarily unavailable",
+          });
+        } else {
+          await gateway.resolveDeferred("users.list", { profiles: [] });
+        }
+        await reference.focus();
+        await expect.poll(async () => (await gateway.getRequests("users.list")).length).toBe(2);
+        await gateway.resolveDeferred("users.list", directory);
+        await expect
+          .poll(() => page.locator(".person-activity-hovercard h2").textContent())
+          .toBe("Ada Lovelace");
+      });
+    },
+  );
+
   it("does not revive a dismissed or disconnected card when an old directory reply arrives", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -350,9 +422,11 @@ suite.define(() => {
       await reference.press("Escape");
       await gateway.resolveDeferred("users.list", directory);
       expect(await card.count()).toBe(0);
+      await gateway.setOnline(false);
       await gateway.deferNext("users.list");
-      await reference.click();
+      await gateway.setOnline(true);
       await expect.poll(async () => (await gateway.getRequests("users.list")).length).toBe(2);
+      await reference.click();
       await gateway.setOnline(false);
       await card.waitFor({ state: "detached" });
       await gateway.resolveDeferred("users.list", directory);
