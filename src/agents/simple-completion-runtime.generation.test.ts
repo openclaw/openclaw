@@ -29,12 +29,14 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
+// mock-isolation: a private generation store records which generation each step reads.
 vi.mock("../plugins/runtime/generation-scope.js", async () => {
   const { AsyncLocalStorage } = await import("node:async_hooks");
   const generation = new AsyncLocalStorage<string>();
   mocks.readGeneration = () => generation.getStore() ?? mocks.publishedGeneration;
   return {
     getPluginRuntimeGenerationRegistry: () => undefined,
+    runOutsidePluginRuntimeGenerationScope: (run: () => unknown) => generation.exit(run),
     withPluginRuntimeGenerationScope: (snapshot: { testGeneration?: string }, run: () => unknown) =>
       generation.run(snapshot.testGeneration ?? "unknown", run),
   };
