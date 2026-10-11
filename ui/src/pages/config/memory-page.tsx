@@ -197,7 +197,7 @@ export function MemorySettingsContent(props: MemorySettingsPageProps) {
     pageConnection = connection;
     setEngineBusy(false);
     setEngineOutcome(null);
-    setAddonBusy(new Set());
+    setAddonBusy(new Set<string>());
     setAddonRefreshWarnings(new Map());
     pageOverviewRequest = null;
     setProbingEmbeddings(false);

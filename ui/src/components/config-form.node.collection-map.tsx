@@ -20,10 +20,7 @@ import {
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.tsx";
-import {
-  hasConfigSearchCriteria as hasSearchCriteria,
-  matchesNodeSearch,
-} from "./config-form.search.ts";
+import { resolveConfigMapSearch } from "./config-form.search.ts";
 import { configFieldId } from "./config-form.shared.ts";
 
 type MapParams = ConfigNodeRenderParams & {
@@ -50,20 +47,7 @@ function resolveMapContent(params: MapParams) {
     existingKeys: [...new Set([...Object.keys(params.value), ...params.reservedKeys])],
     validateKey: params.validateKey,
   };
-  const entries = Object.entries(params.value).filter(([key]) => !params.reservedKeys.has(key));
-  const searching = params.searchCriteria && hasSearchCriteria(params.searchCriteria);
-  const visibleEntries = searching
-    ? entries.filter(([key, entryValue]) =>
-        matchesNodeSearch({
-          schema: params.schema,
-          value: entryValue,
-          path: [...params.path, key],
-          hints: params.hints,
-          criteria: params.searchCriteria!,
-        }),
-      )
-    : entries;
-  return { anySchema, entryDefault, draftId, draftProps, visibleEntries, searching };
+  return { anySchema, entryDefault, draftId, draftProps, ...resolveConfigMapSearch(params) };
 }
 
 function ConfigMapRow(
@@ -178,7 +162,7 @@ function ConfigMapRow(
 export function ConfigMapField(props: MapProps): JSX.Element {
   const content = createMemo(() => resolveMapContent(props.params));
   return (
-    <Show when={!content().searching || content().visibleEntries.length > 0}>
+    <Show when={content().visible}>
       <div class="cfg-block cfg-map">
         <div class="settings-row">
           <Show when={props.params.showLabel !== false || props.params.reservedKeys.size > 0}>

@@ -164,7 +164,7 @@ export function LobsterPetSection(props: ConfigProps) {
                                       { "lobsterdex__mini--unseen": !seen() },
                                     ]}
                                     style={lobsterLookStyle(look)}
-                                    tabIndex={0}
+                                    tabindex={0}
                                     role="img"
                                     aria-label={ariaLabel()}
                                   >

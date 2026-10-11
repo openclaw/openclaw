@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { matchesNodeSearch, parseConfigSearchQuery } from "./config-form.search.ts";
+import {
+  matchesNodeSearch,
+  parseConfigSearchQuery,
+  resolveConfigMapSearch,
+} from "./config-form.search.ts";
 
 const schema = {
   type: "object",
@@ -184,4 +188,36 @@ describe("config form search", () => {
 
     expect(matched).toBe(true);
   });
+  it.each([
+    { query: "", value: { reserved: "hidden", alpha: "visible" }, keys: ["alpha"], visible: true },
+    {
+      query: "alpha",
+      value: { reserved: "hidden", alpha: "visible" },
+      keys: ["alpha"],
+      visible: true,
+    },
+    {
+      query: "reserved",
+      value: { reserved: "hidden", alpha: "visible" },
+      keys: [],
+      visible: false,
+    },
+    { query: "missing", value: { reserved: "hidden", alpha: "visible" }, keys: [], visible: false },
+    { query: "", value: {}, keys: [], visible: true },
+    { query: "alpha", value: {}, keys: [], visible: false },
+  ])(
+    "keeps custom map visibility scoped to its searchable entries ($query, $visible)",
+    ({ query, value, keys, visible }) => {
+      const result = resolveConfigMapSearch({
+        schema: { type: "string" },
+        value,
+        path: ["settings"],
+        hints: {},
+        reservedKeys: new Set(["reserved"]),
+        searchCriteria: parseConfigSearchQuery(query),
+      });
+      expect(result.visibleEntries.map(([key]) => key)).toEqual(keys);
+      expect(result.visible).toBe(visible);
+    },
+  );
 });

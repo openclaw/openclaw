@@ -21,11 +21,6 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { MemorySettingsPage, type MemorySettingsPageProps } from "./memory-page.tsx";
 import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 
-type MemoryPageElement = HTMLElement & {
-  configObject: Record<string, unknown>;
-  routeData: ConfigRouteData | null;
-};
-
 const pageMounts = new WeakMap<HTMLElement, () => () => void>();
 
 export function mountMemoryPage(element: HTMLElement) {
@@ -264,7 +259,6 @@ export function createMemoryPage(params: {
     settingsAgentSelection.set(params.selectedAgentId);
   }
   Object.assign(context, { settingsAgentSelection });
-  const element = createApplicationContextProvider(context) as MemoryPageElement;
   const [revision, setRevision] = createSignal(0);
   const input: MemorySettingsPageProps = {
     configObject: params.configObject,
@@ -274,6 +268,10 @@ export function createMemoryPage(params: {
     memoryImportHref: "",
     buildEditor: () => null,
   };
+  const element = Object.assign(createApplicationContextProvider(context), {
+    configObject: input.configObject,
+    routeData: input.routeData,
+  });
   Object.defineProperties(element, {
     configObject: {
       get: () => input.configObject,

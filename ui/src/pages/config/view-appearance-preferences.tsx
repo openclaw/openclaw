@@ -255,7 +255,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
                     data-settings-chat-message-width
                     aria-label={t("configView.chatPrefs.messageWidth")}
                     type="text"
-                    spellCheck="false"
+                    spellcheck="false"
                     placeholder="48rem"
                     value={props.chatMessageMaxWidth ?? ""}
                     onChange={(event: Event) => {

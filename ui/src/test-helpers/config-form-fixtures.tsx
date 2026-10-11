@@ -34,18 +34,18 @@ function fixture<Props>(component: (props: Accessor<Props>) => JSX.Element) {
       update(props);
     } else {
       activeMounts.get(container)?.();
-      const [value, setValue] = createSignal(props);
+      const [value, setValue] = createSignal({ props });
       const view = mountSolid(
         () => {
           onCleanup(() => {
             mounted.delete(container);
             activeMounts.delete(container);
           });
-          return component(value);
+          return component(() => value().props);
         },
         { container },
       );
-      mounted.set(container, (next) => setValue(() => next));
+      mounted.set(container, (next) => setValue({ props: next }));
       activeMounts.set(container, view.unmount);
     }
     flush();

@@ -233,7 +233,7 @@ function DeviceNotificationPreferences(props: {
               type="text"
               class="settings-input"
               aria-label={t("configView.notifications.notificationLabel")}
-              maxLength={80}
+              maxlength={80}
               value={props.preferences.label}
               onChange={(event) => patch({ label: event.currentTarget.value })}
             />

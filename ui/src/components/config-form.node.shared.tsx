@@ -288,7 +288,7 @@ export function JsonTextareaControl(props: {
       }
       rows={props.rows}
       disabled={props.disabled}
-      readOnly={props.sensitiveState.isRedacted}
+      readonly={props.sensitiveState.isRedacted}
       onClick={() => {
         if (props.sensitiveState.isRedacted) {
           props.onToggleSensitivePath?.(props.path);

@@ -384,7 +384,7 @@ function ScalarInput(props: {
       max={state().constraints?.max}
       step={state().constraints?.step}
       disabled={props.params.disabled}
-      readOnly={state().effectiveRedacted}
+      readonly={state().effectiveRedacted}
       onClick={() => {
         if (
           !state().masked &&

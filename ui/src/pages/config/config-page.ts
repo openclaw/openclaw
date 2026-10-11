@@ -563,7 +563,7 @@ export class ConfigPageController {
     const agentId = this.context.settingsAgentSelection.state.selectedId;
     const labelsClient =
       active &&
-      this.hiddenSessionCatalogIds.length > 0 &&
+      this.hiddenSessionCatalogIds.size > 0 &&
       canCallGatewayMethod(snapshot, "sessions.catalog.list", "operator.read")
         ? snapshot.client
         : null;

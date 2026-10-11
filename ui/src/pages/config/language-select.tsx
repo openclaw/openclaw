@@ -20,11 +20,9 @@ export function LanguageSelect(props: {
     <wa-select
       class="settings-select"
       prop:value={value()}
-      onChange={(event: Event) => {
-        // SAFETY: This change handler is bound directly to the value-bearing wa-select.
-        const next = (event.currentTarget as HTMLElement & { value: string }).value;
-        // SAFETY: The options below are "system" or members of SUPPORTED_LOCALES.
-        props.onLocaleChange(next === "system" ? undefined : (next as Locale));
+      onChange={(event) => {
+        const next = event.currentTarget.value;
+        props.onLocaleChange(SUPPORTED_LOCALES.find((locale) => locale === next));
       }}
     >
       <span slot="label" class="settings-control__sr-label">

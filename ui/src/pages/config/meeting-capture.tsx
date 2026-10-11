@@ -461,6 +461,10 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
   const status = captureStatus;
   const error = () => (requestStatus() === "error" ? formatUiError(requestError()) : null);
   const saved = () => status()?.latestTranscript;
+  const lastUtteranceLabel = () => {
+    const timestamp = saved()?.lastUtteranceAt;
+    return timestamp ? new Date(timestamp).toLocaleString() : t("transcripts.unknown");
+  };
   const sourceRows = () =>
     sources().map((raw, index) => {
       const source = asNullableRecord(raw);
@@ -572,15 +576,7 @@ export function MeetingCaptureSettingsContent(props: SettingsProps) {
               {saved() ? (
                 <SettingsRow
                   title={t("meetingCapture.lastUtterance")}
-                  control={
-                    <SettingsValue
-                      value={
-                        saved()!.lastUtteranceAt
-                          ? new Date(saved()!.lastUtteranceAt).toLocaleString()
-                          : t("transcripts.unknown")
-                      }
-                    />
-                  }
+                  control={<SettingsValue value={lastUtteranceLabel()} />}
                 />
               ) : undefined}
               <SettingsRow

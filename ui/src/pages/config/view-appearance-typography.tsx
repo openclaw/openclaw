@@ -80,7 +80,7 @@ export function Typography(
                             ...options(),
                           ],
                           onOpen: loadTypefaceSpecimens,
-                          onChange: (value) =>
+                          onChange: (value: string) =>
                             (isUi ? props.setFontUi : props.setFontChat)(
                               normalizeTypefaceOverride(value),
                             ),
@@ -110,8 +110,8 @@ export function Typography(
                     data-settings-terminal-font
                     aria-label={t("configView.appearance.fonts.terminal")}
                     placeholder={t("configView.appearance.fonts.terminalDefault")}
-                    maxLength={100}
-                    spellCheck="false"
+                    maxlength={100}
+                    spellcheck="false"
                     value={props.terminalFontFamily ?? ""}
                     onInput={(
                       event: Event & {

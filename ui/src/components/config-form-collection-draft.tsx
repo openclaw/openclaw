@@ -281,7 +281,7 @@ export function ConfigFormCollectionDraftContent(props: {
                 <input
                   data-collection-draft-null
                   type="checkbox"
-                  prop:checked={draftIsNull()}
+                  checked={draftIsNull()}
                   onChange={(event) => {
                     setDraftIsNull(event.currentTarget.checked);
                     clearError();

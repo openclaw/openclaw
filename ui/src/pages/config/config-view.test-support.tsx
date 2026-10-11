@@ -1,6 +1,8 @@
+import { createRouter } from "@openclaw/uirouter";
 import { createSignal, onCleanup } from "solid-js";
 import { vi } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
+import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationTheme } from "../../app/context-types.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
@@ -14,8 +16,9 @@ import { Config, createConfigViewState, type ConfigProps } from "./view.tsx";
 
 const views = new WeakMap<HTMLElement, (props: ConfigProps) => void>();
 
-function createViewContext(): ApplicationContext {
+function createViewContext() {
   const { gateway } = createApplicationGateway();
+  const router = createRouter<RouteId, ApplicationContext>({ routes: [] });
   const theme: ApplicationTheme = {
     branding: resolveThemeBranding(undefined),
     settings: loadSettings(),
@@ -28,7 +31,8 @@ function createViewContext(): ApplicationContext {
     refresh: () => undefined,
     subscribe: () => () => undefined,
   };
-  return { gateway, theme, router: { subscribe: () => () => undefined } } as ApplicationContext;
+  // Rendering consumes only Gateway, theme and router capabilities.
+  return { context: { gateway, theme, router } as ApplicationContext, router };
 }
 
 /** Update one mounted view so the test exercises retained field identity. */
@@ -41,10 +45,14 @@ export function renderConfigInto(props: ConfigProps, container: HTMLElement) {
   }
   const [current, setCurrent] = createSignal({ ...props });
   views.set(container, setCurrent);
-  const provider = createSolidApplicationContextProvider(createViewContext());
+  const application = createViewContext();
+  const provider = createSolidApplicationContextProvider(application.context);
   mountSolid(
     () => {
-      onCleanup(() => views.delete(container));
+      onCleanup(() => {
+        views.delete(container);
+        application.router.stop();
+      });
       return <Config {...current()} />;
     },
     { container, wrapper: provider.wrapper },

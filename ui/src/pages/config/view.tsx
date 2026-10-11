@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, untrack } from "solid-js";
+import { createMemo, createSignal, For, Show, untrack } from "solid-js";
 import "../../styles/lobster-pet.css";
 import { ConfigForm } from "../../components/config-form.render.tsx";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
@@ -352,32 +352,34 @@ export function Config(props: ConfigProps) {
               resetContentScroll={resetContentScroll}
             />
           ) : null}
-          {state().channelGroup && state().formMode === "form" ? (
-            <div class="config-toolbar">
-              <label class="field">
-                <span>{t("configView.channelSettings")}</span>
-                <select
-                  class="settings-select"
-                  value={state().channelGroup.key ?? ""}
-                  onChange={(event) => {
-                    props.onSubsectionChange(event.currentTarget.value || null);
-                    resetContentScroll(event.currentTarget);
-                  }}
-                >
-                  <For each={state().channelGroups} keyed={(group) => group.key}>
-                    {(group) => (
-                      <option
-                        value={group().key ?? ""}
-                        selected={group().key === state().channelGroup.key}
-                      >
-                        {group().label}
-                      </option>
-                    )}
-                  </For>
-                </select>
-              </label>
-            </div>
-          ) : null}
+          <Show when={state().formMode === "form" ? state().channelGroup : undefined}>
+            {(channelGroup) => (
+              <div class="config-toolbar">
+                <label class="field">
+                  <span>{t("configView.channelSettings")}</span>
+                  <select
+                    class="settings-select"
+                    value={channelGroup().key ?? ""}
+                    onChange={(event) => {
+                      props.onSubsectionChange(event.currentTarget.value || null);
+                      resetContentScroll(event.currentTarget);
+                    }}
+                  >
+                    <For each={state().channelGroups} keyed={(group) => group.key}>
+                      {(group) => (
+                        <option
+                          value={group().key ?? ""}
+                          selected={group().key === channelGroup().key}
+                        >
+                          {group().label}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                </label>
+              </div>
+            )}
+          </Show>
           {state().showValidityWarning ? (
             <div class="config-validity-warning">
               <Icon name="alertTriangle" class="config-validity-warning__icon" />

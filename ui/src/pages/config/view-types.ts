@@ -73,7 +73,7 @@ type AppearancePreferences = Required<
     | "composerHoldToRecord"
   >
 > &
-  Pick<UiSettings, "chatMessageMaxWidth" | "chatFollowUpMode">;
+  Pick<UiSettings, "chatMessageMaxWidth" | "chatFollowUpMode" | "openLinksInControlUiBrowser">;
 
 export interface ConfigProps extends TabIconViewProps, AppearancePreferences {
   onAppearanceChange: (patch: Partial<AppearancePreferences>) => void;

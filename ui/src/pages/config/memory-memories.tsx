@@ -50,7 +50,7 @@ function FileContent(props: { content: string; result: SearchResult }) {
   const start = () => Math.max(0, props.result.startLine - 1);
   const end = () => Math.min(lines().length, props.result.endLine);
   return (
-    <pre class="memory-memories__file" tabIndex={0}>
+    <pre class="memory-memories__file" tabindex={0}>
       <span>
         {lines().slice(0, start()).join("\n")}
         {start() ? "\n" : ""}

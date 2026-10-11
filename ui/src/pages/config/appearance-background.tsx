@@ -1,7 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
-import "../../components/session-background.ts";
-import type { SessionBackground } from "../../components/session-background.ts";
+import { SessionBackground } from "../../components/session-background.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { AppearanceBackgroundController } from "./appearance-background-controller.ts";
@@ -33,15 +32,15 @@ export function AppearanceBackgroundContent(
   onCleanup(() => controller.dispose());
   return (
     <>
-      <openclaw-session-background
+      <SessionBackground
         class="settings-background-preview"
         data-background-preview-canvas
         ref={(element: SessionBackground) => {
           preview = element;
         }}
-        prop:context={context()}
-        prop:surface="preview"
-        prop:preferenceOverride={(revision(), controller.previewPreference)}
+        context={context()}
+        surface="preview"
+        preferenceOverride={(revision(), controller.previewPreference)}
       />
       <AppearanceBackgroundView {...viewProps()} />
     </>

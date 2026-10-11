@@ -152,27 +152,29 @@ export function AppearanceSection(props: ConfigProps) {
       ? props.customThemeLabel
       : t("configView.appearance.importedTheme"),
   );
-  const themeOptions = createMemo(() => [
-    ...(props.themeCatalog?.themes.length ? props.themeCatalog.themes : BUILTIN_THEMES).map(
-      (theme) => ({
-        id: theme.id,
-        label: theme.source === "builtin" ? t(`configView.themes.${theme.id}.label`) : theme.name,
-        description:
-          theme.source === "builtin"
-            ? t(`configView.themes.${theme.id}.description`)
-            : theme.description,
-      }),
-    ),
-    {
-      id: "custom",
-      label: props.hasCustomTheme ? importedName() : t("configView.appearance.import"),
-      description: props.hasCustomTheme
-        ? t("configView.appearance.importedFrom", {
-            name: importedName(),
-          })
-        : t("configView.appearance.importHint"),
-    },
-  ]);
+  const themeOptions = createMemo(
+    (): Array<{ id: ThemeName; label: string; description: string }> => [
+      ...(props.themeCatalog?.themes.length ? props.themeCatalog.themes : BUILTIN_THEMES).map(
+        (theme) => ({
+          id: theme.id,
+          label: theme.source === "builtin" ? t(`configView.themes.${theme.id}.label`) : theme.name,
+          description:
+            theme.source === "builtin"
+              ? t(`configView.themes.${theme.id}.description`)
+              : theme.description,
+        }),
+      ),
+      {
+        id: "custom",
+        label: props.hasCustomTheme ? importedName() : t("configView.appearance.import"),
+        description: props.hasCustomTheme
+          ? t("configView.appearance.importedFrom", {
+              name: importedName(),
+            })
+          : t("configView.appearance.importHint"),
+      },
+    ],
+  );
   const selectedTheme = createMemo(() =>
     themeOptions().find((option) => option.id === props.theme),
   );
@@ -399,7 +401,7 @@ export function AppearanceSection(props: ConfigProps) {
                         class="settings-theme-import__input"
                         data-custom-theme-import-input
                         type="text"
-                        spellCheck="false"
+                        spellcheck="false"
                         placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
                         value={props.customThemeImportUrl}
                         onInput={(event: Event) =>
