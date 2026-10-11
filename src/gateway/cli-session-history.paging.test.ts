@@ -2,6 +2,7 @@ import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { buildCliSessionDriftNote } from "../agents/cli-session.js";
 import { captureTranscriptRedactionSnapshot } from "../agents/transcript-redact-text.js";
 import {
   appendTranscriptMessage,
@@ -9,6 +10,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -371,6 +373,115 @@ it("observes newly available reset archives and refuses changed archive bodies u
               __openclaw: expect.objectContaining({ id: "replacement" }),
             }),
           );
+        });
+      } finally {
+        owner.close();
+      }
+    });
+  });
+});
+
+it("matches native rows on their original text and cleans only unmatched imports", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId: nativeId, filePath }) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "cli-generated-prefixes",
+        sessionKey: "agent:main:cli-generated-prefixes",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      const entry = {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
+      };
+      const note = buildCliSessionDriftNote(["prompt-tools"]);
+      const literal = `${note}\n\nhello`;
+      const events = "System: [2026-10-04 13:15:44 GMT+8] Model switched.\n\n";
+      const local = (id: string, parentId: string | null, content: string, timestamp: number) => ({
+        type: "message",
+        id,
+        parentId,
+        message: { role: "user", content, timestamp },
+      });
+      await replaceSessionEntry(scope, entry);
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        local("literal", null, literal, 1_000),
+        local("plain", "literal", "hello", 2_000),
+        local("question", "plain", "real question", 3_000),
+      ]);
+      await waitForSessionTranscriptProjection(scope);
+      const native = (uuid: string, content: string, timestamp: number) =>
+        JSON.stringify({
+          type: "user",
+          uuid,
+          timestamp: new Date(timestamp).toISOString(),
+          message: { role: "user", content },
+        });
+      await fs.writeFile(
+        filePath,
+        [
+          native("native-literal", literal, 1_001),
+          native("native-plain", "hello", 2_001),
+          native("native-question", `${note}\n\n${events}real question`, 3_001),
+          native("native-unmatched", `${note}\n\n${events}only in the native file`, 4_000),
+          native(
+            "native-exec",
+            `${events}${buildExecEventPrompt(["Exec completed (example, code 0) :: done"])}`,
+            5_000,
+          ),
+        ].join("\n"),
+      );
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const target = {
+        transcript: { ...scope, sessionFile: scope.sessionKey },
+        database: { agentId: database.agentId, path: database.path },
+        entryValidationKey: scope.sessionKey,
+      };
+      const owner = new OpenClawAgentDatabaseReadOnlyScope();
+      try {
+        await owner.run(target.database, async () => {
+          const cli = await prepareCliSessionHistoryReader(
+            {
+              entry,
+              provider: "claude-cli",
+              sessionId: scope.sessionId,
+              storePath: scope.storePath,
+              sessionAgentId: scope.agentId,
+              canonicalKey: scope.sessionKey,
+              cliHistoryHomeDir: homeDir,
+              cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
+              max: 10,
+              maxHistoryBytes: 64 * 1024,
+              effectiveMaxChars: 4096,
+              offset: undefined,
+              messageId: undefined,
+            },
+            createReadonlySessionHistoryReader(target),
+          );
+          if (!cli) {
+            throw new Error("Expected native history reader");
+          }
+          try {
+            const page = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
+              maxMessages: 10,
+            });
+            // Three canonical rows absorb their native copies; the literal note stays literal.
+            expect(page.messages).toMatchObject([
+              { content: literal, __openclaw: { id: "literal" } },
+              { content: "hello", __openclaw: { id: "plain" } },
+              { content: "real question", __openclaw: { id: "question" } },
+              {
+                content: "only in the native file",
+                __openclaw: { externalId: "native-unmatched" },
+              },
+              { display: false, provenance: { kind: "internal_system", sourceTool: "exec" } },
+            ]);
+            expect(page.messages).toHaveLength(5);
+          } finally {
+            cli.dispose();
+          }
         });
       } finally {
         owner.close();

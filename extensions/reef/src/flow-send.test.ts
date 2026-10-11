@@ -115,4 +115,42 @@ describe("ReefMessageFlow send recovery", () => {
     expect(guardMock.classify).toHaveBeenCalledWith(expect.objectContaining({ policyVersion }));
     expect(relay.sendEnvelope).toHaveBeenCalledOnce();
   });
+
+  it("refuses delivery when peer trust is revoked during the final storage await", async () => {
+    const alice = reefKeys();
+    const trusted = trust({ bob: peerTrust(generateIdentity()) });
+    const prepare = trusted.store.prepareOutboundDelivery.bind(trusted.store);
+    vi.spyOn(trusted.store, "prepareOutboundDelivery").mockImplementation(async (...args) => {
+      const prepared = await prepare(...args);
+      if (!prepared) {
+        return prepared;
+      }
+      return {
+        ...prepared,
+        async record(...recordArgs) {
+          await prepared.record(...recordArgs);
+          trusted.values.delete("bob");
+        },
+      };
+    });
+    const fetcher = vi.fn<typeof fetch>();
+    const cfg = { ...config(), handle: "alice" };
+    const flow = new ReefMessageFlow({
+      config: cfg,
+      trust: trusted.store,
+      keys: alice,
+      transport: new ReefTransportClient(cfg.relayUrl, "alice", alice, fetcher),
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
+      replay: new MemoryReplayStore(),
+      ...flowStores(),
+      onIngress: async () => {},
+      onOwnerNotice: async () => {},
+    });
+
+    await expect(flow.send("bob", "meeting at ten")).rejects.toThrow(
+      "changed trust before dispatch",
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+  });
 });
