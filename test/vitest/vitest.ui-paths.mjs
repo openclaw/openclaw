@@ -156,6 +156,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+  "ui/src/e2e/session-menu-native-bridge.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
   "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
