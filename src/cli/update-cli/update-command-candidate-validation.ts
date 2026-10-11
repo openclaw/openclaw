@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import { createUpdateDoctorConfigWarningStep } from "../../infra/update-doctor-config.js";
@@ -15,7 +14,6 @@ import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import type { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import type { readUpdateCandidateSource } from "./update-command-managed-context.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 
@@ -44,7 +42,6 @@ export async function preflightUpdateCandidatePlugins(
     channel: execution.channel,
     timeoutMs: execution.updateStepTimeoutMs,
   });
-  await params.readAdmission();
   for (const warning of warnings) {
     defaultRuntime[execution.opts.json ? "error" : "log"](warning.message);
   }
@@ -144,38 +141,6 @@ export function assertUpdateCandidateSteps(steps: UpdateRunResult["steps"]): voi
       failureFacts: failed.failureFacts,
     });
   }
-}
-
-type CandidateSource = Awaited<ReturnType<typeof readUpdateCandidateSource>>;
-
-/** Rehearse each new source generation within one activation budget. */
-export function createUpdateCandidateConfigRefresh(params: {
-  read: () => Promise<CandidateSource>;
-  getValidated: () => CandidateSource | undefined;
-  validate: () => Promise<UpdateRunResult["steps"]>;
-  assertCurrent: () => void;
-  timeoutMs: number;
-}) {
-  const deadline = Date.now() + params.timeoutMs;
-  return async () => {
-    const snapshot = await params.read();
-    params.assertCurrent();
-    const validated = params.getValidated();
-    if (!validated || isDeepStrictEqual(snapshot.source, validated.source)) {
-      return snapshot;
-    }
-    if (Date.now() >= deadline) {
-      throw new UpdatePreMutationError(
-        "invalid-config",
-        "Configuration kept changing throughout the update validation budget; activation cannot safely use an unvalidated configuration.",
-      );
-    }
-    defaultRuntime.error(
-      "Warning: Configuration changed during update checks; validating the current configuration before activation.",
-    );
-    assertUpdateCandidateSteps(await params.validate());
-    return undefined;
-  };
 }
 
 /** Reject candidates that cannot retain the installed updater's native authority. */
