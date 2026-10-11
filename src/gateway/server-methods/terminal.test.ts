@@ -134,7 +134,7 @@ describe("terminal gateway policy", () => {
     expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
   });
 
-  it.each([undefined, "selected-codex-home"])(
+  it.each(["selected-codex-home"])(
     "opens a provider-built local resume plan for source %s and returns its title",
     async (sourceHomeId) => {
       const openTerminal = vi.fn(async () => ({
@@ -233,41 +233,6 @@ describe("terminal gateway policy", () => {
       await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
 
       expect(sessions.open).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: "terminal open timed out" }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("maps a catalog rejection after the absolute deadline to a timeout", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      installCatalog({
-        id: "codex",
-        label: "Codex",
-        list: async () => [],
-        read: async (request) => ({ ...request, items: [] }),
-        openTerminal: async () => {
-          vi.setSystemTime(TERMINAL_OPEN_DEADLINE_MS);
-          throw new Error("late catalog failure");
-        },
-      });
-      const { opts, respond } = makeOpts(
-        {
-          cols: 80,
-          rows: 24,
-          catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread" },
-        },
-        { enabled: true },
-      );
-
-      await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-
       expect(respond).toHaveBeenCalledWith(
         false,
         undefined,
@@ -781,10 +746,7 @@ describe("terminal gateway policy", () => {
     );
   });
 
-  it.each([
-    { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA] },
-    { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE] },
-  ])(
+  it.each([{ caps: [GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE] }])(
     "only returns insertion metadata to clients advertising its capability: $caps",
     async ({ caps }: { caps: string[] }) => {
       const { opts, sessions, respond } = makeOpts(

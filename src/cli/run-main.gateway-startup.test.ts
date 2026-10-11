@@ -83,7 +83,7 @@ describe("runCli exit behavior", () => {
         tryRouteCliMock.mockResolvedValueOnce(false);
       }
       await withCliExitSpies(async (errorSpy, exitSpy) => {
-        await expect(runCli(argv)).rejects.toThrow("exit:78");
+        await expect(runCli(argv)).rejects.toMatchObject({ name: "ExitError", code: 78 });
 
         expect(parkCurrentLaunchAgentForMaintenanceMock).toHaveBeenCalledOnce();
         expect(exitSpy).toHaveBeenCalledWith(78);
@@ -206,7 +206,10 @@ describe("runCli exit behavior", () => {
       },
       () =>
         withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway", ...flags))).rejects.toThrow(`exit:${code}`);
+          await expect(runCli(cliArgs("gateway", ...flags))).rejects.toMatchObject({
+            name: "ExitError",
+            code,
+          });
           expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(action));
           expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
           expect(readConfigFileSnapshotMock.mock.calls).toEqual([[readOnlyCoreOptions]]);
@@ -229,7 +232,10 @@ describe("runCli exit behavior", () => {
           OPENCLAW_SERVICE_MARKER: undefined,
         },
         async () => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toThrow("exit:78");
+          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
+            name: "ExitError",
+            code: 78,
+          });
           expect(process.env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
           expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
           expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
@@ -269,7 +275,10 @@ describe("runCli exit behavior", () => {
           ),
         );
         await withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toThrow("exit:1");
+          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
+            name: "ExitError",
+            code: 1,
+          });
           expect(errorSpy).toHaveBeenCalledWith(
             expect.stringContaining("run gateway state preparation"),
           );
@@ -419,7 +428,10 @@ describe("runCli exit behavior", () => {
           ),
         );
         await withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toThrow("exit:1");
+          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
+            name: "ExitError",
+            code: 1,
+          });
           expect(errorSpy).toHaveBeenCalledWith(
             expect.stringContaining("run gateway state preparation"),
           );

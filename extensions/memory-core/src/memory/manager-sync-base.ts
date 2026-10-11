@@ -37,10 +37,6 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
-import {
-  MEMORY_INDEX_META_KEY as META_KEY,
-  readMemoryIndexMetadata,
-} from "./manager-retrieval-read.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import { requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
@@ -360,20 +356,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   protected hasIndexedChunks(): boolean {
-    return (
-      this.database.hasIndex &&
-      this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() !== undefined
-    );
+    return this.database.facts.hasIndexedChunks;
   }
 
   protected hasSemanticChunks(): boolean {
-    if (!this.database.hasIndex) {
-      return false;
-    }
-    const row = this.db
-      .prepare(`SELECT 1 as found FROM memory_index_chunks WHERE model != 'fts-only' LIMIT 1`)
-      .get() as { found?: number } | undefined;
-    return row?.found === 1;
+    return this.database.facts.hasSemanticChunks;
   }
 
   protected resolveConfiguredIndexIdentity() {
@@ -458,11 +445,15 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     });
   }
 
-  protected resetVectorState(): void {
-    this.database.vectorReady = null;
-    this.vector.available = null;
+  protected resetVectorState(vectorIndexComplete: boolean): void {
+    // Shadow publication replaces index rows, not this handle's loaded extension.
+    const extensionLoaded = vectorIndexComplete && this.vector.available === true;
+    this.database.vectorReady = extensionLoaded ? Promise.resolve(true) : null;
+    if (!extensionLoaded) {
+      this.vector.available = null;
+      this.vector.loadError = undefined;
+    }
     this.vector.semanticAvailable = undefined;
-    this.vector.loadError = undefined;
     this.vector.dims = undefined;
     this.database.vectorDegradedWriteWarningShown = false;
   }
@@ -496,18 +487,16 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       return false;
     }
     if (ready && typeof dimensions === "number" && dimensions > 0) {
-      // Another process may have published a vectorless index while this
-      // connection retained the previous dimensions in memory.
+      const persistedMeta = this.readMeta();
       await this.withDatabaseWrite(() => {
-        const persistedMeta = this.readMeta();
         if (persistedMeta && persistedMeta.vectorDims !== this.vector.dims) {
           this.vector.dims = persistedMeta.vectorDims;
         }
         this.ensureVectorTable(dimensions);
-        if (persistedMeta && !persistedMeta.vectorDims && !this.hasIndexedChunks()) {
-          this.writeMeta({ ...persistedMeta, vectorDims: dimensions });
-        }
       });
+      if (persistedMeta && !persistedMeta.vectorDims && !this.hasIndexedChunks()) {
+        await this.writeMeta({ ...persistedMeta, vectorDims: dimensions });
+      }
     }
     return ready;
   }
@@ -627,24 +616,10 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   protected readMeta(): MemoryIndexMeta | null {
-    if (!this.database.hasIndex) {
-      return null;
-    }
-    const { meta, serialized } = readMemoryIndexMetadata(this.db);
-    this.database.lastMetaSerialized = serialized;
-    return meta;
+    return this.database.facts.meta;
   }
 
-  protected writeMeta(meta: MemoryIndexMeta) {
-    const value = JSON.stringify(meta);
-    if (this.database.lastMetaSerialized === value) {
-      return;
-    }
-    this.db
-      .prepare(
-        `INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-      )
-      .run(META_KEY, value);
-    this.database.lastMetaSerialized = value;
+  protected writeMeta(meta: MemoryIndexMeta): Promise<void> {
+    return this.database.writeMetadata(meta);
   }
 }

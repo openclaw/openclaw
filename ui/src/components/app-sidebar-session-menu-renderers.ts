@@ -377,7 +377,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       value,
       options: options.map((option) => ({ ...option, title: option.label })),
       ariaLabel: label,
-      className: "sidebar-session-menu-segmented",
+      class: "sidebar-session-menu-segmented",
       onChange,
     })}
   </div>`;
@@ -423,7 +423,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
                       (event.currentTarget as HTMLElement)
                         .closest(".sidebar-session-filter-panel")
                         ?.querySelector<HTMLElement>(
-                          '#sidebar-sessions-status wa-radio[value="active"]',
+                          '#sidebar-sessions-status input[type="radio"][value="active"]',
                         )
                         ?.focus();
                       host.setSessionOwnerFilter(null);

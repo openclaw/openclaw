@@ -38,6 +38,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -111,6 +112,7 @@ import { replyRunRegistry } from "./reply-run-registry.js";
 import { acknowledgeReplySessionTransition } from "./reply-run-registry.state.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
+  assertPreparedConversationBindingRouteCurrent,
   resolveSessionDefaultAccountId,
   resolveSessionConversationBinding,
   resolveBoundAcpSessionForCommandReset,
@@ -264,22 +266,8 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
   params.signal?.throwIfAborted();
   const binding = attemptContext.conversationBinding;
   if (binding) {
-    const { bindingId, boundAt, targetSessionKey, targetKind } = binding;
-    const { pluginBindingOwner, pluginId, pluginRoot } = binding.metadata ?? {};
-    await getSessionBindingService().touchAsync(bindingId, undefined, binding.conversation);
-    const current = (await resolveInitSessionStateAttemptContext(params, "initialization"))
-      .conversationBinding;
-    if (
-      current?.bindingId !== bindingId ||
-      current.boundAt !== boundAt ||
-      current.targetSessionKey !== targetSessionKey ||
-      current.targetKind !== targetKind ||
-      current.metadata?.pluginBindingOwner !== pluginBindingOwner ||
-      current.metadata?.pluginId !== pluginId ||
-      current.metadata?.pluginRoot !== pluginRoot
-    ) {
-      throw new ReplySessionInitConflictError(attemptContext.sessionKey);
-    }
+    await getSessionBindingService().touchAsync(binding.bindingId, undefined, binding.conversation);
+    await assertPreparedConversationBindingRouteCurrent(params.ctx);
   }
   params.signal?.throwIfAborted();
   const parentSessionKey = await prepareReplySessionInitialization(params, attemptContext);
@@ -298,12 +286,7 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
     runExclusiveSessionStoreWrite(
       attemptContext.storePath,
       async () =>
-        await initSessionStateAttemptLocked(
-          params,
-          attemptContext,
-          false,
-          lifecycleMutationIdentity,
-        ),
+        await initSessionStateAttemptLocked(params, attemptContext, lifecycleMutationIdentity),
       { identities: writerIdentity ? [writerIdentity] : undefined },
     );
   let rollover = await runLockedAttempt(undefined, storeWriterIdentity);
@@ -318,22 +301,18 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
       identities,
       signal: params.signal,
       prepare: async () => {
-        // A queued rollover may change identity or become obsolete. Recheck
-        // before interrupting, then reacquire any refreshed identity first.
-        const revalidate = async () => {
-          const revalidated = await runLockedAttempt();
-          if (
-            revalidated.kind === "complete" ||
-            revalidated.sessionKey !== candidate.sessionKey ||
-            revalidated.sessionId !== candidate.sessionId ||
-            revalidated.lifecycleRevision !== candidate.lifecycleRevision
-          ) {
-            preparedOutcome = revalidated;
-            return undefined;
-          }
-          return revalidated;
-        };
-        if (!(await revalidate())) {
+        // Cancellation affects live work; do not drain a replacement session
+        // selected while this rollover waited for its lifecycle turn.
+        const currentEntry = await readSessionEntryReadOnlyInWorker({
+          agentId: attemptContext.agentId,
+          storePath: attemptContext.storePath,
+          sessionKey: candidate.sessionKey,
+        });
+        if (
+          currentEntry?.sessionId !== candidate.sessionId ||
+          currentEntry.lifecycleRevision !== candidate.lifecycleRevision
+        ) {
+          preparedOutcome = await runLockedAttempt();
           return;
         }
         const drained = await interruptSessionWorkAdmissions({
@@ -346,10 +325,18 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
             `timed out draining work before reply session rollover: ${candidate.sessionKey}`,
           );
         }
-        // A draining owner can rebind the parent. Reacquire and drain that identity
-        // before selecting any child work associated with the session.
-        const afterDrain = await revalidate();
-        if (afterDrain?.resetTriggered) {
+        if (candidate.resetTriggered) {
+          // Child cancellation is an effect: resolve its current parent before
+          // selecting children, without an additional pre-drain preparation.
+          const current = await runLockedAttempt();
+          if (
+            current.kind === "complete" ||
+            current.sessionId !== candidate.sessionId ||
+            current.lifecycleRevision !== candidate.lifecycleRevision
+          ) {
+            preparedOutcome = current;
+            return;
+          }
           // Child finalizers may need the same store writer. Drain them here,
           // outside that lane, before an explicit reset can commit or run its tail.
           await stopSessionResetSubagents({
@@ -359,20 +346,15 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
             assertCurrent: createSessionResetCleanupGuard({
               sessionKey: candidate.sessionKey,
               storePath: attemptContext.storePath,
-              expectedSession: afterDrain,
+              expectedSession: current,
               assertCurrent: () => params.signal?.throwIfAborted(),
             }),
           });
         }
       },
-      run: async () => {
-        if (preparedOutcome) {
-          return preparedOutcome;
-        }
-        // Interrupted owners can rebind while draining. The locked attempt
-        // must match this exact fenced identity before any rollover side effect.
-        return await runLockedAttempt(candidate);
-      },
+      // Check the current identity once at the commit instead of rebuilding the
+      // complete initialization before and after draining.
+      run: async () => preparedOutcome ?? runLockedAttempt(candidate),
     });
   }
   return rollover.result;
@@ -381,7 +363,6 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
 async function initSessionStateAttemptLocked(
   params: InitSessionStateParams,
   attemptContext: InitSessionStateAttemptContext,
-  staleSnapshotRetried: boolean,
   lifecycleMutationIdentity: InitSessionLifecycleMutation | undefined,
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
@@ -405,7 +386,7 @@ async function initSessionStateAttemptLocked(
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
     normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
-  const { resetAuthorized, resetCommand } = resolveAuthorizedSessionResetCommand({
+  const { resetAuthorized, resetCommand } = await resolveAuthorizedSessionResetCommand({
     ctx,
     cfg,
     agentId,
@@ -888,11 +869,7 @@ async function initSessionStateAttemptLocked(
     snapshotEntry: initializationSnapshot.currentEntry,
   });
   if (!committed.ok) {
-    if (!staleSnapshotRetried) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
-    }
-    // Propagate a typed conflict so initSessionState can retry with backoff
-    // outside the store writer lane instead of surfacing this to the caller.
+    // The outer retry owns conflicts; never retry while holding the writer lane.
     throw new ReplySessionInitConflictError(sessionKey);
   }
   if (

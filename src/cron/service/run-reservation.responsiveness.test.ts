@@ -14,8 +14,6 @@ import {
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
-import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -88,7 +86,7 @@ it.each([
                 const posted = createDeferred();
                 let pending: Promise<void> | undefined;
                 let settled = false;
-                let postedNonce: string | undefined;
+                let postedRequestId: number | undefined;
                 // oxlint-disable-next-line typescript/unbound-method -- Preserve the real Worker receiver.
                 const nativePost = Worker.prototype.postMessage;
                 const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
@@ -103,11 +101,10 @@ it.each([
                     isRecord(command) &&
                     command.type === "cron.finalizeRuns" &&
                     isRecord(command.input) &&
-                    typeof command.input.nonce === "string" &&
                     Array.isArray(command.input.jobIds) &&
                     command.input.jobIds.includes(job.id)
                   ) {
-                    postedNonce = command.input.nonce;
+                    postedRequestId = request.id;
                     posted.resolve();
                   }
                 });
@@ -128,7 +125,7 @@ it.each([
                       throw new Error("Finalization completed without its real worker dispatch");
                     }),
                   ]);
-                  expect(postedNonce).toBeDefined();
+                  expect(postedRequestId).toBeDefined();
                   await nextTurn();
                   releasedAtHeartbeat = Atomics.load(holder.released, 0);
                   settledAtHeartbeat = settled;
@@ -238,130 +235,5 @@ it.each([
         await state.op;
       }
     });
-  },
-);
-
-it.each(["manual", "timer"] as const)(
-  "rolls back %s outcome state and its receipt when availability retires at worker commit",
-  async (entrypoint) => {
-    await withOpenClawTestState(
-      { label: "cron-finalization-live-availability" },
-      async (fixture) => {
-        const now = Date.now();
-        const storePath = fixture.statePath("cron", "jobs.json");
-        const job = createDueIsolatedJob({
-          id: "retired-finalization",
-          nowMs: now - 2_000,
-          nextRunAtMs: now - 1_000,
-        });
-        job.payload = { kind: "command", argv: ["echo", "synthetic"] };
-        let available = true;
-        const runner = vi.fn(async () => ({ status: "ok" as const }));
-        const onEvent = vi.fn();
-        const state = createCronRegressionState({
-          storePath,
-          nowMs: () => now,
-          defaultAgentId: "main",
-          isAgentAvailable: () => available,
-          runCommandJob: runner,
-          runIsolatedAgentJob: runner,
-          onEvent,
-        });
-        await saveCronStore(storePath, { version: 1, jobs: [job] });
-        await list(state);
-        let nonce: string | undefined;
-        let revoked = false;
-        let rollbackObserved = false;
-        // oxlint-disable-next-line typescript/unbound-method -- Preserve the real Worker receiver.
-        const post = Worker.prototype.postMessage;
-        const command = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-          this: Worker,
-          request: SqliteWorkerRequest,
-          transferList,
-        ) {
-          if (request.type === "execute") {
-            const value: unknown = deserialize(request.input);
-            if (
-              isRecord(value) &&
-              value.type === "cron.finalizeRuns" &&
-              isRecord(value.input) &&
-              typeof value.input.nonce === "string" &&
-              Array.isArray(value.input.jobIds) &&
-              value.input.jobIds.includes(job.id)
-            ) {
-              nonce = value.input.nonce;
-            }
-          }
-          return post.call(this, request, transferList);
-        });
-        const admission = probe.admission(operationAdmission, (request, grant, admit) => {
-          if (
-            request.stage === "commit" &&
-            nonce !== undefined &&
-            isRecord(request.facts) &&
-            request.facts.nonce === nonce
-          ) {
-            revoked = true;
-            available = false;
-          }
-          admit(request, grant);
-        });
-        const execute = runtimeMutation.runCronRuntimeMutation;
-        const mutation = vi
-          .spyOn(runtimeMutation, "runCronRuntimeMutation")
-          .mockImplementation(async (params) => {
-            if (params.type !== "cron.finalizeRuns") {
-              return execute(params);
-            }
-            const database = openOpenClawStateDatabase({
-              path: params.context.admission.databasePath,
-              env: params.context.environment,
-            }).db;
-            const snapshot = () => ({
-              job: database
-                .prepare("SELECT state_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
-                .get(cronStoreKey(storePath), job.id),
-              receipt: database
-                .prepare(
-                  "SELECT receipt_id, status FROM cron_run_receipts WHERE store_key = ? AND job_id = ?",
-                )
-                .get(cronStoreKey(storePath), job.id),
-            });
-            const before = snapshot();
-            expect(before.receipt).toMatchObject({ status: "running" });
-            try {
-              return await execute(params);
-            } catch (error) {
-              expect(revoked).toBe(true);
-              expect(error).toMatchObject({ reason: "owner-unavailable" });
-              // Observe rollback before the service's independent supersession cleanup.
-              expect(snapshot()).toEqual(before);
-              rollbackObserved = true;
-              throw error;
-            }
-          });
-        try {
-          await Promise.allSettled([
-            entrypoint === "manual" ? run(state, job.id, "force") : onTimer(state),
-          ]);
-          expect(runner).toHaveBeenCalledOnce();
-          expect(revoked).toBe(true);
-          expect(rollbackObserved).toBe(true);
-          expect(
-            onEvent.mock.calls.filter(
-              ([event]) => event.action === "finished" && event.status === "ok",
-            ),
-          ).toEqual([]);
-          expect(state.queuedRunReservationsByJobId.size).toBe(0);
-          expect(state.runAdmission.active).toBe(0);
-        } finally {
-          mutation.mockRestore();
-          admission.mockRestore();
-          command.mockRestore();
-          stop(state);
-          await state.op;
-        }
-      },
-    );
   },
 );

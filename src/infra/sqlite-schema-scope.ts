@@ -83,6 +83,7 @@ export type SqliteSchemaOwner = SqliteSchemaScopeOwner & {
   facts?: SqliteSchemaFacts;
   readDepth: number;
   mutationRevision: number;
+  rollbackRevision: number;
   mutationDepth: number;
   transactionOpen: boolean;
   transactionSnapshot?: object;
@@ -119,6 +120,7 @@ export function observeSqliteTransactionState(
     if (owner.transactionOpen) {
       // A read error can roll back SQLite without passing through a tracked write.
       owner.mutationRevision += 1;
+      owner.rollbackRevision += 1;
     }
     owner.transactionOpen = inTransaction;
     owner.transactionMutationRevision = undefined;
@@ -139,6 +141,7 @@ export function finishSqliteReadScope(
   const inTransaction = database.isTransaction;
   if (!succeeded && wasTransaction && !inTransaction) {
     owner.mutationRevision += 1;
+    owner.rollbackRevision += 1;
   }
   owner.transactionOpen = inTransaction;
   if (!wasTransaction || !inTransaction) {

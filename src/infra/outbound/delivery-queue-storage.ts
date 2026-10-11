@@ -5,6 +5,7 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
+import { emptyOutboundDeliveryQueueAdmission } from "../delivery-queue-cache.js";
 import type { InitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import {
   captureDeliveryQueueStateContext,
@@ -14,6 +15,7 @@ import {
 import { executeDeliveryQueueOperation } from "../delivery-queue-worker-store.js";
 import type { DeliveryQueueWorkerOperations } from "../delivery-queue.worker-contract.js";
 import { generateSecureUuid } from "../secure-random.js";
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import { createSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../sqlite-worker-operation-settlement.js";
 import { OutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
@@ -108,6 +110,7 @@ function createQueuedDelivery(
     ...projectQueuedDeliveryOptions(params),
     queuePolicy: params.queuePolicy,
     requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
+    retryAmbiguousFinalText: params.retryAmbiguousFinalText,
     ...(params.initialProducerClaim ??
       (params.requiresProducerClaim === true ? { requiresProducerClaim: true } : {})),
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatchFromLowLevelInput(params)),
@@ -274,10 +277,11 @@ function deliveryFailureRecorder(kind: "fail" | "fail-before-send" | "fail-after
     stateDir?: string,
     expectedPlatformSendAttemptId?: string | null,
     context?: DeliveryQueueStateContext,
+    ambiguousTransportError?: true,
   ): Promise<void> => {
     await executeDeliveryQueueOperation(context, stateDir, {
       type: "deliveryQueue.mutateOutbound",
-      input: { kind, id, error, expectedPlatformSendAttemptId },
+      input: { kind, id, error, expectedPlatformSendAttemptId, ambiguousTransportError },
     });
   };
 }
@@ -362,6 +366,18 @@ async function readOutboundDeliveries(
   context?: DeliveryQueueStateContext,
 ): Promise<QueuedDelivery[]> {
   const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  if (
+    input.id === undefined &&
+    input.mode === "unfinished" &&
+    getOrLoadSqliteDatabaseAdmissionForPath(
+      captured.workerContext.admission.databasePath,
+      emptyOutboundDeliveryQueueAdmission,
+      () => undefined,
+    )
+  ) {
+    captured.workerContext.admission.assertCurrent();
+    return [];
+  }
   const reply = await executeExistingOpenClawStateRead(
     {
       path: captured.workerContext.admission.databasePath,

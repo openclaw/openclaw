@@ -106,6 +106,7 @@ const settlement = createCronRunReceiptSettlementOwner({
 });
 export const {
   claimLocalCronRunReceiptOwnership,
+  listLocallyOwnedCronRunReceiptIds,
   trackCronRunReceiptSettlement,
   retainCronRunReceiptSettlement,
   finishCronRunReceiptAsync,

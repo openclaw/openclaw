@@ -19,6 +19,7 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
+import "../../ai-transport-runtime-host.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -42,7 +43,7 @@ const admittedRunContext = {
 };
 
 function createTransportFixture(testCase: {
-  compaction: boolean;
+  compaction?: boolean;
   pruning: boolean;
   apiKey: string;
   baseUrl?: string;
@@ -81,9 +82,14 @@ function createTransportFixture(testCase: {
       runtimePlan: {
         auth: { forwardedAuthProfileId: undefined },
         transport: {
-          resolveExtraParams: () => ({
+          resolveExtraParams: ({
+            extraParamsOverride,
+          }: {
+            extraParamsOverride?: Record<string, unknown>;
+          }) => ({
             transport: "sse",
             anthropicServerCompaction: testCase.compaction,
+            ...extraParamsOverride,
           }),
         },
       },
@@ -250,6 +256,75 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(session.agent.transport).toBe("sse");
     expect(result.compactionReplayEnabled).toBe(testCase.replayEnabled);
     expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
+  });
+
+  it.each([undefined, true])(
+    "disables server compaction overrides only for memory flushes (configured=%s)",
+    async (compaction) => {
+      const wrapProviderStreamFn = vi.fn(({ context }: WrapProviderStreamFnParams) => {
+        return context.streamFn;
+      });
+      extraParamsTesting.setProviderRuntimeDepsForTest({ wrapProviderStreamFn });
+
+      for (const trigger of [undefined, "memory"] as const) {
+        const { input } = createTransportFixture({
+          compaction,
+          pruning: false,
+          apiKey: "sk-ant-api-synthetic",
+        });
+        input.attempt.trigger = trigger;
+        await prepareEmbeddedAttemptTransport(input);
+      }
+
+      expect(wrapProviderStreamFn).toHaveBeenCalledTimes(2);
+      const normalExtraParams = wrapProviderStreamFn.mock.calls[0]?.[0].context.extraParams;
+      expect(normalExtraParams).toHaveProperty("anthropicServerCompaction", compaction);
+      expect(normalExtraParams).not.toHaveProperty("responsesServerCompaction");
+      expect(wrapProviderStreamFn.mock.calls[1]?.[0].context.extraParams).toMatchObject({
+        anthropicServerCompaction: false,
+        responsesServerCompaction: false,
+      });
+    },
+  );
+
+  it("disables OpenAI inline compaction only for memory flushes", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    for (const trigger of [undefined, "memory"] as const) {
+      const { input, session, streamFn } = createTransportFixture({
+        pruning: false,
+        apiKey: "sk-openai-synthetic",
+      });
+      input.attempt.model = {
+        ...anthropicModel,
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      };
+      input.attempt.provider = input.attempt.model.provider;
+      input.attempt.modelId = input.attempt.model.id;
+      input.attempt.trigger = trigger;
+      input.attempt.runtimePlan!.transport.resolveExtraParams = ({ extraParamsOverride } = {}) => ({
+        responsesServerCompaction: true,
+        ...extraParamsOverride,
+      });
+      streamFn.mockImplementation(async (model, _context, options) => {
+        const payload: Record<string, unknown> = { input: [] };
+        await options?.onPayload?.(payload, model);
+        payloads.push(payload);
+        return createAssistantMessageEventStream();
+      });
+      registerProviderStreamForModel.mockReturnValue(streamFn);
+
+      await prepareEmbeddedAttemptTransport(input);
+      await session.agent.streamFn(input.attempt.model, { messages: [] }, {});
+    }
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.context_management).toEqual([
+      { type: "compaction", compact_threshold: 140_000 },
+    ]);
+    expect(payloads[1]).not.toHaveProperty("context_management");
   });
 
   it.each([

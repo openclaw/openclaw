@@ -14,6 +14,7 @@ import {
   getActivePluginChannelRegistryFromState,
   getActivePluginChannelRegistrySnapshotFromState,
 } from "../../plugins/runtime-channel-state.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -32,6 +33,7 @@ import { createSqliteWorkerWriteAdmission } from "../sqlite-worker-store.js";
 import {
   CURRENT_BINDINGS_ID_PREFIX,
   buildBindingId,
+  isBindingExpired,
   removeCurrentConversationBindingsInDatabase,
   readCurrentConversationBindingListInDatabase,
   pruneCurrentConversationBindingListInTransaction,
@@ -40,7 +42,10 @@ import {
   readCurrentConversationBindingResolutionInDatabase,
   type CurrentConversationBindingScope,
 } from "./current-conversation-bindings.kernel.js";
-import { withCurrentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
+import {
+  currentConversationBindingPublication,
+  withCurrentConversationBindingPublication,
+} from "./current-conversation-bindings.publication.js";
 import type {
   CurrentConversationBindingBind,
   CurrentConversationBindingRemove,
@@ -64,6 +69,43 @@ import type {
   SessionBindingScope,
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
+
+const resolvedBindings = resolveGlobalSingleton(
+  Symbol.for("openclaw.resolvedCurrentConversationBindings"),
+  () => {
+    const records = new Map<string, Promise<SessionBindingRecord | null>>();
+    currentConversationBindingPublication.subscribeFacts((change) => {
+      if ("receipt" in change) {
+        const identity = change.receipt.source.identity;
+        if (typeof identity !== "string") {
+          records.clear();
+          return;
+        }
+        for (const [conversationKey, fact] of change.receipt.facts) {
+          const key = `${identity}\u0000${CURRENT_BINDINGS_ID_PREFIX}${conversationKey}`;
+          if (fact.kind === "postimage" || fact.kind === "absent") {
+            // Receipts replace retained rows; an in-flight read cannot reinstall its older result.
+            if (records.has(key)) {
+              records.set(
+                key,
+                Promise.resolve(fact.kind === "postimage" ? structuredClone(fact.value) : null),
+              );
+            }
+          } else if (fact.kind === "unknown") {
+            records.delete(key);
+          }
+        }
+      } else if (
+        change.kind === "unknown" ||
+        (change.kind === "settled" && change.outcome === "unknown")
+      ) {
+        records.clear();
+      }
+    });
+    return records;
+  },
+  (records) => records.clear(),
+);
 
 function bindingWriteOptions(
   context: OpenClawStateWorkerContext,
@@ -477,14 +519,37 @@ export async function resolveCurrentConversationBindingRecordAsync(
 ): Promise<SessionBindingRecord | null> {
   const conversation = captureConversationRef(ref);
   const context = captureOpenClawStateWorkerContext();
-  const result = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "conversationBindings.resolve", input: conversation }),
-    bindingWriteOptions(context, assertCurrent),
-  );
+  const key = `${context.admission.identity.key}\u0000${buildBindingId(conversation)}`;
+  let pending = resolvedBindings.get(key);
+  if (pending) {
+    const record = await pending;
+    // Expiry remains the worker's pruning responsibility, even without a write receipt.
+    if (record && isBindingExpired(record)) {
+      resolvedBindings.delete(key);
+      pending = undefined;
+    }
+  }
+  if (!pending) {
+    pending = runOpenClawStateWorkerOperation(
+      context,
+      (scope) => scope.execute({ type: "conversationBindings.resolve", input: conversation }),
+      bindingWriteOptions(context, assertCurrent),
+    );
+    if (resolvedBindings.size >= 256) {
+      resolvedBindings.delete(resolvedBindings.keys().next().value!);
+    }
+    // In-flight reads are evicted with completed facts and never reinsert themselves.
+    resolvedBindings.set(key, pending);
+    void pending.catch(() => {
+      if (resolvedBindings.get(key) === pending) {
+        resolvedBindings.delete(key);
+      }
+    });
+  }
+  const result = await pending;
   context.admission.assertCurrent();
   assertCurrent?.();
-  return result;
+  return structuredClone(result);
 }
 
 /** Reads one live ordered selection without repairing rows or inheriting discovery snapshots. */
@@ -562,7 +627,6 @@ export function captureGenericBindingSupport(ref: ConversationRef) {
       );
     }
   };
-  assertCurrent();
   return { supported, assertCurrent };
 }
 
@@ -608,9 +672,7 @@ export async function readGenericCurrentConversationBindingSelectionAsync(
     }
   };
   const eligible = conversations.filter((_, index) => captured[index]?.supported);
-  assertCurrent();
   const records = await readCurrentConversationBindingSelectionAsync(eligible, assertCurrent);
-  assertCurrent();
   let index = 0;
   return captured.map((support) => {
     const record = support.supported ? records[index++] : null;
@@ -633,14 +695,12 @@ export async function listGenericCurrentConversationBindingsBySessionsAsync(
       );
     }
   };
-  assertCurrent();
   const records = await listCurrentConversationBindingRecordsBySessionsAsync(
     targetSessionKeys,
     undefined,
     assertCurrent,
     options.context,
   );
-  assertCurrent();
   const supports: ReturnType<typeof captureGenericBindingSupport>[] = [];
   const selected = records.map((entries) =>
     entries.filter((record) => {
@@ -649,7 +709,6 @@ export async function listGenericCurrentConversationBindingsBySessionsAsync(
       }
       const support = captureGenericBindingSupport(record.conversation);
       supports.push(support);
-      assertCurrent();
       return support.supported;
     }),
   );
@@ -688,5 +747,6 @@ export const testing = {
         getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "current_conversation_bindings">>(db);
       executeSqliteQuerySync(db, bindingDb.deleteFrom("current_conversation_bindings"));
     });
+    resolvedBindings.clear();
   },
 };

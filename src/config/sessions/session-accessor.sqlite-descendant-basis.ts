@@ -42,16 +42,20 @@ export function assertSessionSubagentRunsCurrent(
   };
   assertSource();
   const matches = withExistingOpenClawStateDatabaseCurrentReadOnly(
-    (database) =>
-      runSqliteDeferredTransactionSync(
-        database.db,
-        () =>
-          (!params.descendantRunBasis ||
-            subagentRunsDurableBasisMatches(database, params.descendantRunBasis)) &&
-          (!params.maintenanceRunBasis ||
-            subagentMaintenanceDurableBasisMatches(database, params.maintenanceRunBasis)),
-        { databaseLabel: pathname, operationLabel: "session.subagent-commit-facts" },
-      ),
+    (database) => {
+      const compare = () =>
+        (!params.descendantRunBasis ||
+          subagentRunsDurableBasisMatches(database, params.descendantRunBasis)) &&
+        (!params.maintenanceRunBasis ||
+          subagentMaintenanceDurableBasisMatches(database, params.maintenanceRunBasis));
+      // Maintenance is one statement; descendant reads already own their composite snapshot.
+      return params.descendantRunBasis && params.maintenanceRunBasis
+        ? runSqliteDeferredTransactionSync(database.db, compare, {
+            databaseLabel: pathname,
+            operationLabel: "session.subagent-commit-facts",
+          })
+        : compare();
+    },
     { path: pathname, env },
   );
   assertSource();

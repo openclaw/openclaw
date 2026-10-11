@@ -55,6 +55,7 @@ export function makeUiSettings(
     navCollapsed: false,
     navWidth: 258,
     sidebarEntries: [],
+    navigationScope: "mine",
     ...overrides,
   };
 }

@@ -10,6 +10,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   captureSqliteDatabaseAdmissions,
+  createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   retireSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
@@ -17,6 +18,8 @@ import {
   hasPendingSqliteDatabaseSchemaMutation,
   publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
+  readSqliteDatabaseScopedWriteToken,
+  revokeSqliteDatabaseAdmissions,
 } from "./sqlite-database-admission.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import { schemaAdmission } from "./sqlite-schema-admission.js";
@@ -35,6 +38,167 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 describe("native SQLite schema snapshots and callbacks", () => {
   const { tempDirs, openDatabase } = useSqliteSchemaTestFixture();
 
+  it.each(["autocommit", "commit", "rollback", "callback failure"] as const)(
+    "settles %s writes while an unrelated read cursor remains open",
+    (outcome) => {
+      const filename = path.join(tempDirs.make("sqlite-settled-writer-"), "agent.sqlite");
+      const writer = openDatabase(
+        "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES (1),(2)",
+        true,
+        filename,
+      );
+      const sibling = openDatabase("", true, filename);
+      const before = readSqliteDatabaseScopedWriteToken(sibling, "session");
+      expect(before).toBeTypeOf("string");
+      const rows = writer.prepare("SELECT id FROM original").iterate();
+      try {
+        expect(rows.next().done).toBe(false);
+        if (outcome === "callback failure") {
+          expect(() =>
+            runSqliteImmediateTransactionSync(writer, () => {
+              writer.exec("INSERT INTO original VALUES (3)");
+              expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeUndefined();
+              throw new Error("synthetic transaction conflict");
+            }),
+          ).toThrow("synthetic transaction conflict");
+        } else {
+          if (outcome !== "autocommit") {
+            writer.exec("BEGIN IMMEDIATE");
+          }
+          writer.exec("INSERT INTO original VALUES (3)");
+          if (outcome !== "autocommit") {
+            expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeUndefined();
+            writer.exec(outcome === "commit" ? "COMMIT" : "ROLLBACK");
+          }
+        }
+        // Native write custody is gone even though the independent SELECT remains stepped.
+        sibling.exec("BEGIN IMMEDIATE; ROLLBACK");
+        expect(sibling.prepare("SELECT id FROM original ORDER BY id").all()).toEqual(
+          outcome === "rollback" || outcome === "callback failure"
+            ? [{ id: 1 }, { id: 2 }]
+            : [{ id: 1 }, { id: 2 }, { id: 3 }],
+        );
+        const settled = readSqliteDatabaseScopedWriteToken(sibling, "session");
+        expect(settled).toBeTypeOf("string");
+        expect(settled).not.toBe(before);
+      } finally {
+        rows.return?.();
+      }
+    },
+  );
+
+  it("fences a RETURNING writer until its own cursor settles", () => {
+    const filename = path.join(tempDirs.make("sqlite-returning-writer-"), "agent.sqlite");
+    const writer = openDatabase(
+      "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES (1),(2)",
+      true,
+      filename,
+    );
+    const sibling = openDatabase("", true, filename);
+    const reader = writer.prepare("SELECT id FROM original").iterate();
+    const write = writer.prepare("INSERT INTO original VALUES (3),(4) RETURNING id").iterate();
+    try {
+      expect(reader.next().done).toBe(false);
+      expect(write.next().value).toEqual({ id: 3 });
+      expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeUndefined();
+      writer.prepare("SELECT 1").get();
+      expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeUndefined();
+      expect(() => sibling.exec("BEGIN IMMEDIATE")).toThrow(/locked/iu);
+      write.return?.();
+      sibling.exec("BEGIN IMMEDIATE; ROLLBACK");
+      expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeTypeOf("string");
+      expect(sibling.prepare("SELECT id FROM original ORDER BY id").all()).toEqual([
+        { id: 1 },
+        { id: 2 },
+        { id: 3 },
+        { id: 4 },
+      ]);
+    } finally {
+      write.return?.();
+      reader.return?.();
+    }
+  });
+
+  it("reuses admission publications until their owner changes them", () => {
+    const root = tempDirs.make("openclaw-admission-publications-");
+    const first = openDatabase(
+      "CREATE TABLE first_value(id)",
+      true,
+      path.join(root, "first.sqlite"),
+    );
+    const second = openDatabase(
+      "CREATE TABLE second_value(id)",
+      true,
+      path.join(root, "second.sqlite"),
+    );
+    const cursor = createSqliteDatabaseAdmissionCursor();
+    const before = captureSqliteDatabaseAdmissions(cursor);
+    const firstSnapshot = before.find((record) => record.location === first.location())!;
+    const secondSnapshot = before.find((record) => record.location === second.location())!;
+    const key = { name: "publication-value", read: (value: unknown) => value };
+
+    installSqliteDatabaseAdmissions(before);
+    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    expect(
+      captureSqliteDatabaseAdmissions().find(
+        (record) => record.identity === firstSnapshot.identity,
+      ),
+    ).toBe(firstSnapshot);
+
+    publishSqliteDatabaseAdmission(second, key, 42);
+    const changed = captureSqliteDatabaseAdmissions(cursor);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]!.identity).toBe(secondSnapshot.identity);
+    expect(changed[0]!.facts.get(key.name)?.value).toBe(42);
+    expect(secondSnapshot.facts.has(key.name)).toBe(false);
+    expect(
+      captureSqliteDatabaseAdmissions().find(
+        (record) => record.identity === firstSnapshot.identity,
+      ),
+    ).toBe(firstSnapshot);
+    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+
+    revokeSqliteDatabaseAdmissions(second);
+    installSqliteDatabaseAdmissions(changed);
+    expect(getSqliteDatabaseAdmission(second, key)).toBeUndefined();
+    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    const secondLocation = second.location()!;
+    second.close();
+    retireSqliteDatabaseAdmissionForPath(secondLocation);
+    expect(
+      captureSqliteDatabaseAdmissions().some(
+        (record) => record.identity === secondSnapshot.identity,
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["scoped", "full"] as const)(
+    "keeps other database publications pending for the next %s capture",
+    (nextCapture) => {
+      const cursor = createSqliteDatabaseAdmissionCursor();
+      // Other cases retain process-wide admissions; acknowledge those before creating this pair.
+      captureSqliteDatabaseAdmissions(cursor);
+      const root = tempDirs.make("openclaw-admission-scoped-cursor-");
+      const first = path.join(root, "first.sqlite");
+      const second = path.join(root, "second.sqlite");
+      openDatabase(undefined, true, first);
+      openDatabase(undefined, true, second);
+
+      expect(
+        captureSqliteDatabaseAdmissions(cursor, { location: first }).map(
+          (record) => record.location,
+        ),
+      ).toEqual([first]);
+      expect(
+        captureSqliteDatabaseAdmissions(
+          cursor,
+          nextCapture === "scoped" ? { location: second } : undefined,
+        ).map((record) => record.location),
+      ).toEqual([second]);
+      expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    },
+  );
+
   it.each([
     "CREATE TEMP TABLE other_input (id)",
     "DROP TABLE temp.memory_publication_input",
@@ -51,10 +215,11 @@ describe("native SQLite schema snapshots and callbacks", () => {
       filename,
     );
     installSqliteTempTrackingSchema(database, {
-      kind: "generation",
-      table: "local_status",
-      triggers: [],
-      advance: false,
+      kind: "transcript-index",
+      statusTable: "local_status",
+      pendingTable: "local_pending",
+      pendingIndex: "local_pending_state",
+      observedTables: [],
     });
     const schema = getAdmittedSqliteSchemaFacts(database);
     const localRevision = () =>
@@ -73,7 +238,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
       expect(schemaMutation).not.toHaveBeenCalled();
       expect(observation.queries).toEqual([]);
       const beforeWrite = readSqliteDatabaseWriteRevision(sibling);
-      database.exec("UPDATE temp.local_status SET generation=1");
+      database.exec("UPDATE temp.local_status SET sibling_write_revision=1");
       expect(readSqliteDatabaseWriteRevision(sibling)).not.toBe(beforeWrite);
     } finally {
       observation.restore();

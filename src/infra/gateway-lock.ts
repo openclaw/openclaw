@@ -558,7 +558,8 @@ export async function acquireGatewayLock(
             await owner.run(() =>
               assertGatewayOwnerLeaseStopped(
                 env,
-                role === "sqlite-maintenance" ? owner : undefined,
+                role === "sqlite-maintenance" || role === "agent-embedded" ? owner : undefined,
+                role === "sqlite-maintenance",
               ),
             );
             if (previousOwner) {

@@ -10,6 +10,7 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
 } from "./new-session-page.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 
@@ -127,7 +128,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps an ordinary catalog winner when its initial snapshot arrives later", async () => {
+  it("reloads the current catalog after a late initial snapshot without losing its draft", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const current = { provider: "fixture", id: "current", name: "Current model", available: true };
@@ -150,23 +151,33 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("models.list", { match: { agentId: "alpha" } });
       await gateway.resolveDeferred("models.list", { models: [current] });
+      const message = page.locator(".new-session-page__message");
+      await message.fill("Keep this catalog draft");
+      await waitForCommittedComposerDraft(
+        page,
+        JSON.stringify(["", "", ""]),
+        "Keep this catalog draft",
+        0,
+      );
       const trigger = page.locator("[data-chat-model-select]");
       await trigger.click();
       const currentRow = page.locator('[data-chat-model-option="fixture/current"]');
       await revealChatModelOption(currentRow);
       await expect.poll(() => currentRow.isVisible()).toBe(true);
-      const count = (await gateway.getRequests("models.list")).length;
       await gateway.emitGatewayEvent("models.snapshot", {
         target: {},
         scope: { agentId: "alpha" },
         catalog: { models: [older] },
       });
-      await trigger.click();
+      await page.reload();
+      const reloaded = await gateway.waitForRequest("models.list", { match: { agentId: "alpha" } });
+      expect(reloaded.params).toMatchObject({ agentId: "alpha" });
+      await gateway.resolveDeferred("models.list", { models: [current] });
       await trigger.click();
       await revealChatModelOption(currentRow);
       await expect.poll(() => currentRow.isVisible()).toBe(true);
       expect(await page.locator('[data-chat-model-option="fixture/older"]').count()).toBe(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(count);
+      expect(await message.inputValue()).toBe("Keep this catalog draft");
     } finally {
       await context.close();
     }

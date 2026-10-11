@@ -15,7 +15,10 @@ import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
-import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
+import {
+  resolveEffectivePluginIds,
+  resolveEffectivePluginIdsAsync,
+} from "./effective-plugin-ids.js";
 import { buildPluginShapeSummary } from "./inspect-shape.js";
 import {
   acquirePluginRegistryForInspection,
@@ -33,6 +36,7 @@ import {
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import { normalizePluginIdScope } from "./plugin-scope.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import { groupPluginRecords } from "./record-groups.js";
 import type { PluginRegistry } from "./registry.js";
@@ -282,8 +286,8 @@ function preparePluginReport(params: PluginReportParams | undefined) {
 function buildPluginReport(
   params: PluginReportParams | undefined,
   loadModules: boolean,
+  prepared = preparePluginReport(params),
 ): PluginStatusReport {
-  const prepared = preparePluginReport(params);
   const { rawConfig, workspaceDir, metadataSnapshot, context, runtimeCompatConfig, onlyPluginIds } =
     prepared;
   const registry = loadModules
@@ -350,6 +354,28 @@ function projectPluginReport(
 
 export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
   return buildPluginReport(params, false);
+}
+
+export async function buildPluginSnapshotReportAsync(
+  params?: PluginReportParams,
+): Promise<PluginStatusReport> {
+  const prepared = preparePluginReport({ ...params, effectiveOnly: false });
+  if (params?.effectiveOnly === true) {
+    const requestedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
+    const effectivePluginIds = await resolveEffectivePluginIdsAsync({
+      config: prepared.rawConfig,
+      workspaceDir: prepared.workspaceDir,
+      env: params.env ?? process.env,
+      metadataSnapshot: prepared.metadataSnapshot,
+    });
+    const onlyPluginIds =
+      requestedPluginIds === undefined
+        ? effectivePluginIds
+        : effectivePluginIds.filter((pluginId) => requestedPluginIds.includes(pluginId));
+    prepared.onlyPluginIds = onlyPluginIds;
+    prepared.runtimeLoadOptions = { ...prepared.runtimeLoadOptions, onlyPluginIds };
+  }
+  return buildPluginReport(params, false, prepared);
 }
 
 /** Complete diagnostics projection before retiring its imported plugin generation. */

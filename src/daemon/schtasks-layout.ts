@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeProfileName } from "../cli/profile-utils.js";
@@ -370,36 +369,6 @@ async function readWindowsTaskCommand(
       (registered && !directExecutable) || startupEntryPath !== undefined
         ? await captureLaunchers(options?.onLauncherContent)
         : undefined;
-    const assertRegistrationCurrent = async (source?: { path: string; content: string }) => {
-      if (!registered && !launchers) {
-        return;
-      }
-      if (
-        (launchers && !isDeepStrictEqual(await captureLaunchers(), launchers)) ||
-        (source && (await readTaskFile(source.path, deadline)) !== source.content)
-      ) {
-        throw new Error("Task launcher changed during inspection");
-      }
-      assertInspectionDeadline();
-      if (!registered) {
-        return;
-      }
-      const current = probeScheduledTaskState(taskName, remainingTimeout());
-      if (current.status === "unknown") {
-        throw new ScheduledTaskInspectionError(current);
-      }
-      assertInspectionDeadline();
-      if (
-        current.status !== registered.status ||
-        (registered.status === "found" &&
-          (current.status !== "found" ||
-            normalizeWindowsTaskIdentity(current.taskPath ?? "") !==
-              normalizeWindowsTaskIdentity(registered.taskPath ?? "") ||
-            !isDeepStrictEqual(current.actions, registered.actions)))
-      ) {
-        throw new Error("Scheduled Task registration changed during inspection");
-      }
-    };
     if (directExecutable) {
       assertStaticTaskPath(action.path);
       const argumentsText = action.arguments.trim();
@@ -412,7 +381,7 @@ async function readWindowsTaskCommand(
       ) {
         throw new Error("Scheduled Task executable arguments cannot be inspected");
       }
-      await assertRegistrationCurrent();
+      assertInspectionDeadline();
       const command = {
         programArguments: [action.path, ...splitArgsPreservingQuotes(argumentsText)],
         ...(action.workingDirectory ? { workingDirectory: action.workingDirectory } : {}),
@@ -421,7 +390,7 @@ async function readWindowsTaskCommand(
       return command;
     }
     if (launchers?.length === 0) {
-      await assertRegistrationCurrent();
+      assertInspectionDeadline();
       return null;
     }
     const scriptPath = launchers?.[0]?.scriptPath ?? resolveTaskScriptPath(env);
@@ -493,7 +462,7 @@ async function readWindowsTaskCommand(
     if (requireEffective && programArguments.length === 0) {
       throw new Error("Missing Scheduled Task command");
     }
-    await assertRegistrationCurrent({ path: scriptPath, content });
+    assertInspectionDeadline();
     assertCommandProfile({ programArguments, environment });
     if (
       (registered || startupEntryPath !== undefined) &&
@@ -622,11 +591,9 @@ export function buildTaskScript({
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
-  const commandArguments =
-    environment?.OPENCLAW_SERVICE_KIND === "gateway"
-      ? [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
-      : programArguments;
+  let commandArguments = programArguments;
   if (environment?.OPENCLAW_SERVICE_KIND === "gateway") {
+    commandArguments = [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG];
     // Legacy VBS launchers supply their own outer owner; direct tasks own CMD.
     lines.push(DIRECT_TASK_LAUNCHER_MARKER);
   }

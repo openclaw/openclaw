@@ -203,23 +203,25 @@ function createCleanupClient(parent: Parent) {
       signal?.throwIfAborted();
       operations++;
       let released = false;
-      const release = (joined: boolean) => {
+      const release = (joined: boolean, waitForRelease = false) => {
         if (released) {
-          return;
+          return Promise.resolve();
         }
         released = true;
         operations--;
         if (!joined) {
           markFailed();
-          return;
+          return Promise.resolve();
         }
         // Physical joining completes this operation. The ordered exchange still
         // fences later admission, without extending the command's own lifetime.
-        void serialize(() =>
+        const completion = serialize(() =>
           operations === 0 && !permanent && owned && !failedCleanup
             ? request("release")
             : Promise.resolve(),
-        ).catch(fail);
+        );
+        void completion.catch(fail);
+        return waitForRelease ? waitForAcknowledgement(completion) : completion;
       };
       try {
         await waitForAcknowledgement(
@@ -229,7 +231,7 @@ function createCleanupClient(parent: Parent) {
       } catch (failure) {
         // No command started. Relinquish this reservation immediately, but keep
         // the shared claim/release exchange ordered for concurrent or later work.
-        release(true);
+        void release(true);
         throw failure;
       }
       return release;

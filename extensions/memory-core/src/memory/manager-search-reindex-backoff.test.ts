@@ -166,12 +166,20 @@ describe("memory search reindex backoff", () => {
       expect(manager.status().lastSyncError).toContain("queued rebuild failed");
       const embedding = vi.fn(async () => {});
       fixture.provider.beforeEmbedBatch = embedding;
+      await fixture.seedSessionTranscript({
+        sessionId,
+        sessionKey,
+        messages: [{ role: "user", timestamp: 2, content: "Jade pending marker." }],
+      });
       await manager.sync({ reason: "search" });
       expect(embedding).not.toHaveBeenCalled();
       now += 30_000;
       await manager.sync({ reason: "search" });
       expect(embedding).toHaveBeenCalledTimes(1);
       expect(manager.status().lastSyncError).toBeUndefined();
+      expect(
+        readPublishedSessionIndex(fields.db, `sessions/main/${sessionId}.jsonl`, "jade").chunks,
+      ).toHaveLength(1);
     },
   );
 });

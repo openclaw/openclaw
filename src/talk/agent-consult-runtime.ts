@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
+import { resolveAgentRunCwd } from "../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { resolveLoadedSessionThreadInfo } from "../channels/plugins/session-thread-info-loaded.js";
@@ -223,7 +226,14 @@ export function prepareRealtimeVoiceAgentExecutionContext(params: {
     deliveryContext,
     toolAuthorityOverlay,
     agentDir: params.agentRuntime.resolveAgentDir(params.cfg, agentId),
-    workspaceDir: params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId),
+    workspaceDir:
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: sessionEntry?.spawnedBy,
+        workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+        cwd: sessionEntry?.spawnedCwd,
+      }) ?? params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId),
+    cwd:
+      normalizeOptionalString(sessionEntry?.spawnedCwd) ?? resolveAgentRunCwd(params.cfg, agentId),
   };
 }
 
@@ -238,6 +248,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   storePath: string;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
   logger: Pick<RuntimeLogger, "warn">;
+  assertCurrent: () => void;
 }): Promise<SessionEntry> {
   const now = Date.now();
   const deliveryFields = resolveDeliverySessionFields(params.deliveryContext);
@@ -304,7 +315,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
     }
   }
 
-  patched ??= await params.agentRuntime.session.patchSessionEntry({
+  patched ??= await params.agentRuntime.session.prepareSessionEntryPatch({
     agentId: params.agentId,
     storePath: params.storePath,
     sessionKey: params.sessionKey,
@@ -313,7 +324,8 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
       sessionId: "",
       updatedAt: now,
     },
-    update: async (entry) => {
+    authority: { kind: "host", assertCurrent: params.assertCurrent },
+    prepare: (entry) => {
       if (entry.sessionId?.trim()) {
         return { ...deliveryFields, updatedAt: now };
       }
@@ -387,6 +399,26 @@ export async function consultRealtimeVoiceAgent(params: {
   extraSystemPrompt?: string;
   fallbackText?: string;
   abortSignal?: AbortSignal;
+  /** Gateway ingress adapts authenticated policy; channel bridges keep their own authority. */
+  prepareToolContext?: (
+    sessionEntry: SessionEntry,
+  ) => Partial<
+    Pick<
+      RunEmbeddedAgentParams,
+      | "permissionMode"
+      | "toolOverrides"
+      | "senderIsOwner"
+      | "senderId"
+      | "messageProvider"
+      | "agentAccountId"
+      | "approvalReviewerDeviceId"
+      | "clientCaps"
+      | "execOverrides"
+      | "bashElevated"
+      | "currentChannelId"
+      | "currentThreadTs"
+    >
+  >;
   onRunStarted?: (params: {
     runId: string;
     sessionId: string;
@@ -406,6 +438,7 @@ export async function consultRealtimeVoiceAgent(params: {
     agentId,
     agentDir,
     workspaceDir,
+    cwd,
     storePath,
     sessionEntry: initialSessionEntry,
   } = prepareRealtimeVoiceAgentExecutionContext(params);
@@ -488,6 +521,12 @@ export async function consultRealtimeVoiceAgent(params: {
         storePath,
         agentRuntime: params.agentRuntime,
         logger: params.logger,
+        assertCurrent: () => {
+          lifecycleAbortController.signal.throwIfAborted();
+          if (!sessionWorkAdmission.isActive()) {
+            throw lifecycleInterruption;
+          }
+        },
       });
       const { deliveryContext: consultDeliveryContext, toolAuthorityOverlay } =
         prepareRealtimeVoiceAgentExecutionContext({ ...params, agentId, storePath, sessionEntry });
@@ -534,6 +573,7 @@ export async function consultRealtimeVoiceAgent(params: {
             ? String(consultDeliveryContext.threadId)
             : undefined,
         workspaceDir,
+        cwd,
         config: params.cfg,
         prompt: buildRealtimeVoiceAgentConsultPrompt({
           args: params.args,
@@ -551,6 +591,7 @@ export async function consultRealtimeVoiceAgent(params: {
         reasoningLevel: "off",
         toolResultFormat: "plain",
         execSession: sessionEntry,
+        sessionRoot: normalizeOptionalString(sessionEntry.sessionRoot),
         toolsAllow: params.toolsAllow,
         toolBindings: params.toolBindings,
         timeoutMs,
@@ -560,6 +601,7 @@ export async function consultRealtimeVoiceAgent(params: {
           params.extraSystemPrompt ??
           "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
         agentDir,
+        ...params.prepareToolContext?.(sessionEntry),
         abortSignal,
       });
       const result = await runPromise

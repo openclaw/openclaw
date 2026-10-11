@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
@@ -76,11 +77,11 @@ export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 /** Resolves a user-supplied outbound destination through the channel plugin. */
-export function resolveOutboundTarget(
+export async function resolveOutboundTarget(
   params: ResolveOutboundTargetParams & { plugin?: ChannelPlugin; allowBootstrap?: boolean },
-): OutboundTargetResolution {
+): Promise<OutboundTargetResolution> {
   return (
-    resolveOutboundTargetWithPlugin({
+    (await resolveOutboundTargetWithPlugin({
       plugin:
         params.plugin ??
         resolveOutboundChannelPlugin({
@@ -89,7 +90,7 @@ export function resolveOutboundTarget(
           allowBootstrap: params.allowBootstrap,
         }),
       target: params,
-    }) ?? {
+    })) ?? {
       ok: false,
       error: new Error(`Unsupported channel: ${params.channel}`),
     }
@@ -180,7 +181,8 @@ async function resolveHeartbeatOwnerRoute(
   }
   for (const { plugin, accountId } of plugins) {
     const ownerId = concreteAllowFromEntries(
-      plugin.config.resolveAllowFrom?.({
+      await resolveChannelAllowFrom({
+        plugin,
         cfg: params.cfg,
         accountId,
       }),
@@ -366,7 +368,7 @@ export async function resolveHeartbeatDeliveryTarget(
     cfg,
     accountId: effectiveAccountId,
   };
-  const resolved = resolveOutboundTargetWithPlugin({
+  const resolved = await resolveOutboundTargetWithPlugin({
     plugin,
     target: {
       ...targetParams,
@@ -422,8 +424,8 @@ export async function resolveHeartbeatDeliveryTarget(
   }
 
   let reason: string | undefined;
-  if (plugin?.config.resolveAllowFrom) {
-    const explicit = resolveOutboundTargetWithPlugin({
+  if (plugin?.config.resolveAllowFromAsync || plugin?.config.resolveAllowFrom) {
+    const explicit = await resolveOutboundTargetWithPlugin({
       plugin,
       target: { ...targetParams, mode: "explicit" },
     });
@@ -623,25 +625,22 @@ function inferChatTypeFromTarget(params: {
 }
 
 /** Resolves the sender id/allow-list context used for heartbeat sends. */
-export function resolveHeartbeatSenderContext(params: {
+export async function resolveHeartbeatSenderContext(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   delivery: OutboundTarget;
-}): HeartbeatSenderContext {
+}): Promise<HeartbeatSenderContext> {
   const provider =
     params.delivery.channel !== "none" ? params.delivery.channel : params.delivery.lastChannel;
   const accountId =
     params.delivery.accountId ??
     (provider === params.delivery.lastChannel ? params.delivery.lastAccountId : undefined);
-  const allowFromRaw = provider
-    ? (resolveOutboundChannelPlugin({
-        channel: provider,
-        cfg: params.cfg,
-      })?.config.resolveAllowFrom?.({
-        cfg: params.cfg,
-        accountId,
-      }) ?? [])
-    : [];
+  const plugin = provider
+    ? resolveOutboundChannelPlugin({ channel: provider, cfg: params.cfg })
+    : undefined;
+  const allowFromRaw = plugin
+    ? await resolveChannelAllowFrom({ plugin, cfg: params.cfg, accountId })
+    : undefined;
   const allowFrom = mapAllowFromEntries(allowFromRaw);
 
   const deliveryTo = params.delivery.to;

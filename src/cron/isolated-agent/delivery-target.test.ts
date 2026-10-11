@@ -608,7 +608,7 @@ describe("resolveDeliveryTarget", () => {
 
   it("falls back to the runtime target resolver when the channel plugin is not already loaded", async () => {
     setSingleOutboundTestPlugin({ id: "alpha", outbound: createStubOutbound("Alpha") });
-    vi.mocked(resolveOutboundTarget).mockReturnValueOnce({ ok: true, to: "room:default" });
+    vi.mocked(resolveOutboundTarget).mockResolvedValueOnce({ ok: true, to: "room:default" });
 
     const cfg = makeCfg();
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, {

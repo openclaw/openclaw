@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as gatewayLockPayload from "../../infra/gateway-lock-payload.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -18,6 +19,12 @@ import {
 const sqliteHostPlatform = process.platform;
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
+
+beforeEach(() => {
+  // Platform simulation must not change the real process identity shared with SQLite workers.
+  const namespace = gatewayLockPayload.readGatewayLockProcessNamespace();
+  vi.spyOn(gatewayLockPayload, "readGatewayLockProcessNamespace").mockReturnValue(namespace);
+});
 
 afterEach(() => vi.restoreAllMocks());
 

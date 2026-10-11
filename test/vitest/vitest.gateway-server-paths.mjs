@@ -105,6 +105,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/managed-image-record-store.test.ts",
   "src/gateway/managed-outgoing-gc-availability.test.ts",
   "src/gateway/mcp-http.completion-lineage.test.ts",
+  "src/gateway/mcp-http.exec-completion.test.ts",
   "src/gateway/mcp-http.exec-egress.test.ts",
   "src/gateway/mcp-http.question-authority.test.ts",
   "src/gateway/mcp-http.session-controls.test.ts",
@@ -113,7 +114,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/mention-directory.test.ts",
   "src/gateway/mention-inbox.compat.test.ts",
   "src/gateway/mention-inbox.sharing-target.test.ts",
-  "src/gateway/mention-inbox.test.ts",
   "src/gateway/model-account-connect.compat.test.ts",
   "src/gateway/model-account-connect.worker.test.ts",
   "src/gateway/node-claude-skill-runtime.test.ts",
@@ -287,11 +287,12 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/talk/client-agent-consult.terminal-writes.test.ts",
   "src/gateway/talk/client-authority.test.ts",
   "src/gateway/talk/client-gateway-control.agent-consult.test.ts",
-  "src/gateway/talk/client-spoken-confirmation.test.ts",
+  "src/gateway/talk/client-permission-parity.test.ts",
   "src/gateway/talk/handlers/client-consult-authority.test.ts",
   "src/gateway/talk/handlers/client-create-authority.test.ts",
   "src/gateway/talk/handlers/client-native-actions.test.ts",
   "src/gateway/talk/handlers/client-native-control.test.ts",
+  "src/gateway/talk/handlers/client-native-replay.test.ts",
   "src/gateway/talk/handlers/client.test.ts",
   "src/gateway/talk/handlers/native-consult-target.test.ts",
   "src/gateway/talk/handlers/realtime-relay-close.test.ts",
@@ -300,6 +301,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/talk/relay/agent-consult.registration.test.ts",
   "src/gateway/talk/relay/barge-in.regression.test.ts",
   "src/gateway/talk/relay/index.test.ts",
+  "src/gateway/talk/relay/transcript-readiness.test.ts",
   "src/gateway/test-helpers.acquisition.test.ts",
   "src/gateway/tool-resolution.cron-capture.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
@@ -309,6 +311,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/tools-invoke-http.test.ts",
   "src/gateway/tui-session-description-wire.test.ts",
   "src/gateway/update-run-notice-target.test.ts",
+  "src/gateway/update-run-notice.test.ts",
   "src/gateway/user-profiles-http.auth.test.ts",
   "src/gateway/watch-node-http.test.ts",
   "src/gateway/worker-environments/bundle.test.ts",
@@ -354,6 +357,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/placement-idle-sweep.test.ts",
   "src/gateway/worker-environments/placement-move-abandon.test.ts",
   "src/gateway/worker-environments/placement-move-schema.test.ts",
+  "src/gateway/worker-environments/placement-read-cache.worker.test.ts",
   "src/gateway/worker-environments/placement-read-projection.snapshot.test.ts",
   "src/gateway/worker-environments/placement-read-projection.worker.test.ts",
   "src/gateway/worker-environments/placement-reclaim-lifecycle.test.ts",
@@ -534,6 +538,8 @@ export const gatewayMethodsTestExclude = [
 
 // Gateway server tests that need private process state or a private module graph.
 export const gatewayServerIsolatedTestFiles = [
+  // Real provider and subagent lifecycle registrations must survive the whole scenario.
+  "src/gateway/gateway.prompt-cache.test.ts",
   // Sibling threads can fork and retain listener sockets until exec on Linux.
   "src/gateway/server/plugin-legacy-listeners.test.ts",
   // Native source captures must not retain this fixture's forbidden process constructors.

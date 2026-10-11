@@ -75,10 +75,10 @@ describe("memory entry origins", () => {
   }
 
   it("lazily restores the additive origins table without changing the agent schema version", async () => {
-    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     let transactionAdmissions = 0;
     const observed = vi
-      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
       .mockImplementation((options, source, worker) => {
         if (
           worker.moduleUrl.href !==
@@ -454,10 +454,17 @@ describe("memory entry origins", () => {
   });
 
   it.each([false, true])(
-    "settles the successful reservation prefix before rejecting (cleanup failure=%s)",
+    "settles committed agent reservations before rejecting (cleanup failure=%s)",
     async (cleanupFails) => {
       const prior = origin("prior", "session-1");
       await recordMemoryEntryOrigins({ agentId: "main", origins: [prior] });
+      const secondaryPrior = {
+        ...prior,
+        agentId: "secondary",
+        sessionKey: "agent:secondary:session-1",
+      };
+      await recordMemoryEntryOrigins({ agentId: "secondary", origins: [secondaryPrior] });
+      const failingDatabasePath = resolveOpenClawAgentSqlitePath({ agentId: "secondary" });
       const moduleUrl = resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins);
       const fixturePath = path.join(stateDir, "origin-statement-fault.mjs");
       // Intercept execution, including cached statements, without changing admitted schema.
@@ -473,7 +480,7 @@ export function bindSqliteWorkerBackend(input, context) {
     originals.set(method, original);
     StatementSync.prototype[method] = function (...args) {
       const sql = this.sourceSQL.toLowerCase().replaceAll('"', '');
-      if (sql.startsWith('insert into memory_entry_origins ') && args.includes('failing')) {
+      if (context.databasePath === ${JSON.stringify(failingDatabasePath)} && sql.startsWith('insert into memory_entry_origins ') && args.includes('failing')) {
         throw new Error('fixture reservation write rejected');
       }
       if (${cleanupFails} && sql.startsWith('delete from memory_entry_origins ') && args.includes('["first"]')) {
@@ -489,9 +496,9 @@ export function bindSqliteWorkerBackend(input, context) {
 }
 `,
       );
-      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
       const fault = vi
-        .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+        .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
         .mockImplementation((options, source, worker) =>
           open(
             options,
@@ -503,9 +510,10 @@ export function bindSqliteWorkerBackend(input, context) {
         );
       const priorEntry = "- Retain the source until publication settles.";
       try {
+        // Each agent's batch is atomic; a later agent failure exercises committed-prefix cleanup.
         await expect(
           reserveMemoryEntryOrigins({
-            agentIds: ["main"],
+            agentIds: ["main", "secondary"],
             previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
             operations: ["first", "failing"].map((candidateKey) => ({
               candidateKey,
@@ -521,6 +529,7 @@ export function bindSqliteWorkerBackend(input, context) {
         expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(
           cleanupFails ? [origin("first", "session-1"), prior] : [prior],
         );
+        expect(await listMemoryEntryOrigins({ agentId: "secondary" })).toEqual([secondaryPrior]);
       } finally {
         fault.mockRestore();
       }
@@ -547,7 +556,7 @@ export function bindSqliteWorkerBackend(input, context) {
     expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before);
     expect(outcome).toMatchObject({
       status: "rejected",
-      reason: { message: "Agent database target changed before write admission" },
+      reason: { message: "Memory reindex shadow file changed during its owned lifetime" },
     });
   });
 

@@ -101,7 +101,7 @@ const buttonShadow = isAndroid
   ? "0 2px 10px rgba(6, 182, 212, 0.14)"
   : "0 10px 25px rgba(6, 182, 212, 0.18)";
 
-export const openclawTheme = {
+const openclawTheme = {
   components: {
     AudioPlayer: emptyClasses(),
     Button: emptyClasses(),

@@ -154,7 +154,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
     );
   });
 
-  it("keeps native path and file-URL modules on the process module graph", async () => {
+  it("keeps native paths, file URLs, and source SDK aliases on the process module graph", async () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const ownerPath = path.join(dir, "native-require.mjs");
     // tsx's CommonJS hook accepts file URLs and masks Node's native contract.
@@ -175,7 +175,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
       `import assert from "node:assert/strict";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
-import { tryNativeRequireJavaScriptModule as load } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
+import { tryNativeRequireJavaScriptModule as load, tryNativeRequireModule as loadSource } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
 const modulePath = ${JSON.stringify(modulePath)};
 for (const target of [modulePath, pathToFileURL(modulePath).href]) {
   fs.writeFileSync(modulePath, 'module.exports = { marker: "before" };\\n');
@@ -191,7 +191,20 @@ fs.writeFileSync(modulePath + ".missing-peer.cjs", 'require("openclaw/plugin-sdk
 assert.throws(() => load(modulePath + ".missing-peer.cjs", {
   fallbackOnMissingDependency: true,
 }), /openclaw\\/plugin-sdk\\/core/);
-console.log("native path + file URL process identity; missing target/dependency controls passed");
+const sdkPath = modulePath + ".sdk.ts";
+fs.writeFileSync(modulePath + ".helper.ts", 'export const value = "source";\\n');
+fs.writeFileSync(modulePath + ".preferred.js", 'export const value = "javascript";\\n');
+fs.writeFileSync(modulePath + ".preferred.ts", 'export const value = "wrong-source";\\n');
+fs.writeFileSync(sdkPath, [
+  'import { value } from "./' + ${JSON.stringify(encodeURIComponent(path.basename(modulePath)))} + '.helper.js";',
+  'import { value as preferred } from "./' + ${JSON.stringify(encodeURIComponent(path.basename(modulePath)))} + '.preferred.js";',
+  'export const state = { value, preferred };',
+].join("\\n"));
+const source = loadSource(sdkPath, { aliasMap: {} });
+assert.equal(source.ok, true);
+assert.deepEqual(source.moduleExport.state, { value: "source", preferred: "javascript" });
+assert.equal(source.moduleExport.state, (await import(pathToFileURL(sdkPath).href)).state);
+console.log("native path + source SDK process identity; native JavaScript precedence; missing target/dependency controls passed");
 `,
     );
     const result = spawnSync(
@@ -210,7 +223,7 @@ console.log("native path + file URL process identity; missing target/dependency 
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe(
-      "native path + file URL process identity; missing target/dependency controls passed",
+      "native path + source SDK process identity; native JavaScript precedence; missing target/dependency controls passed",
     );
   });
 

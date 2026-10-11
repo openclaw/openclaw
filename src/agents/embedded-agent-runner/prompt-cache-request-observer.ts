@@ -33,6 +33,7 @@ export type PromptCacheRequestObservation = {
   previousCacheRead?: number;
   requestGapMs?: number;
   providerPrefix?: string;
+  dropCause?: string;
   promptTokens?: number;
   changes: PromptCacheChange[] | null;
 };
@@ -58,6 +59,9 @@ export function createPromptCacheRequestObserver(
       model: Pick<Parameters<StreamFn>[0], "provider" | "id" | "api">,
       context: Pick<Parameters<StreamFn>[1], "systemPrompt" | "tools" | "messages">,
     ) => {
+      if (request) {
+        completePromptCacheObservation(params);
+      }
       requestIndex += 1;
       request = {
         ...beginPromptCacheObservation({
@@ -84,6 +88,20 @@ export function createPromptCacheRequestObserver(
         return;
       }
       const cacheBreak = completePromptCacheObservation({ ...params, usage, providerPrompt });
+      const providerPrefix = cacheBreak?.providerPrefix;
+      const dropCause = !cacheBreak
+        ? undefined
+        : cacheBreak.changes?.length
+          ? "tracked-input-change"
+          : !providerPrefix || providerPrefix === "unavailable"
+            ? "unattributed:provider-prompt-unavailable"
+            : providerPrefix === "prefix-match"
+              ? "provider-cache-reuse-lost:unchanged-prefix"
+              : providerPrefix.startsWith("continuation:")
+                ? "unattributed:continuation-wire-input"
+                : providerPrefix.startsWith("unverified-after:")
+                  ? "unattributed:bounded-prefix"
+                  : `provider-input-change:${providerPrefix}`;
       const hasCacheTelemetry = usage?.cacheTelemetry?.state !== "unavailable";
       // Keep completion identity private; cache diagnostics need only aggregate usage.
       contextUsage =
@@ -102,7 +120,8 @@ export function createPromptCacheRequestObserver(
         broke: Boolean(cacheBreak),
         previousCacheRead: request.previousCacheRead ?? undefined,
         requestGapMs: request.requestGapMs,
-        providerPrefix: cacheBreak?.providerPrefix,
+        providerPrefix,
+        dropCause,
         promptTokens:
           usage?.contextUsage?.state === "available" ? usage.contextUsage.promptTokens : undefined,
         input: usage?.input,

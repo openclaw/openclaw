@@ -109,20 +109,22 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
 
   constructor() {
     super();
-    void new SubscriptionsController(this).effect(
-      () => this.context?.gateway,
-      (gateway) =>
-        gateway.subscribeEvents((event) => {
-          const state = this.state;
-          if (!state || !modelAuthEventInvalidates(event)) {
-            return;
-          }
-          state.modelAuthStatusResult = null;
-          state.modelAuthStatusError = null;
-          this.requestUpdate();
-          void refreshChatModelAuthStatus(state).finally(() => this.requestUpdate());
-        }),
-    );
+    void new SubscriptionsController(this)
+      .watchStore(() => this.context?.navigation)
+      .effect(
+        () => this.context?.gateway,
+        (gateway) =>
+          gateway.subscribeEvents((event) => {
+            const state = this.state;
+            if (!state || !modelAuthEventInvalidates(event)) {
+              return;
+            }
+            state.modelAuthStatusResult = null;
+            state.modelAuthStatusError = null;
+            this.requestUpdate();
+            void refreshChatModelAuthStatus(state).finally(() => this.requestUpdate());
+          }),
+      );
   }
 
   protected placementComposerPresentation(

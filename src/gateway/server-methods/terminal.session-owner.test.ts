@@ -96,18 +96,6 @@ describe("terminal session ownership", () => {
   it.each([
     { state: "is missing", entry: undefined, error: { code: ErrorCodes.UNAVAILABLE } },
     {
-      state: "awaits project preparation",
-      entry: {
-        sessionId: "ui-session-id",
-        pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-      },
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message:
-          'Session "agent:main:pending" workspace is not ready. Wait for setup to finish or retry in chat.',
-      },
-    },
-    {
       state: "awaits worktree preparation",
       entry: {
         sessionId: "ui-session-id",

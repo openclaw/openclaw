@@ -19,7 +19,9 @@ type MaintenanceCommand = {
   [K in keyof MemoryWorkspaceMaintenance]: {
     operation: "maintenance";
     method: K;
-    args: Parameters<MemoryWorkspaceMaintenance[K]>;
+    args: K extends "writeDreams" | "appendCorpus"
+      ? [filePath: string, content: string]
+      : Parameters<MemoryWorkspaceMaintenance[K]>;
   };
 }[keyof MemoryWorkspaceMaintenance];
 

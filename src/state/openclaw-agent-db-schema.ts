@@ -454,6 +454,26 @@ function ensureAgentSchema(
       const migrationSchemaSql = requiresStorageMigration
         ? withLegacyAgentStorageSchema(storageSchemaSql, previousVersion)
         : storageSchemaSql;
+      const finishStorageMigration = () => {
+        if (requiresStorageMigration) {
+          migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion, warnings);
+        }
+        if (requiresSnapshotMigration) {
+          migrateSessionEntrySnapshotsInTransaction(db);
+        }
+        if (requiresCanonicalWriterMigration) {
+          migrateCanonicalSessionWriterValidation(db);
+        }
+        finishAgentSchemaMigration(
+          db,
+          agentId,
+          pathname,
+          targetVersion,
+          schemaSql,
+          identityMigration,
+          assertMigration,
+        );
+      };
       if (
         previousVersion < targetVersion &&
         previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION - 1 &&
@@ -487,24 +507,7 @@ function ensureAgentSchema(
             seedCanonicalSessionValidationPending(db);
           }
         }
-        if (requiresStorageMigration) {
-          migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion, warnings);
-        }
-        if (requiresSnapshotMigration) {
-          migrateSessionEntrySnapshotsInTransaction(db);
-        }
-        if (requiresCanonicalWriterMigration) {
-          migrateCanonicalSessionWriterValidation(db);
-        }
-        finishAgentSchemaMigration(
-          db,
-          agentId,
-          pathname,
-          targetVersion,
-          schemaSql,
-          identityMigration,
-          assertMigration,
-        );
+        finishStorageMigration();
         return;
       }
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
@@ -584,24 +587,7 @@ function ensureAgentSchema(
       ) {
         seedCanonicalSessionValidationPending(db);
       }
-      if (requiresStorageMigration) {
-        migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion, warnings);
-      }
-      if (requiresSnapshotMigration) {
-        migrateSessionEntrySnapshotsInTransaction(db);
-      }
-      if (requiresCanonicalWriterMigration) {
-        migrateCanonicalSessionWriterValidation(db);
-      }
-      finishAgentSchemaMigration(
-        db,
-        agentId,
-        pathname,
-        targetVersion,
-        schemaSql,
-        identityMigration,
-        assertMigration,
-      );
+      finishStorageMigration();
     };
     runSqliteImmediateTransactionSync(db, () => withMutation(mutate), {
       databaseLabel: pathname,

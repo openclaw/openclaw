@@ -133,7 +133,7 @@ export function bindSqliteWorkerBackend(
       if (command.type === "count") {
         return readSessionEntryCount(database);
       }
-      return runSqliteDeferredTransactionSync(database.db, () => {
+      const prepare = () => {
         if (command.type === "prepare") {
           const input = command.input;
           const store = readSessionEntryStore(database, {
@@ -165,7 +165,12 @@ export function bindSqliteWorkerBackend(
           input.selected,
           input.upsertedEntries,
         );
-      });
+      };
+      // Without removals the inventory is one statement. Archive recovery is an
+      // independent scheduling hint, already carried across asynchronous builders.
+      return command.type === "prepare" && command.input.removals.length === 0
+        ? prepare()
+        : runSqliteDeferredTransactionSync(database.db, prepare);
     },
     assertSettled() {
       assertOpen();

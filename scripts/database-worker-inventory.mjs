@@ -57,6 +57,62 @@ const reviewed = new Map([
     },
   ],
   [
+    "src/infra/update-managed-service-handoff-database.ts",
+    {
+      tier: "T2",
+      evidence:
+        "readManagedHandoffRepairMetadata and initializeLeaseSchema serve the managed update source-custody lease, a cross-process lock primitive.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-lease.ts",
+    {
+      tier: "T3",
+      evidence:
+        "createLeaseStore.admit is called by original-acquisition.ts from update/repair/triage CLI and the generated lease-source helper; retarget runs in HANDOFF_SCRIPT.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-mutation.ts",
+    {
+      tier: "T2",
+      evidence:
+        "createManagedHandoffMutationReader.childAliases implements managed source-custody lock validation; config/write-lock.ts and daemon/service-operation-lock.ts reach it through the lease owner.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-original-owner.ts",
+    {
+      tier: "T2",
+      evidence:
+        "readOriginalUpdateDependents serves cross-process source-custody lease acquisition/release, not ordinary Gateway state access.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-reclamation.ts",
+    {
+      tier: "T3",
+      evidence:
+        "observeManagedHandoffReclamation.readPairs is called only by lease.ts createLeaseStore admission in CLI/generated source helpers.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-rows.ts",
+    {
+      tier: "T2",
+      evidence:
+        "descendants/deleteRow/updateRow/readRetainedSources belong to cross-process managed source-custody locks. config/write-lock.ts and daemon/service-operation-lock.ts use assertSourceUnborrowed before effects; Gateway release settles the same lease.",
+    },
+  ],
+  [
+    "src/infra/update-managed-service-handoff-source-inspection.ts",
+    {
+      tier: "T2",
+      evidence:
+        "Schema discovery supports only the managed source-custody lock primitive's first admission and repair.",
+    },
+  ],
+  [
     "src/gateway/session-row-projection.ts",
     {
       priority: 2,
@@ -174,6 +230,42 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/agents/auth-profiles/sqlite-json.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readAuthProfileRows"],
+        evidence:
+          "Only auth-profiles/store.worker.ts, plugin-model-catalog.worker.ts, and sqlite-readonly-native-payload.ts's auth-profile-rows worker call this batched reader; synchronous SDK cell readers remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/agents/auth-profiles/shared-store-bootstrap.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "readSharedAuthLegacyRowsFromDatabase",
+          "hasPendingSharedAuthCleanupInDatabase",
+        ],
+        evidence:
+          "First-load legacy shared-auth admission and migration only: initializeFreshSharedAuthStore skips already-inspected ownership; shared-store-bootstrap.worker.ts and Doctor own remaining callers.",
+      },
+    ],
+  ],
+  [
+    "src/plugin-state/plugin-state-store.reads.ts",
+    [
+      {
+        tier: "W",
+        operations: ["selectPluginStateBatchRows"],
+        evidence:
+          "Only the invocation-bound plugin-state-operation.kernel.ts facade calls this row reader; that facade executes in plugin-state.worker.ts. Existing native scalar readers remain separately classified.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-transcript-state.ts",
     [
       {
@@ -216,7 +308,10 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["inspectGatewayCrashLoopBreakerInDatabase"],
+        operations: [
+          "inspectGatewayCrashLoopBreakerInDatabase",
+          "inspectGatewayCrashLoopBreakerInDatabase.latestStartedAt",
+        ],
         evidence:
           "Extracted from the existing gateway-boot-lifecycle.ts boot exception. Native inspectGatewayCrashLoopBreaker is only called by cli/gateway-cli/run.ts beginBoot before starting the Gateway; runtime inspection and recovery commit revalidation execute via gatewayBootReadOperations and gateway-boot-lifecycle.worker.ts in the existing state workers.",
       },
@@ -320,7 +415,7 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
-          "assertNoRunningWorkerSessionToolOperations",
+          "deleteWorkerTurnToolState",
           "closeWorkerTurnToolAdmission",
           "clearWorkerTurnToolState",
           "createPlacementSessionToolOperationKernel.hasToolAuthority",
@@ -373,9 +468,13 @@ const reviewedOperations = new Map([
           "placement-store.ts:102 selects only native restart/wait/validation; claim/release/cancel mutations run in placement-turn-claims.worker.ts:102,117,191,200,287,355,360",
       },
       {
-        tier: "T2",
-        operations: ["createPlacementTurnClaimOps.clearLocalTurnClaimsAfterRestart"],
-        evidence: "Only server-worker-environment-startup.ts:177 clears restart claims",
+        tier: "T1",
+        operations: [
+          "createPlacementTurnClaimOps.clearLocalTurnClaimsAfterRestart",
+          "clearLocalTurnClaimsInDatabase",
+        ],
+        evidence:
+          "The released placement-store.ts clearLocalTurnClaimsAfterRestart facade retains synchronous native access until the next Plugin SDK major; bundled startup awaits the placement-lifecycle.worker.ts clearLocalTurnClaims operation. The shared kernel remains native compatibility debt.",
       },
     ],
   ],
@@ -419,7 +518,7 @@ const reviewedOperations = new Map([
           "clearWorkerWorkspacePendingResult",
           "hasAcceptedWorkerWorkspacePendingResult",
           "insertWorkerWorkspacePendingResult",
-          "markWorkerWorkspacePendingResultAccepted",
+          "createPlacementWorkspaceResultOps.acceptWorkspaceResult",
           "assertPendingClaim",
           "createPlacementWorkspaceResultOps.handoffWorkspaceResultRecovery",
           "createPlacementWorkspaceResultOps.abandonWorkspaceResult",
@@ -479,7 +578,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["ensureLocal"],
         evidence:
-          "placement-dispatch-store.worker.ts:38 and placement-turn-claims.ts:112 claim path; claims only invoked at placement-turn-claims.worker.ts:160,175,345. Native placement-store.ts:75,76 selects clear/wait/validate methods that do not claim.",
+          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods that do not claim.",
       },
     ],
   ],
@@ -783,7 +882,7 @@ const reviewedOperations = new Map([
           "mergeUserPreferences",
         ],
         evidence:
-          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:325,375,432 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
+          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
       },
     ],
   ],
@@ -919,17 +1018,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["replaceTranscriptEvents"],
-        evidence:
-          "Only production invocations are developer benchmarks scripts/bench-agent-database-holds.ts:142 and scripts/bench-session-history.ts:383; remaining references are internal reexports and excluded test helpers. Synchronous replacement is separately retained.",
-      },
-    ],
-  ],
-  [
     "src/config/sessions/session-canonical-key-read.ts",
     [
       {
@@ -1028,29 +1116,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/gateway/worker-environments/placement-move-intent.ts",
-    [
-      {
-        tier: "W",
-        operations: ["readWorkerPlacementMovesReadOnly"],
-        evidence:
-          "Only placement-dispatch-store.worker.ts:69, placement-turn-claims.worker.ts:72 and placement-read-projection.ts:85 call the batch reader; projection itself is only called by state/openclaw-state-read.worker.ts:670. Native getPlacementMove uses another reader.",
-      },
-      {
-        tier: "W",
-        operations: [
-          "deleteExactMove",
-          "requireExactAttachedEnvironment",
-          "createPlacementMoveOps.completeSourceToLocal",
-          "createPlacementMoveOps.beginPlacementMove",
-          "createPlacementMoveOps.recordPlacementMoveError",
-        ],
-        evidence:
-          "Only placement-lifecycle.worker.ts invokes move mutations; placement-store.ts retains only the native getPlacementMove getter for final effect guards.",
-      },
-    ],
-  ],
-  [
     "src/gateway/worker-environments/placement-drain.ts",
     [
       {
@@ -1074,18 +1139,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["assertSessionWorkspaceUnreserved"],
         evidence:
-          "placement-dispatch-store.worker.ts:39 and placement-turn-claims.ts:93 claim path; claims only invoked at placement-turn-claims.worker.ts:160,175,345. Native placement-store.ts:75,76 selects clear/wait/validate methods.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/worker-environments/placement-read-projection.ts",
-    [
-      {
-        tier: "T1",
-        operations: ["readWorkerPlacementMoveAuthorityInDatabase"],
-        evidence:
-          "placement-store.readCurrentMoveAuthority serves native move-abandon, move-service recovery, and pending-result guards. Retained until native/SDK and foreign-writer revocation is fully owned at the next Plugin SDK major. Other projection operations remain worker-only.",
+          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods.",
       },
     ],
   ],
@@ -1157,9 +1211,10 @@ const reviewedOperations = new Map([
           "insertSandboxRegistryRowInDatabase",
           "insertSandboxRegistryRowIfMissingInDatabase",
           "readRegistryRows",
+          "readSandboxRegistryRowInDatabase",
         ],
         evidence:
-          "Registry mutations, including reservation and removal-intent selection, run only through registry-write.worker.ts -> executeSandboxRegistryCommand; import only registry-import.worker.ts. List helpers run through openclaw-state-read-registry.ts in the read worker. The row reader remains T1 for released synchronous sandbox callbacks held across provider waits and deferred process launch; see worker-access.md.",
+          "Registry mutations, including reservation and removal-intent selection, run only through registry-write.worker.ts -> executeSandboxRegistryCommand; import only registry-import.worker.ts. Read helpers run through openclaw-state-read-registry.ts in the read worker. Synchronous sandbox effect checks consume registry-currentness.ts facts maintained by committed receipts.",
       },
     ],
   ],
@@ -1224,6 +1279,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
+        operations: ["createWorktreeRemovalClaimsGuard", "releaseWorktreeRunLeaseRow"],
+        evidence:
+          "Synchronous removal-lock assertion immediately before filesystem/Git deletion and process-exit lock cleanup. Ordinary cleanup consumes the existing worker lease census.",
+      },
+      {
+        tier: "T2",
         operations: [
           "listRegistryWorktreesForMigration",
           "rewriteRegistryWorktreePathsForMigration",
@@ -1244,6 +1305,12 @@ const reviewedOperations = new Map([
     "src/agents/worktrees/run-lease-owner.ts",
     [
       {
+        tier: "T2",
+        operations: ["collectLiveRunLeases"],
+        evidence:
+          "Native caller is registry.ts assertWorktreeRemovalAvailable, a removal lock primitive; ordinary runtime lease reads and writes dispatch through shared-state workers.",
+      },
+      {
         tier: "W",
         operations: ["readWorktreeRunLeaseStateInDatabase", "assertRegistryMutationCustody"],
         evidence:
@@ -1255,10 +1322,16 @@ const reviewedOperations = new Map([
     "src/agents/worktrees/run-lease-store.kernel.ts",
     [
       {
+        tier: "T2",
+        operations: ["releaseWorktreeRunLeaseInDatabase"],
+        evidence:
+          "Native invocation is registry.ts process-exit lock cleanup; normal release dispatches through registry-run-end.worker.ts.",
+      },
+      {
         tier: "W",
         operations: ["admitWorktreeRunLeaseInDatabase"],
         evidence:
-          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Shared release/lease cleanup remain T1.",
+          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Native exit cleanup is classified separately as a lock primitive.",
       },
     ],
   ],
@@ -1640,13 +1713,19 @@ const reviewedOperations = new Map([
     "src/infra/restart-handoff.ts",
     [
       {
+        tier: "T2",
+        operations: ["selectGatewayRestartHandoffRowSync"],
+        evidence:
+          "Native reads only serve server-startup-bootstrap.ts boot admission, daemon CLI status.gather.ts, and Doctor gateway-daemon-flow.ts; ordinary Gateway runtime does not call this reader.",
+      },
+      {
         tier: "T3",
         operations: [
           "consumeGatewayRestartHandoffSync",
           "consumeGatewayRestartHandoffSync.removeCurrent",
         ],
         evidence:
-          "Only CLI gateway-cli/register-restart-handoff.ts:61 calls consumeGatewayRestartHandoffSync and its private removeCurrent helper; shared row reader also runs at Gateway boot and remains T1.",
+          "Only CLI gateway-cli/register-restart-handoff.ts:61 calls consumeGatewayRestartHandoffSync and its private removeCurrent helper.",
       },
     ],
   ],
@@ -1666,7 +1745,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["writeRestartSentinelRowIfRevisionSync", "readRestartSentinelRowForKeySync"],
+        operations: [
+          "writeRestartSentinelRowIfRevisionSync",
+          "readRestartSentinelRowForKeySync",
+          "readRestartSentinelRevisionFloorSync",
+          "upsertRestartSentinelRowSync",
+        ],
         evidence:
           "src/infra/restart-sentinel.worker.ts:74,150 plus generated one-shot child in src/infra/update-managed-service-handoff.ts:101,439,1639,1649.",
       },
@@ -1736,9 +1820,11 @@ const reviewedOperations = new Map([
           "createSqliteAuditRecordKernel.entries",
           "createSqliteAuditRecordKernel.upsertPreparedRecord",
           "createSqliteAuditRecordKernel.latest",
+          "readAuditWriteState",
+          "pruneAuditRecords",
         ],
         evidence:
-          "Native entries/upsert serve state-migrations.audit-checkpoints.ts, audit-recovery.ts, audit-logs.ts and CLI audit-backup.ts. Native latest serves readRecentConfigAuditRecords in Doctor config flow and update-immutable-protection.ts. Transcript/greeting reads and CAS, plus config-journal snapshots, use the existing workers. Native config observation still reaches register/count/next/prune, which remain T1.",
+          "Native entries/upsert/count/next/prune serve state-migrations.audit-checkpoints.ts, audit-recovery.ts, audit-logs.ts and CLI audit-backup.ts. Native latest serves readRecentConfigAuditRecords in Doctor and update-immutable-protection.ts. Runtime config observations use diagnostic.register in sqlite-audit-record.worker.ts; no native register adapter remains.",
       },
     ],
   ],
@@ -1760,20 +1846,63 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/infra/update-run-admission.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["runUpdateRunAdmission"],
+        evidence:
+          "createUpdateRun is the only caller: Gateway/update campaigns dispatch updateRuns.create to update-run-mutation.worker.ts; native create calls are CLI update-command-run.ts and update-repair-command.ts. The existing-schema and bootstrap transactions retain the worker's transaction/commit admission callback.",
+      },
+    ],
+  ],
+  [
     "src/infra/update-run-ledger.ts",
     [
       {
         tier: "T3",
         operations: ["createUpdateRun"],
-        binding: "active",
         evidence:
-          "active initializer requires stale-run opt-in only from src/cli/update-cli/update-command-run.ts:304,310,313; guard src/infra/update-run-ledger.ts:127 excludes Gateway/campaign callers. Repairs: update-repair-command.ts:141; interruption: update-command-mutable-signals.ts:158.",
+          "Gateway server-methods/update.ts and update-startup-auto-run.ts use createUpdateRunAsync; update-run-mutation.worker.ts executes creation. Remaining native callers are update-command-run.ts and update-repair-command.ts. Legacy supersession remains an explicit CLI-only option.",
       },
       {
         tier: "T3",
         operations: ["reconcilePackageOwnerRefusal", "finishInterruptedUpdateBeforeActivation"],
         evidence:
-          "active initializer requires stale-run opt-in only from src/cli/update-cli/update-command-run.ts:304,310,313; guard src/infra/update-run-ledger.ts:127 excludes Gateway/campaign callers. Repairs: update-repair-command.ts:141; interruption: update-command-mutable-signals.ts:158.",
+          "Only update-repair-command.ts calls reconcilePackageOwnerRefusal; update-command-mutable-signals.ts calls finishInterruptedUpdateBeforeActivation under its CLI executor. Their package/activation custody checks remain intact.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-run-read.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readUpdateRunRecord", "hasStoredUpdateRecovery", "readUpdateRuns"],
+        evidence:
+          "Runtime reads dispatch through update-run-reader.ts to openclaw-state-read.worker.ts; mutations read their current record in update-run-mutation.worker.ts, reconciliation and interruption workers. Native readers serve CLI update-command-* / update-repair-command.ts, Doctor admission, update-migrated-finalize.worker.ts and update-repair-turn-worker.ts. Gateway update/report/restart/notice and startup campaign callers use async APIs; generated managed-handoff ledger reads execute in the helper child.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-run-recovery-store.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readRecoveryRows"],
+        evidence:
+          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are update CLI repair, result, rollback and terminal owners plus CLI managed-handoff cleanup; no Gateway reader uses the synchronous recovery facade. Recovery exclusion is retained as activation/rollback custody, not removed as bookkeeping.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-run-write.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["persistRun"],
+        evidence:
+          "Gateway update/run, boot observations, notices and startup campaigns use update-run-write.async.ts and the existing update-run-mutation.worker.ts writer. Remaining native mutateRun callers are CLI update-command-* and Doctor; update-migrated-finalize.worker.ts, reconciliation/interruption workers and the generated managed-handoff helper also own native transactions. No synchronous runtime fallback is retained.",
       },
     ],
   ],
@@ -1805,13 +1934,24 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/hooks/install-record-transaction.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["stageHookInstall", "stageHookInstall.rollback"],
+        evidence:
+          "CLI install/update only: cli/hook-install-persistence.ts calls stageHookInstall; hooks/update.ts reaches it only through cli/plugins-update-command.ts. Rollback belongs to that same offline install transaction.",
+      },
+    ],
+  ],
+  [
     "src/secrets/store/secret-store-hidden-github.ts",
     [
       {
         tier: "W",
         operations: ["writePersonalGitHubSecret"],
         evidence:
-          "Counted expression is null DELETE only: src/state/user-github-connections.ts:260 → user-profiles-merge.ts:58 → user-profile-writes.worker.ts:325,375,432. Other value callers pass JSON strings.",
+          "Counted expression is null DELETE only: src/state/user-github-connections.kernel.ts:202 → user-profiles-merge.ts:58 → user-profile-writes.worker.ts:375,425,482. Other value callers pass JSON strings.",
       },
     ],
   ],
@@ -1954,7 +2094,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["mergeUserModelAccounts"],
         evidence:
-          "Only src/state/user-profiles-merge.ts:57, executed by user-profile-writes.worker.ts:325,375,432.",
+          "Only src/state/user-profiles-merge.ts:57, executed by user-profile-writes.worker.ts:375,425,482.",
       },
     ],
   ],
@@ -1976,6 +2116,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "resolveUserProfileGitHubAttributionInDatabase",
+          "selectUserProfileRoleAuthority",
           "prepareUserProfileGitHubMerge",
           "readGitHubIdentityBinding",
           "selectGitHubProfileAlias",
@@ -1983,7 +2124,7 @@ const reviewedOperations = new Map([
           "applyVerifiedGitHubIdentity.writeIdentity",
         ],
         evidence:
-          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
+          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:474,482 and merges :375,425. Role authority runs only through user-profiles.worker.ts:152. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
       },
     ],
   ],
@@ -1999,7 +2140,7 @@ const reviewedOperations = new Map([
           "readProfileAvatarInDatabase",
         ],
         evidence:
-          "Creation/link/merge/sync calls flow through src/state/user-profiles.worker.ts:61,69,71 and user-profile-writes.worker.ts:325,350,359,375,430; identity/avatar reads dispatch only from openclaw-state-read.worker.ts:577,604,631.",
+          "Creation/link/merge/sync calls flow through src/state/user-profiles.worker.ts:61,69,71 and user-profile-writes.worker.ts:375,400,409,425,480; identity/avatar reads dispatch only from openclaw-state-read.worker.ts:577,604,631.",
       },
     ],
   ],
@@ -2010,7 +2151,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["mergeUserProfiles"],
         evidence:
-          "Only src/state/user-profile-writes.worker.ts:325,375,432 executes mergeUserProfiles.",
+          "Only src/state/user-profile-writes.worker.ts:375,425,482 executes mergeUserProfiles.",
       },
     ],
   ],
@@ -2075,10 +2216,13 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
+  "src/skills/workshop/changes.kernel.ts", // changes.worker.ts owns append/list SQL through the shared-state registry.
+  "src/skills/workshop/skill-usage.kernel.ts", // changes.worker.ts owns recordSkillUsageInDatabase; host imports are type-only.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.
   "extensions/memory-core/src/memory-entry-origin-reads.ts", // Memory search worker origin-read commands only.
   "extensions/memory-core/src/memory-entry-origins-delete.ts", // Memory origin worker delete command only.
@@ -2088,6 +2232,7 @@ const workerModules = new Set([
 
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
+  "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
 
   "extensions/workboard/src/sqlite-store-kernel.ts", // Workboard SQLite worker backend factory only.
   "extensions/workboard/src/sqlite-store-sessions-board.ts", // Workboard worker kernel sessions-board store only.
@@ -2096,7 +2241,7 @@ const workerModules = new Set([
   "packages/memory-host-sdk/src/memory-entry-origins.ts", // Private memory SDK origin queries serve search and origin workers only.
 
   "src/agents/mcp-oauth-store.kernel.ts", // MCP OAuth write dispatcher and shared-state read worker only.
-  "src/agents/harness/native-hook-relay-store.kernel.ts", // native-hook-relay-store.worker.ts owns runtime SQL; clear is test-only.
+  "src/agents/harness/native-hook-relay-store.kernel.ts", // native-hook-relay-store.worker.ts owns all runtime SQL.
 
   "src/agents/subagents/completion/subagent-completion-queue-receipt.ts", // Completion mutation kernel runs through the session-delivery worker.
 
@@ -2271,12 +2416,31 @@ function ownerOf(file) {
   return parts.slice(0, depth).join("/");
 }
 
+/**
+ * @typedef {object} InventoryCall
+ * @property {string} primitive
+ * @property {number} line
+ * @property {number} column
+ * @property {string} operation
+ * @property {string} [binding]
+ * @property {string[]} [guards]
+ * @property {{namespace: string, module: string, arguments: string[]}} [forwarding]
+ */
+
 function findCalls(source) {
   const names = new Map([...primitives.keys()].map((name) => [name, name]));
+  const namespaces = new Map();
   for (const statement of source.statements) {
     const bindings = ts.isImportDeclaration(statement)
       ? statement.importClause?.namedBindings
       : undefined;
+    if (
+      bindings &&
+      ts.isNamespaceImport(bindings) &&
+      ts.isStringLiteral(statement.moduleSpecifier)
+    ) {
+      namespaces.set(bindings.name.text, statement.moduleSpecifier.text);
+    }
     if (bindings && ts.isNamedImports(bindings)) {
       for (const element of bindings.elements) {
         const imported = element.propertyName?.text ?? element.name.text;
@@ -2286,13 +2450,16 @@ function findCalls(source) {
       }
     }
   }
+  /** @type {InventoryCall[]} */
   const calls = [];
-  function visit(node, parentOperation, parentBinding, parentGuards = []) {
+  function visit(node, parentOperation, parentBinding, parentGuards, parentOwner, parent) {
     let operation = parentOperation;
     let binding = parentBinding;
-    let guards = parentGuards;
+    let guards = parentGuards ?? [];
+    let owner = parentOwner;
     // Callback SQL needs its own proof; neither an initializer nor a caller's guard covers it.
     if (ts.isFunctionLikeDeclaration(node)) {
+      owner = node;
       binding = undefined;
       guards = [];
     } else if (ts.isVariableDeclaration(node) && node.initializer) {
@@ -2310,10 +2477,17 @@ function findCalls(source) {
       operation = operation ? `${operation}.${node.name.text}` : node.name.text;
     }
     if (ts.isIfStatement(node)) {
-      visit(node.expression, operation, binding, guards);
-      visit(node.thenStatement, operation, binding, [...guards, node.expression.getText(source)]);
+      visit(node.expression, operation, binding, guards, owner, node);
+      visit(
+        node.thenStatement,
+        operation,
+        binding,
+        [...guards, node.expression.getText(source)],
+        owner,
+        node,
+      );
       if (node.elseStatement) {
-        visit(node.elseStatement, operation, binding, guards);
+        visit(node.elseStatement, operation, binding, guards, owner, node);
       }
       return;
     }
@@ -2329,6 +2503,35 @@ function findCalls(source) {
         const { line, character } = source.getLineAndCharacterOfPosition(
           expression.getStart(source),
         );
+        const namespace =
+          ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)
+            ? expression.expression.text
+            : undefined;
+        const forwarding =
+          namespace &&
+          namespaces.has(namespace) &&
+          owner &&
+          ts.isFunctionDeclaration(owner) &&
+          (owner.name?.text === called || owner.name?.text === `${called}Legacy`) &&
+          parent &&
+          ts.isReturnStatement(parent) &&
+          parent.expression === node &&
+          owner.body?.statements.includes(parent) &&
+          owner.parameters.length === node.arguments.length &&
+          owner.parameters.every(
+            (parameter, index) =>
+              ts.isIdentifier(parameter.name) &&
+              !parameter.initializer &&
+              !parameter.dotDotDotToken &&
+              ts.isIdentifier(node.arguments[index]) &&
+              parameter.name.text === node.arguments[index].text,
+          )
+            ? {
+                namespace,
+                module: namespaces.get(namespace),
+                arguments: node.arguments.map((argument) => argument.text),
+              }
+            : undefined;
         calls.push({
           primitive,
           line: line + 1,
@@ -2336,10 +2539,11 @@ function findCalls(source) {
           operation,
           ...(binding === undefined ? {} : { binding }),
           ...(guards.length === 0 ? {} : { guards }),
+          ...(forwarding ? { forwarding } : {}),
         });
       }
     }
-    node.forEachChild((child) => visit(child, operation, binding, guards));
+    node.forEachChild((child) => visit(child, operation, binding, guards, owner, node));
   }
   visit(source, "");
   return calls;
@@ -2397,6 +2601,14 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
   return files
     .flatMap((file, index) => {
       const calls = findCalls(sources[index]);
+      /** @type {Map<string, {
+       * file: string,
+       * owner: string,
+       * tier: string,
+       * priority: number,
+       * calls: InventoryCall[],
+       * evidence: Set<string>
+       * }>} */
       const groups = new Map();
       for (const call of calls) {
         const classification = classify(file, call.operation, call.binding, call.guards);
@@ -2411,10 +2623,14 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
         group.evidence.add(classification.evidence);
         groups.set(classification.tier, group);
       }
-      return [...groups.values()].map((group) => {
-        group.evidence = [...group.evidence].join("; ");
-        return group;
-      });
+      return [...groups.values()].map((group) => ({
+        file: group.file,
+        owner: group.owner,
+        tier: group.tier,
+        priority: group.priority,
+        calls: group.calls,
+        evidence: [...group.evidence].join("; "),
+      }));
     })
     .toSorted(
       (a, b) =>

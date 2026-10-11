@@ -55,6 +55,9 @@ export function createSessionRowModelFactsReader(params: {
     if (records.ready(row) && !params.dirty.has(records.identity(row))) {
       return row.materialized.source;
     }
+    if (row.preparedRuntimeOwnership === undefined) {
+      throw new Error("Native session ownership must be prepared before reading search facts");
+    }
     const state = params.state();
     return readSessionRowModelFacts({
       ...state,
@@ -167,6 +170,9 @@ export function createSessionRowMaterializer(owner: {
         if (!records.isPreparedSessionRowDatabaseFacts(databaseFacts)) {
           continue;
         }
+        if (!accepted && !records.canRetainSessionRowRuntimeOwnership(databaseFacts)) {
+          continue;
+        }
         if (!accepted && current?.unresolvedDatabaseFacts === "category") {
           continue;
         }
@@ -238,6 +244,8 @@ export function createSessionRowMaterializer(owner: {
           }
           if (row && databaseFacts) {
             row.preparedAcpMeta = databaseFacts.acpMeta;
+            row.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;
+            row.runtimeOwnershipDependencies = databaseFacts.runtimeOwnershipDependencies;
           }
           if (row && isColdArchivedSessionRow(row) && !options.archived) {
             owner.dirty.delete(id);
@@ -280,6 +288,9 @@ export function readResidentSessionRow(
     throw new Error("Incognito session descriptions require awaited row preparation");
   }
   const databaseFacts = params.databaseFacts ?? prepared?.databaseFacts;
+  if (!databaseFacts && !isIncognitoSessionKey(row.key)) {
+    throw new Error("Durable session rows require prepared database facts");
+  }
   const source =
     isIncognitoSessionKey(row.key) && !prepared
       ? resolveGatewaySessionStoreTargetWithStore({
@@ -295,6 +306,9 @@ export function readResidentSessionRow(
     ...row,
     cfg,
     preparedAcpMeta: databaseFacts ? databaseFacts.acpMeta : row.preparedAcpMeta,
+    preparedRuntimeOwnership: databaseFacts
+      ? databaseFacts.runtimeOwnership
+      : row.preparedRuntimeOwnership,
     preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
     preparedRepositoryWorkspace: databaseFacts
       ? databaseFacts.repositoryWorkspace

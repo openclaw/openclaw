@@ -34,7 +34,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
-  CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS,
   CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
   CLAUDE_CLI_PROFILE_ID,
   CLAUDE_MODEL_ID_ALIASES,
@@ -523,7 +522,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
           ...cli.wizard,
           assistantPriority: -20,
           modelAllowlist: {
-            allowedKeys: [...CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS],
+            allowedKeys: [CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF],
             initialSelections: [CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF],
             message: "Claude CLI models",
           },
@@ -565,9 +564,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
       }),
     ],
     // A single-provider result is republished under every hook alias, which would
-    // list these API rows as `claude-cli/*` too. Claude CLI rows come only from
-    // `modelCatalog.providers.claude-cli` and its hosted catalog because Claude
-    // Code does not serve every API model (Mythos 5 is direct-API only).
+    // list these API rows as `claude-cli/*` too. Claude CLI membership comes
+    // from its native initialize menu, not from the Anthropic API catalog.
     catalog: {
       order: "simple",
       run: async (ctx) => {

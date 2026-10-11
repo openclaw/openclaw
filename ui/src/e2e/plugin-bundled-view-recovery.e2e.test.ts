@@ -87,7 +87,15 @@ suite.define(() => {
         controlUiE2eBuiltModuleRequest("ui/src/pages/plugin/logbook-view.ts"),
         failBundledChunkTwice,
       );
-      await page.getByRole("link", { name: "Logbook", exact: true }).click();
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar
+        .locator(".sidebar-rail")
+        .getByRole("button", { name: "Pages", exact: true })
+        .click();
+      await sidebar
+        .locator(".sidebar-pages")
+        .getByRole("link", { name: "Logbook", exact: true })
+        .click();
       await expect.poll(() => failedRequests).toBe(1);
 
       const alert = page.getByRole("alert");

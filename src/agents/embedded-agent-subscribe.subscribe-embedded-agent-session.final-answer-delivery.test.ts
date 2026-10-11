@@ -6,6 +6,12 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
+import { processCompletionsStream } from "../../packages/ai/src/transports/openai-completions-stream.js";
+import {
+  createAssistantOutput,
+  makeCompletionsChunk,
+  makeCompletionsModel,
+} from "../../packages/ai/src/transports/openai-completions.test-support.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -634,35 +640,46 @@ describe("terminal provider phase resolution", () => {
     },
   );
 
-  it("withholds reasoning-associated completions text until terminal resolution", () => {
-    const onPartialReply = vi.fn();
-    const { emit, onBlockReply } = blockHarness({ onPartialReply, blockReplyBreak: "message_end" });
-    const message: TestAssistant = {
-      ...textMessage("Interim text.", "openai-completions"),
-      openclawDelivery: { textPhaseRequiresTerminal: true },
-    };
-    emit({ type: "message_start", message });
-    emitProviderUpdate(emit, message, {
-      type: "text_delta",
-      contentIndex: 0,
-      delta: "Interim text.",
-    });
-    expect(onPartialReply).not.toHaveBeenCalled();
-    const terminal = {
-      ...message,
-      content: [
-        textBlock("Interim text.", "commentary-0", "commentary"),
-        textBlock("Final text.", "final-0", "final_answer"),
-      ],
-    };
-    emitProviderUpdate(emit, terminal, {
-      type: "text_delta",
-      contentIndex: 1,
-      delta: "Final text.",
-    });
-    emit({ type: "message_end", message: terminal });
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(postedText(onBlockReply)).toBe("Final text.");
-  });
+  it.each([true, false])(
+    "streams completions live and delivers the confirmed final answer (interleaved: %s)",
+    async (interleaved) => {
+      const onPartialReply = vi.fn();
+      const { emit, subscription, onBlockReply } = setup({
+        onPartialReply,
+        blockReplyBreak: "message_end",
+      });
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      async function* chunks() {
+        if (interleaved) {
+          yield makeCompletionsChunk({ reasoning_content: "First thought." });
+        }
+        yield makeCompletionsChunk({ content: "Initial text." });
+        await subscription.waitForPendingEvents();
+        expect(onPartialReply).toHaveBeenCalledWith(
+          expect.objectContaining({ text: "Initial text." }),
+        );
+        expect(onBlockReply).not.toHaveBeenCalled();
+        yield makeCompletionsChunk({ reasoning_content: "Second thought." });
+        if (interleaved) {
+          yield makeCompletionsChunk({ content: "Final text." });
+          await subscription.waitForPendingEvents();
+          expect(onPartialReply.mock.calls.at(-1)?.[0].text).toContain("Final text.");
+          expect(onBlockReply).not.toHaveBeenCalled();
+        }
+        yield makeCompletionsChunk({}, "stop");
+      }
+      emit({ type: "message_start", message: output });
+      await processCompletionsStream(chunks(), output, model, {
+        push(event) {
+          emit({ type: "message_update", message: output, assistantMessageEvent: event });
+        },
+      });
+      emit({ type: "message_end", message: output });
+      await subscription.waitForPendingEvents();
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+        interleaved ? "Final text." : "Initial text.",
+      ]);
+    },
+  );
 });

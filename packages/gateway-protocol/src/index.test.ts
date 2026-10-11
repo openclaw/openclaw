@@ -99,6 +99,10 @@ describe("lazy protocol validators", () => {
     expectRejected(protocol.validateSkillsWorkshopRestoreParams, [
       { name: "deploy-notes", expectedRevisionHash: "a".repeat(64) },
     ]);
+    expectAccepted(protocol.validateSkillsWorkshopUndoParams, [
+      { agentId: "main", runId: "skill-workshop-review:1" },
+    ]);
+    expectRejected(protocol.validateSkillsWorkshopUndoParams, [{}, { runId: "" }, { name: "x" }]);
   });
 
   it("can still compile every exported protocol validator", () => {

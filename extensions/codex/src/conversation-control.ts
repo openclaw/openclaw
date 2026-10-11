@@ -5,8 +5,9 @@ import {
 } from "openclaw/plugin-sdk/model-session-runtime";
 import {
   getSessionEntryAsync,
-  patchSessionEntry,
+  prepareSessionEntryPatch,
   resolveStorePath,
+  type SessionEntrySourceAuthority,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   isCodexAppServerNativeAuthProfile,
@@ -134,7 +135,7 @@ export async function setCodexConversationModel(input: {
   config?: CodexAppServerBindingLookup["config"];
   storePath?: string;
   assertCurrent: () => void;
-  assertCommitAllowed?: () => void;
+  assertCommitAllowed?: SessionEntrySourceAuthority;
 }): Promise<string> {
   const params = { ...input };
   const model = params.model.trim();
@@ -178,7 +179,7 @@ export async function setCodexConversationModel(input: {
   if (identity.kind === "session" && identity.sessionKey) {
     // SessionEntry owns the desired model; retain the loaded binding until
     // lifecycle reconciliation can rotate its native generation safely.
-    const updated = await patchSessionEntry({
+    const updated = await prepareSessionEntryPatch({
       agentId: identity.agentId,
       storePath:
         params.storePath ??
@@ -186,8 +187,10 @@ export async function setCodexConversationModel(input: {
       sessionKey: identity.sessionKey,
       requireWriteSuccess: true,
       replaceEntry: true,
-      assertCommitAllowed,
-      update: (entry) => {
+      authority: params.assertCommitAllowed
+        ? { kind: "source", source: params.assertCommitAllowed }
+        : { kind: "host", assertCurrent: params.assertCurrent },
+      prepare: (entry) => {
         if (entry.sessionId !== identity.sessionId) {
           throw new Error("Codex session changed while applying the model selection.");
         }
@@ -262,6 +265,7 @@ export async function setCodexConversationPermissions(params: {
   config?: CodexAppServerBindingLookup["config"];
   storePath?: string;
   assertCurrent: () => void;
+  sourceAuthority?: SessionEntrySourceAuthority;
   session: { agentId: string; sessionId: string; sessionKey: string };
 }): Promise<string> {
   params.assertCurrent();
@@ -284,14 +288,16 @@ export async function setCodexConversationPermissions(params: {
     }
     return `Codex permissions: ${formatPermissionsMode(entry.permissionMode)}.`;
   }
-  const updated = await patchSessionEntry({
+  const updated = await prepareSessionEntryPatch({
     agentId: params.session.agentId,
     storePath,
     sessionKey: params.session.sessionKey,
     requireWriteSuccess: true,
     replaceEntry: true,
-    assertCommitAllowed: params.assertCurrent,
-    update: (entry) => {
+    authority: params.sourceAuthority
+      ? { kind: "source", source: params.sourceAuthority }
+      : { kind: "host", assertCurrent: params.assertCurrent },
+    prepare: (entry) => {
       if (entry.sessionId !== params.session.sessionId) {
         throw new Error("Codex session changed while applying the permission mode.");
       }

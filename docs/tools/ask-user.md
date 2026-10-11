@@ -115,8 +115,8 @@ answers ambiguous, the summary shows the saved reply text without splitting it.
 
 The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
 30 through 3600 seconds. This is a maximum human wait, subject to earlier agent
-run cancellation or the overall run timeout. A pending question does not extend
-an explicit run budget.
+run cancellation or the current model attempt's timeout. A pending question
+does not pause or extend that attempt's execution budget.
 
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.

@@ -1,5 +1,6 @@
 // Covers model runtime policy precedence and private QA runtime overrides.
-import { afterEach, describe, expect, it } from "vitest";
+import * as modelCatalogRefs from "@openclaw/model-catalog-core/model-catalog-refs";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
@@ -159,6 +160,33 @@ afterEach(() => {
 });
 
 describe("resolveModelRuntimePolicy", () => {
+  it("bounds reference parsing when resolving a large provider catalog", () => {
+    const models = Array.from({ length: 500 }, (_, index) =>
+      createModelConfig("openclaw", `ollama/org/model-${String(index).padStart(4, "0")}`),
+    );
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          ollama: { baseUrl: "http://127.0.0.1:11434", models },
+        },
+      },
+    };
+    using parse = vi.spyOn(modelCatalogRefs, "parseModelCatalogRef");
+
+    for (const model of models) {
+      expect(
+        resolveModelRuntimePolicyBase({
+          config,
+          provider: "ollama",
+          modelId: model.id.slice("ollama/".length),
+        }),
+      ).toEqual({ policy: { id: "openclaw" }, source: "model" });
+    }
+
+    // Projection must not parse the full provider inventory again for every model.
+    expect(parse.mock.calls.length).toBeLessThanOrEqual(models.length * 2);
+  });
+
   it.each(["inherited"])(
     "keeps wildcard policy when %s has no own enumerable runtime entry",
     (modelId) => {
@@ -316,6 +344,29 @@ describe("resolveModelRuntimePolicy", () => {
       policy: { id: "codex" },
       source: "model",
     });
+  });
+
+  it.each([
+    { modelId: "qwen-local", expected: { policy: { id: "codex" }, source: "model" } },
+    { modelId: "local", expected: {} },
+  ])("matches self-qualified provider rows only by their full model id ($modelId)", (params) => {
+    const config = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            models: [
+              createModelConfig("openclaw", "other/qwen-local"),
+              createModelConfig("codex", " vllm/qwen-local "),
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({ config, provider: "vllm", modelId: params.modelId }),
+    ).toEqual(params.expected);
   });
 
   it.each([

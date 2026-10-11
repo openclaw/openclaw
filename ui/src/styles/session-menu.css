@@ -187,7 +187,7 @@ wa-dropdown-item.people-menu__submenu::part(submenu) {
   overscroll-behavior: contain;
 }
 
-wa-dropdown-item.session-menu__settings::part(submenu) {
+wa-dropdown-item.session-menu__advanced::part(submenu) {
   width: min(340px, calc(100vw - 24px));
 }
 

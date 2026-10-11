@@ -217,14 +217,17 @@ export async function runCodexNodeExecServer(params: {
     const codexHome = path.join(dir, ".codex");
     // Codex canonicalizes CODEX_HOME during startup and rejects missing directories.
     await mkdir(codexHome, { recursive: true, mode: 0o700 });
-    const resolved = await resolveManagedCodexAppServerStartOptions({
-      transport: "stdio",
-      command: "codex",
-      commandSource: "managed",
-      managedCommandOrder: "package-first",
-      args: ["exec-server", "--listen", "stdio"],
-      headers: {},
-    });
+    const resolved = await resolveManagedCodexAppServerStartOptions(
+      {
+        transport: "stdio",
+        command: "codex",
+        commandSource: "managed",
+        managedCommandOrder: "package-first",
+        args: ["exec-server", "--listen", "stdio"],
+        headers: {},
+      },
+      { preferInstalled: false },
+    );
     const native = resolveManagedCodexNativeCommand(resolved.command);
     if (!native || isManagedCodexDesktopCommand(resolved.command)) {
       throw new Error("Codex node exec-server requires the pinned managed package binary.");

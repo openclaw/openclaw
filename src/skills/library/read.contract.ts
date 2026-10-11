@@ -32,6 +32,13 @@ export type SkillLibraryReadQueries = {
     output: Pick<SkillsLibraryReadResult, "entry" | "revisions"> & { manifestJson: string };
   };
   seed: { input: undefined; output: SkillLibrarySelection[] };
+  session: {
+    input: undefined;
+    output: {
+      selections: SkillLibrarySelection[];
+      presentation: SkillLibraryReadQueries["presentation"]["output"];
+    };
+  };
   change: {
     input: { current: readonly SkillLibrarySelection[]; params: SkillsLibraryActivateParams };
     output: SkillLibrarySelection[];

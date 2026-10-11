@@ -219,7 +219,11 @@ suite.define(() => {
         await page.getByRole("link", { name: "Plugins", exact: true }).click();
         await surface.waitFor({ state: "detached" });
         await gateway.resolveDeferred("x.allowlist.list", added);
-        await page.getByRole("link", { name: "X replies", exact: true }).click();
+        await page.getByRole("button", { name: "Pages", exact: true }).click();
+        await page
+          .locator(".sidebar-pages")
+          .getByRole("link", { name: "X replies", exact: true })
+          .click();
         await surface.getByText("@example_helper", { exact: true }).waitFor();
         expect(await surface.getByText("@example_new", { exact: true }).count()).toBe(0);
         expect(pageErrors).toEqual([]);

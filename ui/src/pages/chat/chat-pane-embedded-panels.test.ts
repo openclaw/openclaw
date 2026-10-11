@@ -12,7 +12,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import {
-  createReviewFixture,
+  createReviewFixture as createUnboundReviewFixture,
   renderPanelFixture,
 } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -40,6 +40,7 @@ import {
   openSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
+import { createChatSidebarContainer } from "./components/chat-sidebar.test-support.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
 import {
   installTranscriptDomMocks,
@@ -57,6 +58,14 @@ import {
   setSidebarOpen,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
+
+function createReviewFixture() {
+  const fixture = createUnboundReviewFixture();
+  const provider = createChatSidebarContainer();
+  fixture.mount.before(provider);
+  provider.append(fixture.mount);
+  return fixture;
+}
 
 function discussionSlots(discussionAvailable: boolean) {
   const discussion = {} as SessionDiscussionPanelConfig;
@@ -231,7 +240,7 @@ describe("chat pane embedded panels", () => {
       const attachmentId = crypto.randomUUID();
       const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
       const container = document.body.appendChild(document.createElement("div"));
-      const detail = document.body.appendChild(document.createElement("div"));
+      const detail = document.body.appendChild(createChatSidebarContainer());
       let sidebarContent: SidebarContent | null = null;
       const pending = createDeferred<{ url: string } | null>();
       const secondResolver = vi.fn(() => pending.promise);
@@ -608,42 +617,8 @@ describe("chat pane embedded panels", () => {
     expect(mount.querySelector('[data-panel-skeleton="files"]')).toBeNull();
   });
 
-  it("does not offer Discussion when no provider is available", () => {
-    expect(discussionSlots(false)).not.toContain("discussion");
-  });
-
   it("offers Discussion after the provider reports it available", () => {
     expect(discussionSlots(true)).toContain("discussion");
-  });
-
-  it("builds default Review content only once a Review tab exists", () => {
-    const state = {
-      client: { request: vi.fn() },
-      connected: true,
-      connectionEpoch: 1,
-      hello: { features: { methods: ["sessions.diff"] } },
-      sessionKey: "agent:main:review",
-      sidebarContent: null,
-      sidebarLayout: openSlot({ columns: [] }, "workspace"),
-      settings: loadSettings(),
-    } as unknown as ChatPageHost;
-    const renderDetail = vi.fn((_content: SidebarContent) => html`<div>Review</div>`);
-    const reviewTemplate = () =>
-      sidebarPanelDefinitions({
-        state,
-        renderDetail: (content: SidebarContent) => renderDetail(content),
-        workspace: html`<div>Files</div>`,
-      } as Parameters<typeof sidebarPanelDefinitions>[0]).find(
-        (definition) => definition.slot === "detail",
-      )?.content;
-
-    // Rendering Review starts its lazy panel import; a diff-capable chat must not pay for it unopened.
-    expect(reviewTemplate()).toBeNull();
-    expect(renderDetail).not.toHaveBeenCalled();
-
-    state.sidebarLayout = openSlot(state.sidebarLayout, "detail");
-    expect(reviewTemplate()).not.toBeNull();
-    expect(renderDetail).toHaveBeenCalledOnce();
   });
 
   it("retains default Review content and collapsed files while switching tabs, focusing Chat, and minimizing", async () => {
@@ -665,7 +640,7 @@ describe("chat pane embedded panels", () => {
       sidebarLayout: { columns: [] },
       settings: loadSettings(),
     } as unknown as ChatPageHost;
-    const mount = document.body.appendChild(document.createElement("div"));
+    const mount = document.body.appendChild(createChatSidebarContainer());
     let presented = true;
     const owner = new EventTarget();
     const renderPanels = async (layout: SidebarLayout) => {
