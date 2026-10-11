@@ -122,7 +122,7 @@ function CloudWorkersContent() {
               });
             }
           },
-          (error) => {
+          (error: unknown) => {
             if (!controller.signal.aborted && gateway.isCurrent(scope)) {
               setCatalog({ pending: false, error: formatUiError(error) });
             }
@@ -373,7 +373,7 @@ function CloudWorkersContent() {
               step={field === "readyWorkers" ? "1" : undefined}
               autocomplete="off"
               spellcheck="false"
-              prop:value={view.draft[field]}
+              value={view.draft[field]}
               disabled={saveState().busy}
               onInput={(event: Event) => patchDraft({ [field]: formControlValue(event) })}
             />
@@ -417,7 +417,7 @@ function CloudWorkersContent() {
               <select
                 class="settings-select"
                 aria-label={t("cloudWorkersPage.fields.operatingSystem")}
-                prop:value={view.draft.target}
+                value={view.draft.target}
                 disabled={saveState().busy}
                 onChange={(event) => {
                   const target = event.currentTarget.value;
@@ -466,7 +466,7 @@ function CloudWorkersContent() {
               placeholder={t("cloudWorkersPage.fields.setupPlaceholder")}
               autocomplete="off"
               spellcheck="false"
-              prop:value={view.draft.setup}
+              value={view.draft.setup}
               disabled={saveState().busy}
               onInput={(event) => patchDraft({ setup: event.currentTarget.value })}
             />
@@ -490,7 +490,7 @@ function CloudWorkersContent() {
               <select
                 class="settings-select"
                 aria-label={t("cloudWorkersPage.fields.warmImage")}
-                prop:value={view.draft.warmImage}
+                value={view.draft.warmImage}
                 disabled={saveState().busy}
                 onChange={(event) => {
                   const value = event.currentTarget.value;

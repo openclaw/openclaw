@@ -157,7 +157,7 @@ export const CloudWorkerRepositories = defineSolidBridge(
                 aria-label={t("cloudWorkersPage.repositoryIdentity")}
                 autocomplete="off"
                 spellcheck="false"
-                prop:value={editorDraft().repository}
+                value={editorDraft().repository}
                 disabled={!editable()}
                 onInput={(event: Event) => {
                   if (event.currentTarget instanceof HTMLInputElement) {
@@ -173,7 +173,7 @@ export const CloudWorkerRepositories = defineSolidBridge(
               <select
                 class="settings-select"
                 aria-label={t("cloudWorkersPage.repositoryProfile")}
-                prop:value={editorDraft().profileId}
+                value={editorDraft().profileId}
                 disabled={!editable()}
                 onChange={(event: Event) => {
                   if (event.currentTarget instanceof HTMLSelectElement) {
@@ -255,12 +255,13 @@ export const CloudWorkerRepositories = defineSolidBridge(
                   min="0"
                   step="1"
                   aria-label={t("cloudWorkersPage.preparedPool")}
-                  prop:value={view.poolDraft ?? readCloudWorkerPreparedPool(config())}
+                  value={view.poolDraft ?? readCloudWorkerPreparedPool(config())}
                   disabled={!editable()}
                   onInput={(event: Event) => {
                     if (event.currentTarget instanceof HTMLInputElement) {
+                      const value = event.currentTarget.value;
                       setView((draft) => {
-                        draft.poolDraft = event.currentTarget.value;
+                        draft.poolDraft = value;
                       });
                       configSave.update({ error: null });
                     }

@@ -137,7 +137,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                 <button
                   class="btn"
                   title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
-                  aria-expanded={String(view().createOpen)}
+                  aria-expanded={view().createOpen ? "true" : "false"}
                   disabled={!view().operatorAccess.canAdmin || view().operation === "create"}
                   onClick={() => model.toggleCreate()}
                 >
@@ -163,7 +163,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                     type="text"
                     aria-label={t("worktrees.repo")}
                     disabled={view().operation === "create"}
-                    prop:value={view().createRepoRoot}
+                    value={view().createRepoRoot}
                     onChange={(event) => {
                       model.update({
                         createRepoRoot: event.currentTarget.value,
@@ -183,7 +183,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                     aria-label={t("worktrees.name")}
                     disabled={view().operation === "create"}
                     placeholder={t("worktrees.namePlaceholder")}
-                    prop:value={view().createName}
+                    value={view().createName}
                     onInput={(event) => model.update({ createName: event.currentTarget.value })}
                   />
                 }
@@ -199,7 +199,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                       disabled={view().operation === "create"}
                       placeholder={t("worktrees.baseBranchPlaceholder")}
                       list="worktrees-create-branches"
-                      prop:value={view().createBaseRef}
+                      value={view().createBaseRef}
                       onInput={(event) =>
                         model.update({ createBaseRef: event.currentTarget.value })
                       }

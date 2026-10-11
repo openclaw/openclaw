@@ -1,4 +1,3 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { For } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SnapshotProfile } from "./cloud-worker-snapshot-rows.tsx";
@@ -6,7 +5,7 @@ import type { SnapshotProfile } from "./cloud-worker-snapshot-rows.tsx";
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-modal-dialog": SolidJSX.HTMLAttributes<HTMLElement> & {
+      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
         label: string;
         "onModal-cancel"?: (event: Event) => void;
       };
@@ -49,7 +48,7 @@ export function SnapshotBuildDialog(props: {
           <span>{t("cloudWorkersPage.snapshots.profile")}</span>
           <select
             class="settings-select"
-            prop:value={props.profile}
+            value={props.profile}
             disabled={props.preparing}
             onChange={(event) => props.onProfile(event.currentTarget.value)}
           >
@@ -72,7 +71,7 @@ export function SnapshotBuildDialog(props: {
           <span>{t("cloudWorkersPage.snapshots.repository")}</span>
           <select
             class="settings-select"
-            prop:value={props.project}
+            value={props.project}
             disabled={props.preparing || props.repositoriesLoading}
             onChange={(event) => props.onProject(event.currentTarget.value)}
           >

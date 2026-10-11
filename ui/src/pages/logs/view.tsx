@@ -41,10 +41,6 @@ function formatLogTime(value: string | null | undefined, formatTime: (ms: number
 }
 
 export function LogsView(props: LogsProps) {
-  const formatTime = createMemo(() => {
-    t("gatewayLogs.title");
-    return createMsFormatter({ timeStyle: "short" });
-  });
   const needle = createMemo(() => normalizeLowercaseStringOrEmpty(props.filterText));
   const filtered = createMemo(() =>
     props.entries.filter((entry) => {
@@ -59,6 +55,14 @@ export function LogsView(props: LogsProps) {
       ).includes(needle());
     }),
   );
+  // A visible-row update also picks up system timezone changes without a formatter per row.
+  const display = createMemo(() => {
+    t("gatewayLogs.title");
+    return {
+      entries: filtered(),
+      formatTime: createMsFormatter({ timeStyle: "short" }),
+    };
+  });
   const exportFileLabel = createMemo(() =>
     needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible",
   );
@@ -99,7 +103,7 @@ export function LogsView(props: LogsProps) {
             <input
               class="settings-input"
               aria-label={t("gatewayLogs.filter")}
-              prop:value={props.filterText}
+              value={props.filterText}
               onInput={(event) => props.onFilterTextChange(event.currentTarget.value)}
               placeholder={t("gatewayLogs.searchPlaceholder")}
             />
@@ -112,7 +116,7 @@ export function LogsView(props: LogsProps) {
                 <label class={`chip log-chip ${level}`}>
                   <input
                     type="checkbox"
-                    prop:checked={props.levelFilters[level]}
+                    checked={props.levelFilters[level]}
                     onChange={(event) => props.onLevelToggle(level, event.currentTarget.checked)}
                   />
                   <span>{level}</span>
@@ -138,14 +142,17 @@ export function LogsView(props: LogsProps) {
           class="log-stream"
           role="region"
           aria-label={t("gatewayLogs.title")}
-          tabIndex={0}
+          tabindex={0}
           onScroll={(event) => props.onScroll(event)}
         >
           <Show when={props.status.hasLoaded} fallback={props.loading ? <LoadingState /> : null}>
-            <For each={filtered()} fallback={<SettingsEmpty message={t("gatewayLogs.empty")} />}>
+            <For
+              each={display().entries}
+              fallback={<SettingsEmpty message={t("gatewayLogs.empty")} />}
+            >
               {(entry) => (
                 <div class="log-row">
-                  <div class="log-time mono">{formatLogTime(entry.time, formatTime())}</div>
+                  <div class="log-time mono">{formatLogTime(entry.time, display().formatTime)}</div>
                   <div class={["log-level", entry.level ?? ""]}>{entry.level ?? ""}</div>
                   <div class="log-subsystem mono">{entry.subsystem ?? ""}</div>
                   <div class="log-message mono">{entry.message ?? entry.raw}</div>

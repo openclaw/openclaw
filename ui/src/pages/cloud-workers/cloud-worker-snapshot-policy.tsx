@@ -125,7 +125,7 @@ export const CloudWorkerSnapshotPolicy = defineSolidBridge(
                 <input
                   class="settings-input"
                   aria-label={t(`cloudWorkersPage.snapshots.${key}`)}
-                  prop:value={values()[key]}
+                  value={values()[key]}
                   disabled={!canSave()}
                   onInput={(event) => edit({ [key]: event.currentTarget.value })}
                 />
@@ -139,7 +139,7 @@ export const CloudWorkerSnapshotPolicy = defineSolidBridge(
             <select
               class="settings-select"
               aria-label={t("cloudWorkersPage.snapshots.keepPrevious")}
-              prop:value={values().keepPrevious}
+              value={values().keepPrevious}
               disabled={!canSave()}
               onChange={(event) =>
                 edit({ keepPrevious: event.currentTarget.value === "1" ? "1" : "0" })

@@ -182,7 +182,7 @@ describe("WorktreesPage lifecycle", () => {
     expect(mutationButtons).toHaveLength(3);
     expect(mutationButtons.every((button) => button.disabled)).toBe(true);
 
-    page.model.loadCreateBranches();
+    await page.model.loadCreateBranches();
     await page.model.removeWorktree(record);
     expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.branches");
     expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.remove");
@@ -756,7 +756,7 @@ describe("WorktreesPage lifecycle", () => {
         ),
       );
 
-      page.model.loadCreateBranches();
+      await page.model.loadCreateBranches();
 
       await waitForSolid(() => expect(page.model.createBranches).toEqual(["main"]));
       expect(page.model.createBaseRef).toBe("");
@@ -783,8 +783,8 @@ describe("WorktreesPage lifecycle", () => {
     page.mount();
     await waitForList(request);
 
-    page.model.loadCreateBranches();
-    page.model.loadCreateBranches();
+    void page.model.loadCreateBranches();
+    void page.model.loadCreateBranches();
     await waitForSolid(() => expect(page.model.createBranches).toEqual(["main"]));
     expect(page.model.createBaseRef).toBe("release");
 
