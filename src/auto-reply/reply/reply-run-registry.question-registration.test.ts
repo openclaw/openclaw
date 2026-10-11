@@ -76,7 +76,7 @@ it("leaves hidden-run image input for visible followup when question registratio
         );
         const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(key);
         expect(target).toBeDefined();
-        const attempt = beginReplyMessageInjectionTarget(target!, run.prompt, {
+        const attempt = await beginReplyMessageInjectionTarget(target!, run.prompt, {
           isInboundUserMessage: true,
           toolAuthorityFingerprint: fingerprint,
           images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],

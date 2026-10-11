@@ -203,27 +203,24 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         const key = matrixCredentialsStoreKey(source.accountId);
         const stored = await store.lookup(key);
-        if (isMatrixCredentialRevocation(stored, source.accountId)) {
-          changes.push(
-            `Archived revoked Matrix credential legacy source for account ${source.accountId}`,
-          );
-          await archiveLegacyStateSource({
+        const archiveSource = () =>
+          archiveLegacyStateSource({
             filePath: source.filePath,
             label: "Matrix credentials",
             changes,
             warnings,
           });
+        if (isMatrixCredentialRevocation(stored, source.accountId)) {
+          changes.push(
+            `Archived revoked Matrix credential legacy source for account ${source.accountId}`,
+          );
+          await archiveSource();
           continue;
         }
         const existing = normalizeMatrixStoredCredentials(stored, source.accountId);
         if (existing && JSON.stringify(existing) !== JSON.stringify(credentials)) {
           changes.push(`Kept existing Matrix credentials for account ${source.accountId}`);
-          await archiveLegacyStateSource({
-            filePath: source.filePath,
-            label: "Matrix credentials",
-            changes,
-            warnings,
-          });
+          await archiveSource();
           continue;
         }
         if (!existing) {
@@ -247,12 +244,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           continue;
         }
         changes.push(`Migrated Matrix credentials for account ${source.accountId} to SQLite`);
-        await archiveLegacyStateSource({
-          filePath: source.filePath,
-          label: "Matrix credentials",
-          changes,
-          warnings,
-        });
+        await archiveSource();
       }
       return { changes, warnings };
     },
@@ -261,7 +253,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "matrix-inbound-dedupe-to-claimable-dedupe",
     label: "Matrix inbound dedupe markers",
     async detectLegacyState(params) {
-      await collectMatrixInboundDedupeSources(params.stateDir);
+      const sources = await collectMatrixInboundDedupeSources(params.stateDir);
+      if (
+        params.config.channels?.matrix === undefined &&
+        sources.status === "complete" &&
+        sources.sqliteRoots.length === 0
+      ) {
+        return null;
+      }
       return (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env))
         ? null
         : { preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"] };

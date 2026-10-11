@@ -27,16 +27,17 @@ type WorkerGatewayTools =
 
 const mocks = vi.hoisted(() => {
   return {
-    createTools: vi.fn<WorkerGatewayTools>(() => []),
+    createTools: vi.fn<WorkerGatewayTools>(async () => []),
     createGatewayTools: undefined as GatewayToolFactory | undefined,
     prepareNodeArtifacts: undefined as Parameters<
       typeof createWorkerEnvironmentService
     >[0]["prepareNodeArtifacts"],
     service: {
+      setHumanPresence: vi.fn(async () => {}),
       get: vi.fn<WorkerEnvironmentService["get"]>(),
       ready: vi.fn<WorkerEnvironmentService["ready"]>(async () => {}),
       stop: vi.fn<WorkerEnvironmentService["stop"]>(async () => {}),
-    } satisfies Pick<WorkerEnvironmentService, "get" | "ready" | "stop">,
+    } satisfies Pick<WorkerEnvironmentService, "get" | "ready" | "stop" | "setHumanPresence">,
   };
 });
 

@@ -16,12 +16,6 @@ export type ConfigSearchCriteria = {
   tags: string[];
 };
 
-type ConfigFieldMeta = {
-  label: string;
-  help?: string;
-  tags: string[];
-};
-
 type ConfigSearchTextMatcher = (value: string, query: string) => boolean;
 
 export function hasConfigSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
@@ -53,7 +47,7 @@ export function resolveConfigFieldMeta(
   path: Array<string | number>,
   schema: JsonSchema,
   hints: ConfigUiHints,
-): ConfigFieldMeta {
+) {
   const hint = localizedHintForPath(path, hints);
   const fallbackSegment = path.findLast((segment) => typeof segment === "string") ?? path.at(-1);
   const label = hint?.label ?? schema.title ?? humanize(String(fallbackSegment));

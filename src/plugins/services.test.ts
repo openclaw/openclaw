@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
-import { createRegistry } from "./services.test-support.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
 
 const mockedLogger = vi.hoisted(() => ({
@@ -36,11 +35,12 @@ import { queuePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute, withPluginHttpRouteRegistry } from "./http-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { listPluginServiceHealthFailures } from "./service-health.js";
+import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "./services.js";
 import {
-  PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+  createRegistry,
   startPluginServices,
   type PluginServicesHandle,
-} from "./services.js";
+} from "./services.test-support.js";
 
 type TrustedExporterInternalDiagnostics = NonNullable<
   OpenClawPluginServiceContext["internalDiagnostics"]
@@ -505,9 +505,7 @@ describe("startPluginServices", () => {
       const handle = await start(registry);
       try {
         if (phase === "reload") {
-          await expect(handle.reload({}, serviceIds)).rejects.toThrow(
-            "plugin service reload startup failed",
-          );
+          await expect(handle.reload({}, serviceIds)).resolves.toBeUndefined();
         }
         expect(listPluginServiceHealthFailures(registry)).toContainEqual(
           expect.objectContaining({ serviceId: "retry-service", error: failure.message }),
@@ -515,7 +513,7 @@ describe("startPluginServices", () => {
         await handle.reload({}, serviceIds);
         expect(order.slice(-2)).toEqual(["dependency", "dependent"]);
         expect(startService).toHaveBeenCalledTimes(failAt + 1);
-        expect(siblingStart).toHaveBeenCalledTimes(2);
+        expect(siblingStart).toHaveBeenCalledTimes(phase === "reload" ? 3 : 2);
         expect(listPluginServiceHealthFailures(registry)).toEqual([]);
       } finally {
         await handle.stop();

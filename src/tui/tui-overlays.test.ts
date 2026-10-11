@@ -14,7 +14,6 @@ class DummyComponent implements Component {
 describe("createOverlayHandlers", () => {
   it("routes overlays through the TUI overlay stack", () => {
     const showOverlay = vi.fn();
-    const hideOverlay = vi.fn();
     const setFocus = vi.fn();
     const handle = {
       hide: vi.fn(),
@@ -33,10 +32,6 @@ describe("createOverlayHandlers", () => {
         showOverlay(component);
         return handle;
       },
-      hideOverlay: () => {
-        open = false;
-        hideOverlay();
-      },
       hasOverlay: () => open,
       setFocus,
     };
@@ -50,8 +45,8 @@ describe("createOverlayHandlers", () => {
     expect(openOverlay(overlay)).toBe(handle);
     expect(showOverlay).toHaveBeenCalledWith(overlay);
 
-    closeOverlay();
-    expect(hideOverlay).toHaveBeenCalledTimes(1);
+    closeOverlay(handle);
+    expect(handle.hide).toHaveBeenCalledTimes(1);
     expect(setFocus).not.toHaveBeenCalled();
   });
 
@@ -109,21 +104,5 @@ describe("createOverlayHandlers", () => {
 
     closeOverlay(upperOverlay);
     expect(host.setFocus).toHaveBeenCalledWith(fallback);
-  });
-
-  it("restores focus when closing without an overlay", () => {
-    const setFocus = vi.fn();
-    const host = {
-      showOverlay: vi.fn(),
-      hideOverlay: vi.fn(),
-      hasOverlay: () => false,
-      setFocus,
-    };
-    const fallback = new DummyComponent();
-
-    const { closeOverlay } = createOverlayHandlers(host, fallback);
-    closeOverlay();
-
-    expect(setFocus).toHaveBeenCalledWith(fallback);
   });
 });

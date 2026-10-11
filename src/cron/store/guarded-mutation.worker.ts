@@ -6,8 +6,10 @@ import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
+import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
 import {
   deleteCronJobRowInDatabase,
   fingerprintCronJobRows,
@@ -23,10 +25,6 @@ import {
 import { retireCronRunTriggerStateInDatabase } from "./run-receipt-trigger-state.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import { loadCronRuntimeAuthorities } from "./runtime-authority-store.js";
-import {
-  prepareCronRuntimeMutation,
-  retainCronRuntimeMutationOutcome,
-} from "./runtime-mutation.worker.js";
 import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
 import { CronJobsStoreChangedError } from "./save-error.js";
 import {
@@ -118,10 +116,9 @@ export function mutateCronJobsInWorker(
       ({ db }) => {
         try {
           const receiptSchema = prepareCronRunReceiptWriteSchema(db);
-          const preparation = prepareCronRuntimeMutation("cron.mutateJobs", input.nonce, {
-            deletionBlocked:
-              input.agentId !== undefined && isAgentDeletionBlocked(input.agentId, {}, db),
-          });
+          if (input.agentId !== undefined && isAgentDeletionBlocked(input.agentId, {}, db)) {
+            throw new Error(describeUnavailableCronAgent(input.agentId));
+          }
           if (input.preconditionJob || input.expectedJob || input.replacement) {
             const current = loadCronMutationStore(db, input.storeKey);
             if (
@@ -174,7 +171,7 @@ export function mutateCronJobsInWorker(
             receiptSchema,
             hooks: {
               beforeWrite: () => {
-                applyCronReceiptMutation(db, input, preparation.nowMs);
+                applyCronReceiptMutation(db, input, input.snapshot.nowMs);
               },
             },
           };
@@ -201,8 +198,11 @@ export function mutateCronJobsInWorker(
               hooks,
             );
           }
-          const outcome = loadCronMutationStore(db, input.storeKey);
-          return retainCronRuntimeMutationOutcome("cron.mutateJobs", db, input.nonce, outcome);
+          const outcome = {
+            ...loadCronMutationStore(db, input.storeKey),
+            names: readCronJobNamesInDatabase(db, undefined, input.storeKey),
+          };
+          return { outcome };
         } catch (error) {
           if (
             error instanceof CronJobsStoreChangedError ||
@@ -226,7 +226,6 @@ export function mutateCronJobsInWorker(
     }
     // Typed refusal is safe only after rollback; uncertain commits retain generic failure.
     return {
-      nonce: input.nonce,
       mutationRefusal:
         transactionRefusal instanceof CronRunReceiptConflictError
           ? { kind: "receipt-conflict", receipt: transactionRefusal.receipt }

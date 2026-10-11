@@ -201,12 +201,11 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
     if (evt.key !== "Tab") {
       return;
     }
-    if (evt.shiftKey && document.activeElement === check) {
+    const from = evt.shiftKey ? check : yes;
+    const to = evt.shiftKey ? yes : check;
+    if (document.activeElement === from) {
       evt.preventDefault();
-      yes.focus();
-    } else if (!evt.shiftKey && document.activeElement === yes) {
-      evt.preventDefault();
-      check.focus();
+      to.focus();
     }
   }
   cancel.addEventListener("click", () => dismissPopover({ restoreFocus: true }));

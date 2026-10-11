@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
@@ -63,6 +64,32 @@ child.once("message", () => process.exit(17));
     stderr: "drained stderr\n",
   });
 });
+
+it.for(["node", "current"] as const)(
+  "builds source worker arguments for the selected %s runtime",
+  async (runtime) => {
+    const script = join(tempDirs.make("openclaw-node-script-runtime-"), "worker.ts");
+    writeFileSync(
+      script,
+      `enum Answer { value = 42 }
+console.log(JSON.stringify({ answer: Answer.value, bun: Boolean(process.versions.bun), args: process.argv.slice(2) }));
+`,
+    );
+    const result = await runNodeScript(
+      (workerArgv) => [...workerArgv(pathToFileURL(script)), "worker-argument"],
+      process.env,
+      5_000,
+      { executable: runtime === "current" ? process.execPath : undefined },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      answer: 42,
+      bun: runtime === "current" && Boolean(process.versions.bun),
+      args: ["worker-argument"],
+    });
+  },
+);
 
 it.for(["at limit", "stdout overflow", "stderr overflow"])(
   "preserves independent 2 MiB output failure boundaries: %s",

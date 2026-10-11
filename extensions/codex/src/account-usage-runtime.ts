@@ -20,19 +20,17 @@ export async function handleCodexAccountUsage({
   signal,
   hasCurrentClientAuthority,
 }: GatewayRequestHandlerOptions): Promise<void> {
+  const invalid = (message: string) =>
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
   const parsed = paramsSchema.safeParse(params);
   if (!parsed.success) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "Expected agentId and profileId."),
-    );
+    invalid("Expected agentId and profileId.");
     return;
   }
   const { agentId, profileId } = parsed.data;
   const config = context.getRuntimeConfig();
   if (!listAgentIds(config).includes(agentId)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Unknown agent."));
+    invalid("Unknown agent.");
     return;
   }
   try {
@@ -42,11 +40,7 @@ export async function handleCodexAccountUsage({
     const store = structuredClone(readStore());
     const credential = store.profiles[profileId];
     if (!credential || credential.provider !== "openai" || credential.type === "api_key") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Select a saved Codex subscription login."),
-      );
+      invalid("Select a saved Codex subscription login.");
       return;
     }
     const assertCurrent = () => {

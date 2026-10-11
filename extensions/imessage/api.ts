@@ -1,4 +1,3 @@
-// Imessage API module exposes the plugin public contract.
 export { imessagePlugin } from "./src/channel.js";
 export { imessageSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -8,7 +7,10 @@ export {
   type ResolvedIMessageAccount,
   resolveIMessageAccount,
 } from "./src/accounts.js";
-export { createIMessageConversationBindingManager } from "./src/conversation-bindings.js";
+export {
+  createIMessageConversationBindingManager,
+  createIMessageConversationBindingManagerV2,
+} from "./src/conversation-bindings.js";
 export {
   matchIMessageAcpConversation,
   normalizeIMessageAcpConversationId,

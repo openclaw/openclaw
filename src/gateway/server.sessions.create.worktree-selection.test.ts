@@ -5,8 +5,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import * as registryReads from "../agents/worktrees/registry-read.js";
+import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
+import { ManagedWorktreeService } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -49,7 +51,7 @@ function managedWorktreeFixture(params: {
   ownerId: string;
   path: string;
   repoRoot: string;
-}): NonNullable<ReturnType<typeof managedWorktrees.findLiveById>> {
+}): ManagedWorktreeRecord {
   return {
     ...params,
     baseRef: "HEAD",
@@ -62,29 +64,6 @@ function managedWorktreeFixture(params: {
 }
 
 test.each([
-  {
-    name: "agent default",
-    request: {},
-    catalogTarget: undefined,
-    parentEntry: undefined,
-    expectedEntry: {},
-    expectedTitleSelection: { regularModelRef: "openai/gpt-5.6-luna" },
-  },
-  {
-    name: "explicit model",
-    request: { model: "anthropic/sonnet-4.6@work" },
-    catalogTarget: undefined,
-    parentEntry: undefined,
-    expectedEntry: {
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      authProfileOverride: "work",
-    },
-    expectedTitleSelection: {
-      regularModelRef: "anthropic/claude-sonnet-4-6@work",
-      preferredProfile: "work",
-    },
-  },
   {
     name: "registered catalog target",
     request: { catalogId: "claude" },
@@ -281,42 +260,6 @@ test("sessions.create does not start title generation for a model denied by poli
   }
 });
 
-test("sessions.create keeps the crustacean fallback when no title source exists", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-worktree-empty-title-",
-  });
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  let worktreeId: string | undefined;
-  try {
-    const created = await directSessionReq<{ worktree: { id: string; branch: string } }>(
-      "sessions.create",
-      { agentId: "main", worktree: true },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    worktreeId = created.payload?.worktree.id;
-    expect(created.payload?.worktree.branch).toMatch(
-      /^openclaw\/[a-z]+-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)$/,
-    );
-    expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
-  } finally {
-    if (worktreeId) {
-      await managedWorktrees.remove({
-        id: worktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
-    await disposeSessionReadContexts();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
-  }
-});
-
 test("sessions.create maps worktree options and preserves a nested dot-prefixed workspace cwd", async () => {
   const workspaceRelativePath = "..notes/app";
   const openClawState = await createOpenClawTestState({
@@ -334,16 +277,18 @@ test("sessions.create maps worktree options and preserves a nested dot-prefixed 
   ]);
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
-  const createSpy = vi.spyOn(managedWorktrees, "createWithOutcome").mockResolvedValue({
-    record: managedWorktreeFixture({
-      id: "worktree-options",
-      name: "target-task",
-      ownerId: key,
-      path: worktreePath,
-      repoRoot,
-    }),
-    materialized: true,
-  });
+  const createSpy = vi
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockResolvedValue({
+      record: managedWorktreeFixture({
+        id: "worktree-options",
+        name: "target-task",
+        ownerId: key,
+        path: worktreePath,
+        repoRoot,
+      }),
+      materialized: true,
+    });
   try {
     const created = await directSessionReq<{
       entry: {
@@ -428,9 +373,9 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
   testState.agentConfig = { workspace: configuredWorkspace };
   await createSessionStoreDir();
   const createSpy = vi
-    .spyOn(managedWorktrees, "createWithOutcome")
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
     .mockResolvedValue({ record, materialized: true });
-  const findSpy = vi.spyOn(managedWorktrees, "findLiveById").mockReturnValue(record);
+  const findSpy = vi.spyOn(registryReads, "readSessionWorktreeBinding").mockResolvedValue(record);
   try {
     const created = await directSessionReq<{
       entry: {

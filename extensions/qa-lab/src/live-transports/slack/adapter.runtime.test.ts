@@ -1,4 +1,3 @@
-// Qa Lab tests cover Slack live adapter message reconciliation.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -242,6 +241,10 @@ async function nativeAdapterFixture(
     driver: prepared?.channelE2e as QaChannelE2eDriver,
     outputDir,
     requests,
+    deletedMessageIds: () =>
+      requests
+        .filter((request) => request.method === "chat.delete")
+        .map((request) => request.body.get("ts")),
     expire(signal: AbortSignal | undefined) {
       const deadline = signal && deadlines.get(signal);
       expect(deadline, "The dispatched HTTP request must have an owned deadline").toBeDefined();
@@ -259,6 +262,26 @@ async function nativeAdapterFixture(
   };
 }
 
+function busObservationFixture() {
+  const state = createQaBusState();
+  const busMessageIds = new Map<string, string>();
+  const base = {
+    accountId: "sut",
+    busMessageIds,
+    logicalConversationId: "C123",
+    observedText: new Map<string, string>(),
+    sutUserId: "U123",
+    messages: {
+      addInboundMessage: (input: Parameters<typeof state.addInboundMessage>[0]) =>
+        state.addInboundMessage(input),
+      addOutboundMessage: (input: Parameters<typeof state.addOutboundMessage>[0]) =>
+        state.addOutboundMessage(input),
+      editMessage: (input: Parameters<typeof state.editMessage>[0]) => state.editMessage(input),
+    },
+  };
+  return { state, base };
+}
+
 describe("Slack live adapter reconciliation", () => {
   it("refuses missing async capture before acquiring credentials or contacting Slack", async () => {
     mocks.captureAvailable = false;
@@ -270,7 +293,7 @@ describe("Slack live adapter reconciliation", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("reuses a read-only capture reader for the exact candidate runtime environment", async () => {
+  it("does not acquire a capture reader before a capture is requested", async () => {
     const adapter = await createSlackQaTransportAdapter({
       messages: {
         addInboundMessage: vi.fn(),
@@ -294,8 +317,7 @@ describe("Slack live adapter reconciliation", () => {
     await adapter.cleanup?.();
     await adapter.cleanupAfterGatewayStop?.();
 
-    expect(mocks.createCaptureReader).toHaveBeenCalledOnce();
-    expect(mocks.createCaptureReader).toHaveBeenCalledWith({ env: runtimeEnv });
+    expect(mocks.createCaptureReader).not.toHaveBeenCalled();
     expect(mocks.acquireCaptureStore).not.toHaveBeenCalled();
     expect(mocks.captureRelease).not.toHaveBeenCalled();
     expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
@@ -329,22 +351,7 @@ describe("Slack live adapter reconciliation", () => {
   });
 
   it("records streamed updates to the same Slack timestamp as bus edits", async () => {
-    const state = createQaBusState();
-    const busMessageIds = new Map<string, string>();
-    const observedText = new Map<string, string>();
-    const messages: Parameters<typeof testing.recordSlackObservedMessage>[0]["messages"] = {
-      addInboundMessage: (input) => state.addInboundMessage(input),
-      addOutboundMessage: (input) => state.addOutboundMessage(input),
-      editMessage: (input) => state.editMessage(input),
-    };
-    const base = {
-      accountId: "sut",
-      busMessageIds,
-      logicalConversationId: "C123",
-      messages,
-      observedText,
-      sutUserId: "U123",
-    };
+    const { state, base } = busObservationFixture();
 
     await testing.recordSlackObservedMessage({
       ...base,
@@ -365,32 +372,23 @@ describe("Slack live adapter reconciliation", () => {
   });
 
   it("maps observed thread replies to the root bus message", async () => {
-    const state = createQaBusState();
+    const { state, base } = busObservationFixture();
     const root = state.addInboundMessage({
       accountId: "sut",
       conversation: { id: "C123", kind: "channel" },
       senderId: "U456",
       text: "root",
     });
-    const busMessageIds = new Map([["123.000001", root.id]]);
+    base.busMessageIds.set("123.000001", root.id);
 
     await testing.recordSlackObservedMessage({
-      accountId: "sut",
-      busMessageIds,
-      logicalConversationId: "C123",
+      ...base,
       message: {
         text: "thread reply",
         thread_ts: "123.000001",
         ts: "123.000002",
         user: "U123",
       },
-      messages: {
-        addInboundMessage: (input) => state.addInboundMessage(input),
-        addOutboundMessage: (input) => state.addOutboundMessage(input),
-        editMessage: (input) => state.editMessage(input),
-      },
-      observedText: new Map(),
-      sutUserId: "U123",
     });
 
     expect(state.getSnapshot().messages.at(-1)).toMatchObject({
@@ -402,6 +400,25 @@ describe("Slack live adapter reconciliation", () => {
 });
 
 describe("Slack agent E2E request settlement", () => {
+  it("captures final writes after the Gateway invalidates an earlier reader", async () => {
+    const f = await nativeAdapterFixture(() => undefined);
+    await f.driver.send({ text: "owned before restart" });
+    const previousReader = mocks.createCaptureReader.mock.results[0]?.value;
+    previousReader.getSessionEvents = async () => {
+      throw new Error("STATE_DATABASE_READ_ADMISSION_INVALIDATED");
+    };
+    mocks.createCaptureReader.mockReturnValue({
+      getSessionEvents: async () => [],
+      readBlob: async () => null,
+    });
+
+    await expect(f.adapter.captureBeforeGatewayCleanup?.()).resolves.toBeUndefined();
+    await f.cleanup();
+    expect((await f.artifact()).ownedMessages).toEqual([
+      expect.objectContaining({ deleted: true }),
+    ]);
+  });
+
   it("retains uncertain final Gateway writes while cleaning only known-owned receipts", async () => {
     const capturedEvents: Array<Record<string, unknown>> = [];
     const f = await nativeAdapterFixture(() => undefined, capturedEvents);
@@ -436,11 +453,7 @@ describe("Slack agent E2E request settlement", () => {
         detail: "response-not-captured",
       }),
     );
-    expect(
-      f.requests
-        .filter((request) => request.method === "chat.delete")
-        .map((request) => request.body.get("ts")),
-    ).toEqual([owned.id]);
+    expect(f.deletedMessageIds()).toEqual([owned.id]);
     expect(mocks.credentialRelease).toHaveBeenCalledOnce();
   });
 
@@ -516,11 +529,7 @@ describe("Slack agent E2E request settlement", () => {
     f.expire(signal);
     await cleaned;
 
-    expect(
-      f.requests
-        .filter((request) => request.method === "chat.delete")
-        .map((request) => request.body.get("ts")),
-    ).toEqual([second.id, first.id]);
+    expect(f.deletedMessageIds()).toEqual([second.id, first.id]);
     const artifact = await f.artifact();
     expect(artifact.ownedMessages).toEqual([
       expect.objectContaining({
@@ -556,11 +565,7 @@ describe("Slack agent E2E request settlement", () => {
     await f.cleanup();
 
     expect(f.requests.filter((request) => request.method === "chat.postMessage")).toHaveLength(1);
-    expect(
-      f.requests
-        .filter((request) => request.method === "chat.delete")
-        .map((request) => request.body.get("ts")),
-    ).toEqual(["7.000000"]);
+    expect(f.deletedMessageIds()).toEqual(["7.000000"]);
     expect((await f.artifact()).ownedMessages).toEqual([
       expect.objectContaining({
         message: expect.objectContaining({ id: "7.000000" }),

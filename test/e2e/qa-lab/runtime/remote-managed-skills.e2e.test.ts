@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createNodeWorkspaceTestTransport,
@@ -11,8 +10,11 @@ import { requireGit } from "../../../../src/agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../../../../src/agents/worktrees/service.js";
 import { ensureSkillSnapshot } from "../../../../src/auto-reply/reply/session-updates.js";
 import type { SessionEntry } from "../../../../src/config/sessions/types.js";
-import { createTestPluginApi } from "../../../../src/plugin-sdk/plugin-test-api.js";
-import type { OpenClawPluginApi, OpenClawPluginService } from "../../../../src/plugins/types.js";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "../../../../src/plugin-sdk/plugin-test-api.js";
+import type { OpenClawPluginApi } from "../../../../src/plugins/types.js";
 import { prepareWorkspaceSkills } from "../../../../src/skills/loading/workspace-skill-loader.js";
 import { closeSkillsWatchers } from "../../../../src/skills/runtime/refresh.js";
 import {
@@ -27,25 +29,6 @@ import {
 } from "../../../../src/state/openclaw-state-db.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
-vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("../../../../src/plugin-sdk/agent-workspace-runtime.js")>();
-  return {
-    ...original,
-    resolveWorkspaceWorkerArgv(kind: "memory" | "skills") {
-      const argv = original.resolveWorkspaceWorkerArgv(kind);
-      const register =
-        "import { register } from " +
-        JSON.stringify(import.meta.resolve("tsx/esm/api")) +
-        "; register({ tsconfig: " +
-        JSON.stringify(fileURLToPath(new URL("../../../../tsconfig.json", import.meta.url))) +
-        " });";
-      return argv[0] === "--import"
-        ? ["--import", "data:text/javascript," + encodeURIComponent(register), ...argv.slice(2)]
-        : argv;
-    },
-  };
-});
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await closeSkillsWatchers(true);
@@ -100,7 +83,12 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
     const worktree =
       kind === "empty"
         ? await worktrees.createEmpty(owner)
-        : await worktrees.create({ ...owner, repoRoot: source, runSetupScript: false });
+        : await worktrees.create({
+            ...owner,
+            repoRoot: source,
+            baseRef: "HEAD",
+            runSetupScript: false,
+          });
     await writeSkill({
       dir: path.join(remote, "skills", "agent-only"),
       name: "agent-only",
@@ -127,7 +115,7 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
       agents: { entries: { main: { workspace: local, agentDir: path.join(stateDir, "agent") } } },
       plugins: { enabled: false, entries: { "file-transfer": { config: pluginConfig } } },
     };
-    let service!: OpenClawPluginService;
+    let service!: Parameters<OpenClawPluginApi["registerService"]>[0];
     const api = createTestPluginApi({
       registrationMode: "full",
       config,
@@ -142,7 +130,9 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
     registerNodeWorkspaces(api);
     const transport = createNodeWorkspaceTestTransport(api, remote);
     const requests: Array<{ operation: string; request: string }> = [];
+    const scheduler = createTestPluginServiceScheduler();
     const context = {
+      scheduler,
       config,
       logger: api.logger,
       stateDir,
@@ -242,8 +232,13 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
         cause: { message: expect.stringContaining("denied by the node file read policy") },
       });
     } finally {
-      await service.stop?.(context);
-      await closeSkillsWatchers(true);
+      scheduler.beginClose();
+      try {
+        await service.stop?.(context);
+      } finally {
+        await scheduler.stop();
+        await closeSkillsWatchers(true);
+      }
     }
     expect(() => getAgentWorkspaceAccess(local)).toThrow("stopped or not ready");
     await expect(

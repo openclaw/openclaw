@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
@@ -47,21 +48,6 @@ export type WebPushCapabilityRuntime = {
   run: (action: WebPushCapabilityAction) => Promise<void>;
   dispose: () => void;
 };
-
-function swReady(): Promise<ServiceWorkerRegistration> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(
-      () => reject(new Error("Service worker not ready (timed out)")),
-      SW_READY_TIMEOUT,
-    );
-  });
-  return Promise.race([navigator.serviceWorker.ready, timeoutPromise]).finally(() => {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
-  });
-}
 
 function pushManagerFor(registration: ServiceWorkerRegistration | undefined): PushManager | null {
   const manager = registration?.pushManager;
@@ -298,7 +284,13 @@ export async function subscribeToWebPush(
     throw new Error(`Notification permission ${permission}`);
   }
 
-  const registration = await swReady();
+  const registration = await raceWithTimeout(
+    () => navigator.serviceWorker.ready,
+    SW_READY_TIMEOUT,
+    () => {
+      throw new Error("Service worker not ready (timed out)");
+    },
+  );
   const pushManager = requirePushManager(registration);
   const vapidPublicKey = await resolveGatewayVapidPublicKey(client);
   const existingSubscription = await pushManager.getSubscription();

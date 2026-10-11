@@ -1,14 +1,12 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -27,10 +25,8 @@ import {
 } from "./session-accessor.sqlite-deletion-plan.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import {
-  deleteLifecycleTargetRows,
-  readSessionEntryCount,
-} from "./session-accessor.sqlite-entry-store.js";
+import { deleteLifecycleTargetRows } from "./session-accessor.sqlite-entry-store.js";
+import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-history-recency.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
   deleteMaterializedSessionStatePlans,
@@ -41,7 +37,6 @@ import type {
   SessionDeletionValidation,
   ReclamationDatabaseOptions,
   ReclamationDeleteParams,
-  SessionEntryMaintenanceInput,
   SessionEntryRemovalPlan,
   SqliteSessionReclamationCallbacks,
   SqliteSessionReclamationPlan,
@@ -49,16 +44,8 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { reclaimSessionMaintenanceInTransaction } from "./session-accessor.sqlite-maintenance-transaction.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
-import { commitProjectedSessionEntryRemovalsInDatabase } from "./session-accessor.sqlite-projection-state.js";
-import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
+import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-
-type SessionBoardCleanupDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  "board_tabs" | "board_widgets"
-> & {
-  sqlite_schema: { name: string | null; type: string };
-};
 
 const reclamationQueue = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSessionReclamationQueue"),
@@ -83,35 +70,6 @@ export function resolveSessionReclamationDatabaseOptions(
     },
     path: resolveOpenClawAgentSqlitePath(options),
   };
-}
-
-function deleteSessionBoardRows(
-  database: OpenClawAgentDatabase,
-  sessionKeys: readonly string[],
-): void {
-  const keys = [...new Set(sessionKeys)];
-  if (keys.length === 0) {
-    return;
-  }
-  const db = getNodeSqliteKysely<SessionBoardCleanupDatabase>(database.db);
-  const tables = new Set(
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("sqlite_schema")
-        .select("name")
-        .where("type", "=", "table")
-        .where("name", "in", ["board_tabs", "board_widgets"]),
-    ).rows.map((row) => row.name),
-  );
-  if (!tables.has("board_tabs") || !tables.has("board_widgets")) {
-    return;
-  }
-  executeSqliteQuerySync(
-    database.db,
-    db.deleteFrom("board_widgets").where("session_key", "in", keys),
-  );
-  executeSqliteQuerySync(database.db, db.deleteFrom("board_tabs").where("session_key", "in", keys));
 }
 
 export function* prepareHistoricalGenerationDeletions(params: {
@@ -186,17 +144,14 @@ function reclaimSqliteRowsInTransaction(
       { operationLabel: "session.deletion.plan" },
     );
   }
-  if (plan.kind === "lifecycle-projection-plan" || plan.kind === "lifecycle-projection-count") {
+  if (plan.kind === "lifecycle-projection-plan") {
     return runOpenClawAgentWriteTransaction(
       (database) => {
         callbacks.beforeMutation?.();
-        const result: SqliteSessionReclamationResult =
-          plan.kind === "lifecycle-projection-plan"
-            ? {
-                kind: plan.kind,
-                value: projectSessionEntryLifecycleRemovalsInDatabase(database, plan.input),
-              }
-            : { kind: plan.kind, value: readSessionEntryCount(database) };
+        const result: SqliteSessionReclamationResult = {
+          kind: plan.kind,
+          value: projectSessionEntryLifecycleRemovalsInDatabase(database, plan.input),
+        };
         callbacks.onCommit?.(database);
         return result;
       },
@@ -208,11 +163,35 @@ function reclaimSqliteRowsInTransaction(
     const value = runSqliteSessionDeletionTransaction(
       (database) => {
         callbacks.beforeMutation?.();
-        const result = commitProjectedSessionEntryRemovalsInDatabase(
+        const progressCardResetKeys: string[] = [];
+        const projectionReconcileSessionIds: string[] = [];
+        const result = commitPreparedSessionEntryLifecycleMutationInDatabase(
           database,
           plan.input,
           plan.materializedPlans,
+          {
+            resetScope: {
+              agentId: plan.agentId,
+              path: database.path,
+              env: plan.databaseOptions.env,
+            },
+            onResetBoundary: ({
+              sessionKey,
+              sessionId,
+              progressCardReset,
+              projectionNeedsReconcile,
+            }) => {
+              if (progressCardReset) {
+                progressCardResetKeys.push(sessionKey);
+              }
+              if (projectionNeedsReconcile) {
+                projectionReconcileSessionIds.push(sessionId);
+              }
+            },
+          },
         );
+        result.progressCardResetKeys = progressCardResetKeys;
+        result.projectionReconcileSessionIds = projectionReconcileSessionIds;
         callbacks.onCommit?.(database, { kind: plan.kind, value: result });
         return result;
       },
@@ -226,6 +205,7 @@ function reclaimSqliteRowsInTransaction(
   }
   if (
     plan.kind === "maintenance-plan" ||
+    plan.kind === "maintenance-age" ||
     plan.kind === "maintenance-finalize" ||
     plan.kind === "maintenance-statistics"
   ) {
@@ -263,7 +243,6 @@ function reclaimSqliteRowsInTransaction(
             sessionKeys,
           );
         }
-        deleteSessionBoardRows(transactionDb, sessionKeys);
         callbacks.onCommit?.(transactionDb);
         return {
           archivedTranscripts,
@@ -334,7 +313,6 @@ function reclaimSqliteRowsInTransaction(
         plan.materializedPlans,
         protectedSessionIds,
         excludedSessionKeys,
-        undefined,
         diskBudget,
       );
       const db = getSessionKysely(transactionDb.db);
@@ -367,29 +345,13 @@ function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOp
 }
 
 // The live assertion belongs to runSqliteSessionReclamation, never its cloneable plan.
-function prepareReclamationDeleteParams({
+export function prepareReclamationDeleteParams({
   commitGuard: _commitGuard,
   env: _env,
   descendantRunBasis: _descendantRunBasis,
   ...params
 }: DeleteSessionEntryLifecycleParams): ReclamationDeleteParams {
   return params;
-}
-
-export function createSessionEntryReclamationPlan(params: {
-  databaseOptions: OpenClawAgentDatabaseOptions;
-  deleteParams: DeleteSessionEntryLifecycleParams;
-  materializedPlans: MaterializedSessionStateDeletePlan[];
-  preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
-}): Extract<SqliteSessionReclamationPlan, { kind: "entry" }> {
-  return {
-    descendantRunBasis: params.deleteParams.descendantRunBasis,
-    databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
-    deleteParams: prepareReclamationDeleteParams(params.deleteParams),
-    kind: "entry",
-    materializedPlans: params.materializedPlans,
-    preparedTargetSnapshot: params.preparedTargetSnapshot,
-  };
 }
 
 export function createLifecycleArtifactReclamationPlan(params: {
@@ -404,18 +366,6 @@ export function createLifecycleArtifactReclamationPlan(params: {
     entries: params.entries,
     kind: "lifecycle-artifacts",
     materializedPlans: params.materializedPlans,
-  };
-}
-
-export function createSessionMaintenancePlanningOperation(params: {
-  databaseOptions: OpenClawAgentDatabaseOptions;
-  input: SessionEntryMaintenanceInput;
-}): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-plan" }> {
-  return {
-    databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
-    input: params.input,
-    kind: "maintenance-plan",
-    materializedPlans: [],
   };
 }
 
@@ -437,44 +387,11 @@ export function createSessionMaintenanceFinalizationOperation(params: {
 }): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-finalize" }> {
   return {
     ...params,
+    entries: params.entries.map((removal) => ({
+      ...removal,
+      expectedEntry: removal.expectedEntry && { ...removal.expectedEntry },
+    })),
     databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     kind: "maintenance-finalize",
-  };
-}
-
-export function createHistoryEvictionReclamationPlan(params: {
-  databaseOptions: OpenClawAgentDatabaseOptions;
-  diskBudget: { preserveRecentMs?: number | null };
-  materializedPlans: MaterializedSessionStateDeletePlan[];
-  protectedSessionIds: ReadonlySet<string>;
-  sessionId: string;
-}): Extract<SqliteSessionReclamationPlan, { kind: "history-eviction" }> {
-  return {
-    databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
-    diskBudget: params.diskBudget,
-    kind: "history-eviction",
-    materializedPlans: params.materializedPlans,
-    protectedSessionIds: [...params.protectedSessionIds],
-    sessionId: params.sessionId,
-  };
-}
-
-export function createHistoricalGenerationReclamationPlan(params: {
-  databaseOptions: OpenClawAgentDatabaseOptions;
-  deleteParams: DeleteSessionEntryLifecycleParams;
-  materializedPlans: MaterializedSessionStateDeletePlan[];
-  preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
-  protectedSessionIds: ReadonlySet<string>;
-  sessionId: string;
-}): Extract<SqliteSessionReclamationPlan, { kind: "historical-generation" }> {
-  return {
-    descendantRunBasis: params.deleteParams.descendantRunBasis,
-    databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
-    deleteParams: prepareReclamationDeleteParams(params.deleteParams),
-    kind: "historical-generation",
-    materializedPlans: params.materializedPlans,
-    preparedTargetSnapshot: params.preparedTargetSnapshot,
-    protectedSessionIds: [...params.protectedSessionIds],
-    sessionId: params.sessionId,
   };
 }

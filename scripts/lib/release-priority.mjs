@@ -23,7 +23,7 @@ const RELEASE_PRIORITY_WORKFLOWS = Object.freeze([
   "Maintainer Command Reactions",
 ]);
 
-export function isReleaseBranch(name) {
+function isReleaseBranch(name) {
   return /^release(?:-ci|-publish)?\//u.test(String(name ?? ""));
 }
 

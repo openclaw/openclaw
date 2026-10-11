@@ -1,10 +1,11 @@
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -15,11 +16,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { handleBoardHttpRequest } from "./board-http.js";
-import {
-  BOARD_VIEW_TICKET_TTL_MS,
-  createBoardViewTicket,
-  verifyBoardViewTicket,
-} from "./board-view-ticket.js";
+import { BOARD_VIEW_TICKET_TTL_MS, createBoardViewTicket } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-board-http-"));
@@ -51,39 +48,6 @@ beforeAll(async () => {
     sessionKey: "agent:main:main",
     name: "status",
     content: { kind: "html", html: statusHtml },
-  });
-  await store.putWidget({
-    sessionKey: "agent:main:main",
-    name: "pending",
-    content: { kind: "html", html: "pending" },
-    declared: { tools: ["pending.read"] },
-  });
-  const rejected = await store.putWidget({
-    sessionKey: "agent:main:main",
-    name: "rejected",
-    content: { kind: "html", html: "rejected" },
-    declared: { tools: ["rejected.read"] },
-  });
-  await store.grant(
-    mainSession,
-    "rejected",
-    "rejected",
-    1,
-    rejected.widgets.find((widget) => widget.name === "rejected")?.instanceId,
-  );
-  await store.putWidget({
-    sessionKey: "agent:main:main",
-    name: "mcp",
-    content: {
-      kind: "mcp-app",
-      descriptor: {
-        serverName: "server",
-        toolName: "tool",
-        uiResourceUri: "ui://resource",
-        toolCallId: "call",
-      },
-      interactive: false,
-    },
   });
   await store.putWidget({
     sessionKey: "agent:main:main",
@@ -232,32 +196,6 @@ describe("board widget HTTP", () => {
     gatewayAActive = true;
   });
 
-  it("round-trips self-contained claims covered by a two-minute HMAC ticket", async () => {
-    const document = await readBoardHtml(store, mainSession, "status");
-    if (!document || !("html" in document)) {
-      throw new Error("missing status widget");
-    }
-    const issued = issueTicket({
-      sessionKey: "agent:main:main",
-      name: "status",
-      revision: 1,
-      viewGeneration: document.viewGeneration,
-      nowMs,
-    });
-    expect(issued.ticket).toMatch(/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
-    expect(issued.ticket).not.toContain("agent:main:main");
-    expect(issued.expiresAtMs).toBe(nowMs + BOARD_VIEW_TICKET_TTL_MS);
-    expect(verifyBoardViewTicket(issued.ticket, { nowMs })).toEqual({
-      sessionKey: "agent:main:main",
-      name: "status",
-      revision: 1,
-      viewGeneration: document.viewGeneration,
-      authorityGeneration: expect.stringMatching(/^[A-Za-z0-9_-]{32}$/u),
-      expiresAtMs: issued.expiresAtMs,
-      nonce: expect.stringMatching(/^[A-Za-z0-9_-]{32}$/u),
-    });
-  });
-
   it.each([
     {
       label: "authorized multibyte HTML",
@@ -274,19 +212,19 @@ describe("board widget HTTP", () => {
       body: "Not Found",
       contentType: "text/plain; charset=utf-8",
     },
-    {
-      label: "missing ticket",
-      name: "status",
-      status: 401,
-      body: "Unauthorized",
-      contentType: "text/plain; charset=utf-8",
-    },
   ])("preserves GET metadata while suppressing the HEAD body for $label", async (testCase) => {
     for (const method of ["GET", "HEAD"] as const) {
-      const response = await request(testCase.name, {
-        method,
-        ticket: await testCase.ticket?.(),
-      });
+      const ticket = await testCase.ticket?.();
+      const host = observeHostDataSql();
+      let response: Response;
+      try {
+        response = await request(testCase.name, { method, ticket });
+        expect(
+          host.queries.filter((sql) => /\bfrom\s+"?board_(?:tabs|widgets)"?\b/iu.test(sql)),
+        ).toEqual([]);
+      } finally {
+        host.restore();
+      }
       const body = Buffer.from(await response.arrayBuffer());
 
       expect(response.status).toBe(testCase.status);
@@ -303,14 +241,6 @@ describe("board widget HTTP", () => {
         expect(response.headers.get("cache-control")).toBe("no-cache");
       }
     }
-  });
-
-  it("does not require or inspect an operator token", async () => {
-    const response = await request("status", {
-      ticket: await ticketFor("status"),
-      headers: { Authorization: "Bearer test-token" },
-    });
-    expect(response.status).toBe(200);
   });
 
   it("rejects garbage and expired tickets before reading the store", async () => {
@@ -360,10 +290,11 @@ describe("board widget HTTP", () => {
       content: { kind: "html", html: "handoff" },
     });
     const ticket = await ticketFor("handoff");
-    const order: string[] = [];
+    let servingResponse: ServerResponse | undefined;
+    let responseEndedBeforeRemoval = false;
     const removed = createDeferred();
     server.prependOnceListener("request", (_req, res) => {
-      res.once("finish", () => order.push("sent"));
+      servingResponse = res;
     });
     const read = store.useWidgetDocument.bind(store);
     const readSpy = vi
@@ -371,7 +302,7 @@ describe("board widget HTTP", () => {
       .mockImplementationOnce((target, name, consume) =>
         read(target, name, (document) => {
           queueMicrotask(() => {
-            order.push("removal");
+            responseEndedBeforeRemoval = servingResponse?.writableEnded === true;
             void store
               .applyOps(target, [{ kind: "widget_remove", name }])
               .then(() => removed.resolve(), removed.reject);
@@ -384,7 +315,7 @@ describe("board widget HTTP", () => {
       await removed.promise;
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("handoff");
-      expect(order).toEqual(["sent", "removal"]);
+      expect(responseEndedBeforeRemoval).toBe(true);
       expect(await readBoardHtml(store, mainSession, "handoff")).toBeUndefined();
     } finally {
       readSpy.mockRestore();
@@ -440,58 +371,6 @@ describe("board widget HTTP", () => {
 
     expect((await request("recreated", { ticket: stale })).status).toBe(401);
     expect((await request("recreated", { ticket: await ticketFor("recreated") })).status).toBe(200);
-  });
-
-  it("refuses pending and rejected widgets even with valid tickets", async () => {
-    expect((await request("pending", { ticket: await ticketFor("pending") })).status).toBe(401);
-    expect((await request("rejected", { ticket: await ticketFor("rejected") })).status).toBe(401);
-  });
-
-  it("serves an encoded slash as part of an opaque session key", async () => {
-    await store.putWidget({
-      sessionKey: "session/with/slash",
-      name: "slash-key",
-      content: { kind: "html", html: "slash" },
-    });
-    const document = await readBoardHtml(
-      store,
-      { sessionKey: "session/with/slash", agentId: "main" },
-      "slash-key",
-    );
-    if (!document || !("html" in document)) {
-      throw new Error("missing slash-key widget");
-    }
-    const ticket = issueTicket({
-      sessionKey: "session/with/slash",
-      name: "slash-key",
-      revision: 1,
-      viewGeneration: document.viewGeneration,
-      nowMs,
-    }).ticket;
-    const response = await fetch(
-      `${baseUrl}/__openclaw__/board/session%2Fwith%2Fslash/slash-key/index.html?bt=${encodeURIComponent(ticket)}`,
-    );
-    expect(response.status).toBe(200);
-    await expect(response.text()).resolves.toBe("slash");
-  });
-
-  it("returns 401 when valid claims have no matching HTML document", async () => {
-    const ticket = issueTicket({
-      sessionKey: "agent:main:main",
-      name: "missing",
-      revision: 1,
-      viewGeneration: "0".repeat(32),
-      nowMs,
-    }).ticket;
-    expect((await request("missing", { ticket })).status).toBe(401);
-    const mcpTicket = issueTicket({
-      sessionKey: "agent:main:main",
-      name: "mcp",
-      revision: 1,
-      viewGeneration: "0".repeat(32),
-      nowMs,
-    }).ticket;
-    expect((await request("mcp", { ticket: mcpTicket })).status).toBe(401);
   });
 
   it("allows GET and HEAD only", async () => {

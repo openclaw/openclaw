@@ -190,11 +190,10 @@ export function claimSessionSuggestionDispatchInDatabase(
     return null;
   }
   const now = params.now ?? Date.now();
-  const claimTtlMs = params.claimTtlMs ?? SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS;
   if (
     row.dispatch_token &&
     row.dispatch_started_at !== null &&
-    now - row.dispatch_started_at < claimTtlMs
+    now - row.dispatch_started_at < SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS
   ) {
     return { kind: "busy" };
   }
@@ -251,19 +250,6 @@ export function finalizeSessionSuggestionClaimInDatabase(
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("session_suggestions")
-      .select(["id", "author_id", "author_label", "text", "created_at", "state"])
-      .where("session_key", "=", sessionKey)
-      .where("id", "=", params.id)
-      .where("state", "=", "pending")
-      .where("dispatch_token", "=", params.token),
-  );
-  if (!row) {
-    return null;
-  }
-  const updated = executeSqliteQuerySync(
-    database.db,
-    db
       .updateTable("session_suggestions")
       .set({
         state: params.state,
@@ -274,11 +260,12 @@ export function finalizeSessionSuggestionClaimInDatabase(
       .where("session_key", "=", sessionKey)
       .where("id", "=", params.id)
       .where("state", "=", "pending")
-      .where("dispatch_token", "=", params.token),
+      .where("dispatch_token", "=", params.token)
+      .returning(["id", "author_id", "author_label", "text", "created_at", "state"]),
   );
-  if ((updated.numAffectedRows ?? 0n) === 0n) {
+  if (!row) {
     return null;
   }
   pruneResolvedSessionSuggestions(database, sessionKey);
-  return { ...toSuggestion(row), state: params.state };
+  return toSuggestion(row);
 }

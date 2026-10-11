@@ -141,10 +141,6 @@ export function clearPendingClearedSubmittedDraft(state: ChatComposerState, key:
   }
 }
 
-function isExplicitComposerInsertion(event: InputEvent): boolean {
-  return event.inputType === "insertFromPaste" || event.inputType === "insertFromDrop";
-}
-
 export function suppressStaleSubmittedDraftReplay(
   target: HTMLTextAreaElement,
   event: InputEvent,
@@ -153,10 +149,13 @@ export function suppressStaleSubmittedDraftReplay(
   state: ChatComposerState,
 ): boolean {
   const pending = state.pendingClearedSubmittedDraft;
-  if (!pending) {
-    return false;
-  }
-  if (target.value !== pending.value || hasInputIntent || isExplicitComposerInsertion(event)) {
+  if (
+    !pending ||
+    target.value !== pending.value ||
+    hasInputIntent ||
+    event.inputType === "insertFromPaste" ||
+    event.inputType === "insertFromDrop"
+  ) {
     return false;
   }
 

@@ -82,11 +82,11 @@ struct ChatSessionSidebarModelTests {
             sessions[index].category = "Work"
         }
         var order = ChatSessionSidebarModel.ObservedOrder()
-        order.observe(sessions.map(\.key))
+        order.observe(sessions.map(OpenClawChatSessionSidebarData.identity))
         // A transient paging gap and a reordered refresh must not reverse tied rows.
-        order.observe(["older"])
+        order.observe([OpenClawChatSessionSidebarData.identity(self.entry(key: "older"))])
         sessions.reverse()
-        order.observe(sessions.map(\.key))
+        order.observe(sessions.map(OpenClawChatSessionSidebarData.identity))
         for (sort, expected) in [
             (ChatSessionSidebarModel.Sort.created, ["newer", "older", "z-tie", "a-tie", "missing"]),
             (.updated, ["missing", "older", "newer", "a-tie", "z-tie"]),

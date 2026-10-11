@@ -37,13 +37,17 @@
   background: var(--accent-subtle);
 }
 
-.portals-rail__title {
+.portals-rail__title,
+.portals-preview__url span:first-child {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portals-rail__title {
   color: var(--text-strong);
   font-size: 0.86rem;
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .portals-rail__port,
@@ -97,12 +101,6 @@
   color: var(--text);
 }
 
-.portals-preview__url span:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .portals-preview__url svg {
   width: 14px;
   height: 14px;
@@ -128,18 +126,23 @@
   min-height: 480px;
 }
 
-.portals-preview__notice {
-  min-height: 480px;
+.portals-preview__notice,
+.portals-empty {
   display: grid;
   place-content: center;
   justify-items: center;
   gap: var(--space-3);
-  padding: var(--space-6);
   color: var(--muted);
   text-align: center;
 }
 
-.portals-preview__notice-title {
+.portals-preview__notice {
+  min-height: 480px;
+  padding: var(--space-6);
+}
+
+.portals-preview__notice-title,
+.portals-empty__title {
   color: var(--text);
   font-size: 0.95rem;
   font-weight: 650;
@@ -171,19 +174,7 @@
 
 .portals-empty {
   min-height: min(620px, calc(100vh - 190px));
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: var(--space-3);
   padding: var(--space-6) var(--space-4);
-  color: var(--muted);
-  text-align: center;
-}
-
-.portals-empty__title {
-  color: var(--text);
-  font-size: 0.95rem;
-  font-weight: 650;
 }
 
 .portals-empty__prompts {

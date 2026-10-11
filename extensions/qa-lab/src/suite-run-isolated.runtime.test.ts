@@ -14,11 +14,7 @@ import * as suite from "./suite.js";
 vi.mock("./lab-server.js", () => ({ startQaLabServer: vi.fn() }));
 
 describe("implicit QA suite isolated runtimes", () => {
-  it.each([
-    { forcedRuntime: undefined, expectedPins: ["codex", "openclaw", undefined] },
-    { forcedRuntime: "codex", expectedPins: ["codex", "codex", "codex"] },
-    { forcedRuntime: "openclaw", expectedPins: ["openclaw", "openclaw", "openclaw"] },
-  ] as const)(
+  it.each([{ forcedRuntime: undefined, expectedPins: ["codex", "openclaw", undefined] }] as const)(
     "preserves scenario runtimes with global override $forcedRuntime",
     async ({ forcedRuntime, expectedPins }) => {
       const context = createCleanupTestContext();

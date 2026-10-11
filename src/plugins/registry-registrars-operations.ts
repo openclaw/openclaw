@@ -6,6 +6,7 @@ import {
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
+  uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import {
   normalizeCommandDescriptorName,
@@ -36,6 +37,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
+  OpenClawPluginServiceV2,
 } from "./types.js";
 
 function isOfficialCodexPluginRecord(
@@ -161,7 +163,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       .filter(
         (descriptor): descriptor is OpenClawPluginCliRootCommandDescriptor => descriptor !== null,
       );
-    const commands = normalizeUniqueStringEntries(
+    const commands = uniqueStrings(
       [...(opts?.commands ?? []), ...descriptors.map((descriptor) => descriptor.name)]
         .map((command) => normalizeCommandRoot(command, "command"))
         .filter((command): command is string => command !== null),
@@ -175,12 +177,12 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     const commandPathSet = new Set(commandPaths);
     const existing = registry.cliRegistrars.find((entry) =>
       entry.commands
-        .map((command) => [...(entry.parentPath ?? []), command].join(" "))
+        .map((command) => [...entry.parentPath, command].join(" "))
         .some((commandPath) => commandPathSet.has(commandPath)),
     );
     if (existing) {
       const existingCommandPaths = new Set(
-        existing.commands.map((command) => [...(existing.parentPath ?? []), command].join(" ")),
+        existing.commands.map((command) => [...existing.parentPath, command].join(" ")),
       );
       const overlap = commandPaths.find((commandPath) => existingCommandPaths.has(commandPath));
       reportRegistrationError(
@@ -366,7 +368,10 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     return undefined;
   };
 
-  const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
+  const registerService = (
+    record: PluginRecord,
+    service: OpenClawPluginService | OpenClawPluginServiceV2,
+  ) => {
     const id = resolveServiceRegistrationId(record, service, "service");
     if (!id) {
       return;

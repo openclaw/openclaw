@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { runPreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
@@ -6,7 +14,11 @@ import type { MSTeamsTurnContext } from "../sdk-types.js";
 // oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
-import { createMessageHandlerDeps } from "./message-handler.test-support.js";
+import {
+  buildChannelActivity,
+  channelConversationId,
+  createMessageHandlerDeps,
+} from "./message-handler.test-support.js";
 
 const dispatch = getRuntimeApiMockState().dispatchReplyWithBufferedBlockDispatcher;
 const graph = vi.hoisted(() => ({
@@ -90,6 +102,19 @@ function threadConfig(groupAllowFrom = ["alice-aad"]): MSTeamsConfig {
     requireMention: false,
   };
 }
+function channelReply(id: string): MSTeamsTurnContext {
+  return activity(
+    buildChannelActivity({
+      id,
+      replyToId: "nested-reply",
+      conversation: {
+        id: `${channelConversationId};messageid=${parentId}`,
+        conversationType: "channel",
+      },
+    }),
+  );
+}
+const channelSessionKey = `agent:main:msteams:channel:${channelConversationId}`;
 function quote(senderName = "Alice", body = "Quoted body", id = "") {
   return [
     {
@@ -133,28 +158,183 @@ describe("msteams message authorization and supplemental context", () => {
     graph.fetchChatMessageText.mockReset();
   });
 
-  it.each([false, true])(
-    "does not widen an empty group sender allowlist through pairing or route entries (route=%s)",
-    async (route) => {
-      const { handler, conversationStore, readAllowFromStore } = setup({
-        dmPolicy: "pairing",
-        allowFrom: [],
-        groupPolicy: "allowlist",
-        groupAllowFrom: [],
-        ...(route
-          ? {
-              teams: {
-                team123: { channels: { "19:channel@thread.tacv2": { requireMention: false } } },
-              },
-            }
-          : {}),
-      });
-      await handler(activity({ channelData: route ? { team: { id: "team123" } } : {} }));
-      expect(readAllowFromStore).not.toHaveBeenCalled();
-      expect(conversationStore.upsert).not.toHaveBeenCalled();
-      expect(dispatch).not.toHaveBeenCalled();
+  it.each(["revoked", "disabled", "removed"])(
+    "rechecks a %s named account after reload without blocking a sibling",
+    async (change) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          msteams: {
+            enabled: true,
+            accounts: {
+              support: { appId: "test-app", dmPolicy: "allowlist", allowFrom: ["alice-aad"] },
+              sales: { appId: "test-app", dmPolicy: "allowlist", allowFrom: ["alice-aad"] },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      try {
+        const resolveRoute = ({ accountId = "default" }: { accountId?: string | null }) => ({
+          sessionKey: "agent:main:msteams:" + accountId + ":direct:alice-aad",
+          agentId: "main",
+          accountId,
+        });
+        const support = createMessageHandlerDeps(cfg, {
+          accountId: "support",
+          resolveAgentRoute: resolveRoute,
+        });
+        const supportHandler = createMSTeamsMessageHandler(support.deps);
+        const sales = createMessageHandlerDeps(cfg, {
+          accountId: "sales",
+          resolveAgentRoute: resolveRoute,
+        });
+        const salesHandler = createMSTeamsMessageHandler(sales.deps);
+        const incoming = () =>
+          activity({ conversation: { id: "19:shared-dm", conversationType: "personal" } });
+        await supportHandler(incoming());
+        expect(dispatch.mock.calls.at(-1)?.[0].ctx.AccountId).toBe("support");
+        dispatch.mockClear();
+        const accounts = { ...cfg.channels?.msteams?.accounts };
+        if (change === "removed") {
+          delete accounts.support;
+        } else {
+          accounts.support =
+            change === "disabled"
+              ? { ...accounts.support, enabled: false }
+              : { ...accounts.support, allowFrom: ["another-user"] };
+        }
+        setRuntimeConfigSnapshot({
+          channels: {
+            msteams: {
+              ...cfg.channels?.msteams,
+              accounts,
+            },
+          },
+        });
+        await supportHandler(incoming());
+        expect(dispatch).not.toHaveBeenCalled();
+        await salesHandler(incoming());
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0]?.[0].ctx.AccountId).toBe("sales");
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
     },
   );
+
+  it.each(["team", "channel"])(
+    "rejects a %s revoked during thread preparation without blocking a sibling account",
+    async (revoked) => {
+      const account: MSTeamsConfig = {
+        appId: "test-app",
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { team123: { channels: { "19:channel@thread.tacv2": {} } } },
+      };
+      const cfg: OpenClawConfig = {
+        channels: { msteams: { enabled: true, accounts: { support: account, sales: account } } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const resolveRoute = ({ accountId = "default" }: { accountId?: string | null }) => ({
+        sessionKey: "agent:main:msteams:" + accountId + ":channel:19:channel@thread.tacv2",
+        agentId: "main",
+        accountId,
+      });
+      const support = createMessageHandlerDeps(cfg, {
+        accountId: "support",
+        resolveAgentRoute: resolveRoute,
+      });
+      const supportHandler = createMSTeamsMessageHandler(support.deps);
+      const sales = createMessageHandlerDeps(cfg, {
+        accountId: "sales",
+        resolveAgentRoute: resolveRoute,
+      });
+      const salesHandler = createMSTeamsMessageHandler(sales.deps);
+      const started = createDeferred<void>();
+      const replies = createDeferred<GraphThreadMessage[]>();
+      graph.fetchThreadReplies.mockImplementationOnce(() => {
+        started.resolve();
+        return replies.promise;
+      });
+      const pending = supportHandler(threadActivity());
+      try {
+        await started.promise;
+        expect(support.conversationStore.upsert).toHaveBeenCalled();
+        expect(dispatch).not.toHaveBeenCalled();
+        setRuntimeConfigSnapshot({
+          channels: {
+            msteams: {
+              ...cfg.channels?.msteams,
+              accounts: {
+                support: {
+                  ...account,
+                  teams:
+                    revoked === "team"
+                      ? { anotherTeam: { channels: { "19:channel@thread.tacv2": {} } } }
+                      : { team123: { channels: { "19:other-channel@thread.tacv2": {} } } },
+                },
+                sales: account,
+              },
+            },
+          },
+        });
+        replies.resolve([]);
+        await pending;
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(support.deps.log.info).toHaveBeenCalledWith(
+          "dropping message (dispatch-time account authorization changed)",
+        );
+        await salesHandler(threadActivity());
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0]?.[0].ctx.AccountId).toBe("sales");
+      } finally {
+        replies.resolve([]);
+        await pending;
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
+  it("does not dispatch one account's admitted sender through a denied sibling route", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          accounts: {
+            support: { appId: "test-app", dmPolicy: "allowlist", allowFrom: ["alice-aad"] },
+            sales: { appId: "test-app", dmPolicy: "allowlist", allowFrom: ["another-user"] },
+          },
+        },
+      },
+    };
+    const { deps } = createMessageHandlerDeps(cfg, {
+      accountId: "support",
+      resolveAgentRoute: () => ({
+        sessionKey: "agent:main:msteams:sales:direct:alice-aad",
+        agentId: "main",
+        accountId: "sales",
+      }),
+    });
+    await createMSTeamsMessageHandler(deps)(
+      activity({ conversation: { id: "19:shared-dm", conversationType: "personal" } }),
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not widen an empty group sender allowlist through pairing or route entries", async () => {
+    const { handler, conversationStore, readAllowFromStore } = setup({
+      dmPolicy: "pairing",
+      allowFrom: [],
+      groupPolicy: "allowlist",
+      groupAllowFrom: [],
+      teams: {
+        team123: { channels: { "19:channel@thread.tacv2": { requireMention: false } } },
+      },
+    });
+    await handler(activity({ channelData: { team: { id: "team123" } } }));
+    expect(readAllowFromStore).not.toHaveBeenCalled();
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 
   it("persists the reply reference for DM pairing without dispatching", async () => {
     const { handler, conversationStore, upsertPairingRequest, recordInboundSession } = setup({
@@ -262,25 +442,6 @@ describe("msteams message authorization and supplemental context", () => {
     await handler(activity({ text: "/config set foo bar" }));
     expect(conversationStore.upsert).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("authorizes control commands from a static access group", async () => {
-    const { handler, conversationStore } = setup(
-      {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["accessGroup:operators"],
-        requireMention: false,
-      },
-      { hasControlCommand: vi.fn(() => true) },
-      {
-        accessGroups: {
-          operators: { type: "message.senders", members: { msteams: ["alice-aad"] } },
-        },
-      },
-    );
-    await handler(activity({ text: "/config set foo bar" }));
-    expect(conversationStore.upsert).toHaveBeenCalled();
-    expect(context().CommandAuthorized).toBe(true);
   });
 
   it("keeps primary system events body-free and applies the sender timezone only to the turn", async () => {
@@ -407,29 +568,6 @@ describe("msteams message authorization and supplemental context", () => {
       ReplyToSender: "Bot",
     });
   });
-  it("matches opaque conversation IDs after removing message suffixes on either side", async () => {
-    const { handler, conversationStore } = setupConversation({
-      groupAllowFrom: [`${group};messageid=allowed-root`],
-    });
-    await handler(
-      activity({
-        conversation: { id: `${group};messageid=inbound-root`, conversationType: "channel" },
-      }),
-    );
-    expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
-  it("uses the direct allowlist fallback for a group conversation", async () => {
-    const { handler, conversationStore } = setupConversation({
-      groupAllowFrom: undefined,
-      allowFrom: ["19:fallback@thread.v2"],
-    });
-    await handler(
-      activity({ conversation: { id: "19:fallback@thread.v2", conversationType: "groupChat" } }),
-    );
-    expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
   it.each([
     ["case-folded opaque ID", "groupChat", group.toLowerCase(), "Member", false],
     ["group ID in a personal conversation", "personal", group, "Member", false],
@@ -463,5 +601,160 @@ describe("msteams message authorization and supplemental context", () => {
     expect(resolveAgentRoute).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("hydrates the canonical root once across replies from a cached thread-qualified route (#66771)", async () => {
+    const cachedRoute = {
+      sessionKey: `${channelSessionKey}:thread:old:thread:malformed`,
+      agentId: "main",
+      accountId: "default",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    };
+    const { handler, enqueueSystemEvent } = setup(
+      { groupPolicy: "open" },
+      { resolveAgentRoute: () => cachedRoute },
+    );
+    graph.fetchChannelMessage.mockResolvedValue(
+      threadMessage(parentId, { displayName: "Alice" }, "Original question"),
+    );
+    await handler(channelReply("reply-1"));
+    await handler(channelReply("reply-2"));
+    expect(
+      enqueueSystemEvent.mock.calls.filter(([text]) => text.startsWith("Replying to @")),
+    ).toEqual([
+      [
+        "Replying to @Alice: Original question",
+        {
+          sessionKey: `${channelSessionKey}:thread:${parentId}`,
+          contextKey: `msteams:thread-parent:${channelConversationId}:${parentId}`,
+        },
+      ],
+    ]);
+    expect(graph.fetchChannelMessage).toHaveBeenCalledExactlyOnceWith(
+      "token",
+      "group-1",
+      channelConversationId,
+      parentId,
+      expect.objectContaining({ label: "MS Teams inbound preprocessing" }),
+    );
+    expect(graph.fetchThreadReplies).toHaveBeenCalledWith(
+      "token",
+      "group-1",
+      channelConversationId,
+      parentId,
+      expect.objectContaining({ label: "MS Teams inbound preprocessing" }),
+    );
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    for (const [params] of dispatch.mock.calls) {
+      expect(params.ctx.SessionKey).toBe(`${channelSessionKey}:thread:${parentId}`);
+    }
+  });
+
+  it("continues dispatch without a parent event after Graph failure", async () => {
+    const { handler, enqueueSystemEvent } = setup({ groupPolicy: "open" });
+    graph.fetchChannelMessage.mockRejectedValueOnce(new Error("graph down"));
+    await handler(channelReply("reply-failure"));
+    expect(
+      enqueueSystemEvent.mock.calls.filter(([text]) => text.startsWith("Replying to @")),
+    ).toEqual([]);
+    expect(enqueueSystemEvent).toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  describe("pending history", () => {
+    const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+    function message(params: {
+      text: string;
+      root?: string;
+      replyToId?: string;
+      mentioned?: boolean;
+      conversationType?: string;
+    }) {
+      return activity(
+        buildChannelActivity({
+          id: params.text,
+          text: params.text,
+          conversation: {
+            id: params.root
+              ? `${channelConversationId};messageid=${params.root}`
+              : channelConversationId,
+            conversationType: params.conversationType ?? "channel",
+          },
+          replyToId: params.replyToId,
+          channelData: {},
+          ...(params.mentioned ? {} : { entities: [] }),
+        }),
+      );
+    }
+
+    it("isolates pending history and cleanup per channel thread", async () => {
+      const tempDir = tempDirs.make("msteams-history-");
+      const { handler } = setup(
+        { groupPolicy: "open", requireMention: true, historyLimit: 10 },
+        {
+          runPrepared: runPreparedInboundReply,
+          resolveStorePath: () => path.join(tempDir, "sessions.json"),
+        },
+      );
+      const thread = (root: string, reply: string) =>
+        root === "root-a" ? { root, replyToId: reply } : { replyToId: root };
+      await handler(message({ text: "note in A", ...thread("root-a", "nested-a") }));
+      await handler(message({ text: "note in B", ...thread("root-b", "nested-b") }));
+      expect(dispatch).not.toHaveBeenCalled();
+
+      await handler(
+        message({ text: "question in B", mentioned: true, ...thread("root-b", "other-b") }),
+      );
+      const inB = dispatch.mock.calls.at(-1)?.[0].ctx;
+      expect(inB?.Body).toContain("note in B");
+      expect(inB?.InboundHistory).toEqual([expect.objectContaining({ body: "note in B" })]);
+      for (const field of [
+        "Body",
+        "BodyForAgent",
+        "CommandBody",
+        "BodyForCommands",
+        "RawBody",
+      ] as const) {
+        expect(inB?.[field]).not.toContain("note in A");
+      }
+      expect(inB?.SessionKey).toContain("root-b");
+
+      // Consuming B must leave A pending, then consume A exactly once.
+      await handler(
+        message({ text: "question in A", mentioned: true, ...thread("root-a", "other-a") }),
+      );
+      const inA = dispatch.mock.calls.at(-1)?.[0].ctx;
+      expect(inA?.Body).toContain("note in A");
+      expect(inA?.Body).not.toContain("note in B");
+      expect(inA?.InboundHistory).toEqual([expect.objectContaining({ body: "note in A" })]);
+      await handler(
+        message({ text: "follow-up in A", mentioned: true, ...thread("root-a", "last-a") }),
+      );
+      expect(dispatch.mock.calls.at(-1)?.[0].ctx.Body).not.toContain("note in A");
+      expect(dispatch.mock.calls.at(-1)?.[0].ctx.InboundHistory).toEqual([]);
+      expect(dispatch).toHaveBeenCalledTimes(3);
+    });
+
+    it("keeps group-chat quotes in conversation-wide history", async () => {
+      const tempDir = tempDirs.make("msteams-history-");
+      const { handler } = setup(
+        { groupPolicy: "open", requireMention: true, historyLimit: 10 },
+        {
+          runPrepared: runPreparedInboundReply,
+          resolveStorePath: () => path.join(tempDir, "sessions.json"),
+        },
+      );
+      const conversationType = "groupChat";
+      const scope = { root: "quoted-a", replyToId: "quoted-a" };
+      await handler(message({ text: "earlier message", conversationType, ...scope }));
+      await handler(message({ text: "question", mentioned: true, conversationType }));
+      const ctx = dispatch.mock.calls.at(-1)?.[0].ctx;
+      expect(ctx?.Body).toContain("earlier message");
+      expect(ctx?.InboundHistory).toEqual([expect.objectContaining({ body: "earlier message" })]);
+      await handler(message({ text: "next question", mentioned: true, conversationType }));
+      expect(dispatch.mock.calls.at(-1)?.[0].ctx.InboundHistory).toEqual([]);
+    });
   });
 });

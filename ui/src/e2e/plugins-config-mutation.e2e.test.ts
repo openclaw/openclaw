@@ -27,7 +27,6 @@ function configResponse(fallback: string | undefined, workboardEnabled: boolean,
       defaults: { model: { primary: "openai/gpt-5" } },
       entries: {
         main: {
-          default: true,
           model: {
             primary: "openai/gpt-5",
             ...(fallback ? { fallbacks: [fallback] } : {}),

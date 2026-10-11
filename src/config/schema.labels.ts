@@ -3,6 +3,7 @@ import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
+import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -14,8 +15,6 @@ import { STORAGE_FIELD_LABELS } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
-  worktreeRoot: "Worktree Root",
-  worktreeAcceleration: "Worktree Acceleration",
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
   env: "Environment",
@@ -118,16 +117,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.deny": "Tool Denylist",
   "tools.web": "Web Tools",
   "tools.exec": "Exec Tool",
-  "tools.github": "GitHub CLI Identity and Git Author",
-  "tools.github.profileId": "GitHub Profile Version",
-  "tools.github.kind": "GitHub Credential Kind",
-  "tools.github.gitAuthor.name": "Git Author Name",
-  "tools.github.gitAuthor.email": "Git Author Email",
-  "agents.entries.*.tools.github": "Agent GitHub CLI Identity Override",
-  "agents.entries.*.tools.github.profileId": "Agent GitHub Profile Version",
-  "agents.entries.*.tools.github.kind": "Agent GitHub Credential Kind",
-  "agents.entries.*.tools.github.gitAuthor.name": "Agent Git Author Name",
-  "agents.entries.*.tools.github.gitAuthor.email": "Agent Git Author Email",
+  ...GITHUB_TOOL_FIELD_LABELS,
   "tools.media.image.enabled": "Enable Image Understanding",
   "tools.media.image.preferredModel": "Preferred Image Understanding Model",
   "tools.media.image.maxBytes": "Image Understanding Max Bytes",
@@ -184,9 +174,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.reviewer.fastMode": "Exec Reviewer Fast Mode",
   "tools.exec.reviewer.timeoutMs": "Exec Reviewer Timeout (ms)",
   "tools.exec.node": "Exec Node Binding",
-  "tools.agentToAgent": "Agent-to-Agent Tool Access",
-  "tools.agentToAgent.enabled": "Enable Agent-to-Agent Tool",
-  "tools.agentToAgent.allow": "Agent-to-Agent Target Allowlist",
   "tools.updatePlan": "Enable Structured Plan Tool",
   "tools.toolSearch": "Tool Search",
   "tools.toolSearch.enabled": "Enable Tool Search",

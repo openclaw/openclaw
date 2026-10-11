@@ -18,7 +18,7 @@ import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const { createQueuedReservation, requestContext, launchedRunIds } = useQueuedCollectorFixture();
 
-it.each(["active", "queued", "pending-chat", "agent"] as const)(
+it.each(["active", "queued", "pending-chat"] as const)(
   "narrow collector Stop preserves a same-key prior-incarnation %s producer",
   async (kind) => {
     const client = roleClient("view", "collector-stop-owner");

@@ -53,6 +53,41 @@ describe("chat history registry projection", () => {
     });
   });
 
+  it("asks for a reload when an absent session is created during the read", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const context = await createHistoryReadContext();
+      const scope = { agentId: "main", sessionKey: "agent:main:created-mid-read" };
+      const prepare = sharingPreparation.prepareSessionMutationFacts;
+      const probe = vi
+        .spyOn(sharingPreparation, "prepareSessionMutationFacts")
+        .mockImplementationOnce(async (params) => {
+          await upsertSessionEntryCore(scope, { sessionId: "created-mid-read", updatedAt: 1 });
+          return await prepare(params);
+        });
+      try {
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          chatHistoryHandlers["chat.history"],
+          "history handler",
+        )({
+          params: { sessionKey: scope.sessionKey },
+          respond,
+          req: { type: "req", id: "created-mid-read", method: "chat.history" },
+          client: null,
+          isWebchatConnect: () => false,
+          context,
+        });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+        );
+      } finally {
+        probe.mockRestore();
+      }
+    });
+  });
+
   it.each(["global", "per-sender"] as const)(
     "reads the selected agent's %s main alias before a competing literal row",
     async (sessionScope) => {

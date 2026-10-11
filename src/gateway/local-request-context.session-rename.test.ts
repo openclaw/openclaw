@@ -85,12 +85,14 @@ describe("guest session rename through the agent catalog", () => {
           expect(tool.parameters).toHaveProperty("properties.label");
           expect(tool.parameters).not.toHaveProperty("properties.model");
           expect(tool.parameters).not.toHaveProperty("properties.archived");
-          const loopback = resolveGatewayScopedTools({
-            ...options,
-            cfg: options.config,
-            surface: "loopback",
-            admittedRunContext,
-          }).tools.find((candidate) => candidate.name === "sessions");
+          const loopback = (
+            await resolveGatewayScopedTools({
+              ...options,
+              cfg: options.config,
+              surface: "loopback",
+              admittedRunContext,
+            })
+          ).tools.find((candidate) => candidate.name === "sessions");
           expect(loopback?.parameters).toHaveProperty("properties.label");
           const result = await tool.execute("rename", { action: "patch", label: "Research plan" });
           expect(result.details).toMatchObject({
@@ -270,12 +272,14 @@ describe("guest session rename through the agent catalog", () => {
                 ],
                 [
                   "loopback",
-                  resolveGatewayScopedTools({
-                    ...options,
-                    cfg: config,
-                    surface: "loopback",
-                    admittedRunContext,
-                  }).tools,
+                  (
+                    await resolveGatewayScopedTools({
+                      ...options,
+                      cfg: config,
+                      surface: "loopback",
+                      admittedRunContext,
+                    })
+                  ).tools,
                 ],
               ] as const;
               for (const [surface, tools] of catalogs) {
@@ -329,7 +333,13 @@ describe("guest session rename through the agent catalog", () => {
                 const absent = (tools: ReturnType<typeof createOpenClawCodingTools>) =>
                   expect(tools.some((tool) => tool.name === "sessions")).toBe(false);
                 absent(
-                  resolveGatewayScopedTools({ ...options, cfg: config, surface: "loopback" }).tools,
+                  (
+                    await resolveGatewayScopedTools({
+                      ...options,
+                      cfg: config,
+                      surface: "loopback",
+                    })
+                  ).tools,
                 );
                 absent(createOpenClawCodingTools({ ...nativeOptions, senderIsOwner: true }));
                 absent(

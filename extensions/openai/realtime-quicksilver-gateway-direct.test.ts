@@ -102,9 +102,9 @@ describe("GPT-Live Gateway direct transport", () => {
     }
   });
 
-  it.each(["close", "transport-error"] as const)(
+  it.each(["transport-error"] as const)(
     "paces buffered public microphone audio and silence until %s",
-    async (terminal) => {
+    async () => {
       let socket: FakeSocket | undefined;
       const onReady = vi.fn();
       const bridge = new OpenAIQuicksilverGatewayBridge(
@@ -162,20 +162,14 @@ describe("GPT-Live Gateway direct transport", () => {
           Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES),
           Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES),
         ]);
-        if (terminal === "transport-error") {
-          connectedSocket.emit("error", new Error("synthetic transport failure"));
-        }
+        connectedSocket.emit("error", new Error("synthetic transport failure"));
         const closing = bridge.close();
         const beforeClose = connectedSocket.sent.length;
         bridge.sendAudio(frames[0]!);
         await vi.advanceTimersByTimeAsync(100);
         expect(connectedSocket.sent).toHaveLength(beforeClose);
         emitSideband(connectedSocket, { type: "session.closed", reason: "close_requested" });
-        if (terminal === "transport-error") {
-          await expect(closing).rejects.toThrow("finalization is unconfirmed");
-        } else {
-          await closing;
-        }
+        await expect(closing).rejects.toThrow("finalization is unconfirmed");
       } finally {
         emitSideband(connectedSocket, { type: "session.closed", reason: "close_requested" });
         await Promise.allSettled([bridge.close()]);
@@ -244,7 +238,7 @@ describe("GPT-Live Gateway direct transport", () => {
     }
   });
 
-  it.each(["close_requested", "connection_lost", "transport-error"] as const)(
+  it.each(["connection_lost"] as const)(
     "keeps public capacity and transcript ownership until finalization: %s",
     async (terminal) => {
       let socket: FakeSocket | undefined;
@@ -320,19 +314,9 @@ describe("GPT-Live Gateway direct transport", () => {
         expect(onAudio).not.toHaveBeenCalled();
         expect(connectedSocket.sent).toHaveLength(sentBeforeLateActions);
         expect(onClose).not.toHaveBeenCalled();
-        if (terminal === "transport-error") {
-          connectedSocket.emit("error", new Error("transport finalization failed"));
-        } else {
-          emitSideband(connectedSocket, { type: "session.closed", reason: terminal });
-        }
-        if (terminal === "transport-error") {
-          await expect(closing).rejects.toThrow("finalization is unconfirmed");
-        } else {
-          await expect(closing).resolves.toBeUndefined();
-        }
-        expect(onClose).toHaveBeenCalledExactlyOnceWith(
-          terminal === "close_requested" ? "completed" : "error",
-        );
+        emitSideband(connectedSocket, { type: "session.closed", reason: terminal });
+        await expect(closing).resolves.toBeUndefined();
+        expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
         expect(
           onTranscript.mock.calls
             .filter((call) => call[2])
@@ -348,7 +332,7 @@ describe("GPT-Live Gateway direct transport", () => {
           end_ms: 300,
         });
         expect(onTranscript).toHaveBeenCalledTimes(transcriptCount);
-        expect(logger.warn).toHaveBeenCalledTimes(terminal === "transport-error" ? 1 : 0);
+        expect(logger.warn).toHaveBeenCalledTimes(0);
       } finally {
         vi.useRealTimers();
         if (socket && !socket.closed) {

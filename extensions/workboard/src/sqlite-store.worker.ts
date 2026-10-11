@@ -40,8 +40,6 @@ export function createSqliteWorkerBackend(
       throw new Error("Workboard SQLite connection initialization failed.");
     }
     switch (command.type) {
-      case "dataVersion":
-        return kernel.dataVersion();
       case "cards.register":
         return kernel.cards.register(...command.input.args);
       case "cards.registerIfAbsent":
@@ -80,8 +78,10 @@ export function createSqliteWorkerBackend(
         return kernel.sessionsBoard.update(...command.input.args);
       case "sessionsBoard.listPlacements":
         return kernel.sessionsBoard.listPlacements(...command.input.args);
-      case "sessionsBoard.writePlacements":
-        return kernel.sessionsBoard.writePlacements(...command.input.args);
+      case "sessionsBoard.repairPlacements":
+        return kernel.sessionsBoard.repairPlacements(...command.input.args);
+      case "sessionsBoard.writePlacement":
+        return kernel.sessionsBoard.writePlacement(...command.input.args);
       case "subscriptions.register":
         return kernel.subscriptions.register(...command.input.args);
       case "subscriptions.lookup":
@@ -113,7 +113,7 @@ export function createSqliteWorkerBackend(
               connections.set(connection, { close });
             });
           connections.set(connection, { kernel, close: kernel.close });
-          return { ok: true, value: { connection, dataVersion: kernel.dataVersion() } };
+          return { ok: true, value: { connection } };
         } catch (error) {
           const owned = connections.get(connection);
           if (owned) {

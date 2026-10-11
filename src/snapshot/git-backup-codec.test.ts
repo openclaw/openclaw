@@ -9,7 +9,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 
-it("preserves NUL-bearing TEXT, storage classes, and source key order", async () => {
+it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-text-"));
   const sourcePath = path.join(root, "source.sqlite");
   const outputPath = path.join(root, "dump");
@@ -21,6 +21,21 @@ it("preserves NUL-bearing TEXT, storage classes, and source key order", async ()
   try {
     const source = openOpenClawStateDatabase({ path: sourcePath });
     source.db.exec('CREATE TABLE text_values ("key" TEXT PRIMARY KEY, value ANY) STRICT');
+    source.db.exec(`
+      CREATE TABLE quoted_ddl (
+        "double;quote" TEXT PRIMARY KEY DEFAULT 'semi;''colon',
+        [bracket;quote] TEXT /* ; not a statement boundary */ DEFAULT 'bracket',
+        \`backtick;quote\` TEXT -- ; not a statement boundary
+          DEFAULT 'backtick'
+      ) STRICT;
+      INSERT INTO quoted_ddl DEFAULT VALUES;
+      CREATE TABLE trigger_values (value INTEGER NOT NULL) STRICT;
+      CREATE TRIGGER zz_case_trigger AFTER INSERT ON trigger_values BEGIN
+        UPDATE trigger_values SET value = CASE WHEN value = 1 THEN 2 ELSE value END;
+        /* The trigger has its own END after the CASE expression. */
+      END;
+      INSERT INTO trigger_values VALUES (1);
+    `);
     const insert = source.db.prepare('INSERT INTO text_values ("key", value) VALUES (?, ?)');
     for (let index = keys.length - 1; index >= 0; index -= 1) {
       insert.run(keys[index]!, values[index]!);
@@ -53,12 +68,37 @@ it("preserves NUL-bearing TEXT, storage classes, and source key order", async ()
       expectedIdentity: { role: "global" },
     });
     expect(restored.tables.every((table) => table.ok)).toBe(true);
-    const database = new DatabaseSync(targetPath, { readOnly: true });
+    const database = new DatabaseSync(targetPath);
     try {
       expect(database.prepare(byteQuery).all()).toEqual(expectedBytes);
+      expect(database.prepare("SELECT * FROM quoted_ddl").all()).toEqual([
+        {
+          "double;quote": "semi;'colon",
+          "bracket;quote": "bracket",
+          "backtick;quote": "backtick",
+        },
+      ]);
+      database.exec("INSERT INTO trigger_values VALUES (1)");
+      expect(database.prepare("SELECT value FROM trigger_values ORDER BY rowid").all()).toEqual([
+        { value: 2 },
+        { value: 2 },
+      ]);
     } finally {
       database.close();
     }
+    const schemaPath = path.join(outputPath, "schema.sql");
+    const schema = await fs.readFile(schemaPath, "utf8");
+    const incompleteTrigger = schema.replace(
+      /CREATE TRIGGER zz_case_trigger[\s\S]*?\n\s*END;/u,
+      (trigger) => trigger.replace(/\n\s*END;$/u, ""),
+    );
+    expect(incompleteTrigger).not.toBe(schema);
+    await fs.writeFile(schemaPath, incompleteTrigger);
+    const refusedTarget = path.join(root, "incomplete-trigger.sqlite");
+    await expect(
+      restoreGitBackupDirectory({ sourcePath: outputPath, targetPath: refusedTarget }),
+    ).rejects.toThrow(/incomplete input/iu);
+    await expect(fs.stat(refusedTarget)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });

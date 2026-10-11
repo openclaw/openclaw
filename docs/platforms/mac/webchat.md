@@ -64,6 +64,19 @@ The full native chat window is a split view:
 - **Find in Conversation**: press Cmd-F to search user and assistant text in the loaded conversation. Return or Cmd-G moves to the next matching message; Shift-Cmd-G moves backward. The selected message is outlined and revealed without incoming replies pulling you away. Escape closes Find. Search does not fetch older history or search hidden reasoning and tool payloads.
 - **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. While Talk Mode is active, the composer shows its listening/thinking/speaking state, live audio activity, and an expandable rolling transcript. Right-click the Talk button to choose **System Default** or a connected microphone; this is the same microphone selection used by Voice Wake and push-to-talk. If a selected microphone disconnects, the active Talk session falls back to the system default and tries the selection again the next time Talk Mode starts. A separate microphone action records a voice note when Talk Mode does not own audio capture.
 
+Cmd-click thread rows to select several, or Shift-click to select a range.
+The batch bar shows the selected count and an **Actions** menu for marking
+threads read or unread, moving them between groups, archiving or restoring,
+and deleting eligible threads. Child threads and rows hidden inside collapsed
+groups are excluded from batch actions. Choose **Done** to leave batch mode.
+Failed operations appear beside the affected rows so you can retry them.
+
+Drag a root thread to **Pages** to pin it, or between pinned threads to change
+its position. Drop it onto a group to move it there and unpin it, onto the
+ungrouped section in category grouping to remove its group, or onto the list background to unpin it while keeping its
+group. Drag group headers to change their order. These actions require write
+access on the connected Gateway; pin ordering requires administrator access.
+
 Right-click a custom-group header and choose **Group defaults…** to choose where
 new sessions in that group start. Use **Agent workspace** or browse folders on
 the connected Gateway. **Separate working copy** is available after the Gateway
@@ -89,6 +102,12 @@ clears its snooze. Archived, child, and protected main or sentinel threads
 cannot be snoozed.
 
 The sidebar loads threads in pages; choose **Load more** to reach older threads.
+In **All agents**, conversations with the same short key remain separate and keep
+their owning agent when selected or changed.
+Command-click or Shift-click to select several root threads, then choose
+**Actions → Move to group → New group…** to create a group and move the selection.
+If some moves fail, the group and completed moves remain; affected rows show
+errors so you can retry.
 Typing filters loaded rows immediately, then searches session names, metadata,
 and messages on the Gateway. Results appear in relevance order. Notices explain
 when message indexing is still in progress or archived transcripts are excluded.
@@ -107,8 +126,9 @@ arrive, including the toolbar subtitle and composer, without delaying selection.
 Configured names keep precedence; the Gateway's default identity is **Assistant**.
 Text and emoji avatars refresh with the same catalog after reconnects or identity
 changes. Badges show at most two complete characters, preserving emoji sequences.
-Agent rows show a text avatar or name initial. Session detail cards can show
-authenticated images for agents and participants.
+Agent rows and cross-agent Pages show a configured image when available, falling
+back to text or a name initial. Session detail cards can also show authenticated
+images for agents and participants.
 
 File attachments keep their original filename, MIME type, and bytes through the durable outbox. Admission uses the Gateway’s advertised image and file size limits. The file limit also caps the combined bytes of all attachments in one message, with images counted after resizing. Files that exceed the remaining budget stay out of the draft; send admission rechecks the total and keeps an oversized draft intact. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**, with the affected filenames. Recorded voice notes keep their separate recording flow. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Assistant-generated managed files retain their **Download file** action.
 
@@ -176,12 +196,23 @@ web actions menu, including plugin actions and **Stop cloud worker…** when
 available. Confirmation, progress, and errors stay in the web conversation.
 Older Gateway UIs keep their existing conversation behavior without these extras.
 
+Archiving from the sidebar offers **Undo** for six seconds; hovering or focusing
+the notice pauses that countdown. Undo restores the captured thread and its
+previous pin state, including successful threads from a partial batch archive.
+Restored threads return to the Active list when the Gateway confirms the restore.
+It remains available while you change conversations, filters, or agents, and
+leaves the current conversation selected. Reconnecting retires the action; if a
+thread was replaced before Undo, the failure stays visible.
+
 **Show message preview**, **Show automation sessions**, and **Show system sessions**
 are off by default. Automation sessions are cron conversations; system sessions
 are identified from their recorded creation source. Human-created and named
 internal conversations remain visible. The selected conversation stays visible
 even when its automation or system category is hidden. These choices are saved
 locally for the app profile.
+
+Unnamed heartbeat conversations also hide under **Show system sessions**.
+Named heartbeat conversations remain visible.
 
 Message previews prefer the Gateway's latest message preview, using the native
 transcript cache only when the row has no server preview. Turning previews off
@@ -194,6 +225,59 @@ from the thread list when its agent entry is available, and its loaded children
 remain reachable. If the agent catalog is unavailable, the primary thread remains
 in the list for recovery.
 
+Expand a thread to load its child conversations. Subagent runs contribute status
+to their parent while persistent descendants remain navigable; children assigned
+to a group appear in that group. Expansion initially shows four children, plus
+selected or active branches and branches with unread messages, failed descendants,
+workspace conflicts, or attention requests. **Show more** reveals all loaded
+children; collapse and reopen to return to the compact list. Failed or incomplete
+child reads offer **Retry** and retain previously loaded children. Expansion also
+keeps children already known from the thread roster when the child read returns
+fewer rows. The selected status filter applies to children as well as roots.
+
+Choose **All agents** to see an expandable roster in configured agent order.
+Pinned threads stay in **Pages** above the roster, show their owning agent's
+avatar, and keep their expandable children even when that agent is collapsed.
+**Selected agent** returns to that agent's pins, groups, and threads.
+
+Each agent header opens its main chat. Its menu offers **New Session**,
+**Open main chat**, **All sessions**, and **Collapse others**. **All sessions**
+opens that agent's thread manager without changing the active chat or draft.
+Expanded headers summarize Home activity; collapsed headers also summarize
+their hidden conversations. Use **Show more** and **See less** to adjust the
+visible rows. The scope and collapsed headers are remembered for each Gateway.
+Expanded Pages summarize their own activity and hidden subagent runs; visible
+children show their own signals. Run indicators pause while disconnected.
+For older threads beyond the all-agent overview, switch to **Selected agent**
+and choose **Load more**, or search through **All sessions**.
+
+## Session catalogs
+
+Plugins can add session catalogs to the native sidebar. **Open in OpenClaw** opens
+the conversation; sending its first message adopts it into OpenClaw. Adopted
+sessions stay in their catalog section without a duplicate in the ordinary thread
+list. Catalogs appear for a selected agent and are hidden in the all-agents and
+archived views. Adopted sessions remain reachable in **Search results**,
+independently of collapsed catalog groups. Adopted rows follow the sidebar status
+filter, including archive and snooze changes. Catalog sources require read access;
+deleting a source session also requires write access.
+
+Right-click a catalog heading to group its sessions by **Project**, **Person**, or
+**None**, filter by owner, or choose **Hide from sidebar**. Restore a hidden catalog
+with its toggle under **View options → Session catalogs**. **Show all owners** in
+the same menu clears an owner filter even when it leaves no catalog rows. Grouping and visibility are
+saved locally for each Gateway profile. This deliberately differs from the web
+sidebar, which restores hidden catalogs through Dashboard settings and stores
+the preference in the browser.
+
+**Session sources…** opens the same Gateway's Dashboard Appearance settings, where
+you can manage session sources. The native handoff opens the page without scrolling
+to the Session sources settings block. **Open in Terminal** is not offered because
+the native sidebar has no catalog terminal action. Catalogs refresh while the
+sidebar is visible and connected; **Load more** and **Retry** operate independently
+for each catalog. Source failures stay visible with **Retry**, including before
+the source returns its first session.
+
 ## Online people
 
 The native sidebar's **Online** section includes your own identity and distinguishes
@@ -202,10 +286,21 @@ running session counts come from the Gateway across agents, independently of the
 loaded thread list; unavailable counts stay unknown and offer retry after a failure.
 
 Hover or focus a person to inspect reported connections, interaction times, and
-visible session links. Recent links stay in place while the card is open and
+visible session links, including threads loaded with **Load more**. Recent links stay in place while the card is open and
 disappear if they become ineligible. **View Activity** opens that person's Activity
 page in the Dashboard for the same Gateway. Thread rows show other viewers,
 combining duplicate connections and excluding your own identity.
+
+The identity card at the bottom of the native sidebar uses your name and avatar
+from **Online**. When healthy, it shows the current Gateway's name and **Primary**
+when applicable; otherwise it shows **Connecting…**. Click it for the Gateway
+list, current and primary indicators, the option to make an eligible profile
+primary, **Manage Gateways…**, **Open Dashboard**, **Settings…**, **Usage**, and
+**About OpenClaw**. **Retry now** appears while disconnected. The adjacent
+attention button counts requests of the same kind as the oldest pending request
+(questions or approvals); click it for details without changing conversations.
+A separate retry button appears if thread groups fail to load. Batch actions
+stay above the footer.
 
 ## Pending questions and approvals
 
@@ -313,10 +408,10 @@ Right-click the OpenClaw Dock icon for **Open Dashboard** and **Settings…**.
 When more than one Gateway is configured, this menu also lists every Gateway;
 the checkmark follows the selected experience's frontmost Gateway window.
 
-The menu probes health only while open, retaining cached facts between openings.
-Before the first result a card shows **checking…**; failed probes show
+The menu checks health only while open, retaining cached facts between openings.
+Before the first result a card shows **checking…**; failed checks show
 **unreachable** and the last successful contact time when known. Closing the menu
-cancels in-flight probes and closes idle probe connections for saved Gateways with
+cancels in-flight checks and closes idle check connections for saved Gateways with
 no open Web or Native windows. It never disconnects the primary Gateway.
 
 The app also reopens your selected Gateway in the chosen experience after an app
@@ -350,6 +445,8 @@ Command-click or Control-click it to open a separate dashboard window. **Set as
 primary…** makes the viewed token-authenticated profile the Mac app's primary
 Gateway after confirmation. The app replaces the primary Gateway's credentials
 and closes its native chat window; independent saved-profile windows stay open.
+Native chat windows stay open while the same Gateway connects at launch or
+reconnects. This includes windows opened with `--chat` or `--no-activate --chat`.
 Dashboard windows displaying **Primary** follow the new connection, including
 windows opened separately. While connected, the sidebar footer also shows the
 current Gateway and marks it when it is primary. Password-only and browser
@@ -416,6 +513,27 @@ connection confirmation rules.
   ```
 
   (`--webchat` is accepted as a legacy alias.)
+
+- Background automation/proof rigs:
+
+  ```bash
+  dist/OpenClaw.app/Contents/MacOS/OpenClaw --no-activate --chat
+  ```
+
+  `--no-activate` keeps app-initiated windows and panels behind the active app
+  and suppresses application activation for the entire process. Combine it with
+  `--chat` or `--dashboard`; `--background-only` still suppresses automatic windows.
+  Drive the app through background Accessibility and capture a window by ID with
+  `screencapture -l <windowId>`, which can capture occluded windows. When launching
+  through Launch Services, use `open -g -n dist/OpenClaw.app --args --no-activate --chat`
+  so the launcher also leaves focus alone.
+
+  Sheets may become key within the inactive app. Update dialogs, macOS permission
+  requests, web media-permission prompts, and file dialogs are deferred; Keychain
+  operations that need interaction fail through the existing
+  error/log paths. Relaunch without the flag to grant access or choose files, then
+  retry automation. External navigation (Finder, browsers, and editor launches)
+  is also deferred and logged. Normal launches retain their existing focus behavior.
 
 - Logs: `./scripts/clawlog.sh` (subsystem `ai.openclaw`, category `WebChatSwiftUI`).
 

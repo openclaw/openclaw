@@ -9,6 +9,7 @@ import {
   sessionsListResponse,
   waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 import { chooseSidebarOwner, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -99,6 +100,7 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
         await waitForSessionRosterHydration(page);
+        await selectAllSidebarSessions(page);
         const target = page.locator('[data-session-key="' + sessionKey + '"]');
         await expectBrowser(target).toBeVisible();
         const chooseFilter = async (value: "all" | "involving-me") => {
@@ -150,6 +152,7 @@ suite.define(() => {
         await expectBrowser(target).toBeVisible();
         await target.hover();
         await target.click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
         const show = page.getByRole("menuitem", { name: "Show in Involving me", exact: true });
         await expectBrowser(show).toBeVisible();
         await captureUiProof(suite, page, "04-restore-from-all-owners.png");

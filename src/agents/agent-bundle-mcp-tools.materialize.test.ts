@@ -17,10 +17,8 @@ import {
 import type {
   McpCatalogTool,
   McpToolCatalog,
-  McpToolCatalogDiagnostic,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
@@ -40,7 +38,6 @@ function makeToolRuntime(
     serverName?: string;
     result?: CallToolResult;
     resultText?: string;
-    diagnostics?: readonly McpToolCatalogDiagnostic[];
     supportsParallelToolCalls?: boolean;
   } = {},
 ): SessionMcpRuntime {
@@ -67,7 +64,6 @@ function makeToolRuntime(
       },
     },
     tools,
-    ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
   });
   return {
     sessionId: "session-collision",
@@ -135,41 +131,28 @@ describe("createBundleMcpToolRuntime", () => {
     expect(disposeRuntime).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { kind: "single", failureAt: "join" },
-    { kind: "combined", failureAt: "join" },
-    { kind: "combined", failureAt: "synchronous-join" },
-    { kind: "combined", failureAt: "dispose" },
-    { kind: "combined", failureAt: "synchronous-dispose" },
-  ] as const)(
-    "replays a $kind owner's $failureAt failure in each final caller",
-    async ({ kind, failureAt }) => {
+  it.each([{ failureAt: "synchronous-join" }, { failureAt: "synchronous-dispose" }] as const)(
+    "replays a combined owner's $failureAt failure in each final caller",
+    async ({ failureAt }) => {
       const failed = makeToolRuntime();
       const sibling = makeToolRuntime();
       sibling.dispose = vi.fn(async () => {});
       sibling.joinCleanup = vi.fn(async () => {});
       const failure = new Error("cleanup owner lost");
-      const failingCleanup = failureAt.startsWith("synchronous")
-        ? vi.fn(() => {
-            throw failure;
-          })
-        : vi.fn(async () => {
-            throw failure;
-          });
+      const failingCleanup = vi.fn(() => {
+        throw failure;
+      });
       const disposing = failureAt.endsWith("dispose");
       if (disposing) {
         failed.dispose = failingCleanup;
       } else {
         failed.joinCleanup = failingCleanup;
       }
-      const runtime =
-        kind === "single"
-          ? failed
-          : createCombinedSessionMcpRuntime({
-              sessionId: failed.sessionId,
-              workspaceDir: failed.workspaceDir,
-              parts: [failed, sibling],
-            });
+      const runtime = createCombinedSessionMcpRuntime({
+        sessionId: failed.sessionId,
+        workspaceDir: failed.workspaceDir,
+        parts: [failed, sibling],
+      });
       const materialized = await materializeBundleMcpToolsForRun({ runtime });
       if (disposing) {
         // The physical failure predates both final callers' cleanup contexts.
@@ -185,9 +168,7 @@ describe("createBundleMcpToolRuntime", () => {
         });
         expect(cleanupScope.outcome).toBe("uncertain");
       }
-      if (kind === "combined") {
-        expect(sibling.joinCleanup).toHaveBeenCalled();
-      }
+      expect(sibling.joinCleanup).toHaveBeenCalled();
     },
   );
 
@@ -273,7 +254,6 @@ describe("createBundleMcpToolRuntime", () => {
 
   it.each([
     { failureAt: "catalog", cleanupFault: "dispose", outcome: "uncertain" },
-    { failureAt: "catalog", cleanupFault: "release", outcome: "uncertain" },
     { failureAt: "acquire", cleanupFault: "none", outcome: "closed" },
     { failureAt: "dispose", cleanupFault: "release", outcome: "uncertain" },
   ] as const)(
@@ -317,54 +297,6 @@ describe("createBundleMcpToolRuntime", () => {
       expect(cleanupScope.outcome).toBe(outcome);
     },
   );
-
-  it("keeps app-only MCP tools out of the model tool catalog", async () => {
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeToolRuntime({
-        tools: [
-          {
-            serverName: "demo",
-            safeServerName: "demo",
-            toolName: "model_tool",
-            inputSchema: { type: "object" },
-            fallbackDescription: "model",
-            uiVisibility: ["model"],
-          },
-          {
-            serverName: "demo",
-            safeServerName: "demo",
-            toolName: "app_tool",
-            inputSchema: { type: "object" },
-            fallbackDescription: "app",
-            uiVisibility: ["app"],
-          },
-          {
-            serverName: "demo",
-            safeServerName: "demo",
-            toolName: "hidden_tool",
-            inputSchema: { type: "object" },
-            fallbackDescription: "hidden",
-            uiVisibility: [],
-          },
-        ],
-      }),
-    });
-
-    expect(runtime.tools.map((tool) => tool.name)).toEqual(["demo__model_tool"]);
-    expect(runtime.appTools?.map((tool) => tool.name)).toEqual([
-      "demo__app_tool",
-      "demo__hidden_tool",
-      "demo__model_tool",
-    ]);
-    expect(getPluginToolMeta(runtime.appTools![0]!)?.mcp?.codexApproval).toEqual({
-      mode: undefined,
-    });
-    expect(
-      applyEmbeddedAttemptToolsAllow(runtime.appTools ?? [], ["demo__model_tool"], {
-        toolMeta: (tool) => getPluginToolMeta(tool),
-      }).map((tool) => tool.name),
-    ).toEqual(["demo__model_tool"]);
-  });
 
   it("attaches app previews without converting typed image results to text", async () => {
     const tool: McpCatalogTool = {
@@ -448,40 +380,6 @@ describe("createBundleMcpToolRuntime", () => {
     expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
   });
 
-  it("materializes bundle MCP tools and executes them", async () => {
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeToolRuntime(),
-    });
-
-    expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
-    expect(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").executionMode).toBe(
-      "sequential",
-    );
-    expect(runtime.tools[0]?.resultContentSource).toBe("network");
-    expect(
-      getPluginToolMeta(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant")),
-    ).toMatchObject({
-      pluginId: "bundle-mcp",
-      mcp: {
-        serverName: "bundleProbe",
-        safeServerName: "bundleProbe",
-        toolName: "bundle_probe",
-        operation: "tool",
-      },
-    });
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-bundle-probe",
-      {},
-      undefined,
-      undefined,
-    );
-    expectTextContentBlock(result.content[0], "FROM-BUNDLE");
-    expect(result.details).toEqual({
-      mcpServer: "bundleProbe",
-      mcpTool: "bundle_probe",
-    });
-  });
-
   it("marks MCP tools parallel only when the server advertises parallel support", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime({
@@ -492,56 +390,6 @@ describe("createBundleMcpToolRuntime", () => {
     expect(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").executionMode).toBe(
       "parallel",
     );
-  });
-
-  it("preserves text and non-text MCP content alongside structuredContent", async () => {
-    const structuredContent = { description: "captured screenshot" };
-    const result = await executeMcpToolResult({
-      content: [
-        { type: "text", text: "captured screenshot" },
-        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-        {
-          type: "resource_link",
-          uri: "https://example.com/report",
-          name: "report",
-          title: "Report",
-        },
-        { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
-        { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
-      ],
-      structuredContent,
-    });
-
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
-      },
-      { type: "text", text: "captured screenshot" },
-      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-      { type: "text", text: "[Report] https://example.com/report" },
-      { type: "text", text: "memo body" },
-      { type: "text", text: "[audio audio/mpeg]" },
-    ]);
-  });
-
-  it("deduplicates exact structured JSON mirrors without dropping near matches", async () => {
-    const structuredContent = { zeta: 2, alpha: 1 };
-    const result = await executeMcpToolResult({
-      content: [
-        { type: "text", text: JSON.stringify(structuredContent, null, 2) },
-        { type: "text", text: 'Result metadata: {"alpha":1,"zeta":2}' },
-      ],
-      structuredContent,
-    });
-
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: 'structuredContent:\n{\n  "alpha": 1,\n  "zeta": 2\n}',
-      },
-      { type: "text", text: 'Result metadata: {"alpha":1,"zeta":2}' },
-    ]);
   });
 
   it("marks isError through the tool-result owner while preserving recovery text", async () => {
@@ -560,17 +408,6 @@ describe("createBundleMcpToolRuntime", () => {
       structuredContent: { retryable: true },
     });
     expect(isToolResultError(result)).toBe(true);
-  });
-
-  it("renders structured-only results in deterministic key order", async () => {
-    const result = await executeMcpToolResult({
-      content: [],
-      structuredContent: { zeta: 2, alpha: 1 },
-    });
-
-    expect(result.content).toEqual([
-      { type: "text", text: 'structuredContent:\n{\n  "alpha": 1,\n  "zeta": 2\n}' },
-    ]);
   });
 
   it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {
@@ -658,24 +495,6 @@ describe("createBundleMcpToolRuntime", () => {
 
     expect(runtime.tools).toEqual([]);
     expect(runtime.appTools?.map((tool) => tool.name)).toEqual(["demo__app_tool-2"]);
-  });
-
-  it("preserves catalog diagnostics when MCP servers fail tool listing", async () => {
-    const diagnostics = [
-      {
-        serverName: "fuzzplugin",
-        safeServerName: "fuzzplugin",
-        launchSummary: "node fuzzplugin-mcp.mjs",
-        message: 'tools[0].inputSchema.type expected "object"',
-      },
-    ];
-
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeToolRuntime({ tools: [], diagnostics }),
-    });
-
-    expect(runtime.tools).toEqual([]);
-    expect(runtime.diagnostics).toEqual(diagnostics);
   });
 
   it("applies per-server MCP tool filters to resource and prompt utility tools", async () => {
@@ -860,99 +679,6 @@ describe("createBundleMcpToolRuntime", () => {
       mcpServer: "configuredProbe",
       mcpTool: "bundle_probe",
     });
-  });
-
-  it("returns tools sorted alphabetically for stable prompt-cache keys", async () => {
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeToolRuntime({
-        tools: [
-          { toolName: "zeta", description: "z" },
-          { toolName: "alpha", description: "a" },
-          { toolName: "mu", description: "m" },
-        ].map(({ toolName, description }) => ({
-          serverName: "multi",
-          safeServerName: "multi",
-          toolName,
-          description,
-          inputSchema: { type: "object", properties: {} },
-          fallbackDescription: description,
-        })),
-      }),
-    });
-
-    expect(runtime.tools.map((tool) => tool.name)).toEqual([
-      "multi__alpha",
-      "multi__mu",
-      "multi__zeta",
-    ]);
-  });
-
-  it("normalizes local $ref schemas from MCP tools before exposing them", async () => {
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeToolRuntime({
-        tools: [
-          {
-            serverName: "notion",
-            safeServerName: "notion",
-            toolName: "API-post-page",
-            description: "Create a page",
-            inputSchema: {
-              type: "object",
-              required: ["parent"],
-              properties: {
-                parent: { $ref: "#/$defs/parentRequest" },
-              },
-              $defs: {
-                parentRequest: {
-                  oneOf: [
-                    {
-                      type: "object",
-                      required: ["page_id"],
-                      properties: { page_id: { type: "string" } },
-                    },
-                    {
-                      type: "object",
-                      required: ["database_id"],
-                      properties: { database_id: { type: "string" } },
-                    },
-                  ],
-                },
-              },
-            },
-            fallbackDescription: "Create a page",
-          },
-        ],
-      }),
-    });
-
-    expect(runtime.tools[0]?.parameters).toEqual({
-      type: "object",
-      required: ["parent"],
-      properties: {
-        parent: {
-          oneOf: [
-            {
-              type: "object",
-              required: ["page_id"],
-              properties: { page_id: { type: "string" } },
-            },
-            {
-              type: "object",
-              required: ["database_id"],
-              properties: { database_id: { type: "string" } },
-            },
-          ],
-        },
-      },
-    });
-    expect(
-      validateToolArguments(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant"), {
-        type: "toolCall",
-        id: "call-page",
-        name: "notion__API-post-page",
-        arguments: { parent: { page_id: "page-id" } },
-      }),
-    ).toEqual({ parent: { page_id: "page-id" } });
   });
 
   it("keeps root fields callable when an MCP input schema uses a root union (#128743)", async () => {

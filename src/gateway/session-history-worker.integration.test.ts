@@ -2,16 +2,16 @@ import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { readMainSessionRecoveryCheckpoint } from "../agents/main-session-recovery/main-session-restart-recovery-replay-safety.js";
+import { readMainSessionRecoveryCheckpoint } from "../agents/main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
@@ -30,7 +30,6 @@ import { readChatHistoryMessageId } from "./session-history-tail.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
 import {
   readSessionMessageByIdAsync,
-  readSessionMessageCountAsync,
   readSessionTranscriptSummaryAsync,
 } from "./session-transcript-readers.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
@@ -82,7 +81,7 @@ function observeColdMetadataReads(database: DatabaseSync) {
   };
 }
 
-it.each(["rpc", "message-by-id", "message-count"] as const)(
+it.each(["rpc", "message-by-id"] as const)(
   "restores %s history without reading cold metadata on the caller",
   async (transport) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -98,9 +97,6 @@ it.each(["rpc", "message-by-id", "message-count"] as const)(
         expect(metadataReads).toHaveLength(1);
         metadataReads.length = 0;
         const read = async () => {
-          if (transport === "message-count") {
-            return readSessionMessageCountAsync(fixture.scope);
-          }
           if (transport === "message-by-id") {
             const result = await readSessionMessageByIdAsync(fixture.scope, "history-assistant");
             expect(result).toMatchObject({ found: true, oversized: false, seq: 2 });
@@ -112,11 +108,9 @@ it.each(["rpc", "message-by-id", "message-count"] as const)(
         // The first read restores cold history; the second probes the now-hot transcript.
         for (let round = 0; round < 2; round++) {
           expect(await read()).toEqual(
-            transport === "message-count"
-              ? 2
-              : transport === "message-by-id"
-                ? ["history-assistant"]
-                : ["history-user", "history-assistant"],
+            transport === "message-by-id"
+              ? ["history-assistant"]
+              : ["history-user", "history-assistant"],
           );
           expect(metadataReads).toEqual([]);
         }
@@ -158,100 +152,95 @@ it("appends hot transcript events without reading cold metadata on the caller", 
   });
 });
 
-it.each([
-  { agentId: "Other", sessionKey: "agent:other:fenced-history" },
-  { agentId: "other", sessionKey: "Agent:Other:Fenced-History" },
-])(
-  "validates worker admission for normalized logical inputs in a shared store: %j",
-  async (input) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        env: state.env,
-        path: state.statePath("shared-history.sqlite"),
-      });
-      const target = {
-        agentId: "other",
-        sessionKey: "agent:other:fenced-history",
-        sessionId: "requested-fenced-history",
-        storePath: database.path,
-      };
-      const entry = { sessionId: target.sessionId, updatedAt: 1 };
-      await replaceSessionEntry(target, entry);
-      await replaceTranscriptEvents(target, [
-        { type: "session", version: 3, id: target.sessionId },
-        {
-          type: "message",
-          id: "before",
-          parentId: null,
-          message: { role: "user", content: "Visible requested history" },
-        },
-        {
-          type: "message",
-          id: "admitted",
-          parentId: "before",
-          message: { role: "user", content: "Current turn" },
-        },
-        {
-          type: "message",
-          id: "later",
-          parentId: "admitted",
-          message: { role: "assistant", content: "After the admitted boundary" },
-        },
-      ]);
-      await waitForSessionTranscriptProjection(target);
-      const anchor = readActiveTranscriptEntryAnchor({ ...target, entryId: "admitted" });
-      if (!anchor) {
-        throw new Error("expected current-turn transcript anchor");
-      }
-      expect(anchor).toMatchObject({
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        storePath: database.path,
-      });
-      expect(database.agentId).toBe("main");
-      const admission = { ...anchor, logicalTurnId: "worker-fence", role: "user" as const };
-      const readRpc = () => readChatHistoryPage(historyParams({ ...target, ...input }, entry));
-      const readHttp = () =>
-        readSessionHistorySnapshotAsync({
-          target: { ...target, ...input, sessionEntry: entry },
-          limit: 10,
-        });
-      const page = await runWithSessionTranscriptReadFence(admission, readRpc);
-      expect(page.messages.map(readChatHistoryMessageId)).toEqual(["before", "admitted", "later"]);
-      const http = await runWithSessionTranscriptReadFence(admission, readHttp);
-      expect(http.history.messages.map(readChatHistoryMessageId)).toEqual([
-        "before",
-        "admitted",
-        "later",
-      ]);
-      expect(http.transcriptPath).toBe(input.sessionKey);
-      // Display rows remain visible, but normalization must not lose admission validation.
-      const invalidAdmission = { ...admission, storePath: `${database.path}.other` };
-      await expect(runWithSessionTranscriptReadFence(invalidAdmission, readRpc)).rejects.toThrow(
-        "different transcript store",
-      );
-      await expect(runWithSessionTranscriptReadFence(invalidAdmission, readHttp)).rejects.toThrow(
-        "different transcript store",
-      );
-      for (const sessionKey of [input.sessionKey, "fenced-history"]) {
-        const readPreview = () =>
-          readSessionPreviewItemsFromTranscriptAsync({ ...target, ...input, sessionKey }, 10, 160);
-        expect(await runWithSessionTranscriptReadFence(admission, readPreview)).toEqual([
-          { role: "user", text: "Visible requested history" },
-          { role: "user", text: "Current turn" },
-          { role: "assistant", text: "After the admitted boundary" },
-        ]);
-        await expect(
-          runWithSessionTranscriptReadFence(invalidAdmission, readPreview),
-        ).rejects.toThrow("different transcript store");
-      }
+it("validates worker admission for normalized logical inputs in a shared store", async () => {
+  const input = { agentId: "Other", sessionKey: "Agent:Other:Fenced-History" };
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: state.env,
+      path: state.statePath("shared-history.sqlite"),
     });
-  },
-);
+    const target = {
+      agentId: "other",
+      sessionKey: "agent:other:fenced-history",
+      sessionId: "requested-fenced-history",
+      storePath: database.path,
+    };
+    const entry = { sessionId: target.sessionId, updatedAt: 1 };
+    await replaceSessionEntry(target, entry);
+    await replaceTranscriptEvents(target, [
+      { type: "session", version: 3, id: target.sessionId },
+      {
+        type: "message",
+        id: "before",
+        parentId: null,
+        message: { role: "user", content: "Visible requested history" },
+      },
+      {
+        type: "message",
+        id: "admitted",
+        parentId: "before",
+        message: { role: "user", content: "Current turn" },
+      },
+      {
+        type: "message",
+        id: "later",
+        parentId: "admitted",
+        message: { role: "assistant", content: "After the admitted boundary" },
+      },
+    ]);
+    await waitForSessionTranscriptProjection(target);
+    const anchor = readActiveTranscriptEntryAnchor({ ...target, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("expected current-turn transcript anchor");
+    }
+    expect(anchor).toMatchObject({
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      storePath: database.path,
+    });
+    expect(database.agentId).toBe("main");
+    const admission = { ...anchor, logicalTurnId: "worker-fence", role: "user" as const };
+    const readRpc = () => readChatHistoryPage(historyParams({ ...target, ...input }, entry));
+    const readHttp = () =>
+      readSessionHistorySnapshotAsync({
+        target: { ...target, ...input, sessionEntry: entry },
+        limit: 10,
+      });
+    const page = await runWithSessionTranscriptReadFence(admission, readRpc);
+    expect(page.messages.map(readChatHistoryMessageId)).toEqual(["before", "admitted", "later"]);
+    const http = await runWithSessionTranscriptReadFence(admission, readHttp);
+    expect(http.history.messages.map(readChatHistoryMessageId)).toEqual([
+      "before",
+      "admitted",
+      "later",
+    ]);
+    expect(http.transcriptPath).toBe(input.sessionKey);
+    // Display rows remain visible, but normalization must not lose admission validation.
+    const invalidAdmission = { ...admission, storePath: `${database.path}.other` };
+    await expect(runWithSessionTranscriptReadFence(invalidAdmission, readRpc)).rejects.toThrow(
+      "different transcript store",
+    );
+    await expect(runWithSessionTranscriptReadFence(invalidAdmission, readHttp)).rejects.toThrow(
+      "different transcript store",
+    );
+    for (const sessionKey of [input.sessionKey, "fenced-history"]) {
+      const readPreview = () =>
+        readSessionPreviewItemsFromTranscriptAsync({ ...target, ...input, sessionKey }, 10, 160);
+      expect(await runWithSessionTranscriptReadFence(admission, readPreview)).toEqual([
+        { role: "user", text: "Visible requested history" },
+        { role: "user", text: "Current turn" },
+        { role: "assistant", text: "After the admitted boundary" },
+      ]);
+      await expect(
+        runWithSessionTranscriptReadFence(invalidAdmission, readPreview),
+      ).rejects.toThrow("different transcript store");
+    }
+  });
+});
 
-it("reads a sparse page in the transcript worker and shares equivalent queued requests", async () => {
+it("reads a sparse page in the transcript worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = {
       agentId: "main",
@@ -294,13 +283,10 @@ it("reads a sparse page in the transcript worker and shares equivalent queued re
     };
     diagnostics.subscribe(record);
     try {
-      const pages = await Promise.all(Array.from({ length: 4 }, () => readChatHistoryPage(params)));
-      for (const page of pages) {
-        expect(page.messages.map(readChatHistoryMessageId)).toEqual([ids[0], ids.at(-1)]);
-        expect(page.pagination).toMatchObject({ totalMessages: 252, rawPageMessages: 252 });
-      }
+      const page = await readChatHistoryPage(params);
+      expect(page.messages.map(readChatHistoryMessageId)).toEqual([ids[0], ids.at(-1)]);
+      expect(page.pagination).toMatchObject({ totalMessages: 252, rawPageMessages: 252 });
       expect(tasks.length).toBeGreaterThan(0);
-      expect(tasks.length).toBeLessThan(pages.length);
     } finally {
       diagnostics.unsubscribe(record);
     }

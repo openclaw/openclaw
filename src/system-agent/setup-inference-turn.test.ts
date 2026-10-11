@@ -46,7 +46,7 @@ vi.mock("../agents/runtime-plugins.js", () => ({
 function embeddedRoute(runtime: "codex" | "openclaw" = "codex"): SystemAgentConfiguredRoute {
   const config: OpenClawConfig = {
     agents: {
-      entries: { main: { default: true, agentDir: "/tmp/openclaw-agent" } },
+      entries: { main: { agentDir: "/tmp/openclaw-agent" } },
       defaults: {
         model: "openai/gpt-5.6-sol",
         models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
@@ -282,7 +282,7 @@ describe("setup inference plugin ownership", () => {
   it("does not load plugins for a direct custom provider using the built-in OpenClaw harness", async () => {
     const config: OpenClawConfig = {
       agents: {
-        entries: { main: { default: true, agentDir: "/tmp/openclaw-agent" } },
+        entries: { main: { agentDir: "/tmp/openclaw-agent" } },
         defaults: {
           model: "fixture/direct-model",
           models: { "fixture/direct-model": { agentRuntime: { id: "openclaw" } } },
@@ -395,7 +395,7 @@ describe("setup probe projection", () => {
 
         // Gateway delivery can consume retained events after the producer has cleaned up.
         for (const event of events) {
-          handler(event);
+          await handler(event);
         }
         expect(broadcast).not.toHaveBeenCalled();
         expect(broadcastToConnIds).not.toHaveBeenCalled();
@@ -403,7 +403,7 @@ describe("setup probe projection", () => {
         expect(persistLifecycle).not.toHaveBeenCalled();
       } finally {
         unsubscribe();
-        handler.dispose();
+        await handler.dispose();
         chatRunState.clear();
         if (runId) {
           clearAgentRunContext(runId);

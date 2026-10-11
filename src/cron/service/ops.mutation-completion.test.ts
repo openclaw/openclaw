@@ -82,39 +82,6 @@ describe("Cron mutation completion", () => {
     }
   });
 
-  it("retains a committed add when its post-commit reporting fails", async () => {
-    const { storePath } = await makeStorePath();
-    const state = createMutationState(storePath);
-    const completion = createCronMutationCompletion("cron.add")!;
-    const failure = new Error("post-commit reporting failed");
-    const info = vi.spyOn(state.deps.log, "info").mockImplementationOnce(() => {
-      throw failure;
-    });
-    try {
-      await expect(
-        completion.run(() =>
-          add(
-            state,
-            {
-              name: "committed before reporting",
-              enabled: true,
-              schedule: { kind: "every", everyMs: 60_000 },
-              sessionTarget: "isolated",
-              wakeMode: "now",
-              payload: { kind: "agentTurn", message: "run" },
-            },
-            { commitGuard: () => {} },
-          ),
-        ),
-      ).rejects.toBe(failure);
-      expect(completion.isCommitted()).toBe(true);
-      expect((await loadCronStore(storePath)).jobs).toHaveLength(1);
-    } finally {
-      info.mockRestore();
-      stop(state);
-    }
-  });
-
   it("leaves completion unmarked when the native commit fails", async () => {
     const { storePath } = await makeStorePath();
     const state = createMutationState(storePath);

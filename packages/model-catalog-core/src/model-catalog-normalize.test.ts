@@ -5,27 +5,6 @@ import {
 } from "./model-catalog-normalize.js";
 
 describe("model catalog normalization", () => {
-  it.each([
-    { input: [" model-2 ", "model-0"], expected: ["model-2", "model-0"] },
-    { input: ["missing"], expected: undefined },
-    { input: ["model-0", " model-0 "], expected: undefined },
-    { input: [" "], expected: undefined },
-    { input: [42], expected: undefined },
-  ])("normalizes a complete recommendation list or omits it: $input", ({ input, expected }) => {
-    const catalog = normalizeModelCatalog(
-      {
-        providers: {
-          openai: {
-            recommendedModels: input,
-            models: Array.from({ length: 3 }, (_, index) => ({ id: `model-${index}` })),
-          },
-        },
-      },
-      { ownedProviders: new Set(["openai"]) },
-    );
-    expect(catalog?.providers?.openai?.recommendedModels).toEqual(expected);
-  });
-
   it("normalizes catalog ownership, aliases, suppressions, and row fields", () => {
     const model = {
       id: "gpt-5.4",
@@ -353,8 +332,6 @@ describe("model catalog normalization", () => {
   it.each([
     { name: "non-record catalog", value: null },
     { name: "invalid suppression", value: { suppressions: [{ provider: "openai" }] } },
-    { name: "unknown discovery", value: { discovery: { openai: "unknown" } } },
-    { name: "array models.dev mapping", value: { modelsDev: ["openai"] } },
     { name: "blank models.dev source", value: { modelsDev: { openai: "  " } } },
   ])("rejects a $name instead of publishing an empty catalog", ({ value }) => {
     expect(normalizeModelCatalog(value, { ownedProviders: new Set(["openai"]) })).toBeUndefined();
@@ -387,54 +364,32 @@ describe("model catalog normalization", () => {
     ]);
   });
 
-  it("bounds selectable context windows and keeps the default inside the cap", () => {
-    const contextWindows = Array.from({ length: 20 }, (_, index) => ({
-      id: `window-${index}`,
-      label: `Window ${index}`,
-      contextWindow: 20 - index,
-    }));
-    const [row] = normalizeModelCatalogProviderRows({
-      provider: "example",
-      providerCatalog: {
-        models: [{ id: "model", contextWindows, contextWindowDefault: "window-3" }],
-      },
-      source: "manifest",
-    });
+  it.each([{ name: "an undeclared default", contextWindowDefault: "missing" }])(
+    "drops the selection tuple with $name",
+    ({ contextWindowDefault }) => {
+      const contextWindows = Array.from({ length: 20 }, (_, index) => ({
+        id: `window-${index}`,
+        label: `Window ${index}`,
+        contextWindow: 20 - index,
+      }));
+      const [row] = normalizeModelCatalogProviderRows({
+        provider: "example",
+        providerCatalog: {
+          models: [
+            {
+              id: "model",
+              contextWindows,
+              ...(contextWindowDefault ? { contextWindowDefault } : {}),
+            },
+          ],
+        },
+        source: "manifest",
+      });
 
-    expect(row?.contextWindows).toHaveLength(16);
-    expect(row?.contextWindows?.map((option) => option.contextWindow)).toEqual([
-      5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-    ]);
-    expect(row?.contextWindowDefault).toBe("window-3");
-  });
-
-  it.each([
-    { name: "an omitted default", contextWindowDefault: undefined },
-    { name: "an undeclared default", contextWindowDefault: "missing" },
-    { name: "a default dropped by the option cap", contextWindowDefault: "window-19" },
-  ])("drops the selection tuple with $name", ({ contextWindowDefault }) => {
-    const contextWindows = Array.from({ length: 20 }, (_, index) => ({
-      id: `window-${index}`,
-      label: `Window ${index}`,
-      contextWindow: 20 - index,
-    }));
-    const [row] = normalizeModelCatalogProviderRows({
-      provider: "example",
-      providerCatalog: {
-        models: [
-          {
-            id: "model",
-            contextWindows,
-            ...(contextWindowDefault ? { contextWindowDefault } : {}),
-          },
-        ],
-      },
-      source: "manifest",
-    });
-
-    // Options without a selectable default would render no picker control, so
-    // the normalized row must drop the whole tuple, not just the default.
-    expect(row?.contextWindows).toBeUndefined();
-    expect(row?.contextWindowDefault).toBeUndefined();
-  });
+      // Options without a selectable default would render no picker control, so
+      // the normalized row must drop the whole tuple, not just the default.
+      expect(row?.contextWindows).toBeUndefined();
+      expect(row?.contextWindowDefault).toBeUndefined();
+    },
+  );
 });

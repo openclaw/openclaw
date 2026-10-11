@@ -1,4 +1,3 @@
-// Collect read-only doctor findings and sanitized diagnostics for an agent handoff.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -130,7 +129,6 @@ async function collectTriageBundle(
   }
 }
 
-/** Collect read-only diagnostics and hand the local repair to an available coding agent. */
 export async function triageCommand(
   runtime: RuntimeEnv,
   options: TriageOptions = {},
@@ -431,11 +429,13 @@ export async function triageCommand(
       }
       return;
     }
-    if (handoff.agent === "claude" && !automatic) {
+    let claudeSafeMode = false;
+    if (handoff.agent === "claude") {
       const { probeClaudeSafeMode } = await import("./triage-claude.js");
       const probe = await probeClaudeSafeMode({
         argv: [handoff.program.command, ...handoff.program.leadingArgv],
         env: targetEnv,
+        signal: automatic?.signal ?? options.recovery?.signal,
         ...agentOptions,
       });
       if (!probe.ok) {
@@ -448,17 +448,18 @@ export async function triageCommand(
       if (!isCurrent()) {
         return;
       }
-      if (!probe.supported) {
-        runtime.error("Claude --safe-mode unavailable; update to Claude Code 2.1.169+.");
-        runtime.log(`Run without safe mode: ${handoffCommands.external.claude}`);
-        exitCliAfterOutput(runtime, 1);
+      claudeSafeMode = probe.supported;
+      if (!claudeSafeMode) {
+        runtime.log(
+          "Claude --safe-mode unavailable; running claude -p with normal customization settings.",
+        );
       }
     }
     runtime.log(`Starting ${handoff.agent}; use --agent <name> to select another coding agent.`);
     const args =
       handoff.agent === "claude"
-        ? ["--safe-mode", prompt]
-        : handoff.agent === "qwen"
+        ? [claudeSafeMode ? "--safe-mode" : "-p", prompt]
+        : handoff.agent === "qwen" || handoff.agent === "agy"
           ? ["--prompt-interactive", prompt]
           : handoff.agent === "opencode" || handoff.agent === "kimi"
             ? ["--prompt", prompt]
@@ -474,7 +475,7 @@ export async function triageCommand(
         const { runUtf8CommandWithTimeout } = await import("../process/exec.js");
         const automaticArgs =
           handoff.agent === "claude"
-            ? ["--safe-mode", "-p"]
+            ? [...(claudeSafeMode ? ["--safe-mode"] : []), "-p"]
             : ["exec", "--skip-git-repo-check", "-"];
         if (!isCurrent()) {
           return;

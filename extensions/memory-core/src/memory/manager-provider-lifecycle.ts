@@ -1,4 +1,3 @@
-// Memory Core plugin module owns embedding provider lifecycle.
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   formatErrorMessage,
@@ -9,7 +8,6 @@ import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-s
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
-  resolveAgentDir,
   resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
@@ -22,7 +20,6 @@ import type {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
-  createEmbeddingProvider,
   resolveEmbeddingProviderAdapterTransport,
   type EmbeddingProvider,
   type EmbeddingProviderResult,
@@ -34,13 +31,16 @@ import {
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
   resolveMemoryPrimaryProviderRequest,
-  resolveMemoryProviderState,
+  resolveMemoryProviderLifecycle,
 } from "./manager-provider-state.js";
 import type {
   MemoryEmbeddingProbeCacheEntry,
   MemoryIndexManagerPurpose,
 } from "./manager-registry.js";
-import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
+import {
+  resolveMemoryIndexProviderIdentities,
+  type MemoryIndexIdentityState,
+} from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
 
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
@@ -113,6 +113,8 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected providersPendingRetirement = new Set<EmbeddingProvider>();
   protected activeBackgroundSearchSyncs = new Set<Promise<void>>();
   protected indexIdentityDirty = false;
+  private primaryRecoveryPromise: Promise<void> | null = null;
+  private primaryRecoveryRetryAt = 0;
   protected abstract indexIdentityState: MemoryIndexIdentityState;
   protected abstract syncAdmitted(
     params?: MemorySyncParams,
@@ -121,13 +123,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract syncPublishedIndexInBackground(params: { reason: string }): Promise<void>;
 
   protected applyProviderResult(providerResult: EmbeddingProviderResult): void {
-    const providerState = resolveMemoryProviderState(providerResult);
-    this.provider = providerState.provider;
-    this.fallbackFrom = providerState.fallbackFrom;
-    this.fallbackReason = providerState.fallbackReason;
-    this.providerUnavailableReason = providerState.providerUnavailableReason;
-    this.providerLifecycle = providerState.lifecycle;
-    this.providerRuntime = providerState.providerRuntime;
+    this.provider = providerResult.provider;
+    this.fallbackFrom = providerResult.fallbackFrom;
+    this.fallbackReason = providerResult.fallbackReason;
+    this.providerUnavailableReason = providerResult.providerUnavailableReason;
+    this.providerLifecycle = resolveMemoryProviderLifecycle(providerResult);
+    this.providerRuntime = providerResult.runtime;
     this.providerInitialized = true;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
@@ -182,6 +183,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     onDebug?: (debug: MemorySearchRuntimeDebug) => void,
   ): Promise<boolean> {
     let indexState = initialIndexState;
+    await this.recoverPrimaryProviderForSearch(indexState);
     const failure = this.embeddingBootstrapFailure;
     if (failure) {
       const cached = this.getCachedEmbeddingAvailability();
@@ -204,12 +206,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       return false;
     }
     if (!this.provider) {
-      const nextFailure: MemoryEmbeddingBootstrapDebug = {
-        ...failure,
-        reason: this.providerUnavailableReason ?? failure.reason,
-      };
-      this.embeddingBootstrapFailure = nextFailure;
-      this.cacheProbeResult({ ok: false, error: nextFailure.reason });
+      const nextFailure = this.refreshEmbeddingBootstrapFailure(failure);
       onDebug?.({ backend: "builtin", embeddingBootstrap: nextFailure });
       return true;
     }
@@ -218,7 +215,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     let activeFailure = failure;
     if (currentIdentity.status !== "valid") {
       try {
-        await this.syncAdmitted({ reason: "search", force: true });
+        await this.syncAdmitted({ reason: "embedding-bootstrap-recovery", force: true });
       } catch (err) {
         const message = redactSensitiveText(formatErrorMessage(err), { mode: "tools" });
         log.warn(`memory sync failed (embedding-bootstrap-recovery): ${message}`);
@@ -244,18 +241,23 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     return true;
   }
 
+  protected refreshEmbeddingBootstrapFailure(failure: MemoryEmbeddingBootstrapDebug) {
+    const nextFailure = { ...failure, reason: this.providerUnavailableReason ?? failure.reason };
+    this.embeddingBootstrapFailure = nextFailure;
+    this.cacheProbeResult({ ok: false, error: nextFailure.reason });
+    return nextFailure;
+  }
+
   protected clearEmbeddingBootstrapFailureAfterRecovery(): void {
     this.embeddingBootstrapFailure = undefined;
     this.providerUnavailableReason = undefined;
     if (this.provider) {
-      this.providerLifecycle = this.fallbackFrom
-        ? {
-            mode: "fallback-active",
-            providerId: this.provider.id,
-            fallbackFrom: this.fallbackFrom,
-            reason: this.fallbackReason ?? "fallback activated",
-          }
-        : { mode: "active", providerId: this.provider.id };
+      this.providerLifecycle = resolveMemoryProviderLifecycle({
+        provider: this.provider,
+        requestedProvider: this.settings.provider,
+        fallbackFrom: this.fallbackFrom,
+        fallbackReason: this.fallbackReason,
+      });
     }
     this.embeddingProbeCache.delete(this.cacheKey);
   }
@@ -301,19 +303,100 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     if (cached) {
       return cached.ok;
     }
-    if (!this.provider) {
+    const provider = this.provider;
+    if (!provider) {
       return false;
     }
     try {
-      await this.embedBatchWithRetry(["ping"]);
+      await this.probeEmbeddingProvider(provider, this.providerRuntime);
       this.cacheProbeResult({ ok: true });
       return true;
     } catch (err) {
       this.markEmbeddingBootstrapFailure(err, {
         retainProvider: true,
-        provider: this.provider.id,
+        provider: provider.id,
       });
       return false;
+    }
+  }
+
+  private async recoverPrimaryProviderForSearch(
+    indexState: MemoryRetrievalIndexState,
+  ): Promise<void> {
+    if (this.primaryRecoveryPromise) {
+      await this.primaryRecoveryPromise;
+      return;
+    }
+    const fallback = this.provider;
+    const meta = indexState.meta;
+    if (
+      !fallback ||
+      !this.fallbackFrom ||
+      !meta ||
+      this.closed ||
+      this.syncProviderGeneration ||
+      Date.now() < this.primaryRecoveryRetryAt ||
+      this.refreshIndexIdentityDirty({ providerKeyKnown: true, indexState }).status === "valid"
+    ) {
+      return;
+    }
+    // A fallback-owned index stays on that provider. Recovery only restores a
+    // primary that can read the published index, never implicitly reindexes it.
+    this.primaryRecoveryRetryAt = Date.now() + EMBEDDING_PROBE_CACHE_TTL_MS;
+    const recovery = (async () => {
+      let candidate: EmbeddingProvider | null = null;
+      try {
+        const result = await this.createConfiguredEmbeddingProvider({
+          ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
+          fallback: "none",
+        });
+        candidate = result.provider;
+        if (
+          !candidate ||
+          !resolveMemoryIndexProviderIdentities({
+            provider: candidate,
+            cacheKeyData: result.runtime?.cacheKeyData,
+            aliases: result.runtime?.indexIdentityAliases,
+          }).some(
+            (identity) =>
+              identity.provider === meta.provider &&
+              identity.model === meta.model &&
+              identity.providerKey === meta.providerKey,
+          )
+        ) {
+          return;
+        }
+        await this.probeEmbeddingProvider(candidate, result.runtime);
+        // Sync owns its captured provider/index pair. A stale probe must not
+        // replace a newer provider or one that is already writing an index.
+        if (
+          this.closed ||
+          this.provider !== fallback ||
+          this.syncProviderGeneration ||
+          this.fallbackProviderInitPromise
+        ) {
+          return;
+        }
+        this.applyProviderResult(result);
+        candidate = null;
+        this.clearEmbeddingBootstrapFailureAfterRecovery();
+        await this.retireProvider(fallback);
+      } catch (err) {
+        if (err instanceof MemoryManagerReloadError) {
+          throw err;
+        }
+        log.debug(`memory embeddings: primary recovery deferred: ${formatErrorMessage(err)}`);
+      } finally {
+        if (candidate) {
+          await this.retireProvider(candidate);
+        }
+      }
+    })();
+    this.primaryRecoveryPromise = recovery;
+    try {
+      await recovery;
+    } finally {
+      this.primaryRecoveryPromise = null;
     }
   }
 
@@ -344,13 +427,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         if (this.closed) {
           return;
         }
-        const providerResult = await createEmbeddingProvider({
-          createProvider: this.createProvider,
-          config: this.cfg,
-          agentDir: resolveAgentDir(this.cfg, this.agentId),
-          ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
-          ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
-        });
+        const providerResult = await this.createConfiguredEmbeddingProvider();
         this.applyProviderResult(providerResult);
       })();
     }
@@ -403,6 +480,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     if (provider) {
       this.provider = null;
       this.providerRuntime = undefined;
+    }
+    return this.retireProvider(provider);
+  }
+
+  private retireProvider(provider: EmbeddingProvider | null): Promise<void> {
+    if (provider) {
       this.providersPendingRetirement.add(provider);
     }
     if (this.providersPendingRetirement.size === 0) {
@@ -419,7 +502,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
           try {
             await this.awaitProviderIdle(pendingProvider);
             await pendingProvider.close?.();
-            this.releaseProvider(pendingProvider);
             this.providersPendingRetirement.delete(pendingProvider);
           } catch (err) {
             if (!closeFailed) {
@@ -494,13 +576,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     providerKeyKnown?: boolean;
     indexState?: MemoryRetrievalIndexState;
   }) {
+    // Provider retirement preserves configured identity for both search and status.
     const provider =
       this.settings.provider === "none"
         ? null
-        : this.providerInitialized
+        : this.providerInitialized && this.providerLifecycle.mode !== "degraded"
           ? this.provider
-            ? { id: this.provider.id, model: this.provider.model }
-            : null
           : undefined;
     const state = this.resolveCurrentIndexIdentityState({
       ...(provider !== undefined ? { provider } : {}),
@@ -569,9 +650,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   async probeVectorStoreAvailability(): Promise<boolean> {
-    return await this.withManagerOperation(
-      async () => await this.probeVectorStoreAvailabilityAdmitted(),
-    );
+    return await this.withManagerOperation(() => this.probeVectorStoreAvailabilityAdmitted());
   }
 
   private async probeVectorStoreAvailabilityAdmitted(): Promise<boolean> {
@@ -635,7 +714,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         });
       }
       try {
-        await this.embedBatchWithRetry(["ping"]);
+        await this.probeEmbeddingProvider(this.provider, this.providerRuntime);
         return this.cacheProbeResult({ ok: true });
       } catch (err) {
         const message = formatErrorMessage(err);

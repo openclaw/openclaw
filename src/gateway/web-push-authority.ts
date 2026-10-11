@@ -76,7 +76,12 @@ function resolveCurrentWebPushTarget(params: {
     return null;
   }
   const rolePolicy = userProfileId
-    ? resolveOperatorRolePolicyForAssignment(userProfileId, params.profile?.role ?? null, cfg)
+    ? resolveOperatorRolePolicyForAssignment(
+        userProfileId,
+        params.profile?.role ?? null,
+        cfg,
+        params.profile?.githubLogin ?? null,
+      )
     : undefined;
   if (cfg.gateway?.roles && !rolePolicy) {
     return null;
@@ -144,6 +149,7 @@ export async function withCurrentWebPushAuthority<T>(
     getRuntimeConfig: () => OpenClawConfig;
     sessionKeys?: readonly string[];
     agentId?: string;
+    preparePublication?: () => Promise<void>;
   },
   prepare: (authority: WebPushAuthority) => { start: () => T | Promise<T> } | undefined,
 ): Promise<T | undefined> {
@@ -222,6 +228,7 @@ export async function withCurrentWebPushAuthority<T>(
                   },
                 };
               },
+              params.preparePublication,
             );
             if (!changed) {
               return begun ? { start: () => begun } : undefined;

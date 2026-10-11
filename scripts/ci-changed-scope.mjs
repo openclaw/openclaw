@@ -1,4 +1,3 @@
-// Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -91,7 +90,7 @@ const MACOS_NATIVE_RE =
 const GIT_OWNER_SCOPE_RE =
   /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout|windows-process-census)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-windows-process-census\.(?:mjs|py)))$)/;
 const MACOS_SCRIPT_SCOPE_RE =
-  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-runtime|stage-openclaw-bun-macos|build-mac-sqlite)\.sh|scripts\/lib\/(?:openclaw-bun-macos|sqlite-macos)\.json|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-runtime(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-runtime-portability))\.mjs|scripts\/(?:materialize-mac-runtime|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|mac-signing-identity|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:build-mac-sqlite|stage-openclaw-bun-macos|codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-runtime|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-runtime-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-runtime-materialization)\.test-support\.ts)$/;
+  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-runtime|stage-openclaw-bun|build-mac-sqlite)\.sh|scripts\/lib\/(?:openclaw-bun|sqlite-macos)\.json|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-runtime(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-runtime-portability))\.mjs|scripts\/(?:materialize-mac-runtime|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|mac-signing-identity|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:build-mac-sqlite|stage-openclaw-bun|codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-runtime|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-runtime-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-runtime-materialization)\.test-support\.ts)$/;
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
@@ -104,6 +103,11 @@ const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
   /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE =
   /^(apps\/android\/|apps\/shared\/|\.github\/actions\/setup-android-toolchain\/)/;
+// JVM tests and benchmark-only changes do not enter the store capture graph.
+const ANDROID_SCREENSHOT_APP_SCOPE_RE =
+  /^apps\/android\/(?!(?:[^/]+\/src\/(?:test[^/]*|androidTest[^/]*)\/|benchmark\/|fastlane\/metadata\/))/;
+const ANDROID_SCREENSHOT_SCRIPT_SCOPE_RE =
+  /^scripts\/(?:android-(?:screenshots\.sh|sips-linux\.sh|app-i18n\.ts|version\.ts|sync-versioning\.ts|pin-version\.ts)|native-(?:i18n-inventory|i18n-locales)\.ts|lib\/(?:android|mobile)-version\.ts|lib\/(?:canonical-json|direct-run)\.mjs)$/;
 // Native bundling owns Mermaid assets and their shared coercion dependency.
 const MERMAID_ASSET_INPUT_RE =
   /^packages\/(?:mermaid-renderer\/|normalization-core\/(?:package\.json|src\/record-coerce\.ts)$)/;
@@ -156,9 +160,11 @@ const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
   /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/(?:git|base-ref)(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|session-repository-checkpoints(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/locales\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+// A plugin can declare its browser entry in any package directory. Keep this
+// path-only planner conservative; source discovery selects actual UI owners.
 const CONTROL_UI_I18N_PRODUCTION_SOURCE_RE =
-  /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
+  /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|extensions\/[^/]+\/.*\.tsx?|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
 const CONTROL_UI_HARD_GENERATED_I18N_RE =
   /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
 const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
@@ -171,7 +177,7 @@ class NativeGeneratedArtifactsMixedError extends Error {}
 const CHROMIUM_UI_TEST_SCOPE_RE =
   /^(ui\/|extensions\/[^/]+\/browser(?:\/|$)|extensions\/browser\/chrome-extension\/|extensions\/qa-lab\/src\/[^/]+\.real-gateway\.e2e\.test\.ts$|test\/vitest\/vitest\.(?:ui-(?:e2e|browser)(?:-[^/.]+)?\.[^/]+\.ts|(?:pattern-file|performance-config|timeouts|weighted-sharding)\.ts|ui-(?:isolated-)?paths\.mjs)$|test\/helpers\/temp-dir\.ts$|scripts\/(?:ensure-playwright-chromium\.mts|test-desktop-resize-real\.mts|check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|control-ui-mock-[^/]+\.ts|lib\/(?:ci-test-timings(?:-schema)?|desktop-resize-proof|vitest-local-scheduling)\.mts)$|config\/(?:ci-test-timings|control-ui-startup-budget-baseline)\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
-  /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-(?:app-i18n|i18n-locales))\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
+  /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-(?:app-i18n|i18n-(?:inventory|locales)))\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
   /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|agents-delete-shared-workspace-docker\.sh|gateway-network-docker\.sh)$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FULL_INSTALL_SMOKE_SCOPE_RE =
@@ -201,8 +207,17 @@ function isAppleSharedBuildInput(path) {
   );
 }
 
+/** @param {string} path Canonical repository-relative build input. */
+function isNativeProtocolInput(path) {
+  return (
+    nativeProtocolInputs.files.includes(path) ||
+    (/\.(?:ts|mts|mjs|json)$/.test(path) &&
+      !/\.(?:test|spec)\./.test(path) &&
+      nativeProtocolInputs.directories.some((directory) => path.startsWith(`${directory}/`)))
+  );
+}
+
 /**
- * Detects high-level CI scope from changed file paths.
  * @param {string[]} changedPaths
  * @returns {ChangedScope}
  */
@@ -248,11 +263,7 @@ export function detectChangedScope(changedPaths) {
     }
 
     const isAppleBuildInput = isAppleSharedBuildInput(path);
-    const isNativeProtocolInput =
-      nativeProtocolInputs.files.includes(path) ||
-      (/\.(?:ts|mts|mjs|json)$/.test(path) &&
-        !/\.(?:test|spec)\./.test(path) &&
-        nativeProtocolInputs.directories.some((directory) => path.startsWith(`${directory}/`)));
+    const hasNativeProtocolInput = isNativeProtocolInput(path);
 
     if (facts.surface === "docs") {
       continue;
@@ -279,12 +290,17 @@ export function detectChangedScope(changedPaths) {
         WORKER_DEPLOY_ARTIFACT_SCOPE_RE.test(path) ||
         APPLE_SHARED_CONTRACT_FIXTURE_RE.test(path) ||
         isAppleBuildInput ||
-        isNativeProtocolInput)
+        hasNativeProtocolInput)
     ) {
       runMacos = true;
     }
 
-    if (IOS_BUILD_RE.test(path) || isAppleBuildInput || isNativeProtocolInput) {
+    if (
+      IOS_BUILD_RE.test(path) ||
+      path === "scripts/ci-xcodebuild.py" ||
+      isAppleBuildInput ||
+      hasNativeProtocolInput
+    ) {
       runIosBuild = true;
     }
 
@@ -293,7 +309,7 @@ export function detectChangedScope(changedPaths) {
       (ANDROID_NATIVE_RE.test(path) ||
         ANDROID_TALK_CONTRACT_FIXTURE_RE.test(path) ||
         MERMAID_ASSET_INPUT_RE.test(path) ||
-        isNativeProtocolInput)
+        hasNativeProtocolInput)
     ) {
       runAndroid = true;
     }
@@ -387,6 +403,36 @@ export function shouldRunIosScreenshots(changedPaths) {
       IOS_SCREENSHOT_APP_SCOPE_RE.test(path) ||
       IOS_SCREENSHOT_SCRIPT_SCOPE_RE.test(path) ||
       isAppleSharedBuildInput(path)
+    );
+  });
+}
+
+/**
+ * Prove the phone and Wear store capture flow when its app or build inputs change.
+ * @param {string[] | null} changedPaths
+ * @returns {boolean}
+ */
+function shouldRunAndroidScreenshots(changedPaths) {
+  if (!Array.isArray(changedPaths)) {
+    return true;
+  }
+  return changedPaths.some((rawPath) => {
+    const { path } = getChangedPathFacts(rawPath);
+    if (isCiDocumentationPath(path) || /\.mdx?$/.test(path)) {
+      return false;
+    }
+    return (
+      ANDROID_SCREENSHOT_APP_SCOPE_RE.test(path) ||
+      ANDROID_SCREENSHOT_SCRIPT_SCOPE_RE.test(path) ||
+      /^(?:apps\/shared\/mermaid\/|apps\/\.i18n\/|\.github\/actions\/(?:setup-android-toolchain|setup-node-env|setup-pnpm-store-cache)\/)/.test(
+        path,
+      ) ||
+      /^(?:\.github\/workflows\/(?:ci|android-store-release)\.yml|scripts\/ci-(?:changed-scope|build-manifest)\.mjs|pnpm-lock\.yaml)$/.test(
+        path,
+      ) ||
+      path === "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" ||
+      MERMAID_ASSET_INPUT_RE.test(path) ||
+      isNativeProtocolInput(path)
     );
   });
 }
@@ -669,7 +715,6 @@ export function shouldRunNativeI18n(changedPaths) {
 }
 
 /**
- * Detects whether node-fast CI can cover the changed paths.
  * @param {string[]} changedPaths
  * @returns {NodeFastScope}
  */
@@ -721,7 +766,6 @@ function detectInstallSmokeScopeForPath(path) {
 }
 
 /**
- * Detects whether install-smoke CI should run for changed paths.
  * @param {string[]} changedPaths
  * @returns {InstallSmokeScope}
  */
@@ -746,7 +790,6 @@ export function detectInstallSmokeScope(changedPaths) {
 }
 
 /**
- * Lists changed paths for CI base/head inputs.
  * @param {string} base
  * @param {string} [head]
  * @param {string} [cwd]
@@ -781,13 +824,13 @@ export function listChangedPaths(
 }
 
 /**
- * Writes CI scope decisions to GitHub Actions output.
  * @param {ChangedScope} scope
  * @param {string} [outputPath]
  * @param {InstallSmokeScope} [installSmokeScope]
  * @param {NodeFastScope} [nodeFastScope]
  * @param {boolean} [runNativeI18n]
  * @param {string[] | null} [changedPaths]
+ * @param {string} [workflowEventName]
  * @returns {void}
  */
 export function writeGitHubOutput(
@@ -800,6 +843,7 @@ export function writeGitHubOutput(
   nodeFastScope = { runFastOnly: false, runPluginContracts: false, runCiRouting: false },
   runNativeI18n = true,
   changedPaths = null,
+  workflowEventName = "",
 ) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
@@ -814,6 +858,11 @@ export function writeGitHubOutput(
   appendFileSync(
     outputPath,
     `run_ios_screenshots=${shouldRunIosScreenshots(changedPaths)}\n`,
+    "utf8",
+  );
+  appendFileSync(
+    outputPath,
+    `run_android_screenshots=${workflowEventName !== "pull_request" && shouldRunAndroidScreenshots(changedPaths)}\n`,
     "utf8",
   );
   appendFileSync(outputPath, `run_android=${scope.runAndroid}\n`, "utf8");
@@ -862,11 +911,6 @@ export function writeGitHubOutput(
   );
 }
 
-/** @returns {boolean} */
-function isDirectRun() {
-  return isDirectRunUrl(process.argv[1], import.meta.url);
-}
-
 /**
  * @param {string[]} argv
  * @returns {{ base: string; head: string; mergeHeadFirstParent: boolean }}
@@ -892,7 +936,8 @@ export function parseArgs(argv) {
   return args;
 }
 
-if (isDirectRun()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  const workflowEventName = process.env.GITHUB_EVENT_NAME ?? "";
   try {
     const args = parseArgs(process.argv.slice(2));
     const changedPaths = listChangedPaths(
@@ -902,7 +947,15 @@ if (isDirectRun()) {
       args.mergeHeadFirstParent,
     );
     if (changedPaths.length === 0) {
-      writeGitHubOutput(EMPTY_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, false, []);
+      writeGitHubOutput(
+        EMPTY_SCOPE,
+        process.env.GITHUB_OUTPUT,
+        undefined,
+        undefined,
+        false,
+        [],
+        workflowEventName,
+      );
       process.exit(0);
     }
     const allowedGeneratedMixBranch = resolveAllowedGeneratedMixBranch();
@@ -915,6 +968,7 @@ if (isDirectRun()) {
       detectNodeFastScope(changedPaths),
       shouldRunNativeI18n(changedPaths),
       changedPaths,
+      workflowEventName,
     );
   } catch (error) {
     if (
@@ -924,7 +978,15 @@ if (isDirectRun()) {
       console.error(error.message);
       process.exitCode = 1;
     } else {
-      writeGitHubOutput(FULL_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, true, null);
+      writeGitHubOutput(
+        FULL_SCOPE,
+        process.env.GITHUB_OUTPUT,
+        undefined,
+        undefined,
+        true,
+        null,
+        workflowEventName,
+      );
     }
   }
 }

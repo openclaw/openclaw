@@ -209,7 +209,7 @@ describe("SMS status probe", () => {
     ).resolves.toMatchObject({
       ok: false,
       error:
-        "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before probing.",
+        "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before checking.",
       webhook: {
         status: "unavailable",
       },
@@ -233,7 +233,7 @@ describe("SMS status probe", () => {
       }),
     ).toEqual([
       {
-        text: "Probe: failed (Recent inbound SMS SM11200 has Twilio error 11200.)",
+        text: "Check: failed (Recent inbound SMS SM11200 has Twilio error 11200.)",
         tone: "error",
       },
       { text: "Twilio SMS webhook: https://gateway.example.com/webhooks/sms" },

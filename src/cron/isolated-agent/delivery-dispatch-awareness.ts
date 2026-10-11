@@ -328,7 +328,7 @@ export async function resolveCronDeliveryRouteSessionKey(params: {
 // and gateway server-methods/send.ts.
 export async function commitDirectCronOutboundRoute(params: {
   cfg: OpenClawConfig;
-  runSessionKey: string;
+  runSessionKey?: string;
   delivery: SuccessfulCronDeliveryTarget;
   route: OutboundSessionRoute | null;
 }): Promise<void> {
@@ -500,7 +500,7 @@ export async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
   try {
     const storePath = params.mirror.storePath;
     const initial = storePath
-      ? loadCronSessionEntryLatest(storePath, params.mirror.sessionKey)
+      ? await loadCronSessionEntryLatest(storePath, params.mirror.sessionKey)
       : undefined;
     const expectedSessionId = params.mirror.expectedSessionId ?? initial?.sessionId;
     const expectedLifecycleRevision =
@@ -527,8 +527,9 @@ export async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
           : undefined,
       ],
       signal: params.abortSignal,
-      assertAllowed: () => {
-        const latest = loadCronSessionEntryLatest(storePath, params.mirror.sessionKey);
+      assertAllowed: async (signal) => {
+        const latest = await loadCronSessionEntryLatest(storePath, params.mirror.sessionKey);
+        signal.throwIfAborted();
         if (
           latest?.sessionId !== expectedSessionId ||
           (expectedLifecycleRevision !== undefined &&

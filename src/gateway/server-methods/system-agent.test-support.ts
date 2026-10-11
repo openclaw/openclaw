@@ -161,10 +161,8 @@ export function useSystemAgentGatewayTestFixture() {
     setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
       requireVerifiedInferenceFixture().configuredRoute,
     );
-    transcriptStoreMocks.appendTranscriptTurn.mockReset();
-    transcriptStoreMocks.appendTranscriptReset.mockReset();
-    transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
-    transcriptStoreMocks.appendTranscriptTurnAsync.mockReset();
+    transcriptStoreMocks.appendTurn.mockReset();
+    transcriptStoreMocks.appendReset.mockReset();
     transcriptStoreMocks.readTranscriptTailAsync.mockReset().mockResolvedValue([]);
     greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
     greetingMocks.loadSystemAgentGreetingFacts.mockReset().mockReturnValue({

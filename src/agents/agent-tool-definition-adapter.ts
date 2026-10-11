@@ -16,7 +16,6 @@ import {
   recordStructuredReplayTrustForToolCall,
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { consumeFinalClientVoiceToolConfirmation } from "./agent-tools.before-tool-call.policy.js";
 import {
   finalizeBeforeToolCallExecutionParams,
   prepareBeforeToolCallExecutionParams,
@@ -90,9 +89,7 @@ function serializeToolParams(value: unknown): string {
     if (typeof serialized === "string") {
       return serialized;
     }
-  } catch {
-    // Fall through to String(value).
-  }
+  } catch {}
   if (typeof value === "function") {
     return value.name ? `[Function ${value.name}]` : "[Function anonymous]";
   }
@@ -181,17 +178,15 @@ function sanitizeExecFailureParamsForLog(value: unknown): unknown {
   return sanitized;
 }
 
-function sanitizeToolFailureParamsForLog(toolName: string, value: unknown): unknown {
-  return toolName === "exec" ? sanitizeExecFailureParamsForLog(value) : value;
-}
-
 function describeToolFailureInputs(params: {
   toolName: string;
   rawParams: unknown;
   effectiveParams: unknown;
 }): string {
-  const rawParams = sanitizeToolFailureParamsForLog(params.toolName, params.rawParams);
-  const effectiveParams = sanitizeToolFailureParamsForLog(params.toolName, params.effectiveParams);
+  const sanitize = (value: unknown) =>
+    params.toolName === "exec" ? sanitizeExecFailureParamsForLog(value) : value;
+  const rawParams = sanitize(params.rawParams);
+  const effectiveParams = sanitize(params.effectiveParams);
   const rawSerialized = serializeToolParams(rawParams);
   const parts = [formatToolParamPreview("raw_params", rawSerialized)];
   const effectiveSerialized = serializeToolParams(effectiveParams);
@@ -212,12 +207,11 @@ function normalizeToolExecutionResult(params: {
       return result as AgentToolResult<unknown>;
     }
     logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
-    const details = "details" in record ? record.details : record;
-    const safeDetails = details ?? { status: "ok", tool: toolName };
-    return payloadTextResult(safeDetails);
+    return payloadTextResult(
+      ("details" in record ? record.details : record) ?? { status: "ok", tool: toolName },
+    );
   }
-  const safeDetails = result ?? { status: "ok", tool: toolName };
-  return payloadTextResult(safeDetails);
+  return payloadTextResult(result ?? { status: "ok", tool: toolName });
 }
 
 function buildToolExecutionErrorResult(params: {
@@ -286,7 +280,6 @@ function attachAdapterExecutionPreparer<T extends ToolDefinition>(definition: T)
 
 const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
-/** Find client-hosted tool names that collide with runtime or sibling tools. */
 export function findClientToolNameConflicts(params: {
   tools: ClientToolDefinition[];
   existingToolNames?: Iterable<string>;
@@ -321,7 +314,6 @@ export function findClientToolNameConflicts(params: {
   return Array.from(conflicts);
 }
 
-/** Build a recognizable error for rejecting conflicting client tool names. */
 export function createClientToolNameConflictError(conflicts: string[]): Error {
   return new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
 }
@@ -331,7 +323,6 @@ export function isClientToolNameConflictError(err: unknown): err is Error {
   return err instanceof Error && err.message.startsWith(CLIENT_TOOL_NAME_CONFLICT_PREFIX);
 }
 
-/** Convert executable agent tools into session definitions with hook handling. */
 export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
@@ -413,23 +404,6 @@ export function toToolDefinitions(
               if (decision && !decision.launch) {
                 return { content: [], details: { status: "skipped" } };
               }
-              // A voice grant binds the post-finalizer execution shape. Consuming it
-              // earlier would let later alias or tool-owned rewrites escape the grant.
-              const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
-                toolCallId,
-                toolName: name,
-                toolKind: hookMetadata?.toolKind,
-                params: executeParams,
-                ctx: hookContext,
-              });
-              if (!voiceConfirmation.allowed) {
-                return buildBlockedToolResult({
-                  reason: voiceConfirmation.reason,
-                  deniedReason: "client-voice-confirmation",
-                  toolCallId,
-                  runId: hookContext?.runId,
-                });
-              }
               decision?.start?.();
               recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
             }
@@ -459,6 +433,7 @@ export function toToolDefinitions(
         { kind: "immediate" }
       >["outcome"];
       const settleImmediate = async (outcome: ImmediateOutcome, dispose: () => void) => {
+        let settled: ImmediateOutcome;
         try {
           const result = await settle(async () => {
             if (outcome.kind === "error") {
@@ -466,22 +441,15 @@ export function toToolDefinitions(
             }
             return outcome.result;
           });
-          return {
-            kind: "immediate" as const,
-            outcome: {
-              kind: "result" as const,
-              result,
-              isError: outcome.kind === "result" && outcome.isError,
-            },
-            dispose,
+          settled = {
+            kind: "result",
+            result,
+            isError: outcome.kind === "result" && outcome.isError,
           };
         } catch (error) {
-          return {
-            kind: "immediate" as const,
-            outcome: { kind: "error" as const, error },
-            dispose,
-          };
+          settled = { kind: "error", error };
         }
+        return { kind: "immediate" as const, outcome: settled, dispose };
       };
       let prepared: Awaited<ReturnType<typeof sourcePreparer>>;
       try {
@@ -541,7 +509,6 @@ function coerceParamsRecord(
   return record;
 }
 
-/** Convert client-hosted tools into pending session definitions. */
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: ClientToolCallRecorder,
@@ -587,21 +554,6 @@ export function toClientToolDefinitions(
           if (decision && !decision.launch) {
             recorder?.discard?.(toolCallId, func.name);
             return { content: [], details: { status: "skipped" } };
-          }
-          const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
-            toolCallId,
-            toolName: func.name,
-            params: paramsRecord,
-            ctx: hookContext,
-          });
-          if (!voiceConfirmation.allowed) {
-            recorder?.discard?.(toolCallId, func.name);
-            return buildBlockedToolResult({
-              reason: voiceConfirmation.reason,
-              deniedReason: "client-voice-confirmation",
-              toolCallId,
-              runId: hookContext?.runId,
-            });
           }
           signal?.throwIfAborted();
           decision?.start?.();

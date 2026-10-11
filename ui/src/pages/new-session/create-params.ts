@@ -26,23 +26,12 @@ export type DraftSessionCreateSelection = Partial<
   toolOverrides?: SessionCreateParams["toolOverrides"] | null;
 };
 
-export function canStartSessionAsDraft(params: {
-  allowedVisibilities?: readonly string[];
-  hasMultipleIdentities?: boolean;
-}): boolean {
-  return (
-    params.allowedVisibilities?.includes("draft") === true && params.hasMultipleIdentities === true
-  );
-}
-
 export function isWorktreeNameValid(value: string): boolean {
   const name = value.trim();
   return !name || WORKTREE_NAME_PATTERN.test(name);
 }
 
-/** Maps the new-session draft selections onto additive sessions.create params. */
 export function buildDraftSessionCreateParams(draft: {
-  key?: string;
   agentId: string;
   message: string;
   mentions?: readonly HumanMention[];
@@ -69,7 +58,6 @@ export function buildDraftSessionCreateParams(draft: {
   catalogId?: string;
   category?: string;
 }): SessionCreateParams {
-  const key = normalizeOptionalString(draft.key);
   const displayName = normalizeOptionalString(draft.displayName);
   const baseRef = normalizeOptionalString(draft.baseRef);
   const worktreeName = normalizeOptionalString(draft.worktreeName);
@@ -102,7 +90,6 @@ export function buildDraftSessionCreateParams(draft: {
       ? cwd
       : undefined;
   return {
-    ...(key ? { key } : {}),
     agentId: normalizeAgentId(draft.agentId),
     message,
     ...(!draft.deferInitialTurn && draft.mentions?.length

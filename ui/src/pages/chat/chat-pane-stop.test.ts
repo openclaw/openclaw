@@ -85,35 +85,39 @@ function createStopFixture(scopes = ["operator.write"], useSessionOwner = false)
 }
 
 describe("chat pane Stop intent", () => {
-  it.each(["operator.write", "operator.sessions.write"])(
-    "replays only the captured run once with %s",
-    async (scope) => {
+  it.each([
+    { scope: "operator.write", method: "chat.abort", renderBeforeDisconnect: true },
+    { scope: "operator.sessions.write", method: "chat.abort", renderBeforeDisconnect: false },
+    { scope: "operator.sessions.write", method: "sessions.abort", renderBeforeDisconnect: false },
+  ])(
+    "replays only the captured run once via $method with $scope",
+    async ({ scope, method, renderBeforeDisconnect }) => {
       const fixture = createStopFixture([scope]);
+      fixture.state.chatRunSessionAbortable = method === "sessions.abort";
+      const renderedStop = renderBeforeDisconnect ? fixture.callbacks().onAbort : undefined;
       fixture.disconnect();
-      const stop = fixture.callbacks().onAbort;
+      const stop = renderBeforeDisconnect ? renderedStop : fixture.callbacks().onAbort;
       expect(stop).toBeTypeOf("function");
       stop?.();
+      expect(fixture.state.pendingAbort?.runId).toBe("original-run");
       expect(fixture.request).not.toHaveBeenCalled();
       expect(fixture.state.chatMessage).toBe("keep this draft");
-
       fixture.state.chatRunId = "replacement-run";
-      fixture.reconnect();
+      fixture.state.chatRunSessionAbortable = false;
+      fixture.reconnect([scope], method === "sessions.abort" ? [method] : undefined);
       expect(await replayPendingChatAbort(fixture.state)).toBe(true);
       expect(await replayPendingChatAbort(fixture.state)).toBe(false);
       expect(fixture.request.mock.calls).toEqual([
-        ["chat.abort", { sessionKey: fixture.state.sessionKey, runId: "original-run" }],
+        [
+          method,
+          {
+            [method === "chat.abort" ? "sessionKey" : "key"]: fixture.state.sessionKey,
+            runId: "original-run",
+          },
+        ],
       ]);
     },
   );
-
-  it("rechecks a Stop rendered before the transport dropped", () => {
-    const fixture = createStopFixture();
-    const stop = fixture.callbacks().onAbort;
-    fixture.disconnect();
-    stop?.();
-    expect(fixture.state.pendingAbort?.runId).toBe("original-run");
-    expect(fixture.request).not.toHaveBeenCalled();
-  });
 
   it.each([false, true])("retires the old client's run with queued Stop=%s", async (queued) => {
     const fixture = createStopFixture();
@@ -134,16 +138,29 @@ describe("chat pane Stop intent", () => {
     expect(fixture.state.chatMessage).toBe("keep this draft");
   });
 
-  it("keeps participation and exact-run requirements while offline", () => {
-    const fixture = createStopFixture();
-    fixture.disconnect();
-    expect(fixture.callbacks(true).onAbort).toBeUndefined();
-    fixture.state.chatRunId = null;
-    expect(fixture.callbacks().onAbort).toBeUndefined();
-    fixture.state.chatRunId = "original-run";
-    fixture.disconnect(null);
-    expect(fixture.callbacks().onAbort).toBeUndefined();
-  });
+  it.each(["offline", "owner", "member", "viewer"] as const)(
+    "offers Stop only with current participation, run and access: %s",
+    (condition) => {
+      const fixture = createStopFixture(
+        condition === "offline" ? ["operator.write"] : ["operator.sessions.write"],
+      );
+      if (condition === "offline") {
+        fixture.disconnect();
+        expect(fixture.callbacks(true).onAbort).toBeUndefined();
+        fixture.state.chatRunId = null;
+        expect(fixture.callbacks().onAbort).toBeUndefined();
+        fixture.state.chatRunId = "original-run";
+        fixture.disconnect(null);
+        expect(fixture.callbacks().onAbort).toBeUndefined();
+        return;
+      }
+      fixture.session.sharingRole = condition;
+      const stop = fixture.callbacks().onAbort;
+      expect(typeof stop).toBe(condition === "owner" ? "function" : "undefined");
+      stop?.();
+      expect(fixture.request).toHaveBeenCalledTimes(condition === "owner" ? 1 : 0);
+    },
+  );
 
   it("consumes revoked intent and permits a fresh authorized Stop after access returns", async () => {
     const fixture = createStopFixture();
@@ -161,16 +178,21 @@ describe("chat pane Stop intent", () => {
     await vi.waitFor(() => expect(fixture.request).toHaveBeenCalledOnce());
   });
 
-  it.each(["operator.sessions.write", "operator.admin"])(
-    "retires a previous principal's Stop before the same client's recovery settles with %s",
-    async (scope) => {
+  it.each(["operator.sessions.write", "operator.admin", "replacement-session"])(
+    "retires captured Stop when its principal or session changes: %s",
+    async (change) => {
       const fixture = createStopFixture(["operator.sessions.write"]);
       const renderedStop = fixture.callbacks().onAbort;
       fixture.disconnect();
       renderedStop?.();
       expect(fixture.state.pendingAbort?.runId).toBe("original-run");
-      Object.defineProperty(fixture.client, "recoveryScopeReady", { get: () => false });
-      fixture.reconnect([scope], undefined, "different-principal");
+      if (change === "replacement-session") {
+        fixture.session.sessionId = change;
+        fixture.reconnect();
+      } else {
+        Object.defineProperty(fixture.client, "recoveryScopeReady", { get: () => false });
+        fixture.reconnect([change], undefined, "different-principal");
+      }
       expect(await replayPendingChatAbort(fixture.state)).toBe(false);
       expect(fixture.state.pendingAbort).toBeNull();
       renderedStop?.();
@@ -217,57 +239,46 @@ describe("chat pane Stop intent", () => {
     expect(fixture.request).not.toHaveBeenCalled();
   });
 
-  it("rechecks online write access when a rendered Stop is clicked", () => {
+  it.each([
+    "write-access",
+    "ownership",
+    "missing-row",
+    "session",
+    "run",
+    "row-run",
+    "route",
+  ] as const)("does not retarget a rendered Stop after changing %s", (change) => {
     const fixture = createStopFixture();
+    if (change === "row-run") {
+      fixture.state.chatRunId = null;
+    }
     const stop = fixture.callbacks().onAbort;
-    fixture.reconnect(["operator.read"]);
+    expect(stop).toBeTypeOf("function");
+    if (change === "write-access") {
+      fixture.reconnect(["operator.read"]);
+    } else if (change === "ownership" || change === "missing-row") {
+      fixture.reconnect(["operator.sessions.write"]);
+      if (change === "ownership") {
+        fixture.session.sharingRole = "viewer";
+      } else {
+        fixture.state.sessionsResult = { ...createSessionsListResult(), sessions: [] };
+      }
+    } else if (change === "session") {
+      fixture.session.sessionId = "replacement-session";
+    } else if (change === "run") {
+      fixture.state.chatRunId = "replacement-run";
+    } else if (change === "row-run") {
+      fixture.session.activeRunIds = ["replacement-run"];
+    } else {
+      fixture.state.sessionKey = "agent:main:other";
+    }
     stop?.();
     expect(fixture.request).not.toHaveBeenCalled();
-    expect(fixture.onDenied).toHaveBeenCalledOnce();
+    expect(fixture.state.chatMessage).toBe("keep this draft");
+    if (change === "write-access") {
+      expect(fixture.onDenied).toHaveBeenCalledOnce();
+    }
   });
-
-  it.each(["owner", "member", "viewer"] as const)(
-    "limits a narrow Stop to its %s row",
-    (sharingRole) => {
-      const fixture = createStopFixture(["operator.sessions.write"]);
-      fixture.session.sharingRole = sharingRole;
-      const stop = fixture.callbacks().onAbort;
-      expect(typeof stop).toBe(sharingRole === "owner" ? "function" : "undefined");
-      stop?.();
-      expect(fixture.request).toHaveBeenCalledTimes(sharingRole === "owner" ? 1 : 0);
-    },
-  );
-
-  it.each(["ownership", "missing-row", "session", "run", "row-run", "route"] as const)(
-    "does not retarget a rendered Stop after changing %s",
-    (change) => {
-      const fixture = createStopFixture();
-      if (change === "row-run") {
-        fixture.state.chatRunId = null;
-      }
-      const stop = fixture.callbacks().onAbort;
-      expect(stop).toBeTypeOf("function");
-      if (change === "ownership" || change === "missing-row") {
-        fixture.reconnect(["operator.sessions.write"]);
-        if (change === "ownership") {
-          fixture.session.sharingRole = "viewer";
-        } else {
-          fixture.state.sessionsResult = { ...createSessionsListResult(), sessions: [] };
-        }
-      } else if (change === "session") {
-        fixture.session.sessionId = "replacement-session";
-      } else if (change === "run") {
-        fixture.state.chatRunId = "replacement-run";
-      } else if (change === "row-run") {
-        fixture.session.activeRunIds = ["replacement-run"];
-      } else {
-        fixture.state.sessionKey = "agent:main:other";
-      }
-      stop?.();
-      expect(fixture.request).not.toHaveBeenCalled();
-      expect(fixture.state.chatMessage).toBe("keep this draft");
-    },
-  );
 
   it.each([true, false])(
     "authorizes the captured row rather than the new selection (owns original=%s)",
@@ -299,20 +310,6 @@ describe("chat pane Stop intent", () => {
       );
     },
   );
-
-  it("replays recovered embedded Stop through its captured advertised method", async () => {
-    const fixture = createStopFixture(["operator.sessions.write"]);
-    fixture.state.chatRunSessionAbortable = true;
-    fixture.disconnect();
-    fixture.callbacks().onAbort?.();
-    fixture.state.chatRunId = "replacement-browser-run";
-    fixture.state.chatRunSessionAbortable = false;
-    fixture.reconnect(["operator.sessions.write"], ["sessions.abort"]);
-    expect(await replayPendingChatAbort(fixture.state)).toBe(true);
-    expect(fixture.request.mock.calls).toEqual([
-      ["sessions.abort", { key: fixture.session.key, runId: "original-run" }],
-    ]);
-  });
 
   it.each(["owner", "viewer"] as const)(
     "settles waiting narrow Stop when the canonical row arrives as %s",
@@ -347,15 +344,4 @@ describe("chat pane Stop intent", () => {
       );
     },
   );
-
-  it("retires captured Stop when its session incarnation is replaced", async () => {
-    const fixture = createStopFixture(["operator.sessions.write"]);
-    fixture.disconnect();
-    fixture.callbacks().onAbort?.();
-    fixture.session.sessionId = "replacement-session";
-    fixture.reconnect();
-    expect(await replayPendingChatAbort(fixture.state)).toBe(false);
-    expect(fixture.state.pendingAbort).toBeNull();
-    expect(fixture.request).not.toHaveBeenCalled();
-  });
 });

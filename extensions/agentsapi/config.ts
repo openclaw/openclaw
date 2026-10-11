@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import type { AgentToolParam, EnvironmentParam } from "openai/resources/beta/agents/agents";
+import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { z } from "zod";
 
 export const DEFAULT_NATIVE_TOOLS = [
@@ -29,6 +31,7 @@ export const agentsApiConfigSchema = z.strictObject({
     })
     .optional(),
   environment: z.enum(["openai_hosted", "self_hosted"]).default("openai_hosted"),
+  executorController: z.string().trim().min(1).optional(),
   openai_host: z
     .strictObject({
       network: z
@@ -85,4 +88,50 @@ export function resolveAgentsApiEnvironment(
           ? { network: parsed.openai_host.network }
           : {}),
       };
+}
+
+/** Immutable native configuration must match before resuming a retained binding. */
+export function requireAgentsApiSessionFingerprint({
+  existingFingerprint,
+  model,
+  environment,
+  mcpTools,
+  webSearchEnabled,
+}: {
+  existingFingerprint?: string;
+  model: string;
+  environment: AgentsApiEnvironment;
+  mcpTools: AgentToolParam.AgentToolConfigParamMcp[];
+  webSearchEnabled: boolean;
+}): string {
+  const identity = [
+    model,
+    // Preserve existing hosted identities only when no network policy is configured.
+    ...(environment.type === "self_hosted" || environment.network != null ? [environment] : []),
+    ...(mcpTools.length ? [mcpTools] : []),
+    // Legacy bindings have no restriction marker; never assume their tools are disabled.
+    ...(!webSearchEnabled ? [{ webSearch: false }] : []),
+  ];
+  const fingerprint = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+  if (existingFingerprint && existingFingerprint !== fingerprint) {
+    throw new Error(
+      "Agents API model, environment, MCP, or web-search policy changed; reset the OpenClaw session before continuing",
+    );
+  }
+  return fingerprint;
+}
+
+export function resolveAgentsApiNativeToolPolicy(
+  params: Pick<AgentHarnessAttemptParamsV2, "config" | "toolOverrides">,
+  pluginConfig: AgentsApiConfig,
+) {
+  const webSearchEnabled =
+    params.config?.tools?.web?.search?.enabled !== false &&
+    params.toolOverrides?.webSearch !== false;
+  return {
+    webSearchEnabled,
+    nativeTools: webSearchEnabled
+      ? pluginConfig.nativeTools
+      : pluginConfig.nativeTools.filter((tool) => tool.type !== "web_search"),
+  };
 }

@@ -1,5 +1,7 @@
-import type { AgentSideConnection } from "@agentclientprotocol/sdk";
+import type { AgentSideConnection, SessionUpdate } from "@agentclientprotocol/sdk";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
@@ -27,10 +29,6 @@ export class AcpTranslatorAgentEvents {
     private readonly sessionUpdates: AcpTranslatorSessionUpdates,
     private readonly pendingPrompts: Map<string, AcpPendingPrompt>,
     private readonly approvalRelays: Map<string, AcpPendingApprovalRelay>,
-    private readonly getPendingPrompt: (
-      sessionId: string,
-      runId: string,
-    ) => AcpPendingPrompt | undefined,
     private readonly findPendingBySessionKey: (
       sessionKey: string,
       runId?: string,
@@ -52,49 +50,117 @@ export class AcpTranslatorAgentEvents {
     }
 
     if (stream === "approval") {
-      await this.handleApprovalEvent({ sessionKey, runId, data });
+      const approvalEvent = parseGatewayExecApprovalEventData(data);
+      if (approvalEvent) {
+        this.startApprovalRelay({ sessionKey, runId, approvalEvent });
+      }
       return;
     }
 
-    if (stream !== "tool") {
+    if (stream !== "tool" && (stream !== "item" || data.kind !== "preamble")) {
       return;
     }
-    const phase = data.phase as string | undefined;
-    const name = data.name as string | undefined;
-    const toolCallId = data.toolCallId as string | undefined;
-    if (!toolCallId) {
-      return;
-    }
-
     const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
       return;
     }
 
-    if (phase === "start") {
-      if (!pending.toolCalls) {
-        pending.toolCalls = new Map();
-      }
-      if (pending.toolCalls.has(toolCallId)) {
+    let update: SessionUpdate;
+    if (stream === "item") {
+      const text = typeof data.progressText === "string" ? data.progressText.trimEnd() : "";
+      if (!text) {
         return;
       }
-      const args = data.args as Record<string, unknown> | undefined;
-      const title = formatToolTitle(name, args);
-      const kind = inferToolKind(name);
-      const locations = extractToolCallLocations(args);
-      pending.toolCalls.set(toolCallId, {
-        title,
-        kind,
-        rawInput: args,
-        locations,
-      });
-      await this.sessionUpdates.emit({
-        sessionId: pending.sessionId,
-        sessionKey: pending.sessionKey,
-        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-        runId: pending.idempotencyKey,
-        record: true,
-        update: {
+      const projection = payload.preamble;
+      if (
+        !isRecord(projection) ||
+        (projection.retainedText !== undefined && typeof projection.retainedText !== "string")
+      ) {
+        return;
+      }
+      const itemId = normalizeOptionalString(data.itemId) ?? "";
+      const preambles = (pending.sentPreambles ??= new Map());
+      const isNewPreamble = !preambles.has(itemId);
+      let sent = preambles.get(itemId) ?? "";
+      let preceding = "";
+      const previous = pending.preamblePreview;
+      if (isNewPreamble && previous) {
+        // One retired preview can contain several subsequently identified items.
+        sent = previous.sent.slice(previous.text.length).replace(/^\n+/, "");
+        preambles.set(previous.itemId, previous.text);
+        pending.preamblePreview = undefined;
+      }
+      if (isNewPreamble && typeof projection.retainedText === "string") {
+        sent = "";
+        const retained = projection.retainedText.trimEnd();
+        const answer = pending.sentText ?? "";
+        if (answer.startsWith(retained)) {
+          const preview = answer.slice(retained.length).replace(/^\n+/, "");
+          if (text.startsWith(preview) || preview.startsWith(text)) {
+            sent = preview;
+          }
+        }
+        preceding = retained.startsWith(answer) ? retained.slice(answer.length) : "";
+        pending.sentText = retained;
+        pending.streamMessage = mergeChatStreamMessage(pending.streamMessage, {
+          deltaText: retained,
+          replace: true,
+        });
+      }
+      const delta = sent.startsWith(text)
+        ? ""
+        : text.startsWith(sent)
+          ? text.slice(sent.length)
+          : text;
+      preambles.set(itemId, sent.startsWith(text) ? sent : text);
+      if (sent.startsWith(text) && sent.length > text.length) {
+        pending.preamblePreview = { itemId, text, sent };
+      } else if (pending.preamblePreview?.itemId === itemId) {
+        pending.preamblePreview = undefined;
+      }
+      if (!preceding && !delta) {
+        if (isNewPreamble) {
+          pending.preambleNeedsSeparator = true;
+        }
+        return;
+      }
+      const separator =
+        isNewPreamble && !sent && pending.preambleNeedsSeparator && !delta.startsWith("\n")
+          ? "\n"
+          : "";
+      pending.preambleNeedsSeparator = true;
+      update = {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: preceding && delta ? `${preceding}\n\n${delta}` : separator + preceding + delta,
+        },
+      };
+    } else {
+      const phase = data.phase as string | undefined;
+      const name = data.name as string | undefined;
+      const toolCallId = data.toolCallId as string | undefined;
+      if (!toolCallId) {
+        return;
+      }
+
+      if (phase === "start") {
+        pending.preamblePreview = undefined;
+        pending.sentPreambles?.delete("");
+        pending.toolCalls ??= new Map();
+        if (pending.toolCalls.has(toolCallId)) {
+          return;
+        }
+        const args = data.args as Record<string, unknown> | undefined;
+        const title = formatToolTitle(name, args);
+        const kind = inferToolKind(name);
+        const locations = extractToolCallLocations(args);
+        pending.toolCalls.set(toolCallId, {
+          title,
+          kind,
+          locations,
+        });
+        update = {
           sessionUpdate: "tool_call",
           toolCallId,
           title,
@@ -102,33 +168,34 @@ export class AcpTranslatorAgentEvents {
           rawInput: args,
           kind,
           locations,
-        },
-      });
-      return;
-    }
-
-    if (phase === "update" || phase === "result") {
-      const toolState = pending.toolCalls?.get(toolCallId);
-      const result = phase === "update" ? data.partialResult : data.result;
-      if (phase === "result") {
-        pending.toolCalls?.delete(toolCallId);
-      }
-      await this.sessionUpdates.emit({
-        sessionId: pending.sessionId,
-        sessionKey: pending.sessionKey,
-        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-        runId: pending.idempotencyKey,
-        record: true,
-        update: {
+        };
+      } else if (phase === "update" || phase === "result") {
+        const toolState = pending.toolCalls?.get(toolCallId);
+        const result = phase === "update" ? data.partialResult : data.result;
+        if (phase === "result") {
+          pending.toolCalls?.delete(toolCallId);
+        }
+        update = {
           sessionUpdate: "tool_call_update",
           toolCallId,
           status: phase === "update" ? "in_progress" : data.isError ? "failed" : "completed",
           rawOutput: result,
           content: extractToolCallContent(result),
           locations: extractToolCallLocations(toolState?.locations, result),
-        },
-      });
+        };
+      } else {
+        return;
+      }
+      pending.preambleNeedsSeparator = false;
     }
+    await this.sessionUpdates.emit({
+      sessionId: pending.sessionId,
+      sessionKey: pending.sessionKey,
+      ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+      runId: pending.idempotencyKey,
+      record: true,
+      update,
+    });
   }
 
   handleExecApprovalRequestEvent(evt: EventFrame): void {
@@ -148,39 +215,16 @@ export class AcpTranslatorAgentEvents {
     this.startApprovalRelay({ sessionKey, approvalEvent });
   }
 
-  clearApprovalRelaysForPrompt(
-    sessionId: string,
-    runId?: string,
-    opts: { denyActive?: boolean } = {},
-  ): void {
+  clearApprovalRelaysForPrompt(sessionId: string, runId: string): void {
     for (const [approvalId, relay] of this.approvalRelays) {
-      if (relay.sessionId !== sessionId) {
-        continue;
-      }
-      if (runId && relay.runId !== runId) {
+      if (relay.sessionId !== sessionId || relay.runId !== runId) {
         continue;
       }
       this.approvalRelays.delete(approvalId);
-      if (opts.denyActive && relay.state === "active") {
+      if (relay.state === "active") {
         void this.resolveGatewayApproval(approvalId, "deny");
       }
     }
-  }
-
-  private async handleApprovalEvent(params: {
-    sessionKey: string;
-    runId?: string;
-    data: Record<string, unknown>;
-  }): Promise<void> {
-    const approvalEvent = parseGatewayExecApprovalEventData(params.data);
-    if (!approvalEvent) {
-      return;
-    }
-    this.startApprovalRelay({
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      approvalEvent,
-    });
   }
 
   private startApprovalRelay(params: {
@@ -211,7 +255,6 @@ export class AcpTranslatorAgentEvents {
       approvalId: approvalEvent.approvalId,
       runId: pending.idempotencyKey,
       sessionId: pending.sessionId,
-      sessionKey: pending.sessionKey,
       state: "active",
     };
     this.approvalRelays.set(relay.approvalId, relay);
@@ -341,7 +384,7 @@ export class AcpTranslatorAgentEvents {
     return (
       this.approvalRelays.get(relay.approvalId) === relay &&
       relay.state === "active" &&
-      this.getPendingPrompt(relay.sessionId, relay.runId) !== undefined
+      this.pendingPrompts.get(relay.sessionId)?.idempotencyKey === relay.runId
     );
   }
 }

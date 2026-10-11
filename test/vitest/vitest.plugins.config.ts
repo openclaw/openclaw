@@ -20,6 +20,7 @@ export const nativeLoaderPluginTestFiles = [
   "src/plugins/plugin-runtime-artifact-resolution.test.ts",
   "src/plugins/plugin-sdk-native-resolver.test.ts",
   "src/plugins/public-surface-loader.test.ts",
+  "src/plugins/sdk-alias.test.ts",
   "src/plugins/stage-bundled-plugin-runtime.test.ts",
 ];
 

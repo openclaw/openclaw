@@ -1,5 +1,4 @@
 import { html, type TemplateResult } from "lit";
-import { icons } from "../../../components/icons.ts";
 import { getSlashCommandDescription, type SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 
@@ -21,10 +20,6 @@ export function getSlashArgOptionId(paneId: string, commandName: string, arg: st
     paneId,
     `slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`,
   );
-}
-
-export function renderSlashIcon(name: NonNullable<SlashCommandDef["icon"]>) {
-  return icons[name] ?? icons.terminal;
 }
 
 export function renderSlashMatchedName(name: string, query: string): TemplateResult {

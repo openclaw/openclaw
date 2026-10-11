@@ -41,7 +41,7 @@ import {
 } from "./session-binding.test-helpers.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import * as threadLifecyclePreflight from "./thread-lifecycle-preflight.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 
 function participantHostCapabilities(assertNativeSubagentSpawnAllowed: () => void) {
@@ -65,12 +65,8 @@ describe("Codex participant native admission", () => {
   setupRunAttemptTestHooks({ sessionOwner: null });
   it.each([
     { hooks: "optional", lifecycle: "fresh", participants: "solo", policy: "normal" },
-    { hooks: "disabled", lifecycle: "fresh", participants: "solo", policy: "normal" },
-    { hooks: "disabled", lifecycle: "resumed", participants: "solo", policy: "normal" },
-    { hooks: "managed-only", lifecycle: "fresh", participants: "solo", policy: "normal" },
     { hooks: "managed-only", lifecycle: "resumed", participants: "solo", policy: "normal" },
     { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "normal" },
-    { hooks: "managed-only", lifecycle: "fresh", participants: "multiple", policy: "normal" },
     { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "token-sharing" },
   ] as const)(
     "handles $participants participants with $hooks native admission on a $lifecycle $policy thread",
@@ -186,7 +182,10 @@ describe("Codex participant native admission", () => {
               ]) {
                 spawnFailure = new Error(message);
                 await expect(
-                  resources.buildNativeHookRelayFinalConfigPatch({ action: "start" }),
+                  resources.buildNativeHookRelayFinalConfigPatch(
+                    { action: "start" },
+                    harness.client,
+                  ),
                 ).rejects.toBe(spawnFailure);
               }
               spawnFailure = ambiguity;
@@ -206,12 +205,7 @@ describe("Codex participant native admission", () => {
             resources.state.thread = binding;
             expect(preflight).toHaveBeenCalledWith(
               expect.objectContaining({
-                nativeModelAdmission:
-                  policy === "token-sharing"
-                    ? undefined
-                    : hooks === "disabled"
-                      ? "disabled"
-                      : "optional",
+                nativeModelAdmission: policy === "token-sharing" ? undefined : "optional",
               }),
             );
             const admission = await preflight.mock.results[0]?.value;
@@ -310,7 +304,6 @@ describe("Codex native hook Gateway fallback", () => {
     const registered = vi.spyOn(agentHarnessRuntime, "setActiveEmbeddedRun");
     for (const { hooks, policy, supportsSteering } of [
       { hooks: "disabled", policy: "normal", supportsSteering: false },
-      { hooks: "managed-only", policy: "normal", supportsSteering: false },
       { hooks: "optional", policy: "normal", supportsSteering: true },
       { hooks: "disabled", policy: "token-sharing", supportsSteering: true },
       { hooks: "disabled", policy: "report-only", supportsSteering: true },
@@ -339,7 +332,7 @@ describe("Codex native hook Gateway fallback", () => {
       }
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "configRequirements/read") {
-          return { requirements: { allowManagedHooksOnly: hooks === "managed-only" } };
+          return { requirements: { allowManagedHooksOnly: false } };
         }
         if (method === "account/read") {
           return { account: { type: "apiKey" } };

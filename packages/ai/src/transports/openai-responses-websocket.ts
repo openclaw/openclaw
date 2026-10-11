@@ -7,6 +7,7 @@ import type {
   ResponsesServerEvent,
 } from "openai/resources/responses/responses.js";
 import { ResponsesWS } from "openai/resources/responses/ws.js";
+import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import {
   getSessionResourceOwnerId,
@@ -27,6 +28,7 @@ import {
   OpenAIResponsesWebSocketPreDispatchError,
   OpenAIResponsesWebSocketSafeRetryError,
 } from "./openai-responses-contracts.js";
+import { isOfficialOpenAIResponsesBaseUrl } from "./openai-responses-endpoint.js";
 import {
   responsesInputFingerprint,
   type ResponsesInputReplay,
@@ -72,6 +74,7 @@ type OpenAIResponsesWebSocketStream = {
   reusedConnection: boolean;
   continuationStatus: ResponsesContinuationStatus | "socket_not_cached";
   inputReplay?: ResponsesInputReplay;
+  readonly hasActiveResponse: boolean;
   finish: (options?: { keep?: boolean }) => void;
 };
 
@@ -86,33 +89,6 @@ type DegradedWebSocketConnection = {
   expiryTimer: ReturnType<typeof setTimeout>;
 };
 const degradedWebSocketConnections = new Map<string, DegradedWebSocketConnection>();
-
-function isOfficialOpenAIResponsesBaseUrl(baseUrl: string | undefined): boolean {
-  if (!baseUrl) {
-    return false;
-  }
-  const url = URL.parse(baseUrl);
-  return (
-    url !== null &&
-    url.origin === "https://api.openai.com" &&
-    url.username === "" &&
-    url.password === "" &&
-    url.search === "" &&
-    url.hash === "" &&
-    url.pathname.replace(/\/+$/, "") === "/v1"
-  );
-}
-export function supportsNativeOpenAIResponsesEndpoint(params: {
-  provider: string;
-  api: string;
-  baseUrl?: string;
-}): boolean {
-  return (
-    params.provider.trim().toLowerCase() === "openai" &&
-    params.api === "openai-responses" &&
-    isOfficialOpenAIResponsesBaseUrl(params.baseUrl)
-  );
-}
 
 function closeWebSocketSilently(socket: ResponsesWS, reason = "done"): void {
   try {
@@ -151,18 +127,9 @@ function scheduleSessionWebSocketExpiry(cacheKey: string, entry: CachedWebSocket
   entry.idleTimer.unref?.();
 }
 
-type PreparedWebSocketConnection = {
-  client: OpenAI;
-  headers: Record<string, string>;
-  identity: string;
-  owner: SessionResourceOwner;
-  ownerId: number;
-};
+type PreparedWebSocketConnection = ReturnType<typeof prepareWebSocketConnection>;
 
-function prepareWebSocketConnection(
-  client: OpenAI,
-  headers: Record<string, string> | undefined,
-): PreparedWebSocketConnection {
+function prepareWebSocketConnection(client: OpenAI, headers: Record<string, string> | undefined) {
   if (!isOfficialOpenAIResponsesBaseUrl(client.baseURL)) {
     throw new Error("OpenAI Responses WebSocket requires the official API endpoint");
   }
@@ -268,8 +235,7 @@ function acquireWebSocket(
   },
   connection: PreparedWebSocketConnection,
 ): WebSocketLease {
-  const useCache = params.mode !== "websocket" && Boolean(params.sessionId);
-  if (!useCache || !params.sessionId) {
+  if (params.mode === "websocket" || !params.sessionId) {
     return createTransientWebSocketLease(connection);
   }
 
@@ -318,26 +284,10 @@ async function nextWebSocketMessage(
   iterator: AsyncIterator<ResponsesWebSocketStreamMessage>,
   signal: AbortSignal | undefined,
 ): Promise<IteratorResult<ResponsesWebSocketStreamMessage>> {
-  if (!signal) {
-    return iterator.next();
-  }
-  if (signal.aborted) {
+  if (signal?.aborted) {
     throw transportAbortError(signal);
   }
-  let onAbort: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      iterator.next(),
-      new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(transportAbortError(signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
+  return await racePromiseWithAbortSignal(iterator.next(), signal, transportAbortError);
 }
 
 function readServerEvent(
@@ -698,6 +648,9 @@ export function createOpenAIResponsesWebSocketStream(params: {
     reusedConnection: lease.reusedConnection,
     continuationStatus: prepared.continuationStatus,
     inputReplay,
+    get hasActiveResponse() {
+      return Boolean(steering?.responseId || resumedSteering);
+    },
     finish,
   };
 }

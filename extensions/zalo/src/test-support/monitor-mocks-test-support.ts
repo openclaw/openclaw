@@ -24,11 +24,9 @@ import { vi, type Mock } from "vitest";
 import type { ResolvedZaloAccount } from "../types.js";
 
 type MonitorModule = typeof import("../monitor.js");
-type SecretInputModule = typeof import("../secret-input.js");
 type WebhookModule = typeof import("../monitor.webhook.js");
 
 const monitorModuleUrl = new URL("../monitor.ts", import.meta.url).href;
-const secretInputModuleUrl = new URL("../secret-input.ts", import.meta.url).href;
 const webhookModuleUrl = new URL("../monitor.webhook.ts", import.meta.url).href;
 const apiModuleId = new URL("../api.js", import.meta.url).pathname;
 const runtimeModuleId = new URL("../runtime.js", import.meta.url).pathname;
@@ -121,12 +119,6 @@ async function importMonitorModule(params: {
     `${monitorModuleUrl}?t=${params.cacheBust}-${Date.now()}`
   )) as MonitorModule;
   return module;
-}
-
-async function importSecretInputModule(cacheBust: string): Promise<SecretInputModule> {
-  return (await import(
-    `${secretInputModuleUrl}?t=${cacheBust}-${Date.now()}`
-  )) as SecretInputModule;
 }
 
 const importCachedWebhookModule = createLazyRuntimeModule(
@@ -228,7 +220,7 @@ export async function startWebhookLifecycleMonitor(params: {
       ? params.account.config.webhookUrl
       : undefined;
   const webhookUrl = params.webhookUrl ?? accountWebhookUrl;
-  const { normalizeSecretInputString } = await importSecretInputModule("secret-input");
+  const { normalizeSecretInputString } = await import("openclaw/plugin-sdk/secret-input");
   const webhookSecret =
     params.webhookSecret ?? normalizeSecretInputString(params.account.config?.webhookSecret);
   const { monitorZaloProvider } = params.cacheKey

@@ -37,6 +37,7 @@ import {
 } from "./live-event-window.js";
 import {
   captureWorkerTurnFinishing,
+  captureWorkerReplyMedia,
   type WorkerTurnTranscriptSource,
 } from "./placement-turn-claim-events.js";
 import {
@@ -313,12 +314,12 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     return claimed;
   };
 
-  const publish = (
+  const publish = async (
     window: LiveEventWindow,
     publication: WorkerLiveEventPublication,
     allowBufferedTerminalCapacity: boolean,
-  ): WorkerLiveEventFailure | undefined => {
-    const { request, recordApplied, runOwner, source } = publication;
+  ): Promise<WorkerLiveEventFailure | undefined> => {
+    const { request, recordApplied, runOwner, source, prepareReplyMedia } = publication;
     if (runOwner?.isCancelled()) {
       if (!runOwner.isCancelledFinishing(request)) {
         return invalidEvent();
@@ -349,6 +350,18 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       stream: request.event.kind,
       data: prepareWorkerLiveEventData(request.event),
     };
+    if (
+      request.event.kind === "assistant" &&
+      request.event.payload.mediaUrls?.length &&
+      prepareReplyMedia
+    ) {
+      const payload = await prepareReplyMedia(request.event.payload);
+      event.data = { ...event.data, ...payload };
+      if (payload.text !== request.event.payload.text) {
+        event.data.replace = true;
+        event.data.delta = payload.text ?? "";
+      }
+    }
     let activity;
     if (request.event.kind === "tool") {
       const tool = request.event.payload;
@@ -403,26 +416,24 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return invalidEvent();
     }
     const write = recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
-    if (write) {
-      window.trajectoryWrites.add(write);
-      void write.then(() => window.trajectoryWrites.delete(write));
-    }
+    window.trajectoryWrites.add(write);
+    void write.then(() => window.trajectoryWrites.delete(write));
     recordApplied?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
 
-  const drain = (
+  const drain = async (
     window: LiveEventWindow,
     first: WorkerLiveEventPublication,
     firstPending?: PendingLiveEvent,
-  ): WorkerLiveEventApplicationResult => {
+  ): Promise<WorkerLiveEventApplicationResult> => {
     let buffered = firstPending;
     let publishedPrefix = false;
     while (true) {
       const publication = buffered ?? first;
       const { request } = publication;
-      const failed = publish(window, publication, buffered !== undefined);
+      const failed = await publish(window, publication, buffered !== undefined);
       if (failed?.details.reason === "capacity-exceeded" && buffered) {
         // Keep the ordered tail retryable while the active prefix claim drains.
         // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
@@ -457,7 +468,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
 
-  const applyToWindow = (
+  const applyToWindow = async (
     window: LiveEventWindow,
     params: {
       identity: WorkerConnectionIdentity;
@@ -465,7 +476,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       source: WorkerTurnTranscriptSource;
     },
     runOwner: WorkerTurnLiveEventOwner | undefined,
-  ): WorkerLiveEventApplicationResult => {
+  ): Promise<WorkerLiveEventApplicationResult> => {
     if (params.request.seq <= window.ackedSeq) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
     }
@@ -477,7 +488,13 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       runOwner?.record(event);
       recordFinishing?.();
     };
-    const publication = { request: params.request, recordApplied, runOwner, source: params.source };
+    const publication = {
+      request: params.request,
+      recordApplied,
+      runOwner,
+      source: params.source,
+      prepareReplyMedia: captureWorkerReplyMedia(params.identity),
+    };
     const { seq } = params.request;
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
@@ -528,7 +545,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     try {
       let result: WorkerLiveEventApplicationResult;
       try {
-        result = applyToWindow(window, params, runOwner);
+        result = await applyToWindow(window, params, runOwner);
       } finally {
         // Snapshot this accepted prefix, including duplicate ACKs, even if a later
         // callback throws. Later requests own their own writes.

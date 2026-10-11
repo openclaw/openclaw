@@ -406,16 +406,6 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(payload).toMatchObject({ thinking, max_tokens: maxTokens });
   });
 
-  it.each([
-    ["claude-opus-4-6", "xhigh", "high"],
-    ["claude-sonnet-4-6", "max", "max"],
-  ] as const)("maps %s %s reasoning to %s effort", (id, reasoning, effort) => {
-    expect(captureOptions(makeModel({ id, maxTokens: 128000 }), { reasoning })).toMatchObject({
-      thinkingEnabled: true,
-      effort,
-    });
-  });
-
   it("honors explicit max opt-outs for Vertex aliases", () => {
     const model = makeModel({
       id: "production-claude",

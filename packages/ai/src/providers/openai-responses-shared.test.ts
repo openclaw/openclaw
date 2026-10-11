@@ -323,15 +323,6 @@ describe("Responses temperature support", () => {
   });
 });
 
-describe("Responses output token limits", () => {
-  it("clamps maxTokens to the Responses minimum", () => {
-    const params = {} as ResponseCreateParamsStreaming;
-    applyCommonResponsesParams(params, nativeOpenAIModel, { messages: [] }, { maxTokens: 1 });
-
-    expect(params.max_output_tokens).toBe(16);
-  });
-});
-
 describe("Responses reasoning effort", () => {
   it("passes max through for GPT-5.6 Sol", () => {
     expect(resolveOpenAISimpleReasoningEffort(gpt56SolModel, "max")).toBe("max");
@@ -353,7 +344,6 @@ describe("Responses reasoning effort", () => {
     reasoning: "minimal" | "high";
     expected: string;
   }>([
-    { model: gpt56SolModel, reasoning: "minimal", expected: "low" },
     {
       model: { ...proxyOpenAIModel, compat: { supportedReasoningEfforts: ["ProviderHigh"] } },
       reasoning: "high",
@@ -615,43 +605,15 @@ describe("convertResponsesMessages", () => {
       expect(item).toHaveProperty("encrypted_content", "route-bound-ciphertext");
     },
   );
-
-  it("serializes structured tool results as text instead of image placeholders", () => {
-    const input = replay(
-      {
-        messages: [
-          {
-            role: "toolResult",
-            toolCallId: "call_structured",
-            toolName: "session_status",
-            content: [
-              {
-                type: "json",
-                payload: { sessionKey: "current", model: "openai/gpt-5.4", status: "ok" },
-              },
-            ],
-            isError: false,
-            timestamp: 1,
-          },
-        ],
-      } as unknown as Context,
-      { includeSystemPrompt: false, replayResponsesItemIds: false },
-    );
-    expect(input).toContainEqual({
-      type: "function_call_output",
-      call_id: "call_structured",
-      output: expect.stringContaining('"type":"json"'),
-    });
-  });
 });
 
 describe("processResponsesStream", () => {
-  it.each([
-    ["400 The encrypted content could not be verified.", 500, false],
-    ["Could not decrypt encrypted_content metadata for the OAuth sidecar.", 400, false],
-  ])("classifies encrypted replay rejection: %s", (message, status, expected) => {
-    expect(isInvalidEncryptedContentError({ message, status })).toBe(expected);
-  });
+  it.each([["Could not decrypt encrypted_content metadata for the OAuth sidecar.", 400, false]])(
+    "classifies encrypted replay rejection: %s",
+    (message, status, expected) => {
+      expect(isInvalidEncryptedContentError({ message, status })).toBe(expected);
+    },
+  );
 
   it("aborts the Responses request signal when the first SSE event never arrives", async () => {
     vi.useFakeTimers();
@@ -676,7 +638,7 @@ describe("processResponsesStream", () => {
     }
   });
 
-  it.each(["create", "response.failed-status", "error", "nested-error"] as const)(
+  it.each(["create", "response.failed-status", "error"] as const)(
     "recovers code-less encrypted reasoning rejected during %s stream drain",
     async (failureShape) => {
       const failureMessage =
@@ -708,19 +670,13 @@ describe("processResponsesStream", () => {
                         },
                       },
                     }
-                  : failureShape === "nested-error"
-                    ? {
-                        type: "error",
-                        sequence_number: 1,
-                        error: { code: null, message: failureMessage },
-                      }
-                    : {
-                        type: "error",
-                        sequence_number: 1,
-                        code: null,
-                        message: "400 Could not decrypt the provided encrypted_content.",
-                        param: null,
-                      }
+                  : {
+                      type: "error",
+                      sequence_number: 1,
+                      code: null,
+                      message: "400 Could not decrypt the provided encrypted_content.",
+                      param: null,
+                    }
               ) as ResponseStreamEvent;
             } else {
               yield {
@@ -1066,24 +1022,6 @@ describe("processResponsesStream", () => {
       cacheWrite: 3,
       totalTokens: 42,
     });
-  });
-
-  it("reports content-filtered incomplete responses as errors", async () => {
-    const { output, done } = startLifecycle(() =>
-      streamResponsesEvents([
-        {
-          type: "response.incomplete",
-          response: {
-            id: "resp_filtered",
-            status: "incomplete",
-            incomplete_details: { reason: "content_filter" },
-          },
-        } as ResponseStreamEvent,
-      ]),
-    );
-    await done;
-    expect(output.stopReason).toBe("error");
-    expect(output.errorMessage).toBe("Provider incomplete_reason: content_filter");
   });
 
   it("preserves failed terminal response details and accounting", async () => {

@@ -1,15 +1,19 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { deleteSubagentSessionForCleanup } from "../agents/subagents/registry/subagent-session-cleanup.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
+import { callGateway } from "./call.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { loadSessionEntry } from "./session-utils.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
+  rpcReq,
 } from "./test-helpers.js";
 
 for (const mode of ["stop", "restart", "graceful"] as const) {
@@ -37,6 +41,12 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
           acquisition = startGatewayServerHarness();
           harness = await acquisition;
           agentDispatch = await import("./agent-turn/agent-run-dispatch.js");
+          const [{ coreGatewayHandlers }, { prepareGatewayRequestHandler }] = await Promise.all([
+            import("./server-methods/core-handlers.js"),
+            import("./server-methods/lazy-core-handlers.js"),
+          ]);
+          // Lazy module transformation belongs to fixture setup, outside the RPC deadline.
+          await prepareGatewayRequestHandler(coreGatewayHandlers["sessions.create"]!);
         } finally {
           capture.mockRestore();
         }
@@ -65,6 +75,26 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
       const graceObserved = createDeferred();
       const runId = `gateway-${mode}-execution`;
       const order: string[] = [];
+      const childSessionKey = `agent:main:subagent:${mode}-cleanup`;
+      const { ws } = await harness.openClient();
+      const created = await rpcReq<{
+        entry: { sessionId: string; lifecycleRevision: string };
+      }>(ws, "sessions.create", { key: childSessionKey });
+      expect(created.ok).toBe(true);
+      const child = created.payload!.entry;
+      const cleanupErrors: string[] = [];
+      const cleanupParams = {
+        callGateway,
+        gatewayBinding: {
+          resolveGatewayContext: kernel.gatewayRequestContext.resolveGatewayContext,
+        },
+        childSessionKey,
+        expectedSessionId: child.sessionId,
+        expectedLifecycleRevision: child.lifecycleRevision,
+        isCurrent: () => true,
+        onError: (error: unknown) => cleanupErrors.push(String(error)),
+      };
+      const cleanupOutcomes: string[] = [];
       const foreign = registerChatAbortController({
         chatAbortControllers: new Map(),
         runId,
@@ -98,12 +128,31 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
             onSettled: async (outcome) => {
               finalizerEntered.resolve();
               await finalizerRelease.promise;
+              let cleanupCurrent = true;
+              cleanupOutcomes.push(
+                await deleteSubagentSessionForCleanup({
+                  ...cleanupParams,
+                  prepareCurrent: async () => {
+                    cleanupCurrent = false;
+                    return true;
+                  },
+                  isCurrent: () => cleanupCurrent,
+                }),
+                await deleteSubagentSessionForCleanup({
+                  ...cleanupParams,
+                  expectedLifecycleRevision: "superseded-child",
+                }),
+                await deleteSubagentSessionForCleanup(cleanupParams),
+              );
+              order.push(
+                loadSessionEntry(childSessionKey).entry ? "child retained" : "child deleted",
+              );
               const result = await params.onSettled?.(outcome);
               order.push("finalizer settled");
               return result ?? true;
             },
-            cleanupAbortController: () => {
-              params.cleanupAbortController();
+            cleanupAbortController: async () => {
+              await params.cleanupAbortController();
               order.push("run owner released");
             },
             io: {
@@ -167,18 +216,24 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
 
         if (mode === "graceful") {
           // This is the same owner inventory the CLI waits on before ordinary server.close().
-          grace = waitForGatewayActiveWork(5_000, {
-            onSnapshot: (snapshot) => {
-              if (!snapshot.idle) {
-                graceObserved.resolve();
-              }
-            },
-          });
-          await graceObserved.promise;
-          expect(runSignal?.aborted).toBe(false);
-          release();
-          await terminalObserved.promise;
-          expect(await grace).toMatchObject({ drained: true });
+          // Keep real polling and cleanup, but decouple the grace budget from runner speed.
+          vi.useFakeTimers({ toFake: ["Date"] });
+          try {
+            grace = waitForGatewayActiveWork(5_000, {
+              onSnapshot: (snapshot) => {
+                if (!snapshot.idle) {
+                  graceObserved.resolve();
+                }
+              },
+            });
+            await withinTest(graceObserved.promise, signal);
+            expect(runSignal?.aborted).toBe(false);
+            release();
+            await withinTest(terminalObserved.promise, signal);
+            expect(await withinTest(grace, signal)).toMatchObject({ drained: true });
+          } finally {
+            vi.useRealTimers();
+          }
         }
         closing = harness.server.close({
           reason: mode === "restart" ? "gateway restart" : "gateway stopping",
@@ -200,6 +255,8 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         await nextTurn();
         await closing;
 
+        expect(cleanupOutcomes, cleanupErrors.join("\n")).toEqual(["failed", "changed", "deleted"]);
+        await expect(deleteSubagentSessionForCleanup(cleanupParams)).resolves.toBe("failed");
         expect(foreign.controller.signal.aborted).toBe(false);
         if (mode === "restart") {
           expect(restartMarkers).toHaveBeenCalledOnce();
@@ -223,6 +280,7 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         }
         expect(order).toEqual([
           "command settled",
+          "child deleted",
           "finalizer settled",
           "run owner released",
           "dependencies stopped",

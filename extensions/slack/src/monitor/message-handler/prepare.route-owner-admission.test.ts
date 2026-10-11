@@ -146,7 +146,7 @@ it.each([
   };
   registerSessionBindingAdapter(adapter);
 
-  const prepared = resolveSlackRoutingContext({
+  const prepared = await resolveSlackRoutingContext({
     ctx: { cfg, teamId: "T1", threadInheritParent: false, threadHistoryScope: "thread" },
     account: createSlackTestAccount({ replyToMode: "all" }),
     message: {
@@ -158,10 +158,7 @@ it.each([
       ts: "1770408518.000002",
       ...(threaded ? { thread_ts: threadTs } : {}),
     },
-    isDirectMessage: direct,
-    isGroupDm: false,
-    isRoom: !direct,
-    isRoomish: !direct,
+    chatType: direct ? "direct" : "channel",
   });
   const route = prepared.route;
   expect(route.agentId).toBe(configured ? "work" : "main");

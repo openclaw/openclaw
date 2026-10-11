@@ -2,17 +2,21 @@ import { threadId } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import type {
   ReclamationDatabaseOptions,
-  SessionEntryMaintenanceInput,
+  SessionMaintenanceMetadataCommand,
   SessionMaintenanceLiveProtection,
+  SessionMaintenanceReadCommand,
 } from "../config/sessions/session-accessor.sqlite-lifecycle-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import type { WorkerOperations } from "./worker-operation-registry.js";
 
-type PreparationInput = { id: string; input: SessionEntryMaintenanceInput };
+type PreparationInput = Omit<
+  Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
+  "kind"
+> & { id: string };
 type MetadataInput =
-  | { kind: "maintenance-statistics" }
+  | Exclude<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>
   | {
       kind: "maintenance-plan";
       preparationId: string;
@@ -24,6 +28,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
   databaseOptions: ReclamationDatabaseOptions;
   assertFileIdentity(): void;
   openWriter(): OpenClawAgentDatabase;
+  readPreparedDatabase(): OpenClawAgentDatabase;
   admit(stage: "transaction" | "commit", publication?: unknown): void;
 }) {
   const preparations = new Map<
@@ -49,6 +54,18 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     }
   };
   const operations = {
+    "session.maintenance.read": (plan: SessionMaintenanceReadCommand) => {
+      context.assertFileIdentity();
+      const kernel = expectDefined(maintenance, "Session maintenance kernel");
+      return {
+        kind: "session-maintenance-read" as const,
+        result: kernel.readSessionMaintenanceInWorker(
+          { ...plan, databaseOptions: context.databaseOptions },
+          context.readPreparedDatabase(),
+        ),
+        workerThreadId: threadId,
+      };
+    },
     "session.maintenance.release": ({ id }: { id: string }) => releasePreparation(id),
     "session.maintenance.prepare": (input: PreparationInput) => {
       const kernel = expectDefined(maintenance, "Session maintenance kernel");
@@ -63,6 +80,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
       const prepared = kernel.prepareSessionMaintenanceInWorker({
         kind: "maintenance-plan",
         input: input.input,
+        ageChanges: input.ageChanges,
         databaseOptions: context.databaseOptions,
       });
       preparations.set(input.id, { plan: input, prepared });
@@ -84,9 +102,13 @@ export function createAgentDatabaseMaintenanceOwner(context: {
       if (preparation && input.kind === "maintenance-plan") {
         Object.assign(preparation.plan.input, input.protection);
       }
-      const plan = preparation
-        ? { kind: "maintenance-plan" as const, input: preparation.plan.input }
-        : { kind: "maintenance-statistics" as const };
+      const plan: SessionMaintenanceMetadataCommand =
+        input.kind === "maintenance-plan"
+          ? {
+              ...expectDefined(preparation, "Session maintenance preparation").plan,
+              kind: "maintenance-plan",
+            }
+          : input;
       const value = kernel.runSessionMaintenanceMetadataInTransaction(
         { ...plan, databaseOptions: context.databaseOptions },
         {

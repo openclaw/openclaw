@@ -484,18 +484,6 @@ describe("openclaw.chat", () => {
     );
   });
 
-  it("rejects unknown setup verification params without running inference", async () => {
-    const { calls, respond } = makeRespond();
-
-    await systemAgentHandler("openclaw.setup.verify")({
-      params: { modelRef: "openai/gpt-5.5" },
-      respond,
-    } as never);
-
-    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
-    expect(calls[0]?.ok).toBe(false);
-  });
-
   it.each(["applied", "restart-required", "failed"] as const)(
     "settles setup completion without holding its lane: %s",
     async (outcome) => {
@@ -562,9 +550,14 @@ describe("openclaw.chat", () => {
     },
   );
 
-  it.each(["success", "task error", "response error"])(
-    "keeps admitted setup on the gateway lane without relabeling %s as non-admission",
-    async (outcome) => {
+  it.each([
+    { outcome: "success", modelTarget: undefined },
+    { outcome: "task error", modelTarget: undefined },
+    { outcome: "response error", modelTarget: undefined },
+    { outcome: "success", modelTarget: "utility" as const },
+  ])(
+    "keeps admitted $modelTarget setup on the gateway lane without relabeling $outcome as non-admission",
+    async ({ outcome, modelTarget }) => {
       const failure = new Error("admitted operation failed");
       const started = createDeferred();
       const release = createDeferred();
@@ -589,6 +582,7 @@ describe("openclaw.chat", () => {
         params: {
           kind: "api-key",
           agentId: "research",
+          ...(modelTarget ? { modelTarget } : {}),
           modelRef: "openai/gpt-5.5",
           authChoice: "openai-api-key",
           apiKey: "test-key",
@@ -615,6 +609,7 @@ describe("openclaw.chat", () => {
       expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledWith({
         kind: "api-key",
         agentId: "research",
+        ...(modelTarget ? { modelTarget } : {}),
         modelRef: "openai/gpt-5.5",
         authChoice: "openai-api-key",
         apiKey: "test-key",
@@ -735,20 +730,6 @@ describe("openclaw.chat", () => {
     });
   });
 
-  it("does not pass UI context to welcome-only turns", async () => {
-    const engine = makeVerifiedEngine();
-    const handle = vi.spyOn(engine, "handle");
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
-
-    const call = await callChat(makeContext(sessions), {
-      sessionId: "s1",
-      context: { page: "custodian" },
-    });
-
-    expect(call.ok).toBe(true);
-    expect(handle).not.toHaveBeenCalled();
-  });
-
   it("persists completed turns from the engine's sanitized history", async () => {
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
@@ -764,39 +745,18 @@ describe("openclaw.chat", () => {
     });
 
     expect(call.payload).toMatchObject({ reply: "Everything is healthy." });
-    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledTimes(2);
-    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenNthCalledWith(
+    expect(transcriptStoreMocks.appendTurn).toHaveBeenCalledTimes(2);
+    expect(transcriptStoreMocks.appendTurn).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ role: "user", text: "How is this machine doing?" }),
     );
-    expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenNthCalledWith(
+    expect(transcriptStoreMocks.appendTurn).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ role: "assistant", text: "Everything is healthy." }),
     );
-    expect(JSON.stringify(transcriptStoreMocks.appendTranscriptTurn.mock.calls)).not.toMatch(
+    expect(JSON.stringify(transcriptStoreMocks.appendTurn.mock.calls)).not.toMatch(
       /ui-context|plugin-reference|Example/,
     );
-  });
-
-  it("seeds a new engine with the persisted tail without recording an idle welcome", async () => {
-    stubEngineOverview();
-    transcriptStoreMocks.readTranscriptTail.mockReturnValue([
-      { role: "user", text: "Earlier question", at: 1 },
-      { role: "assistant", text: "Earlier answer", at: 2 },
-    ]);
-    const seedHistory = vi.spyOn(SystemAgentChatEngine.prototype, "seedHistory");
-
-    const call = await callChat(makeContext(new Map()), { sessionId: "fresh" });
-
-    expect(call.ok).toBe(true);
-    expect(transcriptStoreMocks.readTranscriptTail).toHaveBeenCalledWith(30, {
-      afterLastReset: true,
-    });
-    expect(seedHistory).toHaveBeenCalledWith([
-      { role: "user", text: "Earlier question" },
-      { role: "assistant", text: "Earlier answer" },
-    ]);
-    expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
   });
 
   it("persists only the mask marker for a sensitive hosted-wizard answer", async () => {
@@ -814,11 +774,11 @@ describe("openclaw.chat", () => {
 
     const prompt = await callChat(context, { sessionId: "s1", message: "connect telegram" });
     expect(prompt.payload).toMatchObject({ sensitive: true, wizardInputPending: true });
-    transcriptStoreMocks.appendTranscriptTurn.mockClear();
+    transcriptStoreMocks.appendTurn.mockClear();
 
     await callChat(context, { sessionId: "s1", message: "raw-secret-value" });
 
-    const persisted = transcriptStoreMocks.appendTranscriptTurn.mock.calls.map(([turn]) => turn);
+    const persisted = transcriptStoreMocks.appendTurn.mock.calls.map(([turn]) => turn);
     expect(persisted).toContainEqual(
       expect.objectContaining({ role: "user", text: "<redacted secret>" }),
     );

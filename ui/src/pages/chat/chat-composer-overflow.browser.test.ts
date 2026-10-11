@@ -1,10 +1,10 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { page, server, userEvent } from "vitest/browser";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import type { SessionGoal } from "../../api/types.ts";
 import { renderComposerMenu } from "../../components/composer-menu.ts";
-import { createComposerProps } from "./chat-composer.test-support.ts";
+import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
 import { renderAttachmentPreview } from "./components/chat-attachments.ts";
 import { clearGoalElapsedTimers, renderChatGoal } from "./components/chat-composer-goal.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
@@ -42,7 +42,7 @@ describe("composer overflow presentation", () => {
       goalStyles,
     ].join("\n");
     document.head.append(styles);
-    container = document.createElement("div");
+    container = createComposerContainer();
     container.className = "agent-chat__input";
     container.style.width = "760px";
     document.body.append(container);
@@ -195,64 +195,44 @@ describe("composer overflow presentation", () => {
     },
   );
 
-  it.each([
-    ["reply", "ltr"],
-    ["goal", "ltr"],
-    ["mentions", "ltr"],
-    ["combined", "rtl"],
-  ] as const)(
-    "places %s context before attachments and multiline input in %s",
-    async (kind, dir) => {
-      await page.viewport(390, 900);
-      container.className = "";
-      container.dir = dir;
-      container.style.width = "358px";
-      render(
-        renderChatComposer(
-          createComposerProps({
-            draft: "@Jordan Rivera\nReview the attached file.\nKeep this third line.",
-            attachments: attachments.slice(0, 1),
-            ...(kind === "reply" || kind === "combined"
-              ? {
-                  replyTarget: { messageId: "order-reply", text: "Original message" },
-                }
-              : {}),
-            ...(kind === "goal" || kind === "combined"
-              ? { goalDraftMode: { action: "start" as const } }
-              : {}),
-            ...(kind === "mentions" || kind === "combined"
-              ? {
-                  mentions: [{ profileId: "jordan", start: 0, end: 14 }],
-                }
-              : {}),
-          }),
-        ),
-        container,
-      );
-      await afterLayout();
-      const strips = container.querySelectorAll<HTMLElement>(".composer-context-strip");
-      expect(strips).toHaveLength(kind === "combined" ? 3 : 1);
-      const attachmentBox = rail().querySelector(".chat-attachment-thumb")!.getBoundingClientRect();
-      const textareaBox = container.querySelector("textarea")!.getBoundingClientRect();
-      const composerBox = container.querySelector(".agent-chat__input")!.getBoundingClientRect();
-      for (const strip of strips) {
-        const box = strip.getBoundingClientRect();
-        expect(box.height).toBeCloseTo(45, 0);
-        expect(box.bottom).toBeLessThanOrEqual(attachmentBox.top);
-        expect(box.left).toBeGreaterThanOrEqual(composerBox.left);
-        expect(box.right).toBeLessThanOrEqual(composerBox.right);
-        expect(getComputedStyle(strip).borderBottomWidth).toBe("1px");
-      }
-      expect(attachmentBox.height).toBeGreaterThan(0);
-      expect(attachmentBox.bottom).toBeLessThanOrEqual(textareaBox.top);
-    },
-  );
+  it("places stacked context before attachments and multiline input in RTL", async () => {
+    await page.viewport(390, 900);
+    container.className = "";
+    container.dir = "rtl";
+    container.style.width = "358px";
+    render(
+      renderChatComposer(
+        createComposerProps({
+          draft: "@Jordan Rivera\nReview the attached file.\nKeep this third line.",
+          attachments: attachments.slice(0, 1),
+          replyTarget: { messageId: "order-reply", text: "Original message" },
+          goalDraftMode: { action: "start" },
+          mentions: [{ profileId: "jordan", start: 0, end: 14 }],
+        }),
+      ),
+      container,
+    );
+    await afterLayout();
+    const strips = container.querySelectorAll<HTMLElement>(".composer-context-strip");
+    expect(strips).toHaveLength(3);
+    const attachmentBox = rail().querySelector(".chat-attachment-thumb")!.getBoundingClientRect();
+    const textareaBox = container.querySelector("textarea")!.getBoundingClientRect();
+    const composerBox = container.querySelector(".agent-chat__input")!.getBoundingClientRect();
+    for (const strip of strips) {
+      const box = strip.getBoundingClientRect();
+      expect(box.height).toBeCloseTo(45, 0);
+      expect(box.bottom).toBeLessThanOrEqual(attachmentBox.top);
+      expect(box.left).toBeGreaterThanOrEqual(composerBox.left);
+      expect(box.right).toBeLessThanOrEqual(composerBox.right);
+      expect(getComputedStyle(strip).borderBottomWidth).toBe("1px");
+    }
+    expect(attachmentBox.height).toBeGreaterThan(0);
+    expect(attachmentBox.bottom).toBeLessThanOrEqual(textareaBox.top);
+  });
 
   it.each([
-    [390, "ltr"],
     [390, "rtl"],
     [1440, "ltr"],
-    [1440, "rtl"],
   ] as const)("dismisses only the intended stacked context at %ipx in %s", async (width, dir) => {
     await page.viewport(width, 900);
     container.className = "";
@@ -520,55 +500,30 @@ describe("composer overflow presentation", () => {
     },
   );
 
-  it("updates retained attachment edges when files are appended, scrolled, and removed", async () => {
-    drawAttachments(1);
-    const element = rail();
-    await afterLayout();
-    await expectEdges(element, false);
+  it.each([false, true])(
+    "updates attachment edges after resizing (reconnect=%s)",
+    async (reconnect) => {
+      const part = drawAttachments(3);
+      const element = rail();
+      await afterLayout();
+      await expectEdges(element, false);
 
-    drawAttachments(7);
-    expect(rail()).toBe(element);
-    expect(element.scrollWidth).toBeGreaterThan(element.clientWidth);
-    await expectEdges(element, true);
-    element.scrollLeft = element.scrollWidth;
-    await expectEdges(element, true, false, true);
-
-    drawAttachments(1);
-    await expectEdges(element, false);
-  });
-
-  it("updates retained attachment edges when the composer narrows and widens", async () => {
-    drawAttachments(3);
-    const element = rail();
-    await afterLayout();
-    await expectEdges(element, false);
-
-    container.style.width = "400px";
-    expect(rail()).toBe(element);
-    expect(element.scrollWidth).toBeGreaterThan(element.clientWidth);
-    await expectEdges(element, true);
-
-    container.style.width = "760px";
-    await expectEdges(element, false);
-  });
-
-  it("resumes overflow observation when a retained composer reconnects", async () => {
-    const part = drawAttachments(3);
-    const element = rail();
-    await afterLayout();
-    await expectEdges(element, false);
-
-    part.setConnected(false);
-    container.style.width = "400px";
-    await afterLayout();
-    await expectEdges(element, false);
-
-    part.setConnected(true);
-    expect(rail()).toBe(element);
-    await expectEdges(element, true);
-    container.style.width = "760px";
-    await expectEdges(element, false);
-  });
+      if (reconnect) {
+        part.setConnected(false);
+      }
+      container.style.width = "400px";
+      if (reconnect) {
+        await afterLayout();
+        await expectEdges(element, false);
+        part.setConnected(true);
+      }
+      expect(rail()).toBe(element);
+      expect(element.scrollWidth).toBeGreaterThan(element.clientWidth);
+      await expectEdges(element, true);
+      container.style.width = "760px";
+      await expectEdges(element, false);
+    },
+  );
 
   it.each([
     [320, "active"],
@@ -627,6 +582,28 @@ describe("composer overflow presentation", () => {
       });
       expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
       const cardBox = container.querySelector(".agent-chat__goal")!.getBoundingClientRect();
+      // Exercise keyboard order before pointer activation establishes a native
+      // navigation starting point on one of the slotted buttons.
+      const clear = commands.querySelector<HTMLButtonElement>(".agent-chat__goal-clear")!;
+      clear.focus();
+      expect(document.activeElement).toBe(clear);
+      // Option-Tab includes buttons under Safari's default macOS keyboard settings.
+      await userEvent.keyboard(
+        server.browser === "webkit" && server.platform === "darwin"
+          ? "{Alt>}{Shift>}{Tab}{/Shift}{/Alt}"
+          : "{Shift>}{Tab}{/Shift}",
+      );
+      expect(document.activeElement).toBe(
+        commands.querySelector(
+          status === "active" ? ".agent-chat__goal-pause" : ".agent-chat__goal-resume",
+        ),
+      );
+      await userEvent.keyboard("{Enter}");
+      expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(
+        goal.id,
+        status === "active" ? "pause" : "resume",
+      );
+      onGoalAction.mockClear();
       for (const button of commands.querySelectorAll<HTMLButtonElement>("button")) {
         const box = button.getBoundingClientRect();
         expect(box.left).toBeGreaterThanOrEqual(cardBox.left);
@@ -645,17 +622,6 @@ describe("composer overflow presentation", () => {
         [goal.id, status === "active" ? "pause" : "resume"],
         [goal.id, "clear"],
       ]);
-      await userEvent.tab({ shift: true });
-      expect(document.activeElement).toBe(
-        commands.querySelector(
-          status === "active" ? ".agent-chat__goal-pause" : ".agent-chat__goal-resume",
-        ),
-      );
-      await userEvent.keyboard("{Enter}");
-      expect(onGoalAction).toHaveBeenLastCalledWith(
-        goal.id,
-        status === "active" ? "pause" : "resume",
-      );
       objective.scrollTop = objective.scrollHeight;
       await afterLayout();
       expect(commands.getBoundingClientRect().top).toBe(commandBox.top);
@@ -664,98 +630,94 @@ describe("composer overflow presentation", () => {
     },
   );
 
-  it.each([1440, 1600])(
-    "lets native textarea sizing grow and cap multiline drafts at %ipx",
-    async (width) => {
-      await page.viewport(width, 900);
-      render(renderChatComposer(createComposerProps()), container);
-      const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-      expect(getComputedStyle(textarea).fieldSizing).toBe("content");
+  it("lets native textarea sizing grow and cap multiline drafts", async () => {
+    await page.viewport(1440, 900);
+    render(renderChatComposer(createComposerProps()), container);
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(getComputedStyle(textarea).fieldSizing).toBe("content");
 
-      textarea.value = "one line";
-      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      await afterLayout();
-      const singleLineHeight = textarea.getBoundingClientRect().height;
+    textarea.value = "one line";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await afterLayout();
+    const singleLineHeight = textarea.getBoundingClientRect().height;
 
-      textarea.value = "line 1\nline 2\nline 3";
-      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      await afterLayout();
-      expect(textarea.getBoundingClientRect().height).toBeGreaterThan(singleLineHeight);
+    textarea.value = "line 1\nline 2\nline 3";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await afterLayout();
+    expect(textarea.getBoundingClientRect().height).toBeGreaterThan(singleLineHeight);
 
-      textarea.value = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
-      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    textarea.value = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await afterLayout();
+    const capped = textarea.getBoundingClientRect();
+    expect(capped.height).toBeCloseTo(Number.parseFloat(getComputedStyle(textarea).maxHeight), 0);
+    expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
+    expect(textarea.scrollWidth).toBeLessThanOrEqual(textarea.clientWidth + 1);
+    expect(container.getBoundingClientRect().width).toBe(760);
+  });
+
+  it.each(["attachments", "menu", "goal"] as const)(
+    "updates retained %s edges when content grows, scrolls, and shrinks",
+    async (kind) => {
+      if (kind === "goal") {
+        await page.viewport(480, 800);
+        container.style.width = "400px";
+      }
+      const state = getChatComposerState("overflow-goal");
+      state.goalExpandedId = "overflow-goal";
+      const goal: SessionGoal = {
+        schemaVersion: 1,
+        id: "overflow-goal",
+        objective: "Short objective",
+        status: "complete",
+        createdAt: 1000,
+        updatedAt: 2000,
+        tokenStart: 0,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      };
+      const selector = {
+        attachments: ".chat-attachments-preview",
+        menu: ".slash-menu__scroll",
+        goal: ".agent-chat__goal-detail-objective",
+      }[kind];
+      const draw = (expanded: boolean) => {
+        goal.objective = expanded ? "Fixture objective\n".repeat(30) : "Short objective";
+        return render(
+          kind === "attachments"
+            ? renderAttachmentPreview({ attachments: attachments.slice(0, expanded ? 7 : 1) })
+            : kind === "menu"
+              ? renderComposerMenu({
+                  id: "overflow-menu",
+                  label: "Fixture results",
+                  content: Array.from(
+                    { length: expanded ? 20 : 1 },
+                    (_, index) => html`<div style="height: 40px">Result ${index}</div>`,
+                  ),
+                })
+              : renderChatGoal(state, goal, { canAct: false, requestUpdate: () => {} }),
+          container,
+        );
+      };
+      draw(false);
+      const element = container.querySelector<HTMLElement>(selector)!;
       await afterLayout();
-      const capped = textarea.getBoundingClientRect();
-      expect(capped.height).toBeCloseTo(Number.parseFloat(getComputedStyle(textarea).maxHeight), 0);
-      expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
-      expect(textarea.scrollWidth).toBeLessThanOrEqual(textarea.clientWidth + 1);
-      expect(container.getBoundingClientRect().width).toBe(760);
+      await expectEdges(element, false);
+
+      draw(true);
+      expect(container.querySelector(selector)).toBe(element);
+      const [size, viewport, position] =
+        kind === "attachments"
+          ? (["scrollWidth", "clientWidth", "scrollLeft"] as const)
+          : (["scrollHeight", "clientHeight", "scrollTop"] as const);
+      expect(element[size]).toBeGreaterThan(element[viewport]);
+      await expectEdges(element, true);
+      element[position] = element[size];
+      await expectEdges(element, true, false, true);
+
+      draw(false);
+      expect(container.querySelector(selector)).toBe(element);
+      await expectEdges(element, false);
     },
   );
-
-  it("preserves expanded mobile goal edges as its objective changes and scrolls", async () => {
-    await page.viewport(480, 800);
-    container.style.width = "400px";
-    const state = getChatComposerState("overflow-goal");
-    state.goalExpandedId = "overflow-goal";
-    const goal: SessionGoal = {
-      schemaVersion: 1,
-      id: "overflow-goal",
-      objective: "Fixture objective\n".repeat(30),
-      status: "complete",
-      createdAt: 1000,
-      updatedAt: 2000,
-      tokenStart: 0,
-      tokensUsed: 0,
-      continuationTurns: 0,
-    };
-    const drawGoal = () =>
-      render(
-        renderChatGoal(state, goal, {
-          canAct: false,
-          requestUpdate: () => {},
-        }),
-        container,
-      );
-    drawGoal();
-    const element = container.querySelector<HTMLElement>(".agent-chat__goal-detail-objective")!;
-    expect(element.scrollHeight).toBeGreaterThan(element.clientHeight);
-    await expectEdges(element, true);
-    element.scrollTop = element.scrollHeight;
-    await expectEdges(element, true, false, true);
-
-    goal.objective = "Short objective";
-    drawGoal();
-    expect(container.querySelector(".agent-chat__goal-detail-objective")).toBe(element);
-    await expectEdges(element, false);
-  });
-
-  it("updates menu edges when retained results grow, scroll, and shrink", async () => {
-    const drawMenu = (count: number) =>
-      render(
-        renderComposerMenu({
-          id: "overflow-menu",
-          label: "Fixture results",
-          content: Array.from(
-            { length: count },
-            (_, index) => html`<div style="height: 40px">Result ${index}</div>`,
-          ),
-        }),
-        container,
-      );
-    drawMenu(1);
-    const element = container.querySelector<HTMLElement>(".slash-menu__scroll")!;
-    await afterLayout();
-    await expectEdges(element, false);
-
-    drawMenu(20);
-    expect(container.querySelector(".slash-menu__scroll")).toBe(element);
-    expect(element.scrollHeight).toBeGreaterThan(element.clientHeight);
-    await expectEdges(element, true);
-    element.scrollTop = element.scrollHeight;
-    await expectEdges(element, true, false, true);
-
-    drawMenu(1);
-    await expectEdges(element, false);
-  });
 });

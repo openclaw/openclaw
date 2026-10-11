@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { isAvatarWorkspacePath } from "../shared/avatar-policy.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "./path-guards.js";
 
@@ -14,6 +15,7 @@ export type UpdateStateDatabaseOwner = z.infer<typeof UpdateStateDatabaseOwnerSc
 export const StateDatabaseDiscoverySchema = z.object({
   spellings: z.tuple([z.string()], z.string()),
   owners: z.array(UpdateStateDatabaseOwnerSchema).optional(),
+  registeredPaths: z.array(z.string()).optional(),
 });
 export type StateDatabaseDiscovery = z.infer<typeof StateDatabaseDiscoverySchema>;
 
@@ -38,12 +40,16 @@ export function queueStateDatabaseSpelling(
   stateRoot: string,
   file: string,
   owner?: UpdateStateDatabaseOwner,
+  registeredPath?: string,
 ): void {
   const identity = resolveUpdateCandidateStateIdentity(stateRoot, file);
   const discovery = files.get(identity);
   if (discovery) {
     if (!discovery.spellings.includes(file)) {
       discovery.spellings.push(file);
+    }
+    if (registeredPath !== undefined) {
+      (discovery.registeredPaths ??= []).push(registeredPath);
     }
     if (
       owner &&
@@ -58,7 +64,11 @@ export function queueStateDatabaseSpelling(
     }
     return;
   }
-  files.set(identity, { spellings: [file], ...(owner ? { owners: [owner] } : {}) });
+  files.set(identity, {
+    spellings: [file],
+    ...(owner ? { owners: [owner] } : {}),
+    ...(registeredPath === undefined ? {} : { registeredPaths: [registeredPath] }),
+  });
 }
 
 // Keep path projection independent of snapshot orchestration: the snapshot owner
@@ -131,4 +141,30 @@ export function resolveUpdateCandidatePluginSourcePath(
   return resolveUpdateCandidatePluginPath(rehearsalRoot, rehearsalRoot, source) === copiedPath
     ? source
     : undefined;
+}
+
+/**
+ * Validation confines workspace-path avatars to the agent workspace, which the
+ * candidate relocates. Rebase them against the source workspace so the
+ * candidate accepts exactly the avatars the source did.
+ */
+export function resolveUpdateCandidateAvatar(sourceWorkspaceDir: string, avatar: string): string {
+  const value = avatar.trim();
+  if (!isAvatarWorkspacePath(value)) {
+    return avatar;
+  }
+  // Resolve against the workspace like validation does: a drive-less Windows
+  // root takes the workspace drive, not the process drive.
+  const workspaceRoot = path.resolve(sourceWorkspaceDir);
+  const resolved = path.resolve(workspaceRoot, value);
+  if (!isPathInside(workspaceRoot, resolved)) {
+    // A ../ spelling could land back inside the relocated workspace; the
+    // resolved source path stays outside it.
+    return resolved;
+  }
+  // path.relative cannot see across a \\?\ namespace prefix.
+  const plain = (input: string) =>
+    process.platform === "win32" ? normalizeWindowsPathPreservingCase(input) : input;
+  // The ./ prefix keeps a "~x" or "x:" basename local.
+  return `.${path.sep}${path.relative(plain(workspaceRoot), plain(resolved))}`;
 }

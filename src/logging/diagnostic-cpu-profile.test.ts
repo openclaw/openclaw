@@ -2,8 +2,7 @@ import type { Profiler } from "node:inspector";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { diagnosticProfileEntrypoints } from "./diagnostic-profile-runtime.test-support.js";
 
 const native = vi.hoisted(() => ({
@@ -16,7 +15,6 @@ const native = vi.hoisted(() => ({
   tracingCategories: vi.fn(),
   unsupported: false,
 }));
-const hostBunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
 vi.mock("node:timers/promises", () => ({ setTimeout: native.wait }));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: native.tracingCategories }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -91,15 +89,12 @@ function returnProfile(value: Profiler.Profile = profile()) {
 }
 
 beforeEach(() => {
-  if (hostBunVersion) {
-    // Most cases exercise the Node inspector owner through a mocked native
-    // session. The dedicated Bun case below retains the unsupported contract.
-    Object.defineProperty(process.versions, "bun", { ...hostBunVersion, value: undefined });
-  }
   vi.resetModules();
   vi.resetAllMocks();
   vi.stubEnv("NODE_OPTIONS", "");
   vi.stubEnv("NODE_V8_COVERAGE", "");
+  vi.stubEnv("BUN_INSPECT", "");
+  vi.stubEnv("BUN_INSPECT_CONNECT_TO", "");
   native.unsupported = false;
   vi.doMock("node:inspector/promises", () => {
     if (native.unsupported) {
@@ -120,9 +115,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  if (hostBunVersion) {
-    Object.defineProperty(process.versions, "bun", hostBunVersion);
-  }
   vi.unstubAllEnvs();
 });
 
@@ -382,20 +374,27 @@ describe("diagnostic CPU profile owner", () => {
     expect(native.disconnect).toHaveBeenCalledOnce();
   });
 
-  it("rejects Bun without attempting to connect a native session", async () => {
-    const original = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "fixture" });
-    try {
-      expect(await capture()).toMatchObject({ status: "unavailable", reason: "unsupported" });
-      expect(native.connect).not.toHaveBeenCalled();
-    } finally {
-      if (original) {
-        Object.defineProperty(process.versions, "bun", original);
-      } else {
-        Reflect.deleteProperty(process.versions, "bun");
+  it.each(["BUN_INSPECT", "BUN_INSPECT_CONNECT_TO"])(
+    "refuses %s debugger ownership on Bun only",
+    async (variable) => {
+      const original = Object.getOwnPropertyDescriptor(process.versions, "bun");
+      try {
+        vi.stubEnv(variable, "ws://127.0.0.1:9229/fixture");
+        Object.defineProperty(process.versions, "bun", { configurable: true, value: "fixture" });
+        expect(await capture()).toMatchObject({ status: "unavailable", reason: "conflict" });
+        expect(native.connect).not.toHaveBeenCalled();
+        Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
+        expect(await capture()).toMatchObject({ status: "complete" });
+        expect(native.connect).toHaveBeenCalledOnce();
+      } finally {
+        if (original) {
+          Object.defineProperty(process.versions, "bun", original);
+        } else {
+          Reflect.deleteProperty(process.versions, "bun");
+        }
       }
-    }
-  });
+    },
+  );
 
   it.each(["private payload", "会話の内容"])(
     "redacts unrecognized labels even at package code locations: %s",
@@ -482,13 +481,13 @@ describe("diagnostic CPU profile owner", () => {
     expect(native.disconnect).toHaveBeenCalledOnce();
   });
 
-  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
-    "captures a real Node profile in an isolated child without opening a listener",
+  it.skipIf(process.platform === "win32")(
+    "captures a real profile with the current runtime without opening a listener",
     async ({ signal }) => {
       // Keep V8 coverage and mocked inspector/timers in the test worker. The
       // fresh child exercises the prepared owner without inheriting either.
       const env: NodeJS.ProcessEnv = {};
-      for (const key of ["PATH", "TMPDIR", "TMP", "TEMP"]) {
+      for (const key of ["PATH", "HOME", "OPENCLAW_STATE_DIR", "TMPDIR", "TMP", "TEMP"]) {
         if (process.env[key]) {
           env[key] = process.env[key];
         }
@@ -500,6 +499,7 @@ import assert from 'node:assert/strict';
 import { url } from 'node:inspector/promises';
 import { captureDiagnosticCpuProfile } from ${JSON.stringify(ownerUrl.href)};
 assert.equal(url(), undefined);
+assert.equal(process.versions.bun ?? null, ${JSON.stringify(process.versions.bun ?? null)});
 const pid = process.pid;
 const outcome = await captureDiagnosticCpuProfile({ signal: new AbortController().signal, hasAuthority: () => true });
 assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
@@ -515,18 +515,24 @@ assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 1024 * 1024);
 assert.ok(!JSON.stringify(result).includes(${JSON.stringify(root)}));
 assert.equal(url(), undefined);
 assert.equal(process.pid, pid);
-console.log(JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch, actualDurationMs: result.actualDurationMs, samples: result.profile.samples.length, nodes: result.profile.nodes.length, listener: false }));
+console.log(JSON.stringify({ node: process.version, bun: process.versions.bun ?? null, platform: process.platform, arch: process.arch, actualDurationMs: result.actualDurationMs, samples: result.profile.samples.length, nodes: result.profile.nodes.length, listener: false }));
 `;
       const result = await runNodeScript(
-        [
-          ...resolveRuntimeWorkerArgv(ownerUrl, resolveTestNodeExecPath()).slice(0, -1),
+        (workerArgv) => [
+          ...workerArgv(ownerUrl).slice(0, -1),
           "--input-type=module",
           "--eval",
           source,
         ],
         env,
         20_000,
-        { cwd: root, signal, maxBuffer: 32_768, requireProcessTreeExit: true },
+        {
+          cwd: root,
+          signal,
+          maxBuffer: 32_768,
+          requireProcessTreeExit: true,
+          executable: process.execPath,
+        },
       );
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);

@@ -24,8 +24,7 @@ function cronDeliveryFromContext(context?: DeliveryContext): CronDelivery | null
   if (!normalized?.to) {
     return null;
   }
-  // Internal conversation coordinates are not outbound channel targets. Current
-  // jobs already commit their result through the canonical session completion.
+  // Internal conversation coordinates are not outbound channel targets.
   if (isInternalDeliveryContext(normalized)) {
     return null;
   }

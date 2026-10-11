@@ -84,7 +84,7 @@ async function screenshot(page: Page, name: string) {
   await writeFile(
     path.join(proofDir, name),
     await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-      page.locator(".sidebar-agent-card__name"),
+      page.locator(".sidebar-agent-card__main"),
     ]),
   );
 }
@@ -160,7 +160,7 @@ suite.define(() => {
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
-        .getByRole("menuitemradio", { name: "OpenClaw" })
+        .getByRole("menuitem", { name: "OpenClaw" })
         .click();
       await waitForControlUiRoute(firstPage, { pathname: "/chat/openclaw", routeId: "chat" });
       await expect.poll(() => selectedAgentName(firstPage)).toBe("OpenClaw");

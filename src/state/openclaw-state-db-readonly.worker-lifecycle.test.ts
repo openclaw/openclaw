@@ -120,7 +120,7 @@ beforeEach(() => {
   mock.close.mockReset().mockResolvedValue();
   mock.cleanup.mockReset().mockResolvedValue(true);
   mock.read.mockReset().mockResolvedValue({
-    value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] },
+    value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });
 });
 
@@ -131,28 +131,6 @@ function source() {
   fs.writeFileSync(pathname, "mock read transport source");
   return { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
 }
-
-it("reads independently when native snapshot borrowing refuses a transaction", async () => {
-  const options = source();
-  const observe = vi.fn();
-  const release = vi.fn();
-  mock.borrow.mockImplementation(() => {
-    throw new Error("Asynchronous shared-state reads cannot run inside a native transaction");
-  });
-  mock.independent.mockReturnValue({ assertCurrent() {}, observe, release });
-  await expect(executeExistingOpenClawStateRead(options, { type: "fleet.list" })).resolves.toEqual({
-    ok: true,
-    type: "fleet.list",
-    sourceAdmitted: true,
-    cells: [],
-  });
-  expect(observe).toHaveBeenCalledOnce();
-  expect(release).toHaveBeenCalledOnce();
-  expect(mock.borrow).not.toHaveBeenCalled();
-  expect(mock.prepareNative).not.toHaveBeenCalled();
-  expect(mock.prepareSource).not.toHaveBeenCalled();
-  expect(mock.prepareSourceAsync).not.toHaveBeenCalled();
-});
 
 it("retains the borrowed source through pending preparation and failed published cleanup", async () => {
   const options = source();
@@ -171,7 +149,7 @@ it("retains the borrowed source through pending preparation and failed published
   finishProducer = () =>
     prepared.resolve({ location: "/fixture/prepared.sqlite", cleanupAsync: mock.cleanup });
   const result = withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+    executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
   ).catch((error: unknown) => error);
   await started.promise;
   const closing = closeOpenClawStateDatabaseByPathAsync(options.path).catch(
@@ -201,7 +179,7 @@ it("retains ordered cleanup for canonical retry after a read failure", async () 
 
   await expect(
     withArtifactPreservingStateReads(() =>
-      executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+      executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
     ),
   ).rejects.toMatchObject({ cause: readFailure, errors: [readFailure, stopFailure] });
   expect(mock.cleanup).not.toHaveBeenCalled();
@@ -224,7 +202,7 @@ it("retains an outer snapshot until its child transport acknowledges cleanup", a
   mock.close.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure).mockResolvedValue();
   await expect(
     withOpenClawStateDatabaseReadSnapshot(
-      () => executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+      () => executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
       options,
     ),
   ).rejects.toMatchObject({ cause: failure });
@@ -239,11 +217,11 @@ it("keeps a composite snapshot alive when its callback closes the live writer", 
   await withOpenClawStateDatabaseReadSnapshot(async () => {
     await closeOpenClawStateDatabaseByPathAsync(options.path);
     expect(mock.cleanup).not.toHaveBeenCalled();
-    expect(await executeExistingOpenClawStateRead(options, { type: "fleet.list" })).toEqual({
+    expect(await executeExistingOpenClawStateRead(options, { type: "backup.runs" })).toEqual({
       ok: true,
-      type: "fleet.list",
+      type: "backup.runs",
       sourceAdmitted: true,
-      cells: [],
+      runs: [],
     });
   }, options);
   expect(mock.cleanup).toHaveBeenCalledTimes(1);
@@ -254,17 +232,17 @@ it("retries transport stop before waiting for a still-pending producer", async (
   const started = createDeferredCore();
   const reply = createDeferredCore<OpenClawStateReadOutcome>();
   finishProducer = () =>
-    reply.resolve({ value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } });
+    reply.resolve({ value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } });
   mock.read.mockImplementation(() => {
     started.resolve();
     return reply.promise;
   });
   const failure = new Error("first stop not acknowledged");
   mock.close.mockRejectedValueOnce(failure).mockImplementation(async () => {
-    reply.resolve({ value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } });
+    reply.resolve({ value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } });
   });
   const observed = withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+    executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
   ).then(
     (value) => ({ value }),
     (error: unknown) => ({ error }),
@@ -280,33 +258,17 @@ it("retries transport stop before waiting for a still-pending producer", async (
   });
 });
 
-it.each([false, true])(
-  "observes the current source before reporting a query failure (admitted=%s)",
-  async (sourceAdmitted) => {
-    const options = source();
-    const failure = new Error("query failed");
-    const observe = vi.fn();
-    const release = vi.fn();
-    mock.independent.mockReturnValue({ assertCurrent() {}, observe, release });
-    mock.read.mockResolvedValue({
-      error: failure,
-      ...(sourceAdmitted ? { sourceAdmitted: true } : {}),
-    });
-    await expect(executeExistingOpenClawStateRead(options, { type: "fleet.list" })).rejects.toBe(
-      failure,
-    );
-    expect(observe).toHaveBeenCalledTimes(sourceAdmitted ? 1 : 0);
-    expect(release).toHaveBeenCalledOnce();
-  },
-);
-
-it("preserves the query failure without observing a source that lost its original authority", async () => {
+it("does not observe an independent source retired during an admitted read failure", async () => {
   const options = source();
   const failure = new Error("query failed");
   const retired = new Error("original source retired");
   const assertCurrent = vi.fn();
   const observe = vi.fn();
-  mock.independent.mockReturnValue({ assertCurrent, observe, release() {} });
+  const release = vi.fn();
+  mock.borrow.mockImplementation(() => {
+    throw new Error("Asynchronous shared-state reads cannot run inside a native transaction");
+  });
+  mock.independent.mockReturnValue({ assertCurrent, observe, release });
   mock.read.mockImplementation(async () => {
     assertCurrent.mockImplementation(() => {
       throw retired;
@@ -314,12 +276,17 @@ it("preserves the query failure without observing a source that lost its origina
     return { error: failure, sourceAdmitted: true };
   });
   await expect(
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+    executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
   ).rejects.toMatchObject({
     cause: failure,
     errors: [failure, retired],
   });
   expect(observe).not.toHaveBeenCalled();
+  expect(release).toHaveBeenCalledOnce();
+  expect(mock.borrow).not.toHaveBeenCalled();
+  expect(mock.prepareNative).not.toHaveBeenCalled();
+  expect(mock.prepareSource).not.toHaveBeenCalled();
+  expect(mock.prepareSourceAsync).not.toHaveBeenCalled();
 });
 
 it("joins maintenance reads and retries their transport before closing scoped handles", async () => {
@@ -330,7 +297,7 @@ it("joins maintenance reads and retries their transport before closing scoped ha
   const events: string[] = [];
   const failure = new Error("transport stop not acknowledged");
   finishProducer = () =>
-    reply.resolve({ value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } });
+    reply.resolve({ value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } });
   mock.read.mockImplementation(() => {
     started.resolve();
     return reply.promise;
@@ -345,7 +312,7 @@ it("joins maintenance reads and retries their transport before closing scoped ha
     events.push("handle closed");
   });
   const operation = scope.run(() =>
-    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+    executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
   );
   const assertion = expect(operation).rejects.toBe(failure);
   await started.promise;

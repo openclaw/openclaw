@@ -70,10 +70,10 @@ export async function reconcileUnknownQueuedDelivery(params: {
     assertCurrent: params.assertCurrent,
   });
   params.assertCurrent?.();
-  if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
-    return null;
-  }
-  const reconcileUnknownSend = adapter.durableFinal.reconcileUnknownSend;
+  const reconcileUnknownSend =
+    adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true
+      ? adapter.durableFinal.reconcileUnknownSend
+      : undefined;
   if (!reconcileUnknownSend) {
     return null;
   }

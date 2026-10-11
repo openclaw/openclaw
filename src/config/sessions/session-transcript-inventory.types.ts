@@ -7,6 +7,7 @@ import type {
 import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type {
   MemorySessionSelectors,
   MemorySessionTarget,
@@ -52,6 +53,24 @@ type MemorySessionTargetsWorkerInput = {
 
 type SessionArchivePresenceWorkerInput = TranscriptArchivePresenceRead & {
   kind: "session-archive-presence";
+};
+
+export type SessionColdMetadataWorkerInput = {
+  kind: "cold-metadata";
+  database: { agentId: string; path: string };
+  sessionId: string;
+  env: NodeJS.ProcessEnv;
+};
+
+export type SessionColdMetadataWorkerResult = {
+  kind: "cold-metadata";
+  archive: Omit<SessionColdArchive, "archive_blob"> | undefined;
+};
+
+export type SessionColdStorageInventoryWorkerInput = {
+  kind: "cold-storage-inventory";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
 };
 
 export type SessionTranscriptInventoryWorkerInput =

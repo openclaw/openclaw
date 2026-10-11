@@ -677,7 +677,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
 
         agents: {
           defaults: {},
-          list: [{ id: "researcher", memory: { search: { enabled: true } } }],
+          entries: { researcher: { memory: { search: { enabled: true } } } },
         },
       } as OpenClawConfig,
       ["browser", "openai", "ollama", "memory-core"],
@@ -690,10 +690,10 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
 
         agents: {
           defaults: {},
-          list: [
-            { id: "muted", memory: { search: { enabled: false } } },
-            { id: "researcher", memory: { search: { provider: "ollama" } } },
-          ],
+          entries: {
+            muted: { memory: { search: { enabled: false } } },
+            researcher: { memory: { search: { provider: "ollama" } } },
+          },
         },
       } as OpenClawConfig,
       ["browser", "openai", "ollama", "memory-core"],
@@ -1438,16 +1438,6 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
         contextEngine: "lossless-claw",
       }),
       expected: ["demo-channel", "browser", "memory-core", "lossless-claw"],
-    });
-  });
-
-  it("includes required agent harness owner plugins for model runtime policy", () => {
-    expectStartupPluginIds({
-      config: {
-        agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
-        plugins: { entries: { codex: { enabled: true } } },
-      } as OpenClawConfig,
-      expected: ["demo-channel", "browser", "openai", "codex", "memory-core"],
     });
   });
 

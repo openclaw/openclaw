@@ -118,15 +118,9 @@ describe("Checkout chip state", () => {
     { worktree: true, remotePlacement: true, repository: false },
     { worktree: false, remotePlacement: true, repository: true },
     { worktree: false, remotePlacement: true, repository: true, emptyBranches: true },
-    {
-      worktree: true,
-      remotePlacement: false,
-      repository: false,
-      idPrefix: "palette-session-1",
-    },
   ])(
     "offers explicit checkout choices (worktree=$worktree, remote=$remotePlacement, emptyBranches=$emptyBranches)",
-    ({ worktree, remotePlacement, repository, idPrefix, emptyBranches }) => {
+    ({ worktree, remotePlacement, repository, emptyBranches }) => {
       const container = document.createElement("div");
       const onSelectWorktree = vi.fn();
       const onBaseRefInput = vi.fn();
@@ -134,7 +128,6 @@ describe("Checkout chip state", () => {
       const onConfirm = vi.fn();
       render(
         renderCheckoutChip({
-          idPrefix,
           state: { label: worktree ? "New worktree from main" : "feature" },
           remotePlacement,
           repository,
@@ -244,7 +237,7 @@ describe("Checkout chip state", () => {
         baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
         baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
         expect(baseRef.getAttribute("aria-activedescendant")).toBe(
-          `${idPrefix ?? "new-session"}-worktree-branch-suggestion-1`,
+          "new-session-worktree-branch-suggestion-1",
         );
         expect(suggestions[1]!.getAttribute("aria-selected")).toBe("true");
         for (const key of ["ArrowDown", "ArrowUp"]) {

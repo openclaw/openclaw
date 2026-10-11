@@ -100,13 +100,8 @@ export async function releaseDesktopObserverToken(
   if (!connId || !requester.isCurrent()) {
     return false;
   }
-  let resource: URL;
-  try {
-    resource = new URL(wsPath, "http://127.0.0.1");
-  } catch {
-    return false;
-  }
-  if (resource.pathname !== DESKTOP_OBSERVE_PATH) {
+  const resource = URL.parse(wsPath, "http://127.0.0.1");
+  if (resource?.pathname !== DESKTOP_OBSERVE_PATH) {
     return false;
   }
   const entry = observerTokens.consume(
@@ -226,7 +221,6 @@ export function handleDesktopObserveUpgrade(
       return;
     }
     let closeCause: { trigger: DesktopCloseTrigger; code: number } | undefined;
-    let negotiating = Boolean(entry.preauth);
     let resumeTimer: ReturnType<typeof setInterval> | undefined;
     const stopKeepalive = startWebSocketKeepalive(ws);
     const resumeWebSocket = () => ws.resume();
@@ -328,7 +322,7 @@ export function handleDesktopObserveUpgrade(
     desktopSocket.once("error", () =>
       closeBoth(
         1011,
-        negotiating ? "desktop connection failed during authentication" : "desktop stream failed",
+        entry.preauth ? "desktop connection failed during authentication" : "desktop stream failed",
         "stream-error",
       ),
     );
@@ -351,7 +345,6 @@ export function handleDesktopObserveUpgrade(
         await preauthenticateRfb({ server: desktopSocket, browser, preauth });
         const remainder = browser.detach();
         entry.preauth = undefined;
-        negotiating = false;
         if (!closeCause) {
           startSplice(remainder, true);
         }

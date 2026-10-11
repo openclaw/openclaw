@@ -26,7 +26,7 @@ vi.mock("./control-plane/manager.js", () => ({
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
   agents: {
-    list: [{ id: "codex" }, { id: "claude" }],
+    entries: { codex: {}, claude: {} },
   },
 } satisfies OpenClawConfig;
 

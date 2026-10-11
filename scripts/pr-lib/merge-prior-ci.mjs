@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { runBelongsToPullRequest } from "../verify-pr-hosted-gates.mts";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
@@ -202,7 +203,9 @@ function qualifyStaleHeadRetirement(recordJson, outcome, replacementHead, source
     !priorCaptures.some((entry) => entry.name === currentCapture),
     "stale-head retirement current attempt capture already exists in the retained intent",
   );
-  const expected = [currentCapture, ...priorCaptures.map((entry) => entry.name)].toSorted();
+  const expected = [currentCapture, ...priorCaptures.map((entry) => entry.name)].toSorted(
+    (left, right) => (left < right ? -1 : left > right ? 1 : 0),
+  );
   const files = qualifyCaptureSet(
     source,
     "stale-head retirement",
@@ -491,6 +494,93 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
   };
 }
 
+// Task authorization still comes from the confirmed operator invocation. GitHub's
+// writer-bound ruleset response proves delegated execution capability, not a
+// human approval or permission to waive reviews and security.
+export function verifyPriorCiWriterAuthority({
+  repository,
+  actor,
+  changeKind,
+  policy,
+  writerRead,
+}) {
+  const authority = writerRead(`repos/${repository}`);
+  requireEvidence(
+    authority?.full_name === repository &&
+      positiveInteger(authority.id) &&
+      authority.owner?.type === "Organization" &&
+      authority.owner.login === repository.split("/")[0],
+    "writer repository authority is unavailable",
+  );
+  const membership = writerRead(
+    `orgs/${repository.split("/")[0]}/memberships/${encodeURIComponent(actor)}`,
+  );
+  requireEvidence(
+    membership?.state === "active" &&
+      ["admin", "member"].includes(membership.role) &&
+      membership.user?.login === actor,
+    "writer must be an active organization member",
+  );
+  if (
+    changeKind !== "pre-existing-failure" ||
+    authority.permissions?.push !== true ||
+    (authority.permissions?.admin === true && membership.role === "admin")
+  ) {
+    requireEvidence(
+      authority.permissions?.admin === true,
+      "writer must administer the target organization repository",
+    );
+    requireEvidence(membership.role === "admin", "writer must be an active organization admin");
+    return { authority };
+  }
+  const ciRules = policy.rules.filter(
+    (rule) =>
+      rule.type === "required_status_checks" &&
+      rule.parameters?.required_status_checks?.some(
+        (check) => check.context === "openclaw/ci-gate",
+      ),
+  );
+  requireEvidence(
+    ciRules.length > 0,
+    "delegated CI-only ruleset bypass requires an effective CI gate",
+  );
+  const rulesets = ciRules
+    .map((rule) => {
+      requireEvidence(
+        positiveInteger(rule.ruleset_id) &&
+          rule.ruleset_source_type === "Repository" &&
+          rule.ruleset_source === repository,
+        "delegated CI-only ruleset bypass requires an identified repository ruleset",
+      );
+      const ruleset = writerRead(`repos/${repository}/rulesets/${rule.ruleset_id}`);
+      requireEvidence(
+        ruleset?.id === rule.ruleset_id &&
+          ruleset.source_type === "Repository" &&
+          ruleset.source === repository &&
+          ruleset.target === "branch" &&
+          ruleset.enforcement === "active" &&
+          ["always", "pull_requests_only"].includes(ruleset.current_user_can_bypass) &&
+          Array.isArray(ruleset.rules) &&
+          ruleset.rules.length === 1 &&
+          isDeepStrictEqual(ruleset.rules[0], { type: rule.type, parameters: rule.parameters }) &&
+          rule.parameters.required_status_checks.length === 1 &&
+          rule.parameters.required_status_checks[0].context === "openclaw/ci-gate" &&
+          rule.parameters.required_status_checks[0].integration_id === 15368,
+        "writer lacks live CI-only ruleset bypass; mixed, changed, or unavailable rulesets cannot delegate this exception",
+      );
+      return { id: ruleset.id, mode: ruleset.current_user_can_bypass };
+    })
+    .toSorted((left, right) => left.id - right.id);
+  requireEvidence(
+    new Set(rulesets.map((ruleset) => ruleset.id)).size === rulesets.length,
+    "delegated CI-only ruleset bypass requires unambiguous effective rules",
+  );
+  return {
+    authority,
+    delegation: { kind: "ci-ruleset-bypass", repositoryId: authority.id, actor, rulesets },
+  };
+}
+
 async function verifyPriorCiAdmin({ evidencePath, repository, pr, head, actor, main }) {
   const evidence = readEvidence(evidencePath, repository, pr, head);
   const repo = {
@@ -516,23 +606,14 @@ async function verifyPriorCiAdmin({ evidencePath, repository, pr, head, actor, m
     requireEvidence(response.status === "200", "writer authority is unavailable");
     return response.body;
   };
-  const authority = writerRead(`repos/${repository}`);
-  requireEvidence(
-    authority?.full_name === repository &&
-      authority.permissions?.admin === true &&
-      authority.owner?.type === "Organization",
-    "writer must administer the target organization repository",
-  );
-  const membership = writerRead(
-    `orgs/${repository.split("/")[0]}/memberships/${encodeURIComponent(actor)}`,
-  );
-  requireEvidence(
-    membership?.state === "active" &&
-      membership.role === "admin" &&
-      membership.user?.login === actor,
-    "writer must be an active organization admin",
-  );
   const policy = readMergePolicy(repo);
+  const { authority, delegation } = verifyPriorCiWriterAuthority({
+    repository,
+    actor,
+    changeKind: evidence.changeKind,
+    policy,
+    writerRead,
+  });
   const reviewRules = policy.rules.filter((rule) => rule.type === "pull_request");
   let requireReviews = false;
   let requireThreads = false;
@@ -714,6 +795,22 @@ async function verifyPriorCiAdmin({ evidencePath, repository, pr, head, actor, m
       "only pending/skipped normal CI may be waived; failed CI and other checks, including security, remain blocking",
     );
   }
+  if (delegation) {
+    // CI/security inspection can await external work. Re-read the effective policy
+    // and the writer grant afterward; the retained proof also fences later admission rounds.
+    const currentPolicy = readMergePolicy(repo);
+    const current = verifyPriorCiWriterAuthority({
+      repository,
+      actor,
+      changeKind: evidence.changeKind,
+      policy: currentPolicy,
+      writerRead,
+    });
+    requireEvidence(
+      isDeepStrictEqual(currentPolicy, policy) && isDeepStrictEqual(current.delegation, delegation),
+      "delegated CI-only ruleset bypass changed during admission",
+    );
+  }
   requireEvidence(
     digest(readFileSync(evidencePath)) === evidence.evidenceSha256,
     "operator evidence changed while reading authority",
@@ -725,6 +822,7 @@ async function verifyPriorCiAdmin({ evidencePath, repository, pr, head, actor, m
     ...evidence,
     ...failureProof,
     ...(preExisting(evidence) ? { runAssociation } : {}),
+    delegation,
     actor,
     dispatchTransport: "rest",
     ciUrl: `${repo.url}/actions/runs/${evidence.runId}/attempts/${evidence.runAttempt}`,

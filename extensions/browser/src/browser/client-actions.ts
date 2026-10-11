@@ -63,6 +63,11 @@ function resolveBrowserOperationRequestTimeoutMs(timeoutMs: unknown): number {
   return addTimerTimeoutGraceMs(operationTimeoutMs, BROWSER_ACTION_TRANSPORT_SLACK_MS) ?? 1;
 }
 
+// Keep optional fields as own properties in node-proxy requests.
+function projectBrowserOptions<Options extends object>(opts: Options, fields: (keyof Options)[]) {
+  return Object.fromEntries(fields.map((key) => [key, opts[key]]));
+}
+
 export async function browserNavigate(
   baseUrl: BrowserClientTarget,
   opts: BrowserTimedActionOptions & {
@@ -79,101 +84,51 @@ export async function browserNavigate(
   );
 }
 
-export async function browserArmDialog(
-  baseUrl: BrowserClientTarget,
-  opts: BrowserTimedActionOptions & {
-    accept: boolean;
-    promptText?: string;
-    dialogId?: string;
-  },
-): Promise<BrowserActionOk> {
-  return await postBrowserJson(
-    baseUrl,
-    "/hooks/dialog",
-    {
-      accept: opts.accept,
-      promptText: opts.promptText,
-      dialogId: opts.dialogId,
-      targetId: opts.targetId,
-      timeoutMs: opts.timeoutMs,
-    },
-    browserClientTimeout(
+function createBrowserOperation<Options extends BrowserTimedActionOptions, Result>(
+  path: string,
+  fields: (keyof Options)[],
+  timeoutScope: "local" | "all",
+) {
+  return async (baseUrl: BrowserClientTarget, opts: Options): Promise<Result> =>
+    await postBrowserJson(
       baseUrl,
-      undefined,
-      resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
-    ),
-    opts,
-  );
+      path,
+      projectBrowserOptions(opts, fields),
+      timeoutScope === "local"
+        ? browserClientTimeout(
+            baseUrl,
+            undefined,
+            resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
+          )
+        : resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
+      opts,
+    );
 }
 
-export async function browserArmFileChooser(
-  baseUrl: BrowserClientTarget,
-  opts: BrowserTimedActionOptions & {
+export const browserArmDialog = createBrowserOperation<
+  BrowserTimedActionOptions & { accept: boolean; promptText?: string; dialogId?: string },
+  BrowserActionOk
+>("/hooks/dialog", ["accept", "promptText", "dialogId", "targetId", "timeoutMs"], "local");
+
+export const browserArmFileChooser = createBrowserOperation<
+  BrowserTimedActionOptions & {
     paths: string[];
     ref?: string;
     inputRef?: string;
     element?: string;
   },
-): Promise<BrowserActionOk> {
-  return await postBrowserJson(
-    baseUrl,
-    "/hooks/file-chooser",
-    {
-      paths: opts.paths,
-      ref: opts.ref,
-      inputRef: opts.inputRef,
-      element: opts.element,
-      targetId: opts.targetId,
-      timeoutMs: opts.timeoutMs,
-    },
-    browserClientTimeout(
-      baseUrl,
-      undefined,
-      resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
-    ),
-    opts,
-  );
-}
+  BrowserActionOk
+>("/hooks/file-chooser", ["paths", "ref", "inputRef", "element", "targetId", "timeoutMs"], "local");
 
-export async function browserWaitForDownload(
-  baseUrl: BrowserClientTarget,
-  opts: BrowserTimedActionOptions & {
-    path?: string;
-  },
-): Promise<BrowserDownloadActionResult> {
-  return await postBrowserJson(
-    baseUrl,
-    "/wait/download",
-    {
-      targetId: opts.targetId,
-      path: opts.path,
-      timeoutMs: opts.timeoutMs,
-    },
-    resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
-    opts,
-  );
-}
+export const browserWaitForDownload = createBrowserOperation<
+  BrowserTimedActionOptions & { path?: string },
+  BrowserDownloadActionResult
+>("/wait/download", ["targetId", "path", "timeoutMs"], "all");
 
-export async function browserDownload(
-  baseUrl: BrowserClientTarget,
-  opts: BrowserTimedActionOptions & {
-    ref: string;
-    path: string;
-  },
-): Promise<BrowserDownloadActionResult> {
-  return await postBrowserJson(
-    baseUrl,
-    "/download",
-    {
-      targetId: opts.targetId,
-      ref: opts.ref,
-      path: opts.path,
-      timeoutMs: opts.timeoutMs,
-    },
-    resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
-    opts,
-  );
-}
+export const browserDownload = createBrowserOperation<
+  BrowserTimedActionOptions & { ref: string; path: string },
+  BrowserDownloadActionResult
+>("/download", ["targetId", "ref", "path", "timeoutMs"], "all");
 
 export async function browserAct(
   baseUrl: BrowserClientTarget,
@@ -205,12 +160,7 @@ export async function browserScreenshotAction(
     baseUrl,
     "/screenshot",
     {
-      targetId: opts.targetId,
-      fullPage: opts.fullPage,
-      ref: opts.ref,
-      element: opts.element,
-      type: opts.type,
-      labels: opts.labels,
+      ...projectBrowserOptions(opts, ["targetId", "fullPage", "ref", "element", "type", "labels"]),
       timeoutMs: effectiveTimeoutMs,
     },
     effectiveTimeoutMs,

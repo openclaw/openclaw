@@ -1,12 +1,9 @@
 /* @vitest-environment jsdom */
-import { ContextProvider } from "@lit/context";
-import { nothing } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -30,6 +27,7 @@ import {
   createContext,
   createGateway,
   createManagedSessions,
+  createPage,
   createRenderedPage,
   createSessions,
   type TestSessionsPage,
@@ -48,14 +46,6 @@ const sessionRow = (key: string, extra: Partial<GatewaySessionRow> = {}): Gatewa
   updatedAt: 1,
   ...extra,
 });
-async function createPage(context: ApplicationContext): Promise<TestSessionsPage> {
-  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-  page.context = context;
-  page.render = () => nothing;
-  document.body.append(page);
-  await page.updateComplete;
-  return page;
-}
 async function mountMutation(sessions = createSessions()) {
   const connection = createGateway({} as GatewayBrowserClient);
   const context = createContext(connection.gateway, sessions);
@@ -115,6 +105,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it("pins from the page menu without changing shared pin metadata", async () => {
+    const row = sessionRow("personal-pin", { pinned: true, sharingRole: "viewer" });
+    const sessions = createSessions();
+    const connection = createGateway({} as GatewayBrowserClient);
+    const context = createContext(connection.gateway, sessions);
+    const page = await createRenderedPage(context, sessionsResult([row], 1));
+    const menu = await openRowMenu(page, row);
+    const entry = menu.querySelector('[value="toggle-pin"]');
+    expect(entry).not.toBeNull();
+    expect(entry?.hasAttribute("disabled")).toBe(false);
+    menu.querySelector("wa-dropdown")!.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "toggle-pin" } },
+      }),
+    );
+    expect(context.navigation.snapshot.sidebarEntries).toContain("session:" + row.key);
+    expect(sessions.patch).not.toHaveBeenCalled();
+    expect(row.pinned).toBe(true);
+  });
   it.each([false, true])(
     "reports owner assignment failure only in its current page (retired: %s)",
     async (retired) => {
@@ -145,7 +154,6 @@ describe("sessions page lifecycle", () => {
       const context = createContext(mutableGateway.gateway, sessions);
       const page = await createRenderedPage(context, sessionsResult([row], 1));
       await vi.waitFor(() => expect(page.loading).toBe(false));
-      new ContextProvider(page, { context: applicationContext }).setValue(context);
       page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
       await page.updateComplete;
       const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
@@ -303,7 +311,6 @@ describe("sessions page lifecycle", () => {
     const target = sessionRow("personal", { hiddenFromInvolvingMe: true });
     const context = createContext(connection.gateway, managed.sessions);
     const page = await createRenderedPage(context, sessionsResult([target], 1));
-    new ContextProvider(page, { context: applicationContext }).setValue(context);
     const menu = await openRowMenu(page, target);
     const item = menu.querySelector('[value="toggle-involving-me"]')!;
     expect(item.textContent).toContain("Show in Involving me");
@@ -587,18 +594,6 @@ describe("sessions page new group", () => {
     return { page, sessions, connection, messages };
   }
 
-  it("captures identity before lazy loading and writes the catalog before assignment", async () => {
-    const { page, sessions } = await mount(async () => "completed");
-    const pending = page.requestNewCategory(key);
-    page.result = sessionsResult([{ ...row, sessionId: "replacement-session" }], 1);
-    await pending;
-    expect(sessions.groupsPut).toHaveBeenCalledWith(["Client work"]);
-    expect(sessions.patch).toHaveBeenCalledExactlyOnceWith(...assignment);
-    expect(vi.mocked(sessions.patch).mock.invocationCallOrder[0]).toBeGreaterThan(
-      vi.mocked(sessions.groupsPut).mock.invocationCallOrder[0]!,
-    );
-  });
-
   it("keeps the live dialog abortable when a second open overlaps it", async () => {
     const { page, sessions } = await mount(async () => "completed");
     const signals: Array<AbortSignal | undefined> = [];
@@ -652,11 +647,15 @@ describe("sessions page new group", () => {
       return { ok: true, key, path: "", entry: { sessionId: "replacement-session" } };
     });
     const created = page.requestNewCategory(key);
-    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
     page.result = sessionsResult([{ ...row, sessionId: "replacement-session" }], 2);
+    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledWith(["Client work"]));
+    expect(sessions.patch).not.toHaveBeenCalled();
     pending.resolve("completed");
     await created;
-    expect(sessions.patch).toHaveBeenCalledWith(...assignment);
+    expect(sessions.patch).toHaveBeenCalledExactlyOnceWith(...assignment);
+    expect(vi.mocked(sessions.patch).mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(sessions.groupsPut).mock.invocationCallOrder[0]!,
+    );
     expect(messages).toEqual([failure]);
   });
 
@@ -675,6 +674,10 @@ describe("sessions page new group", () => {
     await page.requestNewCategory(key);
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(messages).toEqual(["Group name rejected"]);
+    await page.updateComplete;
+    const alert = page.querySelector('[role="alert"]');
+    expect(alert?.classList.contains("sessions-error")).toBe(true);
+    expect(alert?.textContent).toContain("Group name rejected");
   });
 
   it("requires a refresh before starting an unbound move", async () => {
@@ -731,6 +734,16 @@ describe("sessions page plugin actions", () => {
     const openMenu = () => openRowMenu(page, row);
     return { page, row, run, publish, openMenu, actionSelector: `[value="plugin:${entry.key}"]` };
   }
+
+  it("keeps the open menu mounted while a refreshed row updates its actions", async () => {
+    const { page, row, publish, openMenu } = await createPluginSessionMenuPage();
+    const menu = await openMenu();
+    publish([{ ...row, label: "Latest" }]);
+    await page.updateComplete;
+    await menu.updateComplete;
+    expect(page.querySelector("openclaw-session-menu")).toBe(menu);
+    expect(menu.pluginActions[0]?.label).toBe("Review Latest");
+  });
 
   it("uses current scoped session state when invoking plugin menu actions", async () => {
     const { page, row, run, publish, openMenu, actionSelector } =

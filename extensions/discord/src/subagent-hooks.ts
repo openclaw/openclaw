@@ -4,10 +4,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   listThreadBindingsBySessionKey,
+  listThreadBindingsBySessionKeyAsync,
+  type ThreadBindingRecord,
   type ThreadBindingTargetKind,
   unbindThreadBindingsBySessionKeyAsync,
 } from "./monitor/thread-bindings.js";
-import { ensureBindingsLoadedAsync } from "./monitor/thread-bindings.state.js";
 
 type DiscordSubagentEndedEvent = {
   targetSessionKey: string;
@@ -38,19 +39,12 @@ type DiscordSubagentDeliveryTargetResult =
     }
   | undefined;
 
-function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "subagent" || normalized === "acp") {
-    return normalized;
-  }
-  return undefined;
-}
-
 export async function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
+  const targetKind = normalizeOptionalLowercaseString(event.targetKind);
   await unbindThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.targetSessionKey,
     accountId: event.accountId,
-    targetKind: normalizeThreadBindingTargetKind(event.targetKind),
+    targetKind: targetKind === "subagent" || targetKind === "acp" ? targetKind : undefined,
     reason: event.reason,
     sendFarewell: event.sendFarewell,
   });
@@ -63,12 +57,21 @@ function shouldResolveDiscordDeliveryTarget(event: DiscordSubagentDeliveryTarget
   );
 }
 
+/** @deprecated Use handleDiscordSubagentDeliveryTargetAsync; removed in the next Plugin SDK major. */
 export function handleDiscordSubagentDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
 ): DiscordSubagentDeliveryTargetResult {
-  return shouldResolveDiscordDeliveryTarget(event)
-    ? resolveDiscordDeliveryTarget(event)
-    : undefined;
+  if (!shouldResolveDiscordDeliveryTarget(event)) {
+    return undefined;
+  }
+  return resolveDiscordDeliveryTarget(
+    event,
+    listThreadBindingsBySessionKey({
+      targetSessionKey: event.childSessionKey,
+      accountId: event.requesterOrigin?.accountId?.trim() || undefined,
+      targetKind: "subagent",
+    }),
+  );
 }
 
 export async function handleDiscordSubagentDeliveryTargetAsync(
@@ -77,42 +80,28 @@ export async function handleDiscordSubagentDeliveryTargetAsync(
   if (!shouldResolveDiscordDeliveryTarget(event)) {
     return undefined;
   }
-  await ensureBindingsLoadedAsync();
-  return resolveDiscordDeliveryTarget(event);
+  const bindings = await listThreadBindingsBySessionKeyAsync({
+    targetSessionKey: event.childSessionKey,
+    accountId: event.requesterOrigin?.accountId?.trim() || undefined,
+    targetKind: "subagent",
+  });
+  return resolveDiscordDeliveryTarget(event, bindings);
 }
 
 function resolveDiscordDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
+  bindings: ThreadBindingRecord[],
 ): DiscordSubagentDeliveryTargetResult {
   const requesterAccountId = event.requesterOrigin?.accountId?.trim();
-  const requesterThreadId =
-    event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""
-      ? (normalizeOptionalStringifiedId(event.requesterOrigin.threadId) ?? "")
-      : "";
-  const bindings = listThreadBindingsBySessionKey({
-    targetSessionKey: event.childSessionKey,
-    ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
-    targetKind: "subagent",
-  });
-  if (bindings.length === 0) {
-    return undefined;
-  }
-
-  let binding: (typeof bindings)[number] | undefined;
-  if (requesterThreadId) {
-    binding = bindings.find((entry) => {
-      if (entry.threadId !== requesterThreadId) {
-        return false;
-      }
-      if (requesterAccountId && entry.accountId !== requesterAccountId) {
-        return false;
-      }
-      return true;
-    });
-  }
-  if (!binding && bindings.length === 1) {
-    binding = bindings[0];
-  }
+  const requesterThreadId = normalizeOptionalStringifiedId(event.requesterOrigin?.threadId);
+  const binding =
+    (requesterThreadId
+      ? bindings.find(
+          (entry) =>
+            entry.threadId === requesterThreadId &&
+            (!requesterAccountId || entry.accountId === requesterAccountId),
+        )
+      : undefined) ?? (bindings.length === 1 ? bindings[0] : undefined);
   if (!binding) {
     return undefined;
   }

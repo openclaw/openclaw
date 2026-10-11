@@ -1,12 +1,11 @@
 // Codex tests cover run attempt thread cleanup plugin behavior.
 import path from "node:path";
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { setImmediate as yieldEventLoop } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import type { CodexServerNotification } from "./protocol.js";
 import { turnCompleted } from "./protocol.test-helpers.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
@@ -25,17 +24,20 @@ import {
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 import { retireCodexAppServerSessionGeneration } from "./session-retirement.js";
+import * as sharedClient from "./shared-client.js";
 import {
-  resetSharedCodexAppServerClientForTests,
   retainSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
   adaptCodexTestClientFactory,
   createInferenceReadyClientHarness,
   waitForHarnessRequest,
+  withoutCodexSkillDiscovery,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
+import { getCodexAppServerTurnRouter } from "./turn-router.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 // The keyed router, client runtime, and subagent monitor each add handlers on
@@ -60,113 +62,6 @@ describe("Codex app-server main thread cleanup", () => {
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
   });
-
-  it.each([
-    { label: "without a context engine", contextEngine: undefined, status: "failed" as const },
-    {
-      label: "with the default legacy context engine",
-      contextEngine: {
-        info: { id: "legacy", name: "Legacy", version: "1.0.0" },
-      } as EmbeddedRunAttemptParams["contextEngine"],
-      status: "completed" as const,
-    },
-  ])(
-    "retains a subscribed persistent Codex thread $label after $status",
-    async ({ contextEngine, status }) => {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const requests: Array<{ method: string; params: unknown }> = [];
-      const turnStarted = createDeferred<void>();
-      const abort = new AbortController();
-      let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-      const request = vi.fn(async (method: string, params?: unknown) => {
-        requests.push({ method, params });
-        if (method === "config/read") {
-          return { config: {}, layers: [] };
-        }
-        if (method === "thread/start") {
-          return threadStartResult();
-        }
-        if (method === "turn/start") {
-          turnStarted.resolve();
-          return turnStartResult();
-        }
-        return {};
-      });
-
-      const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
-        return {
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-          addCloseHandler: () => () => undefined,
-        } as never;
-      });
-
-      const run = runCodexAppServerAttempt(
-        { ...createParams(sessionFile, workspaceDir), contextEngine, abortSignal: abort.signal },
-        { bindingStore: testCodexAppServerBindingStore, clientFactory },
-      );
-      let result: Awaited<typeof run>;
-      try {
-        // Cold preparation has no five-second contract. Wait for the native request,
-        // but surface an early run failure instead of leaving its promise unobserved.
-        await Promise.race([
-          turnStarted.promise,
-          run.then(() => {
-            throw new Error("Codex attempt completed before requesting a turn");
-          }),
-        ]);
-        await notify({
-          method: "turn/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            turn: {
-              id: "turn-1",
-              status,
-              items: [],
-              ...(status === "failed" ? { error: { message: "Native turn failed" } } : {}),
-            },
-          },
-        });
-        result = await run;
-      } finally {
-        abort.abort();
-        await run.catch(() => undefined);
-      }
-      expect(readAttemptTerminal(result).aborted).toBe(false);
-      const firstBinding = await readCodexAppServerBinding(sessionFile);
-      expect({
-        clientId: firstBinding?.clientId,
-        threadId: firstBinding?.threadId,
-        preserveNativeModel: firstBinding?.preserveNativeModel,
-        connectionScope: firstBinding?.connectionScope,
-        ringZeroConfigFingerprint: firstBinding?.ringZeroConfigFingerprint,
-        contextEngine: firstBinding?.contextEngine,
-        pluginAppsFingerprint: firstBinding?.pluginAppsFingerprint,
-      }).toEqual({
-        clientId: "test-client-1",
-        threadId: "thread-1",
-        preserveNativeModel: undefined,
-        connectionScope: undefined,
-        ringZeroConfigFingerprint: undefined,
-        contextEngine: undefined,
-        pluginAppsFingerprint: expect.any(String),
-      });
-
-      expect(requests.map((entry) => entry.method)).toEqual([
-        "config/read",
-        "thread/start",
-        "model/list",
-        "turn/start",
-      ]);
-    },
-  );
 
   it("keeps alternating conversations subscribed after one fails on their shared Codex client", async () => {
     const workspaceDir = path.join(tempDir, "shared-workspace");
@@ -238,29 +133,25 @@ describe("Codex app-server main thread cleanup", () => {
     const userRequestMethods = () =>
       harness.writes
         .map((write) => (JSON.parse(write) as { method: string }).method)
-        .filter((method) => method !== "initialize" && method !== "initialized");
+        .filter((method) => !["initialize", "initialized", "skills/list"].includes(method));
     expect(userRequestMethods()).toEqual([
       "config/read",
       "configRequirements/read",
       "account/read",
       "thread/start",
-      "model/list",
       "turn/start",
       "config/read",
       "configRequirements/read",
       "account/read",
       "thread/start",
-      "model/list",
       "turn/start",
       "config/read",
       "configRequirements/read",
       "account/read",
-      "model/list",
       "turn/start",
       "config/read",
       "configRequirements/read",
       "account/read",
-      "model/list",
       "turn/start",
     ]);
     await expect(readCodexAppServerBinding(sessionFiles.a)).resolves.toMatchObject({
@@ -311,12 +202,11 @@ describe("Codex app-server main thread cleanup", () => {
       },
     });
     expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
-    expect(userRequestMethods().slice(-6)).toEqual([
+    expect(userRequestMethods().slice(-5)).toEqual([
       "thread/unsubscribe",
       "config/read",
       "configRequirements/read",
       "account/read",
-      "model/list",
       "turn/start",
     ]);
   });
@@ -610,65 +500,91 @@ describe("Codex app-server main thread cleanup", () => {
     await expect(retirement).resolves.toBe("applied");
   });
 
-  it.each([
-    { reason: "fails", error: new Error("turn start exploded") },
-    {
-      reason: "is cancelled before its request is written",
-      error: Object.assign(new Error("turn/start aborted"), {
-        code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
-        mayHaveWritten: false,
-      }),
-    },
-  ])("unsubscribes an incognito Codex thread when turn start $reason", async ({ error }) => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const sessionKey = "agent:main:dashboard:incognito-failed-turn";
-    await seedRunSessionOwnerForTest("session-1", sessionKey);
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      requests.push({ method, params });
-      if (method === "config/read") {
-        return { config: {}, layers: [] };
-      }
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        throw error;
-      }
-      return {};
-    });
+  it.each(
+    [
+      { reason: "fails", error: new Error("turn start exploded") },
+      {
+        reason: "is cancelled before its request is written",
+        error: Object.assign(new Error("turn/start aborted"), {
+          code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+          mayHaveWritten: false,
+        }),
+      },
+    ].flatMap(({ reason, error }) =>
+      ["current", "successor"].map((owner) => ({ reason, error, owner })),
+    ),
+  )(
+    "settles rejected incognito startup for the $owner physical owner when turn start $reason",
+    async ({ error, owner }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const sessionKey = "agent:main:dashboard:incognito-failed-turn";
+      await seedRunSessionOwnerForTest("session-1", sessionKey);
+      const params = createParams(sessionFile, workspaceDir, sessionKey);
+      const identity = sessionBindingIdentity(params);
+      const releaseLease = vi.spyOn(sharedClient, "releaseLeasedSharedCodexAppServerClient");
+      const request = vi.fn(async (method: string) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          if (owner === "successor") {
+            const binding = testCodexAppServerBindingStore.read(identity);
+            if (!binding) {
+              throw new Error("Expected the failed startup's native binding");
+            }
+            await testCodexAppServerBindingStore.mutate(identity, {
+              kind: "set",
+              binding: { ...binding, clientId: "successor-client" },
+            });
+          }
+          throw error;
+        }
+        return {};
+      });
 
-    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
-      return {
+      const client = {
         ...mockClientRuntimeMethods(),
         request,
         addNotificationHandler: () => () => undefined,
         addRequestHandler: () => () => undefined,
         addCloseHandler: () => () => undefined,
       } as never;
-    });
+      const clientFactory = multiplexedClientFactory(async () => client);
 
-    await expect(
-      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
-        bindingStore: testCodexAppServerBindingStore,
-        clientFactory,
-      }),
-    ).rejects.toThrow(error.message);
-    expect(requests.map((entry) => entry.method)).toEqual([
-      "config/read",
-      "thread/start",
-      "model/list",
-      "turn/start",
-      "thread/unsubscribe",
-    ]);
-    expect(request).toHaveBeenCalledWith(
-      "thread/unsubscribe",
-      { threadId: "thread-1" },
-      { timeoutMs: 5_000 },
-    );
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
-  });
+      await expect(
+        runCodexAppServerAttempt(params, {
+          bindingStore: testCodexAppServerBindingStore,
+          clientFactory,
+        }),
+      ).rejects.toThrow(error.message);
+      expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
+        "config/read",
+        "thread/start",
+        "turn/start",
+        ...(owner === "current" ? ["thread/unsubscribe"] : []),
+      ]);
+      if (owner === "current") {
+        expect(request).toHaveBeenCalledWith(
+          "thread/unsubscribe",
+          { threadId: "thread-1" },
+          { timeoutMs: 5_000, withCurrent: expect.any(Function) },
+        );
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+      } else {
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+          threadId: "thread-1",
+          clientId: "successor-client",
+        });
+      }
+      const route = getCodexAppServerTurnRouter(client).reserveThread({ threadId: "thread-1" });
+      route.release();
+      expect(releaseLease).toHaveBeenCalledWith(client);
+    },
+  );
 
   it.each([
     { label: "confirms", interruptFails: false },
@@ -714,6 +630,7 @@ describe("Codex app-server main thread cleanup", () => {
       );
       if (!interruptFails) {
         const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
+        expect(unsubscribe.params).toEqual({ threadId: "thread-1" });
         harness.send({ id: unsubscribe.id, result: {} });
       }
       await expect(failure).resolves.toMatchObject({
@@ -725,13 +642,13 @@ describe("Codex app-server main thread cleanup", () => {
       expect(harness.writes.map((entry) => JSON.parse(entry).method)).toEqual([
         "initialize",
         "initialized",
+        "skills/list",
         "config/read",
         "account/read",
         "thread/start",
-        "model/list",
         "turn/start",
         "turn/interrupt",
-        ...(!interruptFails ? ["thread/unsubscribe"] : []),
+        ...(interruptFails ? [] : ["thread/unsubscribe"]),
       ]);
       expect(harness.stdinDestroyed).toBe(interruptFails);
     },
@@ -781,10 +698,9 @@ describe("Codex app-server main thread cleanup", () => {
         clientFactory,
       }),
     ).rejects.toBe(startupError);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
+    expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
       "config/read",
       "thread/start",
-      "model/list",
       "turn/start",
       "turn/interrupt",
     ]);
@@ -821,9 +737,7 @@ describe("Codex app-server main thread cleanup", () => {
       harness.send({ id: threadStart.id, result: threadStartResult() });
       const turnStart = await waitForHarnessRequest(harness, "turn/start");
       harness.send({ id: turnStart.id, result: turnStartResult() });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldEventLoop();
 
       abort.abort("cancelled");
       const interrupt = await waitForHarnessRequest(harness, "turn/interrupt");
@@ -832,9 +746,7 @@ describe("Codex app-server main thread cleanup", () => {
         params: { threadId: "thread-1", turnId: "turn-1" },
       });
       harness.send({ id: interrupt.id, result: {} });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldEventLoop();
       expect(settled).toBe(false);
       expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
         "thread/unsubscribe",
@@ -893,14 +805,19 @@ describe("Codex app-server main thread cleanup", () => {
         harness.send({ id: confirmation.id, result: { data: [], nextCursor: null } });
       }
       const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
+      expect(unsubscribe.params).toEqual({ threadId: "thread-1" });
+      expect(settled).toBe(false);
       harness.send({ id: unsubscribe.id, result: {} });
-
       if (rejected) {
         await rejected;
       } else {
         expect(readAttemptTerminal(await run)).toMatchObject({ aborted: true, timedOut: false });
       }
+      expect(
+        harness.writes.filter((entry) => JSON.parse(entry).method === "thread/unsubscribe"),
+      ).toHaveLength(1);
       expect(close).not.toHaveBeenCalled();
+      expect(harness.stdinDestroyed).toBe(false);
     },
   );
 

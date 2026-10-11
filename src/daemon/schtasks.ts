@@ -1,4 +1,3 @@
-/** Windows Task Scheduler installer, startup fallback, and lifecycle controls. */
 export {
   restartScheduledTask,
   resumeScheduledTaskAutoStartAfterUpdate,

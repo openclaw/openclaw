@@ -86,14 +86,21 @@ export type ResolvedFailureAlert = CronFailureAlertRoute & {
   includeSkipped: boolean;
 };
 
+type CronFailureAlertNotification = {
+  kind: "failure-alert";
+  job: CronNotificationJob;
+  payload: ReplyPayload;
+  runAtMs?: number;
+  route: CronFailureAlertRoute;
+};
+
 export type CronNotificationIntent = { routing?: CronNotificationRouting } & (
   | { kind: "auto-disabled"; job: CronNotificationJob; text: string }
-  | { kind: "failure-repair"; job: CronNotificationJob; text: string }
   | {
-      kind: "failure-alert";
+      kind: "failure-repair";
       job: CronNotificationJob;
-      payload: ReplyPayload;
-      runAtMs?: number;
-      route: CronFailureAlertRoute;
+      text: string;
+      fallback?: CronFailureAlertNotification;
     }
+  | CronFailureAlertNotification
 );

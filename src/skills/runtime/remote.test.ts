@@ -307,7 +307,7 @@ describe("skills-remote", () => {
         get: () => testRemoteSession(nodeId),
         checkConnectivity: async () => ({
           ok: false,
-          error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+          error: { code: "TIMEOUT", message: "node connectivity check timed out" },
         }),
         invoke: async (params: { command: string }) => {
           invokeCalls.push(params.command);
@@ -369,7 +369,7 @@ describe("skills-remote", () => {
             });
             return {
               ok: false,
-              error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+              error: { code: "TIMEOUT", message: "node connectivity check timed out" },
             };
           }
           return { ok: true };

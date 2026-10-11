@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
-import { html, render, type LitElement } from "lit";
+
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -13,7 +15,9 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
-import "./session-activity-media.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { ActivitySessionMedia, type ActivitySessionMediaProps } from "./session-activity-media.tsx";
 
 const observers = new Map<Element, (visible: boolean) => void>();
 let container: HTMLDivElement;
@@ -51,7 +55,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  render(null, container);
+  cleanupSolid();
   container.remove();
   observers.clear();
   vi.unstubAllGlobals();
@@ -69,11 +73,7 @@ function images(label: string, count = 4): ArtifactsListResult {
   };
 }
 
-type MediaRow = LitElement & {
-  revision: number;
-  session?: GatewaySessionRow;
-  agentId: string;
-};
+type MediaRow = SolidBridgeElement<ActivitySessionMediaProps>;
 
 function mountMedia(
   request: GatewayRequestHandler,
@@ -89,15 +89,11 @@ function mountMedia(
 ) {
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const context = createContext(harness.gateway, createSessions("main", []));
-  render(
-    html`<openclaw-activity-session-media
-      .context=${context}
-      .sessionKey=${sessionKey}
-      .agentId=${agentId}
-      .session=${session}
-    ></openclaw-activity-session-media>`,
-    container,
+  mountSolid(
+    () => createComponent(ActivitySessionMedia, { context, sessionKey, agentId, session }),
+    { container },
   );
+  flush();
   return { harness, row: container.querySelector<MediaRow>("openclaw-activity-session-media")! };
 }
 
@@ -106,17 +102,25 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
   const request = vi.fn(async () => pending[request.mock.calls.length - 1]!.promise);
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const context = createContext(harness.gateway, createSessions("main", []));
-  render(
-    html`${[0, 1, 2, 3].map((index) => html`<openclaw-activity-session-media .context=${context} .sessionKey=${`agent:main:images-${index}`} agentId="main"></openclaw-activity-session-media>`)}`,
-    container,
+  mountSolid(
+    () =>
+      [0, 1, 2, 3].map((index) =>
+        createComponent(ActivitySessionMedia, {
+          context,
+          sessionKey: `agent:main:images-${index}`,
+          agentId: "main",
+        }),
+      ),
+    { container },
   );
-  await vi.waitFor(() => expect(observers.size).toBe(4));
+  flush();
+  await waitForSolid(() => expect(observers.size).toBe(4));
   expect(request).not.toHaveBeenCalled();
   const rows = [...container.querySelectorAll("openclaw-activity-session-media")];
   for (const row of rows.slice(0, 3)) {
     observers.get(row)?.(true);
   }
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   expect(request).toHaveBeenCalledWith("artifacts.list", {
     sessionKey: "agent:main:images-0",
     agentId: "main",
@@ -124,35 +128,37 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
     limit: 4,
   });
   pending[0]!.resolve(images("first"));
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
   pending[1]!.resolve(images("second"));
   pending[2]!.resolve(images("third"));
-  await vi.waitFor(() => expect(rows[0]!.querySelectorAll(".chat-message-image")).toHaveLength(4));
+  await waitForSolid(() =>
+    expect(rows[0]!.querySelectorAll(".chat-message-image")).toHaveLength(4),
+  );
   expect(rows[3]!.querySelectorAll("img")).toHaveLength(0);
   rows[0]!.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(rows[0]!.querySelector("openclaw-image-lightbox")?.getAttribute("src")).toBe(
       "https://images.example.test/first-0.png",
     ),
   );
-  const first = rows[0] as LitElement & { revision: number; session?: GatewaySessionRow };
+  const first = rows[0] as MediaRow;
   const lightbox = first.querySelector("openclaw-image-lightbox");
   first.revision = 1;
   try {
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
     expect(first.querySelectorAll(".chat-message-image")).toHaveLength(4);
     expect(first.querySelector("img")?.getAttribute("alt")).toBe("first-0");
     expect(first.querySelector("openclaw-image-lightbox")).toBe(lightbox);
   } finally {
     pending[3]!.resolve(images("refreshed"));
   }
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(first.querySelector("img")?.getAttribute("alt")).toBe("refreshed-0"),
   );
   expect(first.querySelector("openclaw-image-lightbox")).toBe(lightbox);
   expect(lightbox?.getAttribute("src")).toBe("https://images.example.test/first-0.png");
   first.session = { key: "agent:main:images-0", kind: "direct", permissionMode: "workspace" };
-  await vi.waitFor(() => expect(first.querySelector("openclaw-image-lightbox")).toBeNull());
+  await waitForSolid(() => expect(first.querySelector("openclaw-image-lightbox")).toBeNull());
 });
 
 it.each(["initial discovery", "revision refresh"])(
@@ -170,18 +176,18 @@ it.each(["initial discovery", "revision refresh"])(
       .mockReturnValueOnce(failedRefresh.promise)
       .mockReturnValueOnce(retry.promise);
     const { row } = mountMedia(request);
-    await vi.waitFor(() => expect(observers.has(row)).toBe(true));
+    await waitForSolid(() => expect(observers.has(row)).toBe(true));
     observers.get(row)?.(true);
     if (!initialDiscovery) {
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0"),
       );
       row.revision = 1;
     }
     try {
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
       failedRefresh.reject(new Error("Unavailable"));
-      await vi.waitFor(() => expect(row.querySelector('[role="status"]')).not.toBeNull());
+      await waitForSolid(() => expect(row.querySelector('[role="status"]')).not.toBeNull());
       expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0");
       const retryButton = [...row.querySelectorAll<HTMLButtonElement>("button")].find(
         (button) => button.textContent?.trim() === "Retry",
@@ -191,15 +197,17 @@ it.each(["initial discovery", "revision refresh"])(
         row.querySelector(".activity-feed__media"),
       );
       retryButton!.click();
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+      await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
       expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0");
       retry.resolve(images("fresh", 1));
-      await vi.waitFor(() => expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0"));
+      await waitForSolid(() =>
+        expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0"),
+      );
       expect(row.querySelector('[role="status"]')).toBeNull();
       request.mockResolvedValueOnce({ artifacts: [] });
       row.revision = initialDiscovery ? 1 : 2;
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
-      await vi.waitFor(() => expect(row.querySelector("img")).toBeNull());
+      await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
+      await waitForSolid(() => expect(row.querySelector("img")).toBeNull());
     } finally {
       failedRefresh.resolve(images("released", 1));
       retry.resolve(images("released", 1));
@@ -207,7 +215,7 @@ it.each(["initial discovery", "revision refresh"])(
   },
 );
 
-it.each(["session", "agent"] as const)(
+it.each(["session", "agent", "connection"] as const)(
   "retires the previous gallery and pending refresh when its %s changes",
   async (change) => {
     const stale = createDeferred<ArtifactsListResult>();
@@ -217,29 +225,49 @@ it.each(["session", "agent"] as const)(
       .mockResolvedValueOnce(images("original", 1))
       .mockReturnValueOnce(stale.promise)
       .mockReturnValueOnce(fresh.promise);
-    const { row } = mountMedia(request, {
+    const { harness, row } = mountMedia(request, {
       session: { key: "agent:main:images", kind: "direct", sessionId: "original" },
     });
-    await vi.waitFor(() => expect(observers.has(row)).toBe(true));
+    await waitForSolid(() => expect(observers.has(row)).toBe(true));
     observers.get(row)?.(true);
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0"),
     );
     row.revision = 1;
     try {
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
       if (change === "session") {
         row.session = { key: "agent:main:images", kind: "direct", sessionId: "reset" };
-      } else {
+      } else if (change === "agent") {
         row.agentId = "other";
+      } else {
+        harness.publish({ client: createTestGatewayClient(request) });
       }
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+      await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
       expect(row.querySelector("img")).toBeNull();
-      stale.resolve(images("stale", 1));
-      await row.updateComplete;
-      expect(row.querySelector("img")).toBeNull();
+      if (change !== "connection") {
+        stale.resolve(images("stale", 1));
+        await row.updateComplete;
+        expect(row.querySelector("img")).toBeNull();
+      }
       fresh.resolve(images("fresh", 1));
-      await vi.waitFor(() => expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0"));
+      await waitForSolid(() =>
+        expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0"),
+      );
+      expect(row.querySelectorAll("img")).toHaveLength(1);
+      if (change === "connection") {
+        stale.resolve(images("stale"));
+        await row.updateComplete;
+        expect(row.querySelectorAll("img")).toHaveLength(1);
+        expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0");
+        row.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+        await waitForSolid(() =>
+          expect(row.querySelector("openclaw-image-lightbox")).not.toBeNull(),
+        );
+        harness.publish({ phase: "offline" });
+        await waitForSolid(() => expect(row.querySelector("img")).toBeNull());
+        expect(row.querySelector("openclaw-image-lightbox")).toBeNull();
+      }
     } finally {
       stale.resolve(images("released", 1));
       fresh.resolve(images("released", 1));
@@ -247,95 +275,91 @@ it.each(["session", "agent"] as const)(
   },
 );
 
-it("retires old connection results and media when the same row reconnects", async () => {
-  const old = createDeferred<ArtifactsListResult>();
-  const oldRequest = vi.fn(() => old.promise);
-  const { harness, row } = mountMedia(oldRequest);
-  await vi.waitFor(() => expect(observers.has(row)).toBe(true));
-  observers.get(row)?.(true);
-  await vi.waitFor(() => expect(oldRequest).toHaveBeenCalledTimes(1));
-  const freshRequest = vi.fn(async () => images("fresh", 1));
-  harness.publish({ client: createTestGatewayClient(freshRequest) });
-  await vi.waitFor(() => expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0"));
-  old.resolve(images("stale"));
-  await vi.waitFor(() => expect(row.querySelectorAll("img")).toHaveLength(1));
-  expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0");
-  row.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
-  await vi.waitFor(() => expect(row.querySelector("openclaw-image-lightbox")).not.toBeNull());
-  harness.publish({ phase: "offline" });
-  await vi.waitFor(() => expect(row.querySelector("img")).toBeNull());
-  expect(row.querySelector("openclaw-image-lightbox")).toBeNull();
-});
-
 it("coalesces queued revisions without moving the session behind later arrivals", async () => {
   const pending = Array.from({ length: 4 }, () => createDeferred<ArtifactsListResult>());
   const request = vi.fn(async () => pending[request.mock.calls.length - 1]!.promise);
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const context = createContext(harness.gateway, createSessions("main", []));
-  const show = (revision: number) =>
-    render(
-      html`${[0, 1, 2, 3].map((index) => html`<openclaw-activity-session-media .context=${context} .sessionKey=${`agent:main:queue-${index}`} agentId="main" .revision=${index === 2 ? revision : 0}></openclaw-activity-session-media>`)}`,
-      container,
-    );
+  const show = (revision: number) => {
+    const rows = container.querySelectorAll<MediaRow>("openclaw-activity-session-media");
+    if (rows.length) {
+      rows[2]!.revision = revision;
+      flush();
+    } else {
+      mountSolid(
+        () =>
+          [0, 1, 2, 3].map((index) =>
+            createComponent(ActivitySessionMedia, {
+              context,
+              sessionKey: `agent:main:queue-${index}`,
+              agentId: "main",
+              revision: index === 2 ? revision : 0,
+            }),
+          ),
+        { container },
+      );
+      flush();
+    }
+  };
   show(1);
-  await vi.waitFor(() => expect(observers.size).toBe(4));
+  await waitForSolid(() => expect(observers.size).toBe(4));
   for (const notify of observers.values()) {
     notify(true);
   }
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   show(2);
   await Promise.all(
-    [...container.querySelectorAll<LitElement>("openclaw-activity-session-media")].map(
+    [...container.querySelectorAll<MediaRow>("openclaw-activity-session-media")].map(
       (row) => row.updateComplete,
     ),
   );
   pending[0]!.resolve(images("queue-0"));
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
   expect(request.mock.calls[2]).toEqual([
     "artifacts.list",
     { sessionKey: "agent:main:queue-2", agentId: "main", type: "image", limit: 4 },
   ]);
   pending[1]!.resolve(images("queue-1"));
   pending[2]!.resolve(images("queue-2"));
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
   pending[3]!.resolve(images("queue-3"));
-  await vi.waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(16));
+  await waitForSolid(() => expect(container.querySelectorAll("img")).toHaveLength(16));
 });
 
 it.each([
-  { count: 3, cursor: true, omitted: false, error: false },
-  { count: 0, cursor: true, omitted: false, error: false },
-  { count: 0, cursor: false, omitted: true, error: false },
-  { count: 0, cursor: true, omitted: true, error: true },
-  { count: 0, cursor: false, omitted: false, error: false },
+  { count: 3, cursor: true, omitted: false, error: false, revalidate: false },
+  { count: 0, cursor: true, omitted: false, error: false, revalidate: false },
+  { count: 0, cursor: false, omitted: true, error: false, revalidate: false },
+  { count: 0, cursor: true, omitted: true, error: true, revalidate: false },
+  { count: 0, cursor: false, omitted: false, error: false, revalidate: false },
+  { count: 1, cursor: true, omitted: false, error: true, revalidate: true },
+  { count: 1, cursor: true, omitted: true, error: false, revalidate: true },
+  { count: 0, cursor: true, omitted: true, error: false, revalidate: true },
 ])(
-  "keeps image discovery feedback inside its media inset (%j)",
-  async ({ count, cursor, omitted, error }) => {
+  "keeps media feedback and pagination stable through discovery and revalidation (%j)",
+  async ({ count, cursor, omitted, error, revalidate }) => {
     vi.useFakeTimers();
-    const continued = createDeferred<ArtifactsListResult>();
+    const refresh = createDeferred<ArtifactsListResult>();
+    const older = createDeferred<ArtifactsListResult>();
     try {
       const result: ArtifactsListResult = {
-        ...images("preview", count),
+        ...images("settled", count),
         ...(cursor ? { nextCursor: "older" } : {}),
         ...(omitted ? { omittedOversized: true } : {}),
       };
-      // With a notice and an error, the first page carries the notice and the next page fails.
-      const request = vi.fn(async () => {
-        if (error && (!omitted || request.mock.calls.length > 1)) {
-          throw new Error("Image discovery failed");
-        }
-        return result;
-      });
-      const { row } = mountMedia(request, { sessionKey: "agent:main:preview" });
+      const request = vi.fn().mockResolvedValue(result);
+      if (error) {
+        request.mockResolvedValueOnce(result).mockRejectedValueOnce(new Error("Unavailable"));
+      }
+      const { row } = mountMedia(request, { sessionKey: "agent:main:stable" });
       await row.updateComplete;
       observers.get(row)?.(true);
       await vi.advanceTimersByTimeAsync(0);
       await row.updateComplete;
-
       const media = row.querySelector(".activity-feed__media");
+      const note = row.querySelector(".activity-feed__note");
       expect(Boolean(media)).toBe(count > 0 || cursor || omitted || error);
       expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count);
-      const note = row.querySelector(".activity-feed__note");
       expect(Boolean(note)).toBe(error || omitted || (count === 0 && cursor));
       if (note) {
         expect(note.parentElement).toBe(media);
@@ -355,98 +379,56 @@ it.each([
           count ? media?.querySelector(".chat-message-images") : note,
         );
         expect(action?.parentElement?.lastElementChild).toBe(action);
-        request.mockReturnValueOnce(continued.promise);
+      }
+      if (revalidate) {
+        const nodes = [...media!.querySelectorAll("*")];
+        const markup = media!.innerHTML;
+        expect(media!.textContent).toContain(error ? "Couldn't load images" : "Older images");
+        const settledCalls = request.mock.calls.length;
+        request.mockReturnValueOnce(refresh.promise);
+        row.revision++;
+        await row.updateComplete;
+        expect(request).toHaveBeenCalledTimes(settledCalls + 1);
+        expect(row.querySelector(".activity-feed__media")).toBe(media);
+        expect(media!.innerHTML).toBe(markup);
+        for (const [index, node] of [...media!.querySelectorAll("*")].entries()) {
+          expect(node).toBe(nodes[index]);
+        }
+        expect(action?.disabled).toBe(false);
+      }
+      if (cursor && !error) {
+        request.mockReturnValueOnce(older.promise);
         action!.click();
         await row.updateComplete;
+        if (revalidate) {
+          expect(request).toHaveBeenLastCalledWith("artifacts.list", {
+            sessionKey: "agent:main:stable",
+            agentId: "main",
+            type: "image",
+            limit: 4 - count,
+            cursor: "older",
+          });
+        }
         expect(action!.disabled).toBe(true);
         expect(action!.textContent?.trim()).toBe("Loading…");
-        continued.resolve(images("finished"));
+        older.resolve(images("older", revalidate ? 1 : 4));
         await vi.advanceTimersByTimeAsync(0);
         await row.updateComplete;
+        if (revalidate) {
+          expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count + 1);
+        } else {
+          expect(row.querySelector(".activity-feed__note-action")).toBeNull();
+        }
+      }
+      if (revalidate) {
+        refresh.resolve(images("replacement"));
+        await vi.advanceTimersByTimeAsync(0);
+        await row.updateComplete;
+        expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(4);
+        expect(row.querySelector("img")?.getAttribute("alt")).toBe("replacement-0");
         expect(row.querySelector(".activity-feed__note-action")).toBeNull();
+        expect(row.querySelector(".activity-feed__note")).toBeNull();
       }
-    } finally {
-      continued.resolve({ artifacts: [] });
-      vi.useRealTimers();
-    }
-  },
-);
-
-it.each([
-  { count: 1, error: true, omitted: false },
-  { count: 1, error: false, omitted: true },
-  { count: 0, error: false, omitted: true },
-])(
-  "keeps settled media DOM unchanged during revision revalidation (%j)",
-  async ({ count, error, omitted }) => {
-    vi.useFakeTimers();
-    const refresh = createDeferred<ArtifactsListResult>();
-    const older = createDeferred<ArtifactsListResult>();
-    try {
-      const request = vi.fn().mockResolvedValue({
-        ...images("settled", count),
-        nextCursor: "older",
-        omittedOversized: omitted,
-      });
-      if (error) {
-        request
-          .mockResolvedValueOnce({ ...images("settled", count), nextCursor: "older" })
-          .mockRejectedValueOnce(new Error("Unavailable"));
-      }
-      const { row } = mountMedia(request, { sessionKey: "agent:main:stable" });
-      await row.updateComplete;
-      observers.get(row)?.(true);
-      await vi.advanceTimersByTimeAsync(0);
-      await row.updateComplete;
-      const media = row.querySelector(".activity-feed__media")!;
-      const nodes = [...media.querySelectorAll("*")];
-      const markup = media.innerHTML;
-      if (omitted) {
-        expect(media.querySelector(".activity-feed__note")?.textContent).toContain(
-          "Images too large to preview here",
-        );
-      }
-      expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count);
-      expect(media.textContent).toContain(error ? "Couldn't load images" : "Older images");
-      const settledCalls = request.mock.calls.length;
-      request.mockReturnValueOnce(refresh.promise);
-      row.revision++;
-      await row.updateComplete;
-      expect(request).toHaveBeenCalledTimes(settledCalls + 1);
-      expect(row.querySelector(".activity-feed__media")).toBe(media);
-      expect(media.innerHTML).toBe(markup);
-      for (const [index, node] of [...media.querySelectorAll("*")].entries()) {
-        expect(node).toBe(nodes[index]);
-      }
-      expect(media.querySelector<HTMLButtonElement>(".activity-feed__note-action")?.disabled).toBe(
-        false,
-      );
-      if (!error) {
-        request.mockReturnValueOnce(older.promise);
-        const button = media.querySelector<HTMLButtonElement>(".activity-feed__note-action")!;
-        button.click();
-        await row.updateComplete;
-        expect(request).toHaveBeenLastCalledWith("artifacts.list", {
-          sessionKey: "agent:main:stable",
-          agentId: "main",
-          type: "image",
-          limit: 4 - count,
-          cursor: "older",
-        });
-        expect(button.disabled).toBe(true);
-        expect(button.textContent?.trim()).toBe("Loading…");
-        older.resolve(images("older", 1));
-        await vi.advanceTimersByTimeAsync(0);
-        await row.updateComplete;
-        expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(count + 1);
-      }
-      refresh.resolve(images("replacement"));
-      await vi.advanceTimersByTimeAsync(0);
-      await row.updateComplete;
-      expect(row.querySelectorAll(".chat-image-frame")).toHaveLength(4);
-      expect(row.querySelector("img")?.getAttribute("alt")).toBe("replacement-0");
-      expect(row.querySelector(".activity-feed__note-action")).toBeNull();
-      expect(row.querySelector(".activity-feed__note")).toBeNull();
     } finally {
       refresh.resolve({ artifacts: [] });
       older.resolve({ artifacts: [] });
@@ -516,15 +498,19 @@ it("keeps queued pagination separate from background revalidation", async () => 
     });
     const harness = createGatewayHarness(createTestGatewayClient(request));
     const context = createContext(harness.gateway, createSessions("main", []));
-    render(
-      html`${["target", "0", "1"].map((sessionKey) => html`<openclaw-activity-session-media .context=${context} .sessionKey=${sessionKey} agentId="main"></openclaw-activity-session-media>`)}`,
-      container,
+    mountSolid(
+      () =>
+        ["target", "0", "1"].map((sessionKey) =>
+          createComponent(ActivitySessionMedia, {
+            context,
+            sessionKey,
+            agentId: "main",
+          }),
+        ),
+      { container },
     );
-    const rows = [
-      ...container.querySelectorAll<LitElement & { revision: number }>(
-        "openclaw-activity-session-media",
-      ),
-    ];
+    flush();
+    const rows = [...container.querySelectorAll<MediaRow>("openclaw-activity-session-media")];
     const row = rows[0]!;
     await Promise.all(rows.map((element) => element.updateComplete));
     observers.get(row)?.(true);

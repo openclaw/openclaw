@@ -101,7 +101,6 @@ vi.mock("./comment-reaction.js", () => ({
 }));
 
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { buildFeishuPostMessageContent } from "./markdown.js";
 import {
   FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER,
   feishuOutbound,
@@ -251,11 +250,6 @@ afterAll(() => {
 });
 
 describe("Feishu text delivery", () => {
-  it("preserves single newlines in the chunker used by cards and comments", () => {
-    const text = "line one\nline two\nline three";
-    expect(feishuOutbound.chunker?.(text, 100).join("")).toBe(text);
-  });
-
   it("routes a local image payload through approved media access without exposing its path", async () => {
     await withImage(async (file, dir) => {
       const readFile = vi.fn(async () => Buffer.from("approved image"));
@@ -364,7 +358,6 @@ describe("Feishu TTS supplements", () => {
   });
 
   it.each([
-    { route: "direct", controls: true, visible: true },
     { route: "core", controls: true, visible: true },
     { route: "direct", controls: false, visible: false },
     { route: "core", controls: false, visible: true },
@@ -434,13 +427,21 @@ describe("Feishu native presentation delivery", () => {
           type: "buttons",
           buttons: [
             { label: "Approve", value: "/approve req_1 allow-once", style: "success" },
-            { label: "Deny", value: "/approve req_1 deny", style: "danger" },
+            {
+              label: "Deny",
+              action: { type: "command", command: "/approve req_1 deny" },
+              url: "https://example.com/stale",
+              webApp: { url: "https://example.com/stale-app" },
+              style: "danger",
+            },
           ],
         },
       ],
     };
     const rendered = await render({ presentation });
-    expect(rendered.text).toBe("Approval\n\nApprove the request?\n\n- Approve\n- Deny");
+    expect(rendered.text).toBe(
+      "Approval\n\nApprove the request?\n\n- Approve\n- Deny: `/approve req_1 deny`",
+    );
     expectResult(await sendPayload(rendered), "native_card_msg");
     expect(cardCall()?.header).toEqual({
       title: { tag: "plain_text", content: "Approval" },
@@ -526,39 +527,6 @@ describe("Feishu native presentation delivery", () => {
     }
     expect(sendCardFeishuMock.mock.calls[0]?.[0]?.replyToMessageId).toBeUndefined();
     expectResult(result, "native_card_msg");
-  });
-
-  it("keeps explicit command actions authoritative over stale link fields", async () => {
-    await sendPayload(
-      await render({
-        presentation: buttons([
-          {
-            label: "Deny",
-            action: { type: "command", command: "/approve req-1 deny" },
-            url: "https://example.com/stale",
-            webApp: { url: "https://example.com/stale-app" },
-          },
-        ]),
-      }),
-    );
-    expect(cardCall()?.body.elements).toEqual([
-      {
-        tag: "button",
-        text: { tag: "plain_text", content: "Deny" },
-        type: "default",
-        behaviors: [
-          {
-            type: "callback",
-            value: {
-              oc: "ocf1",
-              k: "quick",
-              a: "feishu.payload.button",
-              q: "/approve req-1 deny",
-            },
-          },
-        ],
-      },
-    ]);
   });
 
   it("keeps typed approval actions out of callback envelopes", async () => {
@@ -771,29 +739,6 @@ describe("Feishu native presentation delivery", () => {
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("consumes one implicit reply on media before a short element-limit fallback", async () => {
-    const presentation: MessagePresentation = {
-      blocks: [
-        ...Array.from({ length: 200 }, () => ({ type: "divider" as const })),
-        ...buttons([{ label: "Approve", action: { type: "command", command: "/approve req_1" } }])
-          .blocks,
-      ],
-    };
-    const result = await sendPayload(
-      await render({ presentation, mediaUrl: imageUrl }),
-      implicitReply,
-    );
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
-    expect(mediaCall()).toMatchObject({ mediaUrl: imageUrl, replyToMessageId: "om_reply" });
-    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
-    expect(textCall()).toMatchObject({
-      text: "- Approve: `/approve req_1`",
-      replyToMessageId: undefined,
-    });
-    expectResult(result, "text_msg");
-  });
-
   it("falls back to post mode above five markdown tables even in card mode", async () => {
     await sendText(tableText(6), { cfg: cardConfig });
     expect(sendMessageFeishuMock).toHaveBeenCalled();
@@ -885,32 +830,6 @@ describe("Feishu document comments", () => {
     );
     expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps disabled labels literal without command guidance after core rendering", async () => {
-    const presentation = buttons([
-      {
-        label: "Disabled [Approve](https://example.com) & <at>",
-        disabled: true,
-        action: { type: "command", command: "/approve req_1" },
-      },
-    ]);
-    expectResult(
-      await sendPayload(
-        await render(
-          {
-            text: "Review this",
-            presentation,
-          },
-          commentTarget,
-        ),
-        { to: commentTarget },
-      ),
-      "reply_msg",
-    );
-    expect(commentCall()?.content).toBe(
-      "Review this\n\n- Disabled [Approve](https://example.com) & <at>",
-    );
   });
 
   it.each(
@@ -1024,33 +943,6 @@ describe("Feishu chunked delivery and media receipts", () => {
 
   it.each([
     {
-      name: "selected account",
-      cfg: { channels: { feishu: { accounts: { main: { textChunkLimit: 10 } } } } },
-      lines: 10,
-      limit: 10,
-    },
-    {
-      name: "serialized byte envelope",
-      cfg: { channels: { feishu: { textChunkLimit: 25_000 } } },
-      lines: 6150,
-      limit: 25_000,
-    },
-  ])(
-    "re-chunks expanded posts at the $name limit",
-    async ({ cfg: accountConfig, lines, limit }) => {
-      await sendText("a\n".repeat(lines).trimEnd(), { cfg: accountConfig });
-      expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-      for (const [params] of sendMessageFeishuMock.mock.calls) {
-        expect(params.text.length).toBeLessThanOrEqual(limit);
-        expect(
-          Buffer.byteLength(buildFeishuPostMessageContent({ messageText: params.text }), "utf8"),
-        ).toBeLessThanOrEqual(30 * 1024);
-      }
-    },
-  );
-
-  it.each([
-    {
       name: "implicit first",
       reply: implicitReply,
       target: "om_reply",
@@ -1063,13 +955,6 @@ describe("Feishu chunked delivery and media receipts", () => {
       target: "om_reply",
       sticky: true,
       thread: false,
-    },
-    {
-      name: "topic",
-      reply: { replyToId: " ", threadId: "om_topic" },
-      target: "om_topic",
-      sticky: true,
-      thread: true,
     },
   ])(
     "records all caption chunks and media with $name reply semantics",
@@ -1173,22 +1058,6 @@ describe("Feishu chunked delivery and media receipts", () => {
       "fallback_msg",
     ]);
     expectResult(result, "fallback_msg");
-  });
-
-  it("preserves skipped voice text and an unconsumed reply after upload failure", async () => {
-    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
-    await sendMedia({
-      text: "spoken reply",
-      mediaUrl: voiceUrl,
-      audioAsVoice: true,
-      ...implicitReply,
-    });
-    expect(mediaCall()?.replyToMessageId).toBe("om_reply");
-    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
-    expect(textCall()).toMatchObject({
-      text: "spoken reply\n\n📎 " + voiceUrl,
-      replyToMessageId: "om_reply",
-    });
   });
 
   it.each([

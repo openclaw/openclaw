@@ -105,8 +105,10 @@ A scenario send can select an existing forum topic:
 ```
 
 A scenario send can also carry a photo (`photo`, absolute path; `text` becomes
-the optional caption) or reply to the newest message this scenario sent
-(`replyToPrevious: true`), for reply-context and caption-command proof:
+the optional caption), a media album (`photos`, 2–10 absolute paths sent in one
+`sendMessageAlbum` call; `text` captions the first item), or reply to the newest
+message this scenario sent (`replyToPrevious: true`, the last album member after
+an album), for reply-context and caption-command proof:
 
 ```json
 {
@@ -118,6 +120,19 @@ the optional caption) or reply to the newest message this scenario sent
 ```
 
 Create the run-owned topic under the held lease and use its actual returned id.
+For a Test Server forum without a prepared fixture, pass `--create-forum` with
+`--scenario` instead of `--chat`: the runner creates a forum and topic, sends
+every scenario message there, deletes the forum before releasing the lease, and
+records `testForum` setup and cleanup in `summary.json`.
+If creation returns no chat ID, cleanup searches the leased account's server
+chats for the exact run-owned title, verifies creator ownership, and deletes the
+match with a group-state read-back. An inconclusive search or deletion retains an
+`uncertain-creation` record with the title, creation timestamp, and tester user
+ID in the summary. Cleanup failure retains the lease state for recovery; do not
+treat an absent ID or an empty search as proof that creation never happened.
+A successful deletion awaiting a fresh read-back is saved separately as
+`deletion-pending-verification`, including its deletion receipt. Retrying cleanup
+only verifies that recorded deletion; it does not delete the group again.
 The direct driver also accepts `send --forum-topic-id <id>`. TDLib 1.8.67 uses
 `topic_id: messageTopicForum` for forum topics; ordinary message threads use
 `messageTopicThread`. Inspect `topicType` and `topicId` on both the sent message
@@ -175,7 +190,12 @@ Prepare `qa-mock` with `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build` before leasing.
 The built lane starts both the provider and Gateway from that checkout's
 `dist/entry.js`; `--source-gateway` selects the development launcher for both.
 A leased run must not rebuild a dirty source checkout while waiting for provider
-readiness.
+readiness. Gateway startup gets 45 s built and 300 s from source; on a heavily
+loaded host, raise it with `--gateway-ready-timeout-ms` instead of retrying the
+lease.
+
+Recorder readiness gets 30 s; on a heavily loaded host, raise it with
+`--recorder-ready-timeout-ms`.
 
 The named tool-progress shell fixture emits command-style `exec` arguments.
 Use `E2E_ROOT_CONFIG_PATCH='{"tools":{"codeMode":false}}'` for that fixture, or
@@ -279,6 +299,8 @@ proof directory outside runner scratch.
 Failed fixture cleanup can leave a private lease directory with `lease.json`
 and credential/runtime state. Process groups and pipes must be joined before
 release; adapters returning a teardown receipt must return `verified: true`.
+After SIGKILL, a group that still answers probes is waiting on a kernel call and
+gets up to 300 seconds; a group that only answers `EPERM` fails cleanup after 2 seconds.
 A false or missing verification in a returned receipt retains the consumer,
 lease, scratch, and recovery state. Preserve that directory and the failure evidence. The
 receipt contains a secret broker handle: exclude it from proof exports and
@@ -293,8 +315,8 @@ node "$TELEGRAM_E2E_SKILL_DIR/scripts/telegram-test-recover.mjs" \
   "$TELEGRAM_RETAINED_LEASE_DIR" status
 ```
 
-`status` leaves the lease held. `cleanup-group` removes a confirmed run-owned
-group and credential state before releasing it. `release` handles a retained
+`status` leaves the lease held. `cleanup` removes confirmed run-owned forums,
+groups, and credential state before releasing it. `release` handles a retained
 broker receipt only after credential state is gone. A rejected revalidation is
 a real authority stop; never use the saved session directly after it.
 

@@ -16,22 +16,24 @@ import {
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import {
   loadSubagentRegistryFromSqlite,
-  loadSubagentRunsForSessionFromSqlite,
-} from "./subagent-registry.store.sqlite.js";
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
+import { loadSubagentRunsForSessionFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -40,6 +42,10 @@ import {
 const PARENT = "agent:main:main";
 const CHILD = "agent:main:subagent:catchup-child";
 const RESULT = "Retained child result: the requested check found three actionable failures.";
+const temporalFact = {
+  kind: "conversation-data",
+  text: expect.stringContaining("## Temporal Context\n"),
+};
 
 describe("parent runtime facts from retained completion obligations", () => {
   const fixture = useSubagentRestartRecoveryFixture();
@@ -102,8 +108,9 @@ describe("parent runtime facts from retained completion obligations", () => {
       receipt.complete(buildAgentRunTerminalOutcome({ status: "ok" }));
       receipt.finish("interrupted");
       await resetSubagentRegistryForTests({ persist: false });
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      await closeStateDatabaseForTest();
       const shared = openOpenClawStateDatabase().db;
       const agent = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope))).db;
       const rows = () => shared.prepare("SELECT * FROM subagent_runs ORDER BY run_id").all();
@@ -123,7 +130,7 @@ describe("parent runtime facts from retained completion obligations", () => {
       const agentWrites = agent.prepare("SELECT total_changes() AS count").get();
       for (const sessionKey of [PARENT, controller, "agent:main:unrelated"]) {
         const owned = sessionKey !== "agent:main:unrelated";
-        const loaded = loadSubagentRunsForSessionFromSqlite(sessionKey);
+        const loaded = loadSubagentRunsForSessionFromSqlite(sessionKey, { db: shared });
         expect(loaded).toHaveLength(owned ? 1 : 0);
         if (owned) {
           expect(loaded[0]).toMatchObject({
@@ -151,7 +158,7 @@ describe("parent runtime facts from retained completion obligations", () => {
           }
           expect(JSON.parse(encoded)).toBe(result.slice(0, 2_000));
         } else {
-          expect(facts).toEqual([]);
+          expect(facts).toEqual([temporalFact]);
         }
       }
       expect(subagentRuns.size).toBe(0);
@@ -267,7 +274,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     };
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
-      expect(await buildRuntimeFactsContext(params)).toEqual([]);
+      expect(await buildRuntimeFactsContext(params)).toEqual([temporalFact]);
       const child = makeRestartRecoveryRun({
         runId: "catchup-other-writer",
         childSessionKey: CHILD,
@@ -420,7 +427,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     expect(await read(PARENT)).toContain(RESULT);
     expect(await read(controller)).toContain(RESULT);
     expect(await read("agent:main:other-parent")).not.toContain(RESULT);
-    await addSubagentRunForTests(child);
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true });
     await mutateSubagentRuns([child.runId], (rows) => {
       const current = rows.get(child.runId);
       if (!current) {

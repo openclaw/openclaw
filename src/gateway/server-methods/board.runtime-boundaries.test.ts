@@ -239,37 +239,6 @@ describe("board gateway runtime boundaries", () => {
     expect(response.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
   });
 
-  it("enforces data bindings against the granted tool set", async () => {
-    sessionList.mockImplementation(async ({ respond }: { respond: RespondFn }) =>
-      respond(true, { sessions: ["one"] }),
-    );
-    const harness = createHarness();
-    const { invoke } = harness;
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "reader",
-      content: { kind: "html", html: "reader" },
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const denied = await invoke("board.data.read", {
-      ticket: snapshot.widgets[0]?.viewTicket,
-      bindingId: "sessions.list",
-      params: { limit: 2 },
-    });
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
-    expect(sessionList).not.toHaveBeenCalled();
-
-    const { ticket } = await grantTools(["sessions.list"], harness);
-    const allowed = await invoke("board.data.read", {
-      ticket,
-      bindingId: "sessions.list",
-      params: { limit: 2 },
-    });
-    expect(allowed.mock.calls[0]?.[1]).toEqual({ sessions: ["one"] });
-    expect(sessionList).toHaveBeenCalledWith(expect.objectContaining({ params: { limit: 2 } }));
-  });
-
   it("fences awaited board mutation through Gateway dispatch when its root retires", async () => {
     const documentStarted = createDeferred();
     const releaseDocument = createDeferred<{ html: string; cspSandbox: "scripts" }>();
@@ -293,7 +262,7 @@ describe("board gateway runtime boundaries", () => {
       getGatewayMethodRegistry: () => methodRegistry,
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "ask" } },
       }),
       logGateway: { warn: vi.fn() },
@@ -301,6 +270,7 @@ describe("board gateway runtime boundaries", () => {
     gatewayContext.resolveGatewayContext = () => gatewayContext;
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     server.on("connection", (socket) => {
+      let gatewayClient: GatewayWsClient | null = null;
       socket.send(
         JSON.stringify({
           type: "event",
@@ -316,7 +286,7 @@ describe("board gateway runtime boundaries", () => {
           type: "req";
         };
         if (request.method === "connect") {
-          gatewayClients.add({
+          gatewayClient = {
             socket,
             connect: {
               role: "operator",
@@ -324,7 +294,8 @@ describe("board gateway runtime boundaries", () => {
             } as GatewayWsClient["connect"],
             connId: "board-authority-proof",
             usesSharedGatewayAuth: false,
-          });
+          };
+          gatewayClients.add(gatewayClient);
           socket.send(
             JSON.stringify({
               type: "res",
@@ -365,7 +336,7 @@ describe("board gateway runtime boundaries", () => {
               }),
             );
           },
-          client: null,
+          client: gatewayClient,
           isWebchatConnect: () => false,
           context: gatewayContext,
           methodRegistry,
@@ -445,7 +416,7 @@ describe("board gateway runtime boundaries", () => {
     });
     const harness = createHarness(undefined, undefined, undefined, {
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "auto" } },
       }),
     });

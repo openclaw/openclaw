@@ -1,3 +1,4 @@
+import { readExecRequestOwners } from "../infra/exec-request-context.js";
 import {
   markExited,
   settleExecSessionFinalization,
@@ -61,8 +62,16 @@ export async function settleExecProcessExit({
       delete session.agentId;
       delete session.eventRouting;
       delete session.notifyDeliveryContext;
+      delete session.notifySessionTarget;
+      delete session.notifyFromConversationTurn;
       delete session.notifyOnExit;
       delete session.notifyOnExitEmptySuccess;
+      if (session.finalizationFailed || session.cleanupUncertain) {
+        // Publish before releasing waiters; output eviction must not erase the verdict.
+        for (const owner of readExecRequestOwners(session) ?? []) {
+          owner.cleanupUncertain = true;
+        }
+      }
       settleExecSessionFinalization(session);
     }
   }

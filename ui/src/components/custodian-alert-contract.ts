@@ -1,8 +1,6 @@
 import type { NavigationRouteId } from "../app-navigation.ts";
 
-export type CustodianAlertAction =
-  | { kind: "update" }
-  | { kind: "navigate"; routeId: NavigationRouteId };
+type CustodianAlertAction = { kind: "update" } | { kind: "navigate"; routeId: NavigationRouteId };
 
 export type CustodianTurnAdmission = {
   isCurrent: () => boolean;

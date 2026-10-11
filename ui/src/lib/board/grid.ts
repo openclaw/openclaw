@@ -1,5 +1,3 @@
-/** Pure order-and-size layout for the session dashboard board. */
-
 export const BOARD_GRID_COLUMNS = 12;
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
@@ -52,31 +50,25 @@ function canonicalItems(
     .map(withOrder);
 }
 
-function fits(occupied: readonly boolean[][], x: number, y: number, w: number, h: number): boolean {
+function fits(occupied: readonly number[], x: number, y: number, w: number, h: number): boolean {
+  // The fixed 12-column grid fits in one occupancy mask per row.
+  const columns = ((1 << w) - 1) << x;
   for (let row = y; row < y + h; row += 1) {
-    for (let column = x; column < x + w; column += 1) {
-      if (occupied[row]?.[column]) {
-        return false;
-      }
+    if ((occupied[row] ?? 0) & columns) {
+      return false;
     }
   }
   return true;
 }
 
-function occupy(occupied: boolean[][], rect: BoardGridRect): void {
-  for (let row = rect.y; row < rect.y + rect.h; row += 1) {
-    const cells = occupied[row] ?? Array.from({ length: BOARD_GRID_COLUMNS }, () => false);
-    occupied[row] = cells;
-    for (let column = rect.x; column < rect.x + rect.w; column += 1) {
-      cells[column] = true;
-    }
-  }
-}
-
-function firstFit(occupied: readonly boolean[][], item: BoardGridItem): BoardGridRect {
+function placeFirstFit(occupied: number[], item: BoardGridItem): BoardGridRect {
   for (let y = 0; ; y += 1) {
     for (let x = 0; x <= BOARD_GRID_COLUMNS - item.w; x += 1) {
       if (fits(occupied, x, y, item.w, item.h)) {
+        const columns = ((1 << item.w) - 1) << x;
+        for (let row = y; row < y + item.h; row += 1) {
+          occupied[row] = (occupied[row] ?? 0) | columns;
+        }
         return { name: item.name, x, y, w: item.w, h: item.h };
       }
     }
@@ -95,14 +87,8 @@ export function layout(
 }
 
 function layoutCanonicalItems(items: readonly BoardGridItem[]): BoardGridRect[] {
-  const occupied: boolean[][] = [];
-  const rects: BoardGridRect[] = [];
-  for (const item of items) {
-    const placed = firstFit(occupied, item);
-    occupy(occupied, placed);
-    rects.push(placed);
-  }
-  return rects;
+  const occupied: number[] = [];
+  return items.map((item) => placeFirstFit(occupied, item));
 }
 
 function contains(rect: BoardGridRect, cell: BoardGridCell): boolean {
@@ -155,7 +141,6 @@ export function previewDrag(
   return canonical.map(withOrder);
 }
 
-/** Returns a new canonical item list with one clamped size change. */
 export function resize(
   items: readonly BoardGridItem[],
   name: string,

@@ -160,6 +160,7 @@ export function registerGenerationRecoveryTests(
         });
       });
       mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
+        outcome: mocks.running ? "ready" : "failed",
         healthy: mocks.running,
         staleGatewayPids: [],
         runtime: {

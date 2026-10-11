@@ -95,104 +95,70 @@ describe("worker inference manager", () => {
     },
   );
 
-  it("environment cancellation does not adopt a successor admitted by terminal delivery", async () => {
-    const instance = makeManager(async ({ signal }) => {
-      await new Promise<void>((resolve) => {
-        if (signal.aborted) {
-          resolve();
-        } else {
-          signal.addEventListener("abort", () => resolve(), { once: true });
-        }
-      });
-      return ERROR;
-    });
-    const frames: WorkerInferenceTerminalFrame[] = [];
-    const replacementRequest = { ...REQUEST, turnId: "successor-turn" };
-    const successor = createSink("successor");
-    let successorStart: ReturnType<typeof accept> | undefined;
-    await accept(instance, {
-      sink: {
-        connectionId: "original",
-        send: (frame) => {
-          if (frame.event !== "worker.inference.terminal") {
-            return;
+  it.each(["environment", "captured session"] as const)(
+    "%s cancellation does not adopt a successor admitted by terminal delivery",
+    async (scope) => {
+      const instance = makeManager(async ({ signal }) => {
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+          } else {
+            signal.addEventListener("abort", () => resolve(), { once: true });
           }
-          frames.push(frame);
-          successorStart = accept(
-            instance,
-            { request: replacementRequest, sink: successor.sink },
-            false,
-          );
-        },
-      },
-    });
-    try {
-      await instance.cancelEnvironment(IDENTITY.environmentId);
-      await successorStart;
-      expect(frames).toHaveLength(1);
-      expect(frames[0]?.payload.turnId).toBe(REQUEST.turnId);
-      expect(terminalFrames(successor.frames)).toEqual([]);
-      expect(instance.hasSession(REQUEST.sessionId, REQUEST.runId)).toBe(true);
-    } finally {
-      await instance.stop();
-    }
-  });
-
-  it("records accepted worker cancellation and never adopts its callback's successor", async () => {
-    const instance = makeManager(async ({ signal }) => {
-      await new Promise<void>((resolve) => {
-        if (signal.aborted) {
-          resolve();
-        } else {
-          signal.addEventListener("abort", () => resolve(), { once: true });
-        }
+        });
+        return ERROR;
       });
-      return ERROR;
-    });
-    const successor = createSink("successor");
-    let successorStart: ReturnType<typeof accept> | undefined;
-    let current = true;
-    await accept(instance, {
-      sink: {
-        connectionId: "original",
-        send: (frame) => {
-          if (frame.event !== "worker.inference.terminal") {
-            return;
-          }
-          current = false;
-          successorStart = accept(
-            instance,
-            {
-              request: { ...REQUEST, turnId: "successor-turn" },
-              sink: successor.sink,
-            },
-            false,
-          );
-        },
-      },
-    });
-    const captured = instance.captureSessionCancellation(REQUEST.sessionId);
-    const committed: string[] = [];
-    try {
-      expect(
-        await captured.cancel({
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("source revoked");
+      const frames: WorkerInferenceTerminalFrame[] = [];
+      const successor = createSink("successor");
+      let successorStart: ReturnType<typeof accept> | undefined;
+      let current = true;
+      await accept(instance, {
+        sink: {
+          connectionId: "original",
+          send: (frame) => {
+            if (frame.event !== "worker.inference.terminal") {
+              return;
             }
+            frames.push(frame);
+            current = false;
+            successorStart = accept(
+              instance,
+              { request: { ...REQUEST, turnId: "successor-turn" }, sink: successor.sink },
+              false,
+            );
           },
-          onCancelled: (runId) => committed.push(runId),
-        }),
-      ).toEqual([REQUEST.runId]);
-      await successorStart;
-      expect(committed).toEqual([REQUEST.runId]);
-      expect(terminalFrames(successor.frames)).toEqual([]);
-      expect(await captured.cancel()).toEqual([]);
-      expect(instance.hasSession(REQUEST.sessionId, REQUEST.runId)).toBe(true);
-    } finally {
-      await instance.stop();
-    }
-  });
+        },
+      });
+      try {
+        if (scope === "environment") {
+          await instance.cancelEnvironment(IDENTITY.environmentId);
+        } else {
+          const captured = instance.captureSessionCancellation(REQUEST.sessionId);
+          const committed: string[] = [];
+          expect(
+            await captured.cancel({
+              assertCurrent: () => {
+                if (!current) {
+                  throw new Error("source revoked");
+                }
+              },
+              onCancelled: (runId) => committed.push(runId),
+            }),
+          ).toEqual([REQUEST.runId]);
+          await successorStart;
+          expect(committed).toEqual([REQUEST.runId]);
+          expect(await captured.cancel()).toEqual([]);
+        }
+        await successorStart;
+        expect(frames).toHaveLength(1);
+        expect(frames[0]?.payload.turnId).toBe(REQUEST.turnId);
+        expect(terminalFrames(successor.frames)).toEqual([]);
+        expect(instance.hasSession(REQUEST.sessionId, REQUEST.runId)).toBe(true);
+      } finally {
+        await instance.stop();
+      }
+    },
+  );
 
   it.each([false, true])(
     "Gateway Stop retains original worker registration and authority (explicit=%s)",
@@ -215,11 +181,7 @@ describe("worker inference manager", () => {
             });
           });
           const workerService = {};
-          registerWorkerInferenceSessionControl(workerService, {
-            reserveDrain: instance.reserveSessionDrain,
-            captureCancel: instance.captureSessionCancellation,
-            resolveTarget: instance.resolveSessionTargetForRunId,
-          });
+          registerWorkerInferenceSessionControl(workerService, instance);
           const original = createSink();
           const successor = createSink("successor");
           let successorStart: Promise<unknown> | undefined;

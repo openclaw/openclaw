@@ -51,18 +51,13 @@ export async function runExec(
   args: string[],
   opts: number | RunExecOptions = 10_000,
 ): Promise<{ stdout: string; stderr: string }> {
+  const resolvedOptions: RunExecOptions = typeof opts === "number" ? { timeoutMs: opts } : opts;
   const timeout =
-    typeof opts === "number"
-      ? resolveTimerTimeoutMs(opts, 1)
-      : typeof opts.timeoutMs === "number"
-        ? resolveTimerTimeoutMs(opts.timeoutMs, 1)
-        : undefined;
-  const maxBuffer =
-    typeof opts === "number"
-      ? DEFAULT_EXEC_MAX_BUFFER_BYTES
-      : (opts.maxBuffer ?? DEFAULT_EXEC_MAX_BUFFER_BYTES);
-  const resolvedOptions = typeof opts === "number" ? undefined : opts;
-  if (resolvedOptions?.input !== undefined && resolvedOptions.stdinFileDescriptor !== undefined) {
+    typeof resolvedOptions.timeoutMs === "number"
+      ? resolveTimerTimeoutMs(resolvedOptions.timeoutMs, 1)
+      : undefined;
+  const maxBuffer = resolvedOptions.maxBuffer ?? DEFAULT_EXEC_MAX_BUFFER_BYTES;
+  if (resolvedOptions.input !== undefined && resolvedOptions.stdinFileDescriptor !== undefined) {
     throw new Error("runExec accepts either input or stdinFileDescriptor, not both");
   }
   let acceptingOutput = true;
@@ -71,18 +66,18 @@ export async function runExec(
   let releaseCancellation = () => {};
   try {
     const subprocess = spawnCommand([command, ...args], {
-      baseEnv: resolvedOptions?.baseEnv,
-      cancelSignal: resolvedOptions?.signal,
-      cwd: resolvedOptions?.cwd,
+      baseEnv: resolvedOptions.baseEnv,
+      cancelSignal: resolvedOptions.signal,
+      cwd: resolvedOptions.cwd,
       encoding: "buffer",
       executionTimeoutMs: timeout,
-      env: resolvedOptions?.env,
+      env: resolvedOptions.env,
       forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
-      ...(resolvedOptions?.input !== undefined ? { input: resolvedOptions.input } : {}),
+      ...(resolvedOptions.input !== undefined ? { input: resolvedOptions.input } : {}),
       maxBuffer,
       reject: true,
-      ...(resolvedOptions?.stdinFileDescriptor === undefined
-        ? { stdin: resolvedOptions?.input === undefined ? "ignore" : undefined }
+      ...(resolvedOptions.stdinFileDescriptor === undefined
+        ? { stdin: resolvedOptions.input === undefined ? "ignore" : undefined }
         : {
             // Execa forwards arbitrary numeric stdin descriptors to Node, but its type narrows them to fd 0.
             stdin: resolvedOptions.stdinFileDescriptor as 0,
@@ -93,7 +88,7 @@ export async function runExec(
       subprocess.nodeChildProcess instanceof BrokerChild && subprocess.pid === undefined
         ? createDeferredCore<never>()
         : undefined;
-    const signal = resolveCommandProcessSignal(resolvedOptions?.signal);
+    const signal = resolveCommandProcessSignal(resolvedOptions.signal);
     let cancellationOpen = true;
     let deadline: ReturnType<typeof setProcessTimeout> | undefined;
     const stopCommand = (reason: "timeout" | "signal") => {
@@ -151,7 +146,7 @@ export async function runExec(
       }
       awaitingStartup = false;
       const releaseOutput = releaseChildProcessOutputAfterExit(subprocess.nodeChildProcess);
-      let observer = acceptingOutput ? resolvedOptions?.onOutputChunk : undefined;
+      let observer = acceptingOutput ? resolvedOptions.onOutputChunk : undefined;
       const observe = (chunk: Buffer, stream: CommandOutputStream) => {
         try {
           observer?.(chunk, stream);
@@ -183,7 +178,7 @@ export async function runExec(
       const { stdout, stderr } = result;
       const decodedStdout = decodeExecOutput(stdout);
       const decodedStderr = decodeExecOutput(stderr);
-      if (acceptingOutput && resolvedOptions?.logOutput !== false) {
+      if (acceptingOutput && resolvedOptions.logOutput !== false) {
         const [{ shouldLogVerbose }, { logDebug, logError }] = await Promise.all([
           import("../globals.js"),
           import("../logger.js"),
@@ -235,7 +230,7 @@ export async function runExec(
         errorWithOutput.stderr = decodeExecOutput(errorWithOutput.stderr);
       }
     }
-    if (resolvedOptions?.logOutput !== false) {
+    if (resolvedOptions.logOutput !== false) {
       // Logging imports must not replace the original command failure.
       const logging = await Promise.all([import("../globals.js"), import("../logger.js")]).catch(
         () => undefined,

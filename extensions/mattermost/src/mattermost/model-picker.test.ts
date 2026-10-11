@@ -62,28 +62,6 @@ describe("Mattermost model picker", () => {
     );
   });
 
-  it("renders the summary view with a browse button", () => {
-    const view = renderMattermostModelSummaryView({
-      ownerUserId: "user-1",
-      currentModel: "openai/gpt-5",
-    });
-
-    expect(view.text).toContain("Current: openai/gpt-5");
-    expect(view.text).toContain("Tap below to browse models");
-    expect(view.text).toContain("/oc_model <provider/model> to switch");
-    expect(view.text).toContain("Browse keeps the current runtime");
-    expect(view.text).toContain("/oc_model <provider/model> --runtime <runtime>");
-    const firstRow = view.buttons[0];
-    if (!firstRow) {
-      throw new Error("expected Mattermost model picker button row");
-    }
-    const browseButton = firstRow[0];
-    if (!browseButton) {
-      throw new Error("expected Mattermost browse providers button");
-    }
-    expect(browseButton.text).toBe("Browse providers");
-  });
-
   it("trims accidental model spacing in Mattermost current-model text", () => {
     const view = renderMattermostModelSummaryView({
       ownerUserId: "user-1",
@@ -91,6 +69,11 @@ describe("Mattermost model picker", () => {
     });
 
     expect(view.text).toContain("Current: openai/gpt-5");
+    expect(view.text).toContain("Tap below to browse models");
+    expect(view.text).toContain("/oc_model <provider/model> to switch");
+    expect(view.text).toContain("Browse keeps the current runtime");
+    expect(view.text).toContain("/oc_model <provider/model> --runtime <runtime>");
+    expect(view.buttons[0]?.[0]?.text).toBe("Browse providers");
   });
 
   it("renders providers and models with Telegram-style navigation", () => {
@@ -114,17 +97,6 @@ describe("Mattermost model picker", () => {
     expect(modelsView.text).toContain("Models (openai) - 2 available");
     expect(modelTexts).toContain("gpt-5 [current]");
     expect(modelTexts).toContain("Back to providers");
-  });
-
-  it("renders unique alphanumeric action ids per button", () => {
-    const modelsView = renderMattermostModelsPickerView({
-      ownerUserId: "user-1",
-      data,
-      provider: "openai",
-      page: 1,
-      currentModel: "openai/gpt-5",
-    });
-
     const ids = modelsView.buttons.flat().map((button) => button.id);
     expect(ids.every((id) => typeof id === "string" && /^[a-z0-9]+$/.test(id))).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
@@ -191,12 +163,11 @@ describe("Mattermost model picker", () => {
         defaults: {
           model: "anthropic/claude-opus-4-5",
         },
-        list: [
-          {
-            id: "support",
+        entries: {
+          support: {
             model: "openai/gpt-5",
           },
-        ],
+        },
       },
     };
     const providerData = {

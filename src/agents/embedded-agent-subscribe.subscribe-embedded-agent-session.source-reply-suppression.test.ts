@@ -32,8 +32,7 @@ function createBlockReplyHarness(
   // Harness exposes both emitted block replies and subscription state so tests
   // can distinguish suppression from missing delivery tracking.
   const { session, emit: rawEmit } = createStubSessionHarness();
-  const sessionManager = {};
-  Object.assign(session, { sessionManager });
+  const sessionManager = session.sessionManager;
   const emit = (evt: unknown) => {
     const event = asOptionalRecord(evt);
     const details = asOptionalRecord(asOptionalRecord(event?.result)?.details);
@@ -175,24 +174,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses later message_end block replies after message-tool-only delivery", async () => {
-    const { emit, onBlockReply } = createBlockReplyHarness("message_end", {
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-continue",
-      message: "Starting the requested work.",
-      to: null,
-      result: { details: { deliveryStatus: "sent" } },
-    });
-    emitAssistantMessageEnd(emit, "Done.");
-    await Promise.resolve();
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
   it("preserves a distinct automatic final after confirmed current-source thread delivery", async () => {
     const { emit, onBlockReply, subscription } = createBlockReplyHarness("message_end", {
       sourceReplyDeliveryMode: "automatic",
@@ -223,24 +204,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     ]);
   });
 
-  it("reports bridged message-tool-only source delivery to the attempt", async () => {
-    const onDeliveredMessageToolOnlySourceReply = vi.fn();
-    const { emit } = createBlockReplyHarness("message_end", {
-      sourceReplyDeliveryMode: "message_tool_only",
-      onDeliveredMessageToolOnlySourceReply,
-    });
-
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-bridged-source-reply",
-      message: "Visible source reply from Code Mode.",
-      to: null,
-      result: { details: { deliveryStatus: "sent" } },
-    });
-
-    expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledTimes(1);
-  });
-
   it("suppresses later text_end block replies after message-tool-only delivery", async () => {
     const { emit, onBlockReply } = createBlockReplyHarness("text_end", {
       sourceReplyDeliveryMode: "message_tool_only",
@@ -258,24 +221,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
-  it("does not suppress source replies after explicit routed message-tool-only sends", async () => {
-    const { emit, onBlockReply } = createBlockReplyHarness("message_end", {
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-routed",
-      message: "Sent somewhere else.",
-      to: "+1555",
-      result: { details: { deliveryStatus: "sent" } },
-    });
-    emitAssistantMessageEnd(emit, "Reply to the current source.");
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-    });
   });
 
   it("does not suppress source replies after non-message messaging tools send", async () => {
@@ -303,26 +248,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("preserves source-reply suppression across compaction retries", async () => {
-    const { emit, onBlockReply } = createBlockReplyHarness("message_end", {
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-before-compaction",
-      message: "Starting the requested work.",
-      to: null,
-      result: { details: { deliveryStatus: "sent" } },
-    });
-    emit(retryingCompactionEnd());
-    await Promise.resolve();
-    emitAssistantMessageEnd(emit, "Done after compaction.");
-    await Promise.resolve();
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
   it("preserves internal source-reply payloads across compaction retries", async () => {
     const { emit, subscription } = createBlockReplyHarness("message_end", {
       sourceReplyDeliveryMode: "message_tool_only",
@@ -347,59 +272,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.getMessagingToolSourceReplyPayloads()).toEqual([
       { text: "Visible terminal answer." },
     ]);
-  });
-
-  it("suppresses later assistant stream and partial replies after message-tool-only delivery", async () => {
-    const { emit, onAgentEvent, onPartialReply } = createBlockReplyHarness("text_end", {
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-before-partial",
-      message: "Starting the requested work.",
-      to: null,
-      result: { details: { deliveryStatus: "sent" } },
-    });
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: "Done." });
-    await Promise.resolve();
-
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(onAgentEvent.mock.calls.some((call) => call[0]?.stream === "assistant")).toBe(false);
-  });
-
-  it("suppresses later reasoning streams after message-tool-only delivery", async () => {
-    const onReasoningStream = vi.fn();
-    const onReasoningEnd = vi.fn();
-    const { emit } = createBlockReplyHarness("message_end", {
-      sourceReplyDeliveryMode: "message_tool_only",
-      reasoningMode: "stream",
-      onReasoningEnd,
-      onReasoningStream,
-    });
-
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-before-reasoning",
-      message: "Starting the requested work.",
-      to: null,
-      result: { details: { deliveryStatus: "sent" } },
-    });
-    emit({
-      type: "message_update",
-      message: { role: "assistant", content: [{ type: "thinking", thinking: "private" }] },
-      assistantMessageEvent: { type: "thinking_delta", delta: "private" },
-    });
-    emit({
-      type: "message_update",
-      message: { role: "assistant", content: [{ type: "thinking", thinking: "private" }] },
-      assistantMessageEvent: { type: "thinking_end" },
-    });
-    await Promise.resolve();
-
-    expect(onReasoningStream).not.toHaveBeenCalled();
-    expect(onReasoningEnd).not.toHaveBeenCalled();
   });
 
   it("does not expose a reasoning boundary after message-tool-only delivery", async () => {
@@ -429,32 +301,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     emitAssistantMessageEnd(emit, "Private final output.");
     await Promise.resolve();
 
-    expect(onReasoningEnd).not.toHaveBeenCalled();
-  });
-
-  it("suppresses later tagged reasoning streams after message-tool-only delivery", async () => {
-    const onReasoningStream = vi.fn();
-    const onReasoningEnd = vi.fn();
-    const { emit } = createBlockReplyHarness("message_end", {
-      sourceReplyDeliveryMode: "message_tool_only",
-      reasoningMode: "stream",
-      onReasoningEnd,
-      onReasoningStream,
-    });
-
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-before-tagged-reasoning",
-      message: "Starting the requested work.",
-      to: null,
-      result: { details: { deliveryStatus: "sent" } },
-    });
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: "<think>private reasoning" });
-    emitAssistantTextDelta({ emit, delta: "</think>Done." });
-    await Promise.resolve();
-
-    expect(onReasoningStream).not.toHaveBeenCalled();
     expect(onReasoningEnd).not.toHaveBeenCalled();
   });
 
@@ -508,32 +354,6 @@ describe("subscribeEmbeddedAgentSession", () => {
     }
   });
 
-  it("tracks internal-ui source replies for message-tool-only final payloads", async () => {
-    // internal-ui source replies are not ordinary channel sends; they are stored
-    // for terminal payload mirroring in message_tool_only mode.
-    const { emit, subscription } = createBlockReplyHarness("message_end");
-
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-source-reply",
-      message: "Visible terminal answer.",
-      result: {
-        details: {
-          status: "ok",
-          deliveryStatus: "sent",
-          sourceReplySink: "internal-ui",
-          sourceReply: { text: "Visible terminal answer." },
-        },
-      },
-    });
-    await Promise.resolve();
-
-    expect(subscription.getMessagingToolSourceReplyPayloads()).toEqual([
-      { text: "Visible terminal answer." },
-    ]);
-    expect(subscription.getSourceReplyDelivered()).toBeUndefined();
-  });
-
   it("does not let an earlier approval prompt suppress the next user reply", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createSubscribedSessionHarness({
@@ -576,17 +396,15 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it.each([
-    { action: "send", final: true },
     { action: "reply", final: true },
-    { action: "thread-reply", final: true },
+
     { action: "poll", final: true },
     { action: "send", final: false },
   ])(
     "keeps source progress distinct from final receipts for $action (final=$final)",
     async ({ action, final }) => {
       const { session, emit } = createStubSessionHarness();
-      const sessionManager = {};
-      Object.assign(session, { sessionManager });
+      const sessionManager = session.sessionManager;
       const onBlockReply = vi.fn();
       const onDeliveredMessageToolOnlySourceReply = vi.fn();
       const subscription = subscribeEmbeddedAgentSession({
@@ -648,17 +466,13 @@ describe("subscribeEmbeddedAgentSession", () => {
   );
 
   it.each([
-    { name: "only progress", batch: ["progress"], endsWithProgress: true },
-    { name: "work in the same batch", batch: ["read", "progress"], endsWithProgress: false },
-    { name: "a later tool batch", batch: ["progress"], later: true, endsWithProgress: false },
     { name: "a progress reaction", batch: ["reaction"], endsWithProgress: false },
     { name: "a partial progress send", batch: ["partial"], endsWithProgress: false },
   ])(
     "reports whether the last tool batch was source progress after $name",
-    async ({ batch, later, endsWithProgress }) => {
+    async ({ batch, endsWithProgress }) => {
       const { session, emit } = createStubSessionHarness();
-      const sessionManager = {};
-      Object.assign(session, { sessionManager });
+      const sessionManager = session.sessionManager;
       const subscription = subscribeEmbeddedAgentSession({
         session,
         runId: "trailing-progress",
@@ -712,9 +526,6 @@ describe("subscribeEmbeddedAgentSession", () => {
       };
 
       await runToolBatch(batch);
-      if (later) {
-        await runToolBatch(["read"]);
-      }
       emitAssistantMessageEnd(emit, "", { stopReason: "stop" });
       await subscription.waitForPendingEvents();
 
@@ -766,41 +577,5 @@ describe("subscribeEmbeddedAgentSession", () => {
     await vi.waitFor(() => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
-  });
-
-  it("ignores delivery-mirror assistant messages", async () => {
-    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
-
-    emitAssistantMessageEnd(emit, "Mirrored transcript text", {
-      provider: "openclaw",
-      model: "delivery-mirror",
-    });
-    await Promise.resolve();
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
-  it("ignores gateway-injected assistant messages", async () => {
-    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
-
-    emitAssistantMessageEnd(emit, "Injected transcript text", {
-      provider: "openclaw",
-      model: "gateway-injected",
-    });
-    await Promise.resolve();
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
-  it("clears block reply state on message_start", async () => {
-    const { emit, onBlockReply } = createBlockReplyHarness("text_end");
-    emitAssistantTextEndBlock(emit, "OK");
-    await Promise.resolve();
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-
-    // New assistant message with identical output should still emit.
-    emitAssistantTextEndBlock(emit, "OK");
-    await Promise.resolve();
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
   });
 });

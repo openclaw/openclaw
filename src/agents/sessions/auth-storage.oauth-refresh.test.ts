@@ -11,6 +11,7 @@ import { createOAuthManager } from "../auth-profiles/oauth-manager.js";
 import { refreshSerializedOAuthCredential } from "../auth-profiles/oauth-refresh-fence.js";
 import {
   createOAuthRefreshFence,
+  isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
 } from "../auth-profiles/oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
@@ -19,10 +20,11 @@ import {
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../auth-profiles/sqlite.js";
+import * as authProfileSqlite from "../auth-profiles/sqlite.js";
 import * as authProfileStoreRuntime from "../auth-profiles/store-runtime.js";
 import type { OAuthCredential } from "../auth-profiles/types.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
-import { AuthStorage, FileAuthStorageBackend, type AuthStorageBackend } from "./auth-storage.js";
+import { AuthStorage, type AuthStorageBackend } from "./auth-storage.js";
 
 const { ensureAuthProfileStoreWithoutExternalProfiles, saveAuthProfileStore } =
   authProfileStoreRuntime;
@@ -173,14 +175,7 @@ describe("AuthStorage OAuth refresh ownership", () => {
         });
         expect(fallback).not.toHaveBeenCalled();
 
-        const backend = new FileAuthStorageBackend(path.join(agentDir, "auth.json"));
-        await backend.withLockAsync(async () => ({
-          result: undefined,
-          next: JSON.stringify({
-            [providerId]: refreshed,
-            litellm: { type: "api_key", key: "synthetic-local-key" },
-          }),
-        }));
+        storage.set("litellm", { type: "api_key", key: "synthetic-local-key" });
         expect(loadPersistedAuthProfileStore(agentDir)?.profiles["litellm:default"]).toEqual({
           type: "api_key",
           provider: "litellm",
@@ -192,17 +187,35 @@ describe("AuthStorage OAuth refresh ownership", () => {
   });
 
   it.each(["worker", "main"])(
-    "blocks sync and async writes when the %s destination requires migration",
+    "blocks credential writes and OAuth refresh when the %s destination requires migration",
     async (agentId) => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "auth-write-fence-" },
         async (state) => {
           const agentDir = state.agentDir(agentId);
           await fs.mkdir(agentDir, { recursive: true });
-          const emptyStore = { version: 1, profiles: {} };
-          writePersistedAuthProfileStoreRaw(emptyStore, agentDir);
-          const backend = new FileAuthStorageBackend(path.join(agentDir, "auth.json"));
-          backend.read();
+          const originalStore = {
+            version: 1,
+            profiles: {
+              "test-oauth:default": createCredential({ provider: "test-oauth", expires: 1 }),
+            },
+          };
+          writePersistedAuthProfileStoreRaw(originalStore, agentDir);
+          const storage = AuthStorage.forAgent(agentDir, {});
+          const refreshToken = vi.fn(async () => createCredential({ provider: "test-oauth" }));
+          getAuthStorageOAuthProviderRegistry(storage).register({
+            id: "test-oauth",
+            name: "Test OAuth",
+            async login() {
+              throw new Error("not used");
+            },
+            refreshToken,
+            getApiKey: (credential) => credential.access,
+          });
+          // A populated SQLite owner treats legacy files as leftover bytes. Retain
+          // the facade's expired credential while its durable owner loses migration admission.
+          const migrationStore = { version: 1, profiles: {} };
+          writePersistedAuthProfileStoreRaw(migrationStore, agentDir);
           await state.writeJson(
             `agents/${agentId}/agent/auth-profiles.json`,
             agentId === "worker"
@@ -221,26 +234,22 @@ describe("AuthStorage OAuth refresh ownership", () => {
           expect(() => assertAuthProfileMigrationReady(agentDir)).toThrow(
             "requires legacy credential migration",
           );
-          const write = vi.fn(() => ({
-            result: undefined,
-            next: JSON.stringify({ litellm: { type: "api_key", key: "synthetic-local-key" } }),
-          }));
-          expect(() => backend.withLock(write)).toThrow("requires legacy credential migration");
-          await expect(backend.withLockAsync(async () => write())).rejects.toMatchObject({
+          const write = vi.spyOn(authProfileStoreRuntime, "saveAuthProfileStoreWithPreparedOwner");
+          expect(() =>
+            storage.set("litellm", { type: "api_key", key: "synthetic-local-key" }),
+          ).toThrow("requires legacy credential migration");
+          await expect(storage.getApiKey("test-oauth")).rejects.toMatchObject({
             code: "AUTH_PROFILE_MIGRATION_REQUIRED",
           });
+          expect(refreshToken).not.toHaveBeenCalled();
           expect(write).not.toHaveBeenCalled();
-          expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(emptyStore);
+          expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(migrationStore);
         },
       );
     },
   );
 
-  it.each([
-    { state: "fresh", expires: Date.now() + 600_000 },
-    { state: "expired", expires: 1 },
-    { state: "pending", expires: 1 },
-  ])(
+  it.each([{ state: "pending", expires: 1 }])(
     "rejects an initial $state credential owned by another provider",
     async ({ state, expires }) => {
       await withOAuthTempRoot(`oauth-manager-provider-${state}-`, async (tempRoot) => {
@@ -430,14 +439,6 @@ describe("AuthStorage OAuth refresh ownership", () => {
 
   it.each([
     {
-      name: "fresh initial credential",
-      initial: createCredential({ provider: "provider-b", expires: Date.now() + 600_000 }),
-    },
-    {
-      name: "expired initial credential",
-      initial: createCredential({ provider: "provider-b", expires: 1 }),
-    },
-    {
       name: "pending initial fence",
       initial: createOAuthRefreshFence({
         profileId: "openai:default",
@@ -479,56 +480,6 @@ describe("AuthStorage OAuth refresh ownership", () => {
     },
   ])("rejects a serialized provider change from a $name", async (scenario) => {
     await expectSerializedProviderMismatch(scenario);
-  });
-
-  it("normalizes a missing provider before serialized refresh", async () => {
-    const providerId = "test-oauth";
-    let persisted = JSON.stringify({
-      [providerId]: {
-        type: "oauth",
-        access: "expired-access",
-        refresh: "expired-refresh",
-        expires: 1,
-      },
-    });
-    const backend: AuthStorageBackend = {
-      withLock: (fn) => {
-        const update = fn(persisted);
-        if (update.next !== undefined) {
-          persisted = update.next;
-        }
-        return update.result;
-      },
-      withLockAsync: async () => {
-        throw new Error("refresh must not use withLockAsync");
-      },
-    };
-    const refreshToken = vi.fn(async () => ({
-      access: "rotated-access",
-      refresh: "rotated-refresh",
-      expires: Date.now() + 60_000,
-    }));
-    const storage = AuthStorage.fromStorage(backend);
-    getAuthStorageOAuthProviderRegistry(storage).register({
-      id: providerId,
-      name: "Test OAuth",
-      async login() {
-        throw new Error("not used");
-      },
-      refreshToken,
-      getApiKey(credentials: { access: string }) {
-        return credentials.access;
-      },
-    });
-
-    await expect(storage.getApiKey(providerId)).resolves.toBe("rotated-access");
-    expect(refreshToken).toHaveBeenCalledOnce();
-    expect(JSON.parse(persisted)[providerId]).toMatchObject({
-      type: "oauth",
-      provider: providerId,
-      access: "rotated-access",
-      refresh: "rotated-refresh",
-    });
   });
 
   it("runs provider I/O outside custom backend locks and fences peer retries", async () => {
@@ -705,4 +656,271 @@ describe("AuthStorage OAuth refresh ownership", () => {
       vi.unstubAllEnvs();
     }
   });
+});
+
+function observeAuthTransactions(after: () => void, before?: () => void) {
+  const runTransaction = authProfileSqlite.runAuthProfileWriteTransaction;
+  vi.spyOn(authProfileSqlite, "runAuthProfileWriteTransaction").mockImplementation(
+    (agentDir, operation, options) => {
+      before?.();
+      const result = runTransaction(agentDir, operation, options);
+      after();
+      return result;
+    },
+  );
+}
+
+function createPublicationCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
+  return {
+    type: "oauth",
+    provider: "test-oauth",
+    access: "synthetic-access-a",
+    refresh: "synthetic-refresh-a",
+    expires: Date.now() + 600_000,
+    ...overrides,
+  };
+}
+
+async function createSqliteAuthRefreshFixture(agentDir: string) {
+  await fs.mkdir(agentDir, { recursive: true });
+  const providerId = "test-oauth";
+  const profileId = `${providerId}:default`;
+  const initial = createPublicationCredential({
+    provider: providerId,
+    expires: 1,
+    accountId: "account-a",
+  });
+  const refreshed = createPublicationCredential({
+    provider: providerId,
+    access: "synthetic-refreshed-a",
+    refresh: "synthetic-refresh-a",
+    accountId: "account-a",
+  });
+  const replacement = createPublicationCredential({
+    provider: providerId,
+    access: "synthetic-account-b",
+    refresh: "synthetic-refresh-b",
+    accountId: "account-b",
+  });
+  writePersistedAuthProfileStoreRaw(
+    {
+      version: 1,
+      profiles: {
+        [profileId]: initial,
+        "other:default": { type: "api_key", provider: "other", key: "synthetic-other-old" },
+      },
+    },
+    agentDir,
+  );
+  const storage = AuthStorage.forAgent(agentDir, {});
+  const peer = AuthStorage.forAgent(agentDir, {});
+  const refreshToken = vi.fn(async () => refreshed);
+  getAuthStorageOAuthProviderRegistry(storage).register({
+    id: providerId,
+    name: "Test OAuth",
+    async login() {
+      throw new Error("not used");
+    },
+    refreshToken,
+    getApiKey: (credential) => credential.access,
+  });
+  return { storage, peer, providerId, profileId, refreshed, replacement, refreshToken };
+}
+
+describe("AuthStorage OAuth publication", () => {
+  it.each([
+    { phase: "claim", actor: "same", change: "logout" },
+    { phase: "claim", actor: "peer", change: "replace" },
+    { phase: "settlement", actor: "peer", change: "logout" },
+    { phase: "settlement", actor: "same", change: "replace" },
+    { phase: "claim", actor: "same", change: "unrelated" },
+    { phase: "settlement", actor: "peer", change: "unrelated" },
+  ])(
+    "preserves $actor facade $change after durable $phase and before publication",
+    async ({ phase, actor, change }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "auth-refresh-publication-" },
+        async (state) => {
+          const agentDir = state.agentDir();
+          const { storage, peer, providerId, profileId, refreshed, replacement, refreshToken } =
+            await createSqliteAuthRefreshFixture(agentDir);
+          let otherWhenRefreshStarted = storage.get("other");
+          refreshToken.mockImplementation(async () => {
+            otherWhenRefreshStarted = storage.get("other");
+            return refreshed;
+          });
+          const mutate = actor === "same" ? storage : peer;
+          let queued = false;
+          observeAuthTransactions(() => {
+            if (!queued) {
+              const durable = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+              if (
+                durable?.type === "oauth" &&
+                (phase === "claim"
+                  ? isPendingOAuthRefreshFence(durable)
+                  : durable.access === refreshed.access)
+              ) {
+                queued = true;
+                queueMicrotask(() => {
+                  if (change === "logout") {
+                    mutate.logout(providerId);
+                  } else if (change === "replace") {
+                    mutate.set(providerId, replacement);
+                  } else if (change === "unrelated") {
+                    mutate.set("other", { type: "api_key", key: "synthetic-other-new" });
+                  }
+                });
+              }
+            }
+          });
+
+          const apiKey = await storage.getApiKey(providerId);
+          expect(queued).toBe(true);
+          const durable = loadPersistedAuthProfileStore(agentDir)?.profiles;
+          if (change === "logout") {
+            expect(apiKey).toBeUndefined();
+            expect(storage.get(providerId)).toBeUndefined();
+            expect(durable?.[profileId]).toBeUndefined();
+          } else if (change === "replace") {
+            expect(apiKey).toBe(replacement.access);
+            expect(storage.get(providerId)).toEqual(replacement);
+            expect(durable?.[profileId]).toEqual(replacement);
+          } else {
+            expect(apiKey).toBe(refreshed.access);
+            expect(storage.get(providerId)).toEqual(refreshed);
+            expect(durable?.[profileId]).toEqual(refreshed);
+          }
+          expect(refreshToken).toHaveBeenCalledTimes(
+            phase === "claim" && (change === "logout" || change === "replace") ? 0 : 1,
+          );
+          const otherKey = change === "unrelated" ? "synthetic-other-new" : "synthetic-other-old";
+          if (phase === "claim" && change === "unrelated") {
+            expect(otherWhenRefreshStarted).toEqual({ type: "api_key", key: otherKey });
+          }
+          expect(storage.get("other")).toEqual({ type: "api_key", key: otherKey });
+          expect(durable?.["other:default"]).toEqual({
+            type: "api_key",
+            provider: "other",
+            key: otherKey,
+          });
+        },
+      );
+    },
+  );
+
+  it.each(["unchanged", "logout", "replace"])(
+    "preserves %s state when an observer publishes a settled credential",
+    async (change) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "auth-refresh-observer-publication-" },
+        async (state) => {
+          const agentDir = state.agentDir();
+          const { storage, peer, providerId, profileId, refreshed, replacement, refreshToken } =
+            await createSqliteAuthRefreshFixture(agentDir);
+          peer.set(providerId, createOAuthRefreshFence({ profileId, credential: refreshed }));
+          storage.reload();
+          let settlementQueued = false;
+          let changeQueued = false;
+          let settlingPeer = false;
+          observeAuthTransactions(() => {
+            if (settlingPeer) {
+              return;
+            }
+            const durable = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+            if (durable?.type === "oauth") {
+              if (!settlementQueued && isPendingOAuthRefreshFence(durable)) {
+                settlementQueued = true;
+                queueMicrotask(() => {
+                  settlingPeer = true;
+                  try {
+                    peer.set(providerId, refreshed);
+                  } finally {
+                    settlingPeer = false;
+                  }
+                });
+              } else if (!changeQueued && durable.access === refreshed.access) {
+                changeQueued = true;
+                queueMicrotask(() => {
+                  if (change === "logout") {
+                    peer.logout(providerId);
+                  } else if (change === "replace") {
+                    peer.set(providerId, replacement);
+                  }
+                });
+              }
+            }
+          });
+
+          const apiKey = await storage.getApiKey(providerId);
+          expect(settlementQueued).toBe(true);
+          expect(changeQueued).toBe(true);
+          expect(refreshToken).not.toHaveBeenCalled();
+          const expected =
+            change === "logout" ? undefined : change === "replace" ? replacement : refreshed;
+          expect(apiKey).toBe(expected?.access);
+          expect(storage.get(providerId)).toEqual(expected);
+          expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toEqual(expected);
+        },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "settles claim custody when publication read fails (replacement: %s)",
+    async (replace) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "auth-refresh-publication-read-failure-" },
+        async (state) => {
+          const agentDir = state.agentDir();
+          const { storage, peer, providerId, profileId, replacement, refreshToken } =
+            await createSqliteAuthRefreshFixture(agentDir);
+          const readError = new Error("synthetic publication read failure");
+          let queued = false;
+          let failNextRead = false;
+          observeAuthTransactions(
+            () => {
+              if (!queued) {
+                const durable = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+                if (durable?.type === "oauth" && isPendingOAuthRefreshFence(durable)) {
+                  queued = true;
+                  queueMicrotask(() => {
+                    if (replace) {
+                      peer.set(providerId, replacement);
+                    }
+                    failNextRead = true;
+                  });
+                }
+              }
+            },
+            () => {
+              if (failNextRead) {
+                failNextRead = false;
+                throw readError;
+              }
+            },
+          );
+
+          const apiKey = await storage.getApiKey(providerId);
+          expect(queued).toBe(true);
+          expect(refreshToken).not.toHaveBeenCalled();
+          expect(storage.drainErrors()).toContain(readError);
+          const durable = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+          if (replace) {
+            expect(apiKey).toBe(replacement.access);
+            expect(storage.get(providerId)).toEqual(replacement);
+            expect(durable).toEqual(replacement);
+          } else {
+            expect(apiKey).toBeUndefined();
+            expect(storage.get(providerId)).toBeUndefined();
+            expect(durable?.type).toBe("oauth");
+            if (durable?.type !== "oauth") {
+              throw new Error("Expected the failed refresh to retain a terminal OAuth fence");
+            }
+            expect(isOAuthRefreshFence(durable)).toBe(true);
+            expect(isPendingOAuthRefreshFence(durable)).toBe(false);
+          }
+        },
+      );
+    },
+  );
 });

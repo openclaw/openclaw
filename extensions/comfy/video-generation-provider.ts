@@ -66,24 +66,15 @@ export function buildComfyVideoGenerationProvider(): VideoGenerationProvider {
       }
 
       const result = await runComfyWorkflow({
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        authStore: req.authStore,
-        prompt: req.prompt,
-        model: req.model,
-        timeoutMs: req.timeoutMs,
+        ...req,
         capability: "video",
-        outputKinds: ["images", "gifs", "videos"],
         inputImage: toComfyInputImage(req.inputImages?.[0]),
       });
 
       return {
         videos: result.assets,
         model: result.model,
-        metadata: {
-          promptId: result.promptId,
-          outputNodeIds: result.outputNodeIds,
-        },
+        metadata: result.metadata,
       };
     },
   };

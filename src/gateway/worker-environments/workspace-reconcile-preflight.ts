@@ -1,3 +1,4 @@
+import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
@@ -15,9 +16,10 @@ import type {
   WorkspaceManifestValueInputs,
   WorkspaceManifestValueOutputs,
 } from "./workspace-manifest-computation.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 import {
-  directoryContainsOnlyDerivedWorkspaceEntries,
+  directoryContainsOnlyWorkspaceEntries,
   localPath,
   localWorkspaceNode,
 } from "./workspace-reconcile-fs.js";
@@ -122,23 +124,23 @@ export async function preflightWorkspaceApplyImpl(
       continue;
     }
     const currentNode = currentNodes.get(entryPath);
-    const deletionAlreadySatisfied =
-      currentNode === undefined &&
-      !(await fs.lstat(localPath(params.root, entryPath)).catch((error: unknown) => {
+    if (currentNode === undefined) {
+      // This preflight runs in a Git worker. Avoid a threadpool round trip for
+      // every already-absent deletion without caching facts across passes.
+      try {
+        if (!lstatSync(localPath(params.root, entryPath), { throwIfNoEntry: false })) {
+          continue;
+        }
+      } catch (error) {
         if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
-          return undefined;
+          continue;
         }
         throw error;
-      }));
-    if (deletionAlreadySatisfied) {
-      // A deletion can already be satisfied because local also removed an
-      // unchanged ancestor. Do not turn that convergence into a conflict.
-      continue;
+      }
     }
-    const segments = entryPath.split("/");
     let localAncestorConflict = false;
-    for (let index = 1; index < segments.length; index += 1) {
-      const ancestor = segments.slice(0, index).join("/");
+    let replacedBaseAncestor = false;
+    for (const ancestor of workspacePathAncestors(entryPath)) {
       const baseAncestor = baseNodes.get(ancestor);
       const currentAncestor = currentNodes.get(ancestor);
       if (!baseAncestor && !currentAncestor) {
@@ -158,25 +160,19 @@ export async function preflightWorkspaceApplyImpl(
         localAncestorConflict = true;
         break;
       }
+      if (
+        baseAncestor &&
+        baseAncestor.type !== "directory" &&
+        !sameEntry(baseAncestor, currentAncestor) &&
+        sameEntry(localAncestor, baseAncestor)
+      ) {
+        replacedBaseAncestor = true;
+      }
     }
     if (localAncestorConflict) {
       continue;
     }
     let local: WorkspaceNode;
-    let replacedBaseAncestor = false;
-    for (let index = 1; index < segments.length; index += 1) {
-      const ancestor = segments.slice(0, index).join("/");
-      const baseAncestor = baseNodes.get(ancestor);
-      if (
-        baseAncestor &&
-        baseAncestor.type !== "directory" &&
-        !sameEntry(baseAncestor, currentNodes.get(ancestor)) &&
-        sameEntry(await localNode(ancestor), baseAncestor)
-      ) {
-        replacedBaseAncestor = true;
-        break;
-      }
-    }
     if (replacedBaseAncestor) {
       local = undefined;
     } else {
@@ -185,11 +181,7 @@ export async function preflightWorkspaceApplyImpl(
         local?.type === "directory" &&
         (!baseNodes.has(entryPath) || !currentNodes.has(entryPath)) &&
         currentNodes.get(entryPath)?.type !== "directory" &&
-        (await directoryContainsOnlyDerivedWorkspaceEntries(
-          params.root,
-          entryPath,
-          isRetainedInput,
-        ))
+        (await directoryContainsOnlyWorkspaceEntries(params.root, entryPath, isRetainedInput))
       ) {
         local = undefined;
       }
@@ -212,9 +204,7 @@ export async function preflightWorkspaceApplyImpl(
   // Lift descendant conflicts before a file/symlink replacement can erase them.
   const conflictsBeforeLifting = [...conflicts];
   for (const conflictPath of conflictsBeforeLifting) {
-    const segments = conflictPath.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      const ancestor = segments.slice(0, index).join("/");
+    for (const ancestor of workspacePathAncestors(conflictPath)) {
       const workerNode = currentNodes.get(ancestor);
       if (changed.has(ancestor) && workerNode && workerNode.type !== "directory") {
         conflicts.add(ancestor);

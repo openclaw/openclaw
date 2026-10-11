@@ -51,7 +51,7 @@ const proof: Record<string, unknown> = {
   captures: "separate full browser views; no transcript/footer compositing",
 };
 const suite = createControlUiE2eSuite({
-  name: "Real Gateway sender-local collaborator scroll",
+  name: "Real Gateway collaborator scroll",
   startServerBeforeBrowser: true,
   async startServer() {
     artifactDir = createControlUiE2eArtifactDir("collaborator-scroll-real-gateway");
@@ -301,7 +301,7 @@ async function wheel(page: Page, delta: number) {
 }
 
 suite.define(() => {
-  it("only follows local submissions, preserving remote-send anchors through queue, stream, and persistence", async (context) => {
+  it("preserves reader intent through remote queue, stream, and persistence", async (context) => {
     await suite.runScenario(context, {
       retainedState: () => instance.stateDir,
       run: async () => {
@@ -529,15 +529,21 @@ suite.define(() => {
                       current: latest,
                     }),
                   );
-                  expect
-                    .soft(
-                      Math.abs((latest.anchor ?? Infinity) - before.anchor!),
-                      mode + ": " + stage + " anchor",
-                    )
-                    .toBeLessThanOrEqual(1);
-                  expect
-                    .soft(Math.abs(latest.top - before.top), mode + ": " + stage + " scrollTop")
-                    .toBeLessThanOrEqual(1);
+                  if (mode.startsWith("reading")) {
+                    expect
+                      .soft(
+                        Math.abs((latest.anchor ?? Infinity) - before.anchor!),
+                        mode + ": " + stage + " anchor",
+                      )
+                      .toBeLessThanOrEqual(1);
+                    expect
+                      .soft(Math.abs(latest.top - before.top), mode + ": " + stage + " scrollTop")
+                      .toBeLessThanOrEqual(1);
+                  } else {
+                    expect
+                      .soft(latest.distance, mode + ": " + stage + " follows")
+                      .toBeLessThanOrEqual(8);
+                  }
                 };
                 await checkpoint("real-pending-input");
                 await turn.append(paragraphs(mode + " continuing", 3));
@@ -604,9 +610,11 @@ suite.define(() => {
                   samples,
                   maxDrift,
                 });
-                expect
-                  .soft(maxDrift, mode + ": every animation frame retains the reading anchor")
-                  .toBeLessThanOrEqual(1);
+                if (mode.startsWith("reading")) {
+                  expect
+                    .soft(maxDrift, mode + ": every animation frame retains the reading anchor")
+                    .toBeLessThanOrEqual(1);
+                }
                 await capture("03-" + mode + "-after-remote");
                 // A deliberate local submission from real wheel scrollback must resume follow.
                 await wheel(reader, -420);

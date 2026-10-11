@@ -101,7 +101,7 @@ function resolveReadySpeechProvider(params: {
   config: ResolvedTtsConfig;
   persona?: ResolvedTtsPersona;
   voiceModel?: VoiceModelRef;
-  requireTelephony?: boolean;
+  target: SpeechSynthesisTarget;
   providerRegistry: TtsProviderRegistry;
 }): TtsProviderReadyResolution {
   const resolvedProvider = params.providerRegistry.getSpeechProvider(params.provider, params.cfg);
@@ -148,7 +148,7 @@ function resolveReadySpeechProvider(params: {
       message: `${params.provider}: not configured`,
     };
   }
-  if (params.requireTelephony && !resolvedProvider.synthesizeTelephony) {
+  if (params.target === "telephony" && !resolvedProvider.synthesizeTelephony) {
     return {
       kind: "skip",
       reasonCode: "unsupported_for_telephony",
@@ -165,31 +165,6 @@ function resolveReadySpeechProvider(params: {
         ? undefined
         : params.persona,
     personaBinding: merged.personaBinding,
-  };
-}
-
-async function prepareSpeechSynthesis({
-  provider,
-  ...request
-}: SpeechProviderPrepareSynthesisContext & { provider: SpeechProviderPlugin }): Promise<
-  Pick<SpeechSynthesisRequest, "text" | "providerConfig" | "providerOverrides">
-> {
-  if (!provider.prepareSynthesis) {
-    return {
-      text: request.text,
-      providerConfig: request.providerConfig,
-      providerOverrides: request.providerOverrides,
-    };
-  }
-  const prepared = await provider.prepareSynthesis({ ...request });
-  return {
-    text: prepared?.text ?? request.text,
-    providerConfig: prepared?.providerConfig
-      ? { ...request.providerConfig, ...prepared.providerConfig }
-      : request.providerConfig,
-    providerOverrides: prepared?.providerOverrides
-      ? { ...request.providerOverrides, ...prepared.providerOverrides }
-      : request.providerOverrides,
   };
 }
 
@@ -390,7 +365,6 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   timeoutMs?: number;
   target: SpeechSynthesisTarget;
   logLabel: string;
-  requireTelephony?: boolean;
   prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
   selectOperation: (params: {
     provider: TtsProvider;
@@ -439,7 +413,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         config,
         persona,
         voiceModel,
-        requireTelephony: params.requireTelephony,
+        target: params.target,
         providerRegistry,
       });
       if (resolvedProvider.kind === "skip") {
@@ -464,8 +438,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         config,
         provider: resolvedProvider.provider,
       });
-      const prepared = await prepareSpeechSynthesis({
-        provider: resolvedProvider.provider,
+      const request: SpeechProviderPrepareSynthesisContext = {
         text: params.synthesisText,
         cfg,
         providerConfig: resolvedProvider.providerConfig,
@@ -474,7 +447,17 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target: params.target,
         timeoutMs,
-      });
+      };
+      const overrides = await resolvedProvider.provider.prepareSynthesis?.({ ...request });
+      const prepared = {
+        text: overrides?.text ?? request.text,
+        providerConfig: overrides?.providerConfig
+          ? { ...request.providerConfig, ...overrides.providerConfig }
+          : request.providerConfig,
+        providerOverrides: overrides?.providerOverrides
+          ? { ...request.providerOverrides, ...overrides.providerOverrides }
+          : request.providerOverrides,
+      };
       const synthesis = await operation.synthesize({
         text: prepared.text,
         cfg,
@@ -497,8 +480,14 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
           synthesis,
           latencyMs,
           provider,
-          providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
-          providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
+          providerModel: resolveTtsResultDetail(prepared, ["modelId", "model"]),
+          providerVoice: resolveTtsResultDetail(prepared, [
+            "speakerVoiceId",
+            "speakerVoice",
+            "voiceId",
+            "voiceName",
+            "voice",
+          ]),
           persona: persona?.id,
           fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
           attemptedProviders,
@@ -543,34 +532,19 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   };
 }
 
-function resolveTtsResultModel(
-  providerConfig: SpeechProviderConfig,
-  providerOverrides?: SpeechProviderOverrides,
+function resolveTtsResultDetail(
+  prepared: Pick<SpeechSynthesisRequest, "providerConfig" | "providerOverrides">,
+  keys: readonly string[],
 ): string | undefined {
-  return (
-    readTtsResultString(providerOverrides?.modelId) ??
-    readTtsResultString(providerOverrides?.model) ??
-    readTtsResultString(providerConfig.modelId) ??
-    readTtsResultString(providerConfig.model)
-  );
-}
-
-function resolveTtsResultVoice(
-  providerConfig: SpeechProviderConfig,
-  providerOverrides?: SpeechProviderOverrides,
-): string | undefined {
-  return (
-    readTtsResultString(providerOverrides?.speakerVoiceId) ??
-    readTtsResultString(providerOverrides?.speakerVoice) ??
-    readTtsResultString(providerOverrides?.voiceId) ??
-    readTtsResultString(providerOverrides?.voiceName) ??
-    readTtsResultString(providerOverrides?.voice) ??
-    readTtsResultString(providerConfig.speakerVoiceId) ??
-    readTtsResultString(providerConfig.speakerVoice) ??
-    readTtsResultString(providerConfig.voiceId) ??
-    readTtsResultString(providerConfig.voiceName) ??
-    readTtsResultString(providerConfig.voice)
-  );
+  for (const config of [prepared.providerOverrides, prepared.providerConfig]) {
+    for (const key of keys) {
+      const value = readTtsResultString(config?.[key]);
+      if (value !== undefined) {
+        return value;
+      }
+    }
+  }
+  return undefined;
 }
 
 function resolvePersonaBinding(

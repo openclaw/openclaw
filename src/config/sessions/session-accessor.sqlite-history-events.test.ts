@@ -5,11 +5,7 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  appendTranscriptEvent,
-  persistSessionTranscriptTurn,
-  replaceTranscriptEvents,
-} from "./session-accessor.js";
+import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import {
   readTranscriptDisplayDelta,
@@ -25,6 +21,7 @@ import {
   readSessionTranscriptHistoryAnchorPage,
   useHistoryEventScope,
 } from "./session-accessor.sqlite-history.test-support.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
 function messageEvent(

@@ -11,7 +11,42 @@ import {
 
 export { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const GITHUB_API_ORIGIN = "https://api.github.com";
+const DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com";
+// Shipped public constant names the default service, independent of the selected Enterprise API.
+export const GITHUB_API_ORIGIN = DEFAULT_GITHUB_API_BASE_URL;
+
+function resolveGitHubApiBaseUrl(value: string | undefined): string {
+  const raw = value?.trim() || DEFAULT_GITHUB_API_BASE_URL;
+  const parsed = new URL(raw);
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    !["/", "", "/api/v3", "/api/v3/"].includes(parsed.pathname)
+  ) {
+    throw new Error("gateway.github.apiBaseUrl must be an HTTPS GitHub API base URL");
+  }
+  return parsed.origin + (parsed.pathname.startsWith("/api/v3") ? "/api/v3" : "");
+}
+
+export const GITHUB_API_BASE_URL = DEFAULT_GITHUB_API_BASE_URL;
+function githubGraphqlUrl(baseUrl: string): string {
+  return baseUrl.endsWith("/api/v3") ? `${baseUrl.slice(0, -3)}/graphql` : `${baseUrl}/graphql`;
+}
+
+export const GITHUB_GRAPHQL_URL = githubGraphqlUrl(GITHUB_API_BASE_URL);
+
+export function resolveGitHubApiUrls(apiBaseUrl: string | undefined) {
+  const baseUrl = resolveGitHubApiBaseUrl(apiBaseUrl);
+  return { baseUrl, graphqlUrl: githubGraphqlUrl(baseUrl) };
+}
+
+export function githubRestApiPath(url: URL, apiBaseUrl = GITHUB_API_BASE_URL): string {
+  const basePath = new URL(apiBaseUrl).pathname;
+  return url.pathname.slice(basePath === "/" ? 0 : basePath.length);
+}
 const GITHUB_JSON_MAX_BYTES = 256 * 1024;
 export const GITHUB_REQUEST_TIMEOUT_MS = 8_000;
 const GITHUB_API_VERSION = "2022-11-28";
@@ -22,9 +57,14 @@ const GITHUB_QUOTA_RETRY_MS = 60_000;
 // Normal Gateway callers share global fetch; injected transports own separate
 // API environments and release their cooldown state with that transport.
 const transportCooldowns = new WeakMap<typeof fetch, Map<string, ControlUiGitHubError>>();
+// Body-reported quotas belong to the admitted request even after API configuration changes.
+const responseRequestScopes = new WeakMap<
+  Response,
+  { credentialScope: string; fetchImpl: typeof fetch; resource: string }
+>();
 
 export class ControlUiGitHubError extends Error {
-  private readonly retryAtMs?: number;
+  readonly retryAtMs: number | undefined;
   readonly upstreamStatus: number;
   readonly retryable: boolean;
 
@@ -143,13 +183,14 @@ export function optionalNumber(record: Record<string, unknown>, key: string): nu
   return asFiniteNumber(record[key]);
 }
 
-function githubApiResource(url: URL): string {
+function githubApiResource(url: URL, apiBaseUrl: string, graphqlUrl: string): string {
   // GitHub separates GraphQL, code search, other searches, and non-search REST.
-  return url.pathname === "/graphql"
+  const path = githubRestApiPath(url, apiBaseUrl);
+  return url.href === graphqlUrl
     ? "graphql"
-    : url.pathname === "/search/code"
+    : path === "/search/code"
       ? "code_search"
-      : url.pathname.startsWith("/search/")
+      : path.startsWith("/search/")
         ? "search"
         : "core";
 }
@@ -205,9 +246,16 @@ function isGitHubApiRedirect(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
-function safeGitHubApiUrl(raw: string, base?: URL): URL | null {
+function safeGitHubApiUrl(raw: string, apiBase: URL, graphqlUrl: string, base?: URL): URL | null {
   const url = URL.parse(raw, base);
-  if (!url || url.origin !== GITHUB_API_ORIGIN || url.username || url.password || url.port) {
+  if (
+    !url ||
+    url.origin !== apiBase.origin ||
+    url.username ||
+    url.password ||
+    (url.href !== graphqlUrl &&
+      !url.pathname.startsWith(`${apiBase.pathname === "/" ? "" : apiBase.pathname}/`))
+  ) {
     return null;
   }
   return url;
@@ -222,17 +270,21 @@ export async function fetchGitHubApi(
   etag?: string,
   callerSignal?: AbortSignal,
   graphql?: { query: string; variables: Record<string, string> },
+  apiBaseUrl = GITHUB_API_BASE_URL,
 ): Promise<Response> {
   callerSignal?.throwIfAborted();
-  const initialUrl = safeGitHubApiUrl(rawUrl);
+  const baseUrl = resolveGitHubApiBaseUrl(apiBaseUrl);
+  const apiBase = new URL(baseUrl);
+  const graphqlUrl = githubGraphqlUrl(baseUrl);
+  const initialUrl = safeGitHubApiUrl(rawUrl, apiBase, graphqlUrl);
   if (!initialUrl) {
     throw new ControlUiGitHubError(502, "Invalid GitHub API URL");
   }
-  if (graphql && (initialUrl.href !== `${GITHUB_API_ORIGIN}/graphql` || !token || etag)) {
+  if (graphql && (initialUrl.href !== graphqlUrl || !token || etag)) {
     throw new ControlUiGitHubError(502, "Invalid authenticated GitHub GraphQL request");
   }
   let url: URL = initialUrl;
-  const credentialScope = githubApiCredentialCacheScope(token);
+  const credentialScope = `${baseUrl}:${githubApiCredentialCacheScope(token)}`;
   const cooldowns = transportCooldowns.get(fetchImpl) ?? new Map<string, ControlUiGitHubError>();
   transportCooldowns.set(fetchImpl, cooldowns);
 
@@ -246,7 +298,7 @@ export async function fetchGitHubApi(
       identity.assertSelected();
     }
     callerSignal?.throwIfAborted();
-    const resource = githubApiResource(url);
+    const resource = githubApiResource(url, baseUrl, graphqlUrl);
     const sharedCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:*`);
     const resourceCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:${resource}`);
     const cooldown =
@@ -286,11 +338,14 @@ export async function fetchGitHubApi(
       throw retained;
     }
     if (!isGitHubApiRedirect(response.status)) {
+      responseRequestScopes.set(response, { credentialScope, fetchImpl, resource });
       return response;
     }
 
     const location: string | null = response.headers.get("location");
-    const nextUrl: URL | null = location ? safeGitHubApiUrl(location, url) : null;
+    const nextUrl: URL | null = location
+      ? safeGitHubApiUrl(location, apiBase, graphqlUrl, url)
+      : null;
     if (!nextUrl || redirects >= GITHUB_API_MAX_REDIRECTS) {
       await discardResponse(response);
       throw new ControlUiGitHubError(502, "GitHub API returned an unsafe redirect");
@@ -321,8 +376,8 @@ export async function readBoundedResponse(response: Response, maxBytes: number):
 }
 
 // GitHub reports quota exhaustion as 429 or as 403 with exhausted-quota
-// headers; a bare 403 is a permission response and must stay distinguishable
-// so callers can degrade optional fetches instead of flagging rate limits.
+// headers. Body-reported secondary limits are classified by the JSON reader;
+// other 403 responses remain permission failures.
 function isGitHubRateLimitResponse(response: Response): boolean {
   if (response.status === 429) {
     return true;
@@ -343,8 +398,8 @@ function githubResponseErrorStatus(response: Response): number {
   return 502;
 }
 
-function githubResponseError(response: Response, graphqlRateLimited = false): ControlUiGitHubError {
-  const status = graphqlRateLimited ? 429 : githubResponseErrorStatus(response);
+function githubResponseError(response: Response, rateLimited = false): ControlUiGitHubError {
+  const status = rateLimited ? 429 : githubResponseErrorStatus(response);
   let retryAtMs: number | undefined;
   if (status === 429) {
     const now = Date.now();
@@ -361,7 +416,10 @@ function githubResponseError(response: Response, graphqlRateLimited = false): Co
           ? reset * 1_000
           : undefined;
     retryAtMs =
-      proposed !== undefined && Number.isSafeInteger(proposed) && proposed > now
+      proposed !== undefined &&
+      Number.isSafeInteger(proposed) &&
+      Number.isFinite(new Date(proposed).getTime()) &&
+      proposed > now
         ? proposed
         : now + GITHUB_QUOTA_RETRY_MS;
   }
@@ -378,6 +436,9 @@ export async function readGitHubGraphQLResponse(
   token: string,
   maxBytes?: number,
 ): Promise<unknown> {
+  const credentialScope =
+    responseRequestScopes.get(response)?.credentialScope ??
+    `${DEFAULT_GITHUB_API_BASE_URL}:${githubApiCredentialCacheScope(token)}`;
   const value =
     response.status === 403 && !isGitHubRateLimitResponse(response)
       ? await readGitHubJsonBody(response, maxBytes)
@@ -394,7 +455,7 @@ export async function readGitHubGraphQLResponse(
     ) {
       throw retainGitHubCooldown(
         fetchImpl,
-        githubApiCredentialCacheScope(token),
+        credentialScope,
         "graphql",
         response,
         githubResponseError(response, true),
@@ -472,6 +533,31 @@ export async function readGitHubJsonResponse(
   maxBytes = GITHUB_JSON_MAX_BYTES,
 ): Promise<unknown> {
   if (!response.ok) {
+    if (response.status === 403 && !isGitHubRateLimitResponse(response)) {
+      let payload: unknown;
+      try {
+        payload = await readGitHubJsonBody(response, maxBytes);
+      } catch {
+        // An unreadable error body must not change a permission failure's status.
+      }
+      if (
+        isRecord(payload) &&
+        typeof payload.message === "string" &&
+        /\b(?:secondary rate limit|abuse detection)\b/iu.test(payload.message)
+      ) {
+        const error = githubResponseError(response, true);
+        const scope = responseRequestScopes.get(response);
+        throw scope
+          ? retainGitHubCooldown(
+              scope.fetchImpl,
+              scope.credentialScope,
+              scope.resource,
+              response,
+              error,
+            )
+          : error;
+      }
+    }
     await discardResponse(response);
     throw githubResponseError(response);
   }
@@ -504,8 +590,22 @@ export function fetchGitHubJson(
   fetchImpl: typeof fetch,
   token?: string,
   maxBytes?: number,
+  apiBaseUrl = GITHUB_API_BASE_URL,
 ): Promise<unknown> {
   return withOptionalGitHubAuth(token, async (requestToken) =>
-    readGitHubJsonResponse(await fetchGitHubApi(rawUrl, fetchImpl, requestToken), maxBytes),
+    readGitHubJsonResponse(
+      await fetchGitHubApi(
+        rawUrl,
+        fetchImpl,
+        requestToken,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        apiBaseUrl,
+      ),
+      maxBytes,
+    ),
   );
 }

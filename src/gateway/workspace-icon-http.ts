@@ -84,34 +84,27 @@ export function clearWorkspaceIconCacheForTest(): void {
   workspaceIconCache = new LruCache(WORKSPACE_ICON_CACHE_MAX_ENTRIES);
 }
 
-async function readWorkspaceIconCandidate(
-  workspaceRoot: string,
-  relativePath: string,
-): Promise<WorkspaceIcon | undefined> {
-  const opened = await openRootFile({
-    absolutePath: path.join(workspaceRoot, relativePath),
-    rootPath: workspaceRoot,
-    boundaryLabel: "workspace root",
-    symlinks: "follow-parents-within-root",
-    maxBytes: WORKSPACE_ICON_MAX_BYTES,
-  });
-  if (!opened.ok) {
-    return undefined;
-  }
-  let body: Buffer;
-  try {
-    body = await readFileDescriptorBounded(opened.fd, WORKSPACE_ICON_MAX_BYTES);
-  } catch {
-    return undefined;
-  } finally {
-    await closeFileDescriptor(opened.fd);
-  }
-  return await resolveHttpImageRepresentation(relativePath, body);
-}
-
 async function scanWorkspaceIcon(workspaceRoot: string): Promise<WorkspaceIconResolution> {
   for (const relativePath of WORKSPACE_ICON_RELATIVE_PATHS) {
-    const icon = await readWorkspaceIconCandidate(workspaceRoot, relativePath);
+    const opened = await openRootFile({
+      absolutePath: path.join(workspaceRoot, relativePath),
+      rootPath: workspaceRoot,
+      boundaryLabel: "workspace root",
+      symlinks: "follow-parents-within-root",
+      maxBytes: WORKSPACE_ICON_MAX_BYTES,
+    });
+    if (!opened.ok) {
+      continue;
+    }
+    let body: Buffer;
+    try {
+      body = await readFileDescriptorBounded(opened.fd, WORKSPACE_ICON_MAX_BYTES);
+    } catch {
+      continue;
+    } finally {
+      await closeFileDescriptor(opened.fd);
+    }
+    const icon = await resolveHttpImageRepresentation(relativePath, body);
     if (icon) {
       return icon;
     }

@@ -3,7 +3,6 @@ import { describeControlFailure } from "./app-server/capabilities.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import type { CodexCommandOptions } from "./commands.js";
 
-/** Dispatches a `/codex` command to the lazily loaded handler. */
 export async function handleCodexCommand(
   ctx: PluginCommandContext,
   options: CodexCommandOptions,

@@ -8,5 +8,5 @@ export function resolveDiscordPreviewStreamMode(
     streaming?: unknown;
   } = {},
 ): StreamingMode {
-  return resolveChannelPreviewStreamMode(params, "off");
+  return resolveChannelPreviewStreamMode(params, "progress");
 }

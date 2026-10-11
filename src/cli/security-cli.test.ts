@@ -141,7 +141,7 @@ describe("security CLI", () => {
         {
           checkId: "gateway.probe_failed",
           severity: "warn",
-          title: "Gateway probe failed (deep)",
+          title: "Gateway check failed (deep)",
           detail: "connect failed: connect ECONNREFUSED 127.0.0.1:18789",
         },
       ],
@@ -164,6 +164,17 @@ describe("security CLI", () => {
     expect(payload.secretDiagnostics).toEqual([
       "security audit: gateway secrets.resolve unavailable (gateway closed); resolved command secrets locally.",
     ]);
+  });
+
+  it("reports an unexpected fixer failure instead of emitting a successful JSON audit", async () => {
+    primeDeepAuditConfig();
+    const failure = new Error("Fixture repair failed");
+    fixSecurityFootguns.mockRejectedValueOnce(failure);
+
+    await expect(
+      createProgram().parseAsync(["security", "audit", "--fix", "--json"], { from: "user" }),
+    ).rejects.toBe(failure);
+    expect(runtimeLogs).toEqual([]);
   });
 
   it.each([

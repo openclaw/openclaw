@@ -9,6 +9,8 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
+import { invalidateCronJobNames, publishCronJobNames } from "./store/job-name.js";
+import { readCronJobNamesInDatabase } from "./store/job-name.kernel.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
 import { resolveCronJobsStorePath } from "./store/paths.js";
@@ -56,17 +58,26 @@ export function getCronJobsStoreRevision(storePath: string): number {
   return cronStoreRevisions.get(cronStoreKey(storePath)) ?? nextCronStoreRevision;
 }
 
-export function noteCronJobsStoreCommit(storeKey: string): void {
+export function noteCronJobsStoreCommit(storeKey?: string): void {
+  invalidateCronJobNames(storeKey);
   // A bounded monotonic fact invalidates sibling service snapshots without
   // polling SQLite or discarding the current scheduler's transient run state.
+  if (storeKey === undefined) {
+    // A lost default-load reply can hide both the selected partition and a committed repair.
+    cronStoreRevisions.clear();
+    nextCronStoreRevision += 1;
+    return;
+  }
   cronStoreRevisions.delete(storeKey);
   cronStoreRevisions.set(storeKey, ++nextCronStoreRevision);
   pruneMapToMaxSize(cronStoreRevisions, MAX_TRACKED_CRON_STORE_REVISIONS);
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
-export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
-  const storeKey = cronStoreKey(storePath);
+export async function loadCronJobsStoreWithConfigJobs(
+  storePath?: string,
+): Promise<LoadedCronStore> {
+  const storeKey = storePath === undefined ? undefined : cronStoreKey(storePath);
   const context = captureOpenClawStateWorkerContext();
   let received = false;
   try {
@@ -74,12 +85,12 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
       const result = await scope.execute({ type: "cron.loadMutable", input: { storeKey } });
       received = true;
       for (let index = 0; index < result.repairCommits; index += 1) {
-        noteCronJobsStoreCommit(storeKey);
+        noteCronJobsStoreCommit(result.storeKey);
       }
       if (!result.ok) {
         // Coordinator cleanup can fail after COMMIT but before a repair is reported.
         if (result.repairCommits === 0) {
-          noteCronJobsStoreCommit(storeKey);
+          noteCronJobsStoreCommit(result.storeKey);
         }
         throw restoreCronLoadError(result.error);
       }
@@ -119,16 +130,24 @@ export async function removeStaleCronJobFamilyRows(
     type: "cron.removeStaleFamily",
     input: { storeKey, family: { ...family } },
     assertCurrent: () => opts?.commitGuard?.(),
-    prepare: () => ({ value: {}, assertCurrent() {} }),
+    snapshot: {},
     publish: (outcome) => {
       removed = outcome.removed;
+      if (removed > 0) {
+        invalidateCronJobNames();
+      }
+    },
+    onSettled(outcome) {
+      if (outcome === "unknown") {
+        invalidateCronJobNames();
+      }
     },
   });
   return removed;
 }
 
 /** Loads only the persisted cron job store payload. */
-export async function loadCronJobsStore(storePath: string): Promise<CronStoreFile> {
+export async function loadCronJobsStore(storePath?: string): Promise<CronStoreFile> {
   return (await loadCronJobsStoreWithConfigJobs(storePath)).store;
 }
 
@@ -163,6 +182,7 @@ function commitCronStoreNative<Value>(
   hooks: CronStoreTransactionHooks | undefined,
   operationLabel?: string,
 ): CronStoreCommit<Value> {
+  const context = captureOpenClawStateWorkerContext();
   const observedRevision = getCronJobsStoreRevision(storeKey);
   let committed = false;
   try {
@@ -175,13 +195,22 @@ function commitCronStoreNative<Value>(
         deferSqlitePostCommitPublication(database.db, () => {
           committed = true;
         });
-        return { value, ...readCronStoreFingerprints(database.db, storeKey) };
+        return {
+          value,
+          names: readCronJobNamesInDatabase(database.db, undefined, storeKey),
+          ...readCronStoreFingerprints(database.db, storeKey),
+        };
       },
       {},
       operationLabel ? { operationLabel } : undefined,
     );
+    const revision = publishCronStoreSaveRevision(storeKey, observedRevision);
+    // Nested Doctor transactions have no acknowledged commit until their outer scope settles.
+    if (committed && revision !== STALE_CRON_STORE_REVISION) {
+      publishCronJobNames(storeKey, context, result.names);
+    }
     hooks?.afterCommit?.();
-    return { ...result, revision: publishCronStoreSaveRevision(storeKey, observedRevision) };
+    return { ...result, revision };
   } catch (error) {
     if (committed) {
       noteCronJobsStoreCommit(storeKey);
@@ -209,6 +238,9 @@ async function saveCronStoreWithWorker<Value>(
           : observedRevision;
       if (!result.ok) {
         throw restoreCronSaveError(result.error);
+      }
+      if (revision !== STALE_CRON_STORE_REVISION) {
+        publishCronJobNames(storeKey, context, result.names);
       }
       return {
         value: result.value,

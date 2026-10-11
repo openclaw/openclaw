@@ -162,13 +162,13 @@ export async function withUpdateCandidateIoBudget<T>(
           },
         );
         if (probe.cleanup === "uncertain") {
-          throw Object.assign(new Error("Update progress probe cleanup could not be confirmed"), {
+          throw Object.assign(new Error("Update progress check cleanup could not be confirmed"), {
             cleanup: probe.cleanup,
           });
         }
         monitorSignal.throwIfAborted();
         if (probe.code !== 0) {
-          throw new Error(`Update progress probe failed (${probe.termination}): ${probe.stderr}`);
+          throw new Error(`Update progress check failed (${probe.termination}): ${probe.stderr}`);
         }
         const current = copyProgressSchema.parse(JSON.parse(probe.stdout));
         if (Date.now() >= deadline) {
@@ -191,7 +191,7 @@ export async function withUpdateCandidateIoBudget<T>(
         probeFailure =
           error instanceof Error
             ? error
-            : new Error("Update progress probe cleanup failed", { cause: error });
+            : new Error("Update progress check cleanup failed", { cause: error });
       }
       if (!monitorSignal.aborted) {
         stalled.abort(error);

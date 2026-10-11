@@ -3,10 +3,6 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const CUSTODIAN_SESSION_STORAGE_KEY = "openclaw.custodian.session.v1";
 
-function isStoredCustodianSessionId(value: string | null): value is string {
-  return value !== null && value.length <= 512 && value.trim().length > 0;
-}
-
 export function createCustodianSessionId(): string {
   return `control-ui-onboarding-${generateUUID()}`;
 }
@@ -31,7 +27,7 @@ export function loadCustodianSessionId(): { sessionId: string; restored: boolean
   } catch {
     // Fall through to a process-local id when storage is unavailable.
   }
-  if (isStoredCustodianSessionId(stored)) {
+  if (stored !== null && stored.length <= 512 && stored.trim().length > 0) {
     return { sessionId: stored, restored: true };
   }
   const sessionId = createCustodianSessionId();

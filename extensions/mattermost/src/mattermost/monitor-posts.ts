@@ -2,7 +2,7 @@ import {
   formatInboundEnvelope,
   formatInboundFromLabel,
   implicitMentionKindWhen,
-  resolveInboundSessionEnvelopeContext,
+  resolveInboundSessionEnvelopeContextAsync,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
@@ -123,7 +123,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     // detection and CommandBody, or the leading-slash check fails and the model gets prose.
     const commandBody = normalizeMention(rawText, botUsername).trim();
     const { effectiveReplyToId, sessionKey } = thread;
-    const { envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+    const { envelopeOptions, previousTimestamp } = await resolveInboundSessionEnvelopeContextAsync({
       cfg,
       agentId: route.agentId,
       sessionKey,
@@ -381,7 +381,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     }
     // Mention-only turns need non-empty agent text; the shared reply runner rejects empty
     // bodies before model invocation. The guard above ensures this fallback is a bot mention.
-    const bodyForAgent = bodyText || rawText.trim();
+    const bodyForAgent = bodyText || rawText;
     core.channel.activity.record({
       channel: "mattermost",
       accountId: account.accountId,
@@ -419,10 +419,6 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
             kind,
           })
         : undefined;
-    if (backfill && !backfill.current) {
-      monitor.logVerboseMessage("mattermost: drop stale thread turn after session rotation");
-      return;
-    }
     // Preserve concurrent live posts in the shared window, but do not render the
     // trigger or a later post into this older turn's supplemental context.
     const turnHistories = new Map<string, HistoryEntry[]>(

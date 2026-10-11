@@ -72,8 +72,9 @@ export function readNewSessionSubmissionAccess(options: {
 }): SessionMethodAccess {
   const { gateway, place, pendingPlacement, hasInitialTurn, createParams } = options;
   const pendingPlacementActive = Boolean(pendingPlacement.sessionKey);
-  const target = resolveDraftSessionPlacement(pendingPlacement, place).target;
-  const remoteProject = !target && !hasInitialTurn ? place.browser.remoteProject : null;
+  const target = resolveDraftSessionPlacement(pendingPlacement, place);
+  const remoteProject =
+    !place.hostedEnvironment && !target && !hasInitialTurn ? place.browser.remoteProject : null;
   if (!pendingPlacementActive && remoteProject && !remoteProject.projectId) {
     const projectAccess = readSessionMethodAccess(gateway, {
       method: "projects.add",
@@ -89,9 +90,13 @@ export function readNewSessionSubmissionAccess(options: {
       params: createParams,
       sessionScope: true,
     });
-    if (!createAccess.allowed || !target) {
+    // Creation assigns ownership before its required first-turn handoff has a row.
+    if (!createAccess.allowed || !target || (target.kind === "profile" && target.required)) {
       return createAccess;
     }
+  }
+  if (target.kind === "profile" && target.required) {
+    return readSessionMethodAccess(gateway, { method: "sessions.send", sessionScope: true });
   }
   return readSessionMethodAccess(gateway, {
     method: "sessions.dispatch",
@@ -111,6 +116,11 @@ export function requiresNewSessionModelSetup(options: {
   pendingPlacement: PendingSessionPlacementRecoveryState;
 }): boolean {
   const { snapshot, gateway, place, pendingPlacement } = options;
+  // Placement metadata decides where credentials live; do not flash Gateway
+  // setup before the required worker policy is known. Submission remains gated.
+  if (!gateway.placementPolicyReady) {
+    return false;
+  }
   const selectedAgent = place.selectedAgent();
   const agents = snapshot.context?.agents.state;
   return place.modelControl.requiresModelSetup({
@@ -133,7 +143,7 @@ type SubmitGateDraft = {
   readonly mentions: readonly HumanMention[];
   readonly visibility: NewSessionVisibility;
   readonly attachmentDraft: {
-    readonly pendingReads: number;
+    readonly reads: { readonly pendingReads: number };
     readonly attachments: readonly ChatAttachment[];
   };
   readonly capabilities: { readonly toolOverrides: SessionToolOverrides | null };
@@ -164,13 +174,23 @@ export function resolveNewSessionSubmitBlock(
   ) {
     return { gate: "preference-restore", reason: t("newSession.restoringPreferences") };
   }
+  if (kind === "session" && !gateway.placementPolicyReady) {
+    return { gate: "cloud", reason: t("newSession.placementNotReady") };
+  }
+  if (
+    kind === "session" &&
+    gateway.requiredProfile &&
+    !gateway.cloudProfiles.some((profile) => profile.id === gateway.requiredProfile)
+  ) {
+    return { gate: "cloud", reason: t("newSession.requiredWorkerUnavailable") };
+  }
   if (kind === "session" && draft.requiresModelSetup()) {
     return { gate: "model-setup", reason: t("modelSetup.required.title") };
   }
   if (catalog.isRoutePending(snapshot.data, snapshot.context?.sessions)) {
     return { gate: "route-pending", reason: t("newSession.catalogUnavailable") };
   }
-  if (draft.attachmentDraft.pendingReads > 0) {
+  if (draft.attachmentDraft.reads.pendingReads > 0) {
     return { gate: "attachment-reads", reason: t("newSession.readingAttachment") };
   }
   if (!pendingPlacementActive && draft.submissionOutcomeUnknown) {
@@ -219,12 +239,12 @@ export function resolveNewSessionSubmitBlock(
     if (place.remotePlacement || draft.pendingPlacement.sessionKey) {
       return { gate: "device", reason: t("newSession.terminalPlacementUnsupported") };
     }
-  }
-  if (kind === "terminal" && draft.capabilities.toolOverrides !== null) {
-    return {
-      gate: "terminal-capabilities",
-      reason: t("newSession.terminalCapabilityOverridesUnsupported"),
-    };
+    if (draft.capabilities.toolOverrides !== null) {
+      return {
+        gate: "terminal-capabilities",
+        reason: t("newSession.terminalCapabilityOverridesUnsupported"),
+      };
+    }
   }
   if (place.folderSubmissionBlocked()) {
     return { gate: "folder", reason: t("newSession.checkingPlace") };
@@ -233,7 +253,7 @@ export function resolveNewSessionSubmitBlock(
     const retryReady = Boolean(
       draft.pendingPlacement.retryAllowed &&
       client.recoveryScopeReady &&
-      resolveDraftSessionPlacement(draft.pendingPlacement, place).target &&
+      resolveDraftSessionPlacement(draft.pendingPlacement, place) &&
       draft.pendingPlacement.agentId &&
       draft.pendingPlacement.gatewayUrl === connection.connection.gatewayUrl &&
       draft.pendingPlacement.recoveryScope === client.recoveryScope,
@@ -254,8 +274,12 @@ export function resolveNewSessionSubmitBlock(
       ),
     };
   }
+  const placementTarget = resolveDraftSessionPlacement(draft.pendingPlacement, place);
+  const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
+  const cloudProfile = gateway.cloudProfiles.find((profile) => profile.id === cloudProfileId);
   const modelUnavailableMessage =
-    kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());
+    kind === "session" &&
+    place.modelControl.modelSelectionBlockedReason(place.selectedAgent(), cloudProfile?.inference);
   if (modelUnavailableMessage) {
     return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }
@@ -276,23 +300,17 @@ export function resolveNewSessionSubmitBlock(
   if ((place.deviceId || place.autoDevice) && deviceRuntimeUnsupportedReason) {
     return { gate: "device-runtime", reason: deviceRuntimeUnsupportedReason };
   }
-  const placementTarget = resolveDraftSessionPlacement(draft.pendingPlacement, place).target;
   if (
     placementTarget &&
     (!client.recoveryScope || !client.recoveryScopeReady || gateway.cloudProfilesPending)
   ) {
     return { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
-  const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
   const cloudRuntimeUnsupportedReason = () =>
-    place.modelControl.cloudRuntimeUnsupportedReason(
-      gateway.cloudProfiles.find((profile) => profile.id === place.cloudProfileId),
-    );
+    place.modelControl.cloudRuntimeUnsupportedReason(cloudProfile);
   if (
     cloudProfileId &&
-    (!gateway.cloudProfilesReady ||
-      !gateway.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
-      Boolean(cloudRuntimeUnsupportedReason()))
+    (!gateway.cloudProfilesReady || !cloudProfile || Boolean(cloudRuntimeUnsupportedReason()))
   ) {
     const reason = cloudRuntimeUnsupportedReason() ?? t("newSession.placementNotReady");
     return { gate: "cloud", reason };

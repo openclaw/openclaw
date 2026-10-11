@@ -20,6 +20,7 @@ import {
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
+  aggregatePluginRuntimeCloseErrors,
   hasRetainedPluginRuntimeCloseError,
   PluginRuntimeCloseRetainedError,
 } from "../plugins/runtime-close-error.js";
@@ -191,7 +192,7 @@ export function ownPreparedPluginGeneration(
         result.status === "rejected" ? [result.reason] : [],
       );
       if (failures.length) {
-        throw new AggregateError(
+        throw aggregatePluginRuntimeCloseErrors(
           [...acquisitionFailures, ...failures],
           "Prepared plugin generation cleanup failed",
         );
@@ -264,12 +265,10 @@ export function publishPreparedPluginGeneration(
           "Prepared model runtime plugin generation retired",
         );
         owner.pluginGeneration = undefined;
-        const retiredGatewayLoan = [...instances].some(
-          (instance) =>
-            !instance.acceptingCalls &&
-            instance.owner !== undefined &&
-            gatewayLenders.has(instance.owner.registry),
-        );
+        const retiredGatewayLoan = [...instances].some((instance) => {
+          const registry = instance.owner?.registry;
+          return !instance.acceptingCalls && registry !== undefined && gatewayLenders.has(registry);
+        });
         log.debug(
           `Prepared plugin publication retired: metadataCacheRetired=${cacheSignal.aborted}, provenance=${owner.provenance}, pending=${Boolean(owner.pending)}, gatewayLoan=${retiredGatewayLoan}`,
         );

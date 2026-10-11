@@ -138,7 +138,7 @@ extension DashboardManager {
     nonisolated static let failureURL = URL(string: "about:blank")!
 
     func canFocusWithoutReload(_ controller: DashboardWindowController) -> Bool {
-        controller.hasCurrentBrowserSession && !controller.isShowingFailurePage
+        controller.documentHost.hasCurrentBrowserSession && !controller.isShowingFailurePage
     }
 
     func loadWindow(
@@ -183,7 +183,7 @@ extension DashboardManager.WindowConfiguration {
         }
         try self.init(
             url: GatewayEndpointStore.dashboardURL(for: (profile.url, nil, nil), mode: .remote),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: .unauthenticated,
             tlsParams: nil,
             mode: .remote,
             displayName: profile.name,
@@ -207,21 +207,45 @@ extension DashboardManager {
             "\(self.mainWindowAutosaveName)-\(profileID)"
         }
     }
-}
 
-extension DashboardManager {
     func dashboardConfiguration(
         endpoint: GatewayConnection.EndpointSnapshot,
         mode: AppState.ConnectionMode,
         target: DashboardGatewayTarget,
-        token: String?) async throws -> WindowConfiguration
+        token: String?) async throws
+        -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)
     {
+        var endpoint = endpoint
         let config = endpoint.config
         let browserSession = endpoint.browserSession
         try browserSession?.validate(for: config.url)
-        let identityURL = mode == .remote
+        let advertisedIdentityURL = mode == .remote || endpoint.tls != nil
             ? try await browserIdentityURLProvider(target, config)
             : nil
+        let identityURL = mode == .remote ? advertisedIdentityURL : nil
+        // The preflight may have replaced a learned leaf pin. Browser TLS and
+        // native-auth closures must capture the refreshed endpoint, not the failed pin.
+        if let tls = endpoint.tls, tls.allowsTrustedPinReplacement,
+           let storeKey = tls.params.storeKey,
+           let fingerprint = GatewayTLSStore.loadFingerprint(stableID: storeKey),
+           fingerprint != tls.params.expectedFingerprint
+        {
+            // The pin store owns this one changed fact. Keep the captured route
+            // revision/authority; an immediate primary config read has no revision.
+            endpoint = GatewayConnection.EndpointSnapshot(
+                config: config,
+                tls: GatewayTLSRoute(
+                    params: GatewayTLSParams(
+                        required: tls.params.required,
+                        expectedFingerprint: fingerprint,
+                        allowTOFU: false,
+                        storeKey: storeKey),
+                    allowsTrustedPinReplacement: true),
+                routeAuthority: endpoint.routeAuthority,
+                deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
+                revision: endpoint.revision,
+                browserSession: browserSession)
+        }
         // Device grants remain challenge-only. Shared startup credentials retain
         // the released UI contract, but come only from the native accepted binding.
         let dashboardConfig: GatewayConnection.Config = (url: config.url, token: nil, password: nil)
@@ -249,7 +273,7 @@ extension DashboardManager {
             : self.gatewayEntries.first { $0.id == target.bridgeID }?.name ?? url.host ?? "Gateway"
         // The public sign-in origin owns normal HTTPS trust; an SSH/native TLS
         // pin and its bearer credentials belong only to the device connection.
-        return WindowConfiguration(
+        return (WindowConfiguration(
             url: url,
             auth: auth,
             tlsParams: identityURL == nil && browserSession == nil ? endpoint.tls?.params : nil,
@@ -258,11 +282,9 @@ extension DashboardManager {
             browserSession: browserSession,
             legacyNativeCredentials: legacyCredentials,
             nativeAuthProvider: auth.usesNativeDevice ? self
-                .nativeAuthProvider(target: target, endpoint: endpoint) : nil)
+                .nativeAuthProvider(target: target, endpoint: endpoint) : nil), endpoint)
     }
-}
 
-extension DashboardManager {
     func nativeAuthProvider(
         target: DashboardGatewayTarget,
         endpoint: GatewayConnection.EndpointSnapshot) -> DashboardNativeGatewayAuth.Provider
@@ -273,9 +295,7 @@ extension DashboardManager {
             return try await connection.controlUiNativeAuth(endpoint: endpoint, nonce: nonce, signedAt: signedAt)
         }
     }
-}
 
-extension DashboardManager {
     static func requiresIsolatedDashboardDocument(
         _ controller: DashboardWindowController,
         configuration: WindowConfiguration,
@@ -285,16 +305,15 @@ extension DashboardManager {
     {
         // A saved renewal may reach the catalog before its serialized cookie
         // write finishes. The existing account lease remains valid throughout.
-        controller.tlsParams != configuration.tlsParams ||
+        controller.documentHost.tlsParams != configuration.tlsParams ||
             controller.auth != configuration.auth ||
-            !controller.hasCurrentBrowserSession ||
-            controller.browserSession?.browserDataPrincipal != configuration.browserSession?.browserDataPrincipal ||
+            !controller.documentHost.hasCurrentBrowserSession ||
+            controller.documentHost.browserSession?.browserDataPrincipal != configuration.browserSession?
+            .browserDataPrincipal ||
             (comparePrimaryRoute && (endpoint.routeAuthority != displayedRoute?.authority ||
                     endpoint.revision.map { $0 != displayedRoute?.revision } == true))
     }
-}
 
-extension DashboardManager {
     func localWindowConfiguration() async throws
         -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)
     {
@@ -303,16 +322,14 @@ extension DashboardManager {
               state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
         let generation = state.gatewayRoutingGeneration
         let endpoint = try GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true)
-        let configuration = try await dashboardConfiguration(
+        let resolved = try await dashboardConfiguration(
             endpoint: endpoint, mode: .local, target: .local, token: endpoint.config.token)
         guard state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary,
               state.gatewayRoutingGeneration == generation,
               state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
-        return (configuration, endpoint)
+        return resolved
     }
-}
 
-extension DashboardManager {
     func windowConfiguration(
         for target: DashboardGatewayTarget, userGesture: Bool = false) async throws
         -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)
@@ -328,10 +345,10 @@ extension DashboardManager {
                     let config = endpoint.config
                     let token = await authTokenProvider(config)
                     guard self.endpointGeneration == generation else { continue }
-                    let configuration = try await dashboardConfiguration(
+                    let resolved = try await dashboardConfiguration(
                         endpoint: endpoint, mode: mode, target: target, token: token)
                     guard self.endpointGeneration == generation else { continue }
-                    return (configuration, endpoint)
+                    return resolved
                 } catch {
                     guard self.endpointGeneration == generation else { continue }
                     throw error
@@ -348,10 +365,10 @@ extension DashboardManager {
                 do {
                     let endpoint = try await profileEndpoint(profileID: profileID)
                     resolvedEndpoint = endpoint
-                    let configuration = try await dashboardConfiguration(
+                    let resolved = try await dashboardConfiguration(
                         endpoint: endpoint, mode: .remote, target: target, token: endpoint.config.token)
                     guard self.profileCredentialRevisions[profileID, default: 0] == revision else { continue }
-                    return (configuration, endpoint)
+                    return resolved
                 } catch {
                     guard self.profileCredentialRevisions[profileID, default: 0] == revision else { continue }
                     guard let configuration = try WindowConfiguration(

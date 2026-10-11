@@ -14,9 +14,7 @@ export function createLocalEmbeddingProvider(..._args: unknown[]): Promise<never
 }
 
 export {
-  applyEmbeddingBatchOutputLine,
   buildBatchHeaders,
-  buildCaseInsensitiveExtensionGlob,
   buildEmbeddingBatchGroupOptions,
   buildRemoteBaseUrlPolicy,
   classifyMemoryMultimodalPath,
@@ -25,53 +23,41 @@ export {
   embeddingProviderOwnsDestination,
   EmbeddingBatchUnavailableError,
   EMBEDDING_BATCH_ENDPOINT,
-  enforceEmbeddingMaxInputTokens,
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
   extractBatchErrorMessage,
-  fetchRemoteEmbeddingVectors,
   formatBatchErrorDetail,
+  formatEmbeddingModelInput,
+  formatEmbeddingTaskText,
   formatUnavailableBatchError,
-  getMemoryMultimodalExtensions,
   hasNonTextEmbeddingParts,
   isEmbeddingBatchUnavailableError,
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
-  normalizeBatchBaseUrl,
   normalizeEmbeddingModelWithPrefixes,
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
   resolveEmbeddingEndpointUrl,
-  resolveBatchCompletionFromStatus,
-  resolveCompletedBatchResult,
+  resolveEmbeddingInputFormatVersion,
   resolveRemoteEmbeddingBearerClient,
   resolveRemoteEmbeddingClient,
   runEmbeddingBatchGroups,
   runEmbeddingBatches,
   sanitizeAndNormalizeEmbedding,
   sanitizeEmbeddingCacheHeaders,
-  throwIfBatchCompletionError,
-  throwIfBatchTerminalFailure,
   waitForEmbeddingBatch,
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 
 export type {
-  BatchCompletionResult,
-  BatchHttpClientConfig,
   EmbeddingBatchExecutionParams,
   EmbeddingBatchStatus,
   EmbeddingInput,
   ProviderBatchOutputLine,
   RemoteEmbeddingClient,
-  RemoteEmbeddingProviderId,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
-export {
-  getMemoryEmbeddingProvider,
-  listMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviderAdapters,
-} from "../plugins/memory-embedding-provider-runtime.js";
+export { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";
 export type {
   MemoryEmbeddingBatchChunk,

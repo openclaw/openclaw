@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { getRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -98,9 +99,9 @@ describe("managed worktree path state migrations", () => {
         path: movedPath,
         branch: "openclaw/moved",
       };
-      insertRegistryWorktree(env, removed, { provisionedPaths: [] });
-      insertRegistryWorktree(env, canonical, { provisionedPaths: [] });
-      insertRegistryWorktree(env, moved, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, removed, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, canonical, { provisionedPaths: [] });
+      await insertRegistryWorktree(env, moved, { provisionedPaths: [] });
 
       await closeOpenClawStateDatabaseAsync();
       const { DatabaseSync } = requireNodeSqlite();

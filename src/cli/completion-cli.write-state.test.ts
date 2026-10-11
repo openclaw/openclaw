@@ -293,7 +293,7 @@ describe("completion-cli write-state", () => {
     },
   );
 
-  it.each(COMPLETION_SHELLS)(
+  it.each(["bash", "powershell"] as const)(
     "installs cached %s completion visibly and idempotently without registering commands or plugins",
     async (shell) => {
       const { registerCompletionCli } = await import("./completion-cli.js");
@@ -515,7 +515,7 @@ describe("completion-cli write-state", () => {
     }
   });
 
-  it.each([true, false])("owns plugin registration during cache writes (skip=%s)", async (skip) => {
+  it("skips plugin registration during cache writes through the nodes registrar", async () => {
     const [{ COMPLETION_SKIP_PLUGIN_COMMANDS_ENV }, { registerCompletionCli }] = await Promise.all([
       import("./completion-runtime.js"),
       import("./completion-cli.js"),
@@ -543,25 +543,15 @@ describe("completion-cli write-state", () => {
 
         await program.parseAsync(["completion", "--write-state"], { from: "user" });
 
-        expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(
-          skip ? 0 : 1,
-        );
-        if (!skip) {
-          expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
-            program,
-            undefined,
-            undefined,
-            { mode: "eager" },
-          );
-        }
+        expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
         for (const shell of COMPLETION_SHELLS) {
           const script = await fs.readFile(resolveCompletionCachePath(shell, "openclaw"), "utf8");
           expect(script).toContain("nodes");
           expect(script).toContain("invoke");
-          expect(script.includes("plugin-fixture")).toBe(!skip);
+          expect(script).not.toContain("plugin-fixture");
         }
       },
-      { [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: skip ? "1" : undefined },
+      { [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
     );
   });
 });

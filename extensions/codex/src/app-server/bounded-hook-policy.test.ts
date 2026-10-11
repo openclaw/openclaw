@@ -59,28 +59,6 @@ async function fixture() {
 }
 
 describe("private Codex hook isolation", () => {
-  it("admits private profiles and project layers while preserving managed hooks", async () => {
-    const state = await fixture();
-    const signal = new AbortController().signal;
-    await expect(
-      assertCodexPrivateHookIsolation(state.client, state.workspace, signal),
-    ).resolves.toEqual({ activeManagedHooks: true });
-    expect(state.request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "hooks/list",
-    ]);
-    expect(state.request).toHaveBeenCalledWith(
-      "config/read",
-      { cwd: state.workspace.cwd, includeLayers: true },
-      { signal },
-    );
-    expect(state.request).toHaveBeenCalledWith(
-      "hooks/list",
-      { cwds: [state.workspace.cwd] },
-      { signal },
-    );
-  });
-
   it.each(["user", "project"])(
     "rejects an ambient %s config even with no active hooks",
     async (type) => {

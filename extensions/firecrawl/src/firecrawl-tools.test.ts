@@ -229,7 +229,7 @@ describe("firecrawl tools", () => {
     const recovered = await runActualFirecrawlScrape(params);
 
     expect(recovered.status).toBe(200);
-    expect(recovered.cached).toBeUndefined();
+    expect(recovered).not.toHaveProperty("cached");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -328,7 +328,7 @@ describe("firecrawl tools", () => {
           : await runActualFirecrawlScrape(scrapeParams);
       if (operation === "search") {
         expect(retry).toMatchObject({ results: [{ url: "https://fresh.example/result" }] });
-        expect(retry.cached).toBeUndefined();
+        expect(retry).not.toHaveProperty("cached");
       } else {
         expect(retry).toMatchObject({ status: 200 });
         expect(retry.text).toContain("fresh scrape result");
@@ -359,6 +359,31 @@ describe("firecrawl tools", () => {
     expect(result.truncated).toBe(true);
     expect(JSON.stringify(result).length).toBeLessThan(23_000);
   });
+
+  it.each(["news", "images"] as const)(
+    "returns Firecrawl %s source results from the matching response array",
+    async (source) => {
+      global.fetch = vi.fn(async () =>
+        Response.json({
+          success: true,
+          data: {
+            [source]: [{ url: `https://example.com/firecrawl/${source}`, title: source }],
+          },
+        }),
+      ) as typeof fetch;
+
+      const result = await runActualFirecrawlSearch({
+        query: `source-specific Firecrawl ${source}`,
+        sources: [source],
+        access: "keyless",
+      });
+
+      expect(result).toMatchObject({
+        count: 1,
+        results: [{ url: `https://example.com/firecrawl/${source}` }],
+      });
+    },
+  );
 
   it("bounds final Firecrawl search text after short special-token replacement expands", async () => {
     mockJsonResponse({
@@ -398,7 +423,7 @@ describe("firecrawl tools", () => {
     });
 
     expect(result.truncated).toBe(true);
-    expect(String(result.text).length).toBeLessThan(50_200);
+    expect(result.text.length).toBeLessThan(50_200);
     expect(String(result.title).length + String(result.warning).length).toBeLessThan(4_300);
     expect(JSON.stringify(result)).not.toContain("<s>");
   });
@@ -417,7 +442,7 @@ describe("firecrawl tools", () => {
     });
 
     expect(result.truncated).toBe(true);
-    expect(String(result.text).length).toBeLessThan(1_500);
+    expect(result.text.length).toBeLessThan(1_500);
   });
 
   it("normalizes Firecrawl authorization headers before requests", async () => {

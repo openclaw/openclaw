@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   resolveHeartbeatConfig,
@@ -42,11 +42,12 @@ export function isHeartbeatEnabledForSessionAgent(params: {
   );
 }
 
-export function hasSessionLocalHeartbeatRelayRoute(params: {
+export async function hasSessionLocalHeartbeatRelayRoute(params: {
   cfg: OpenClawConfig;
   parentSessionKey: string;
   requesterAgentId: string;
-}): boolean {
+  assertActive?: () => void;
+}): Promise<boolean> {
   const scope = params.cfg.session?.scope ?? "per-sender";
   if (scope === "global") {
     return false;
@@ -66,11 +67,19 @@ export function hasSessionLocalHeartbeatRelayRoute(params: {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.requesterAgentId,
   });
-  const parentEntry = loadSessionEntryReadOnly({
-    storePath,
-    sessionKey: params.parentSessionKey,
-    clone: false,
-  });
-  const parentDeliveryContext = deliveryContextFromSession(parentEntry);
-  return hasDeliveryTargetFields(parentDeliveryContext);
+  return withSessionEntryReadOnlyInWorker(
+    {
+      agentId: params.requesterAgentId,
+      storePath,
+      sessionKey: params.parentSessionKey,
+      clone: false,
+    },
+    () => params.assertActive?.(),
+    async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return hasDeliveryTargetFields(deliveryContextFromSession(read.value));
+    },
+  );
 }

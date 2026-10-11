@@ -143,7 +143,6 @@ function withoutRedactionLookup(context: RedactionContext): RedactionContext {
   return context.lookup ? { ...context, lookup: undefined } : context;
 }
 
-/** Deep-walk an object and replace values at sensitive paths with the redaction sentinel. */
 function redactObject<T>(obj: T, context: RedactionContext, values: string[] = []): T {
   return redactValue(obj, "", values, context) as T;
 }
@@ -336,7 +335,6 @@ export function redactConfigSnapshot(
   ) {
     redactedRaw = null;
   }
-  // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactObject(snapshot.resolved, context);
   return {
     ...publicSnapshot,
@@ -534,45 +532,6 @@ function indexRedactedArrayItemsById(items: unknown[]): Map<string, RedactedArra
   return itemsById;
 }
 
-function mapRedactedArray(params: {
-  incoming: unknown[];
-  original: unknown;
-  path: string;
-  mapItem: (item: unknown, originalItem: unknown) => unknown;
-}): unknown[] {
-  const originalArray = Array.isArray(params.original) ? params.original : [];
-  if (params.incoming.length < originalArray.length) {
-    log.warn(`Redacted config array key ${params.path} has been truncated`);
-  }
-  const originalById = indexRedactedArrayItemsById(originalArray);
-  const incomingById = indexRedactedArrayItemsById(params.incoming);
-  const reservedOriginalIndexes = new Set<number>();
-  for (const [id, incomingIdentity] of incomingById) {
-    const originalIdentity = originalById.get(id);
-    if (incomingIdentity.count === 1 && originalIdentity?.count === 1) {
-      reservedOriginalIndexes.add(originalIdentity.index);
-    }
-  }
-  const hasUniqueOriginalIdentity = Array.from(originalById.values()).some(
-    (identity) => identity.count === 1,
-  );
-
-  return params.incoming.map((item, index) => {
-    const id = readRedactedArrayItemId(item);
-    const originalIdentity = id === undefined ? undefined : originalById.get(id);
-    const incomingIdentity = id === undefined ? undefined : incomingById.get(id);
-    if (incomingIdentity?.count === 1 && originalIdentity?.count === 1) {
-      return params.mapItem(item, originalIdentity.item);
-    }
-    if (incomingIdentity?.count === 1 && !originalIdentity && hasUniqueOriginalIdentity) {
-      return params.mapItem(item, undefined);
-    }
-    // Positional fallback must not reuse a secret already reserved for another identified entry.
-    const originalItem = reservedOriginalIndexes.has(index) ? undefined : originalArray[index];
-    return params.mapItem(item, originalItem);
-  });
-}
-
 function restoreRedactedValue(
   incoming: unknown,
   original: unknown,
@@ -589,14 +548,38 @@ function restoreRedactedValue(
     const fallbackContext = schemaMatched ? context : withoutRedactionLookup(context);
     const heuristicSensitive =
       !isExplicitlyNonSensitivePath(context.hints, [path]) && isSensitivePath(path);
-    return mapRedactedArray({
-      incoming,
-      original,
-      path,
-      mapItem: (item, originalItem) =>
-        item === REDACTED_SENTINEL && (schemaMatched || heuristicSensitive)
-          ? originalItem
-          : restoreRedactedValue(item, originalItem, path, fallbackContext),
+    const originalArray = Array.isArray(original) ? original : [];
+    if (incoming.length < originalArray.length) {
+      log.warn(`Redacted config array key ${path} has been truncated`);
+    }
+    const originalById = indexRedactedArrayItemsById(originalArray);
+    const incomingById = indexRedactedArrayItemsById(incoming);
+    const reservedOriginalIndexes = new Set<number>();
+    for (const [id, incomingIdentity] of incomingById) {
+      const originalIdentity = originalById.get(id);
+      if (incomingIdentity.count === 1 && originalIdentity?.count === 1) {
+        reservedOriginalIndexes.add(originalIdentity.index);
+      }
+    }
+    const hasUniqueOriginalIdentity = Array.from(originalById.values()).some(
+      (identity) => identity.count === 1,
+    );
+    return incoming.map((item, index) => {
+      const id = readRedactedArrayItemId(item);
+      const originalIdentity = id === undefined ? undefined : originalById.get(id);
+      const incomingIdentity = id === undefined ? undefined : incomingById.get(id);
+      let originalItem: unknown;
+      if (incomingIdentity?.count === 1 && originalIdentity?.count === 1) {
+        originalItem = originalIdentity.item;
+      } else if (
+        !(incomingIdentity?.count === 1 && !originalIdentity && hasUniqueOriginalIdentity)
+      ) {
+        // Positional fallback must not reuse a secret already reserved for another identified entry.
+        originalItem = reservedOriginalIndexes.has(index) ? undefined : originalArray[index];
+      }
+      return item === REDACTED_SENTINEL && (schemaMatched || heuristicSensitive)
+        ? originalItem
+        : restoreRedactedValue(item, originalItem, path, fallbackContext);
     });
   }
 

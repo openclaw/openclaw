@@ -1,10 +1,5 @@
-/** True when CLI input and output both belong to an interactive terminal. */
-function isTtyStream(stream: { isTTY?: boolean }): boolean {
-  return stream.isTTY === true;
-}
-
 export function isTerminalInteractive(output: { isTTY?: boolean } = process.stdout): boolean {
-  return isTtyStream(process.stdin) && isTtyStream(output);
+  return process.stdin.isTTY ? output.isTTY === true : false;
 }
 
 export const NON_INTERACTIVE_GATEWAY_STOP_MESSAGE =

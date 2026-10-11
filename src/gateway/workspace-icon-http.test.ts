@@ -204,7 +204,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
     state = await createOpenClawTestState({ scenario: "minimal" });
     cfg = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { workspace: state.workspaceDir },
       },
     };

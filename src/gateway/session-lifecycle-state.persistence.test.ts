@@ -30,7 +30,10 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -61,6 +64,17 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: routing.loadSessionEntry,
 }));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => {
+    const loaded = routing.loadSessionEntry(params.key, { agentId: params.agentId }, params.cfg);
+    return { ...loaded, storeKeys: loaded.storeKeys ?? [loaded.canonicalKey] };
+  },
+}));
 
 const persistenceTestWarnings = vi.fn();
 const silentLog: SubsystemLogger = {
@@ -77,7 +91,12 @@ const silentLog: SubsystemLogger = {
 };
 
 it.each([
-  { stopReason: "restart", status: "running", recovery: "recoverable", timeoutPhase: undefined },
+  {
+    stopReason: "restart",
+    status: "interrupted",
+    recovery: "recoverable",
+    timeoutPhase: undefined,
+  },
   { stopReason: "aborted", status: "killed", recovery: "inactive", timeoutPhase: undefined },
   { stopReason: "restart", status: "timeout", recovery: "inactive", timeoutPhase: "provider" },
 ])(
@@ -97,7 +116,6 @@ it.each([
       await replaceSessionEntry(target, {
         sessionId: "restart-terminal-session",
         lifecycleRunId: runId,
-        status: "running",
         startedAt: 1_000,
         updatedAt: 1_000,
       });
@@ -112,12 +130,19 @@ it.each([
           data: { phase: "error", aborted: true, stopReason, timeoutPhase, endedAt: 2_000 },
         },
       });
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+      closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(restored?.status).toBe(status);
       if (recovery === "recoverable") {
-        expect(restored?.restartRecoveryForceSafeTools).toBe(true);
-        expect(restored?.endedAt).toBeUndefined();
+        expect(restored).toMatchObject({
+          abortedLastRun: true,
+          endedAt: 2_000,
+          runtimeMs: 1_000,
+          lastRunError: "Run interrupted by a Gateway restart.",
+          restartRecoveryForceSafeTools: true,
+          restartRecoveryRuns: [{ runId, lifecycleGeneration: getAgentEventLifecycleGeneration() }],
+        });
       }
       if (!restored) {
         throw new Error("session did not survive store reopen");
@@ -131,7 +156,8 @@ it.each([
       expect(observed).toMatchObject({ kind: "observed", view: { status: recovery } });
     } finally {
       routing.loadSessionEntry.mockReset();
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+      closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
     }
   },
 );
@@ -203,14 +229,16 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     const recovered = start("timing-persisted-recovered");
     await persistence;
     const running = loadSessionEntry(target);
-    expect(running).toMatchObject({ status: "running", startedAt: 3_600_000 });
+    expect(running).toMatchObject({ startedAt: 3_600_000 });
+    expect(running?.status).toBeUndefined();
     expect(running?.runtimeMs).toBeUndefined();
     expect(running?.endedAt).toBeUndefined();
     expect(running?.lastRunError).toBeUndefined();
     now += 11_192;
     recovered.emit("end", { meta: {} });
     await persistence;
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+    closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
     expect(loadSessionEntry(target)).toMatchObject({
       status: "done",
       startedAt: 3_600_000,
@@ -223,7 +251,8 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     await persistence;
     clock.mockRestore();
     routing.loadSessionEntry.mockReset();
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+    closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
   }
 });
 
@@ -303,7 +332,7 @@ it.each(["success", "failed-write"])(
     const startPersisted = createDeferred();
     const terminalWrite = createDeferred();
     let persistenceSpy:
-      | MockInstance<typeof lifecycleState.persistGatewaySessionLifecycleEvent>
+      | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
       | undefined;
     const restartRecoveryCandidates = new Map();
     const writerStarted = createDeferred();
@@ -355,15 +384,18 @@ it.each(["success", "failed-write"])(
         restartRecoveryCandidates,
         refreshConnectedUserProfiles: vi.fn(),
       });
-      const persistLifecycleEvent = lifecycleState.persistGatewaySessionLifecycleEvent;
+      const prepareLifecycleEvent = lifecycleState.prepareGatewaySessionLifecycleEvent;
       persistenceSpy = vi
-        .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+        .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
         .mockImplementation((params) => {
-          const persistence = persistLifecycleEvent(params);
-          if (params.event.runId === runId && params.event.data?.phase === "start") {
-            startPersisted.resolve(persistence);
-          }
-          return persistence;
+          const persist = prepareLifecycleEvent(params);
+          return () => {
+            const persistence = persist();
+            if (params.event.runId === runId && params.event.data?.phase === "start") {
+              startPersisted.resolve(persistence);
+            }
+            return persistence;
+          };
         });
       emitAgentEvent({
         runId,
@@ -375,7 +407,7 @@ it.each(["success", "failed-write"])(
       // The first start crosses lazy handler loading; await its real commit,
       // not a polling deadline that also measures cold module initialization.
       await startPersisted.promise;
-      expect(loadSessionEntry(target)?.status).toBe("running");
+      expect(loadSessionEntry(target)?.status).toBeUndefined();
       expect(await readHistory()).toMatchObject({
         sessionInfo: { status: "running", hasActiveRun: true, activeRunIds: [runId] },
       });
@@ -386,7 +418,7 @@ it.each(["success", "failed-write"])(
       });
       await writerStarted.promise;
       if (outcome === "failed-write") {
-        persistenceSpy.mockReturnValueOnce(terminalWrite.promise);
+        persistenceSpy.mockReturnValueOnce(() => terminalWrite.promise);
       }
 
       interruption = startSessionWorkAdmissionInterruption({
@@ -438,7 +470,7 @@ it.each(["success", "failed-write"])(
           observedAt: 2_000,
         });
         expect(entry.projectSessionTerminalPersisted).toBe(false);
-        expect(loadSessionEntry(target)?.status).toBe("running");
+        expect(loadSessionEntry(target)?.status).toBeUndefined();
         return;
       }
       releaseWriter.resolve();
@@ -469,7 +501,8 @@ it.each(["success", "failed-write"])(
         new Set(["session-observer"]),
         { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
       );
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(state.root);
+      closeOpenClawAgentDatabasesForTest(state.root);
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(restored).toMatchObject({
         status: "killed",
@@ -546,7 +579,6 @@ it.for([
           lifecycleRunId: runId,
           sessionId,
           startedAt: 1_000,
-          status: "running",
           updatedAt: 1_000,
         });
         heldWriter = patchSessionEntryCore(target, async () => {
@@ -644,7 +676,8 @@ it.for([
         subscriptions?.lifecycleUnsub();
         releaseAgentRunContext(runId, claimId);
         routing.loadSessionEntry.mockReset();
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+        closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
       }
     }),
 );

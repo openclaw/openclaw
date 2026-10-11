@@ -90,7 +90,7 @@ it("opens New Agent through the real Gateway and runner using a protected provid
           },
         },
       });
-      writeSecretStoreEntry({
+      await writeSecretStoreEntry({
         scope: { kind: "team" },
         name: secretRef.id,
         value: key,
@@ -160,7 +160,7 @@ it("opens New Agent through the real Gateway and runner using a protected provid
       expect(rotation).toMatchObject({ ok: true, reloaded: true });
       await expect(
         client.request("openclaw.chat", { sessionId, message: "Reply with OK again." }),
-      ).rejects.toThrow("OpenClaw could not reach working inference");
+      ).rejects.toThrow("The verified inference route changed");
       expect(requests).toHaveLength(2);
       const freshSessionId = randomUUID();
       const fresh = await client.request("openclaw.chat", {

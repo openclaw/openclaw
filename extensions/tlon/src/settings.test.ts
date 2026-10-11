@@ -79,9 +79,7 @@ describe("tlon settings store", () => {
     const manager = createSettingsManager(api);
     expect((await manager.load()).autoDiscoverChannels).toBeUndefined();
     const updates: TlonSettingsStore[] = [];
-    manager.onChange((settings) => updates.push(settings));
-
-    await manager.startSubscription();
+    await manager.startSubscription((settings) => updates.push(settings));
     await emitSettingsEvent({
       "put-entry": {
         desk: "moltbot",

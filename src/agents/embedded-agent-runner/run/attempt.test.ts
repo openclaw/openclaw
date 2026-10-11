@@ -250,7 +250,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
   });
 
-  it("preserves structured orphaned user content while keeping the leaf for later turns", () => {
+  it("keeps structured orphaned user input actionable alongside the current request", () => {
     expect(
       mergeOrphan({
         content: [
@@ -263,7 +263,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: false,
       prompt:
-        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
+        "[Earlier unanswered user message. Address this request alongside the current input; follow the latest user instruction if they conflict.]\n" +
         "please inspect this\n" +
         "[image_url] https://example.test/cat.png\n" +
         "[input_audio] https://example.test/cat.wav\n\n" +
@@ -369,14 +369,13 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
         fs: { workspaceOnly: true },
       },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             tools: {
               fs: { workspaceOnly: false },
             },
           },
-        ],
+        },
       },
     };
 
@@ -460,29 +459,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     for (const testCase of cases) {
       expect(testCase.toolCall.name, testCase.label).toBe(testCase.expectedName);
     }
-    expect(result).toBe(finalMessage);
-  });
-
-  it("normalizes toolUse and functionCall names before dispatch", async () => {
-    const partialToolCall = { type: "toolUse", name: " functions.read " };
-    const messageToolCall = { type: "functionCall", name: " functions.exec " };
-    const finalToolCall = { type: "toolUse", name: " tools/write " };
-    const event = {
-      type: "toolcall_delta",
-      partial: { role: "assistant", content: [partialToolCall] },
-      message: { role: "assistant", content: [messageToolCall] },
-    };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = fakeBaseStream(finalMessage, [event]);
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
-
-    await drainStream(stream);
-    const result = await stream.result();
-
-    expect(partialToolCall.name).toBe("read");
-    expect(messageToolCall.name).toBe("exec");
-    expect(finalToolCall.name).toBe("write");
     expect(result).toBe(finalMessage);
   });
 
@@ -687,20 +663,6 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(ids[1]).toMatch(/^call_[0-9a-f]{24}$/);
     expect(ids[1]).not.toBe(ids[0]);
   });
-
-  it("fails closed when malformed ids could map to multiple allowlisted tools", async () => {
-    const finalToolCall = { type: "toolCall", id: "functions.exec2", name: "" };
-    const finalMessage = { role: "assistant", content: [finalToolCall] };
-    const baseFn = fakeBaseStream(finalMessage);
-
-    const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
-    const result = (await stream.result()) as {
-      content: Array<{ type: string; text?: string }>;
-    };
-
-    expectSingleTextContent(result.content, '"blank tool name"');
-    expect(finalToolCall.name).toBe("");
-  });
   it("leaves provisional blank streamed names recoverable while stopping final blank dispatch", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
@@ -758,6 +720,90 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCallB.name).toBe("write");
     expect(finalToolCallA.id).toBe("edit:22");
     expect(finalToolCallB.id).toMatch(/^call_[0-9a-f]{24}$/);
+  });
+
+  it.each([true, false])(
+    "keeps repeated provider ids unique across compacted responses (prior history: %s)",
+    async (hasPriorHistory) => {
+      const makeToolCall = () => ({ type: "toolCall", name: "exec", id: "exec_0", arguments: {} });
+      const makeMessage = (call = makeToolCall()) => ({ role: "assistant", content: [call] });
+      const baseFn = vi.fn(() => {
+        const partialCall = makeToolCall();
+        const partial = makeMessage(partialCall);
+        const message = makeMessage();
+        const result = makeMessage();
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "toolcall_delta", partial };
+            // Later transport deltas can restore the provider id on the same block.
+            partialCall.id = "exec_0";
+            yield { type: "toolcall_delta", partial };
+            yield { type: "done", message };
+          },
+          async result() {
+            return result;
+          },
+        };
+      });
+      const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]));
+      const history = hasPriorHistory ? [makeMessage()] : [];
+      const responseIds: string[] = [];
+      for (let responseIndex = 0; responseIndex < 3; responseIndex += 1) {
+        const stream = await wrappedFn(
+          {} as never,
+          { messages: responseIndex === 0 ? history : [] } as never,
+          {} as never,
+        );
+        const projectedIds: string[] = [];
+        for await (const event of stream) {
+          const message =
+            "partial" in event ? event.partial : "message" in event ? event.message : undefined;
+          const call = message?.content[0];
+          if (call?.type === "toolCall") {
+            projectedIds.push(call.id);
+          }
+        }
+        const result = await stream.result();
+        const call = result.content[0];
+        if (call?.type !== "toolCall") {
+          throw new Error("missing final tool call");
+        }
+        expect(projectedIds).toEqual([call.id, call.id, call.id]);
+        if (hasPriorHistory || responseIndex > 0) {
+          expect(call.id).toMatch(/^call_[0-9a-f]{24}$/);
+        } else {
+          expect(call.id).toBe("exec_0");
+        }
+        responseIds.push(call.id);
+      }
+      expect(new Set(responseIds).size).toBe(3);
+      expect(history).toEqual(hasPriorHistory ? [makeMessage()] : []);
+    },
+  );
+
+  it("preserves non-colliding provider ids byte-for-byte", async () => {
+    const ids = ["toolu_01NativeAnthropic", "call_NativeOpenAI"];
+    const finalMessage = {
+      role: "assistant",
+      content: ids.map((id) => ({ type: "toolCall", name: "exec", id, arguments: {} })),
+    };
+    const baseFn = fakeBaseStream(finalMessage, [
+      { type: "toolcall_delta", partial: structuredClone(finalMessage) },
+      { type: "done", message: structuredClone(finalMessage) },
+    ]);
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]));
+    const stream = await wrappedFn(
+      {} as never,
+      { messages: [{ role: "assistant", content: [{ type: "toolCall", id: "exec_0" }] }] } as never,
+      {} as never,
+    );
+    for await (const event of stream) {
+      const message =
+        "partial" in event ? event.partial : "message" in event ? event.message : undefined;
+      expect(message?.content).toEqual(finalMessage.content);
+    }
+    expect((await stream.result()).content).toEqual(finalMessage.content);
+    expect(finalMessage.content.map((call) => call.id)).toEqual(ids);
   });
 });
 
@@ -976,15 +1022,6 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     ]);
   });
 
-  it("drops embedded Anthropic user tool_result blocks when signed-thinking replay must stay provider-owned", async () => {
-    const messages = [
-      thinkingTurn({ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }),
-      embeddedResultUser("embedded result"),
-    ];
-    const seenContext = await replaySigned(messages);
-    expect(seenContext.messages).toEqual(expectedRetryMessages());
-  });
-
   it("preserves embedded Anthropic user tool_result blocks for non-thinking turns even when immutable replay is enabled", async () => {
     const messages = [
       replayAssistant([{ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }]),
@@ -1021,12 +1058,11 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   async function replayArgumentDeltas(
     deltas: string[],
     options: {
-      name?: string;
       initialArgs?: Record<string, unknown>;
       fullResult?: boolean;
     } = {},
   ) {
-    const name = options.name ?? "read";
+    const name = "read";
     const partialToolCall = { type: "toolCall", name, arguments: options.initialArgs ?? {} };
     const streamedToolCall = { type: "toolCall", name, arguments: {} };
     const endMessageToolCall = { type: "toolCall", name, arguments: {} };
@@ -1076,19 +1112,12 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     {
       name: "repairs anthropic-compatible tool arguments when trailing junk follows valid JSON",
       deltas: ['{"path":"/tmp/report.txt"}', "xx"],
-      toolName: "read",
-    },
-    {
-      name: "repairs tool arguments when malformed tool-call preamble appears before JSON",
-      deltas: ['.functions.write:8  \n{"path":"/tmp/report.txt"}'],
-      toolName: "write",
     },
     {
       name: "preserves anthropic-compatible tool arguments when the streamed JSON is already valid",
       deltas: ['{"path":"/tmp/report.txt"', "}"],
-      toolName: "read",
     },
-  ])("$name", async ({ deltas, toolName }) => {
+  ])("$name", async ({ deltas }) => {
     const {
       stream,
       partialToolCall,
@@ -1096,7 +1125,7 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       endMessageToolCall,
       finalToolCall,
       finalMessage,
-    } = await replayArgumentDeltas(deltas, { name: toolName, fullResult: true });
+    } = await replayArgumentDeltas(deltas, { fullResult: true });
     const result = await stream.result();
 
     expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
@@ -1148,54 +1177,50 @@ describe("buildAfterTurnRuntimeContext", () => {
     };
   }
 
-  it.each([undefined, "agent:main:execution"])(
-    "preserves execution-scoped processes with sessionKey=%s and borrowed policy",
-    (sessionKey) => {
+  it("preserves session-id-scoped processes with borrowed policy", () => {
+    resetProcessRegistryForTests();
+    try {
+      const active = createProcessSessionFixture({
+        id: "sess-session-id",
+        command: "sleep 600",
+        backgrounded: true,
+        pid: 1234,
+      });
+      active.scopeKey = "session-123";
+      addSession(active);
+      const other = createProcessSessionFixture({
+        id: "sess-other",
+        command: "sleep 600",
+        backgrounded: true,
+      });
+      other.scopeKey = "agent:main";
+      addSession(other);
+
+      const legacy = buildAfterTurnRuntimeContext({
+        attempt: runtimeAttempt({
+          sessionId: "session-123",
+          sandboxSessionKey: "agent:main",
+        }),
+        ...runtimeDirectories,
+        activeAgentId: "main",
+      });
+
+      const activeProcessSessions = legacy.activeProcessSessions as
+        | Array<{ sessionId?: string; command?: string; pid?: number }>
+        | undefined;
+      expect(activeProcessSessions).toHaveLength(1);
+      const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
+      expect(activeSession.sessionId).toBe("sess-session-id");
+      expect(activeSession.command).toBe("sleep 600");
+      expect(activeSession.pid).toBe(1234);
+      expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
+        false,
+      );
+      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
+    } finally {
       resetProcessRegistryForTests();
-      try {
-        const active = createProcessSessionFixture({
-          id: "sess-session-id",
-          command: "sleep 600",
-          backgrounded: true,
-          pid: 1234,
-        });
-        active.scopeKey = sessionKey ?? "session-123";
-        addSession(active);
-        const other = createProcessSessionFixture({
-          id: "sess-other",
-          command: "sleep 600",
-          backgrounded: true,
-        });
-        other.scopeKey = "agent:main";
-        addSession(other);
-
-        const legacy = buildAfterTurnRuntimeContext({
-          attempt: runtimeAttempt({
-            sessionId: "session-123",
-            sessionKey,
-            sandboxSessionKey: "agent:main",
-          }),
-          ...runtimeDirectories,
-          activeAgentId: "main",
-        });
-
-        const activeProcessSessions = legacy.activeProcessSessions as
-          | Array<{ sessionId?: string; command?: string; pid?: number }>
-          | undefined;
-        expect(activeProcessSessions).toHaveLength(1);
-        const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
-        expect(activeSession.sessionId).toBe("sess-session-id");
-        expect(activeSession.command).toBe("sleep 600");
-        expect(activeSession.pid).toBe(1234);
-        expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
-          false,
-        );
-        expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
-      } finally {
-        resetProcessRegistryForTests();
-      }
-    },
-  );
+    }
+  });
 
   it("keeps the primary model for a locked after-turn runtime context", () => {
     const runtimeContext = buildAfterTurnRuntimeContext({

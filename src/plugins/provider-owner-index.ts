@@ -57,35 +57,24 @@ export function pluginOwnsProviderRef(
   if (plugin.providers.length === 0) {
     return false;
   }
-  if (
-    plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider)
-  ) {
+  const providers = new Set(plugin.providers.map(normalizeProviderId));
+  if (providers.has(normalizedProvider)) {
     return true;
   }
-  for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
-    if (typeof target !== "string") {
-      continue;
-    }
-    const alias = normalizeProviderId(rawAlias);
+  const ownsAlias = (rawAlias: string, target: string) => {
     const targetProvider = normalizeProviderId(target);
-    if (
-      alias === normalizedProvider &&
-      targetProvider &&
-      plugin.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
-    ) {
-      return true;
-    }
-  }
-  for (const [rawAlias, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
-    const alias = normalizeProviderId(rawAlias);
-    const targetProvider = normalizeProviderId(target.provider);
-    if (
-      alias === normalizedProvider &&
-      targetProvider &&
-      plugin.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
-    ) {
-      return true;
-    }
-  }
-  return false;
+    return (
+      normalizeProviderId(rawAlias) === normalizedProvider &&
+      Boolean(targetProvider) &&
+      providers.has(targetProvider)
+    );
+  };
+  return (
+    Object.entries(plugin.providerAuthAliases ?? {}).some(
+      ([alias, target]) => typeof target === "string" && ownsAlias(alias, target),
+    ) ||
+    Object.entries(plugin.modelCatalog?.aliases ?? {}).some(([alias, target]) =>
+      ownsAlias(alias, target.provider),
+    )
+  );
 }

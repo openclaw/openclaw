@@ -71,8 +71,8 @@ export async function runDispatch(params: {
           originatingTo: params.originatingTo ?? "telegram:thread-1",
         }
       : {}),
-    shouldSendToolSummaries: true,
-    shouldSendFullToolDetails: false,
+    shouldSendToolSummaries: async () => true,
+    shouldSendFullToolDetails: async () => false,
     bypassForCommand: false,
     toolsAllow: params.toolsAllow,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),

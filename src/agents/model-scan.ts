@@ -127,21 +127,16 @@ function parseOpenRouterPricing(value: unknown): OpenRouterModelPricing | null {
   const obj = value as Record<string, unknown>;
   const prompt = parseNumberString(obj.prompt);
   const completion = parseNumberString(obj.completion);
-  const request = parseNumberString(obj.request) ?? 0;
-  const image = parseNumberString(obj.image) ?? 0;
-  const webSearch = parseNumberString(obj.web_search) ?? 0;
-  const internalReasoning = parseNumberString(obj.internal_reasoning) ?? 0;
-
   if (prompt === null || completion === null) {
     return null;
   }
   return {
     prompt,
     completion,
-    request,
-    image,
-    webSearch,
-    internalReasoning,
+    request: parseNumberString(obj.request) ?? 0,
+    image: parseNumberString(obj.image) ?? 0,
+    webSearch: parseNumberString(obj.web_search) ?? 0,
+    internalReasoning: parseNumberString(obj.internal_reasoning) ?? 0,
   };
 }
 
@@ -268,7 +263,7 @@ async function probeModel(
           signal,
         } satisfies OpenAICompletionsOptions),
       timeoutMs,
-      `model ${kind} probe`,
+      `model ${kind} check`,
     );
 
     if (kind === "tool" && !message.content.some((block) => block.type === "toolCall")) {
@@ -297,7 +292,7 @@ export async function scanOpenRouterModels(
   const apiKey = options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
   if (probe && !apiKey) {
     throw new Error(
-      "Missing OpenRouter API key. Free OpenRouter models still require OPENROUTER_API_KEY for live probes and inference; call with probe:false to list public catalog metadata.",
+      "Missing OpenRouter API key. Free OpenRouter models still require OPENROUTER_API_KEY for live checks and inference; call with probe:false to list public catalog metadata.",
     );
   }
 
@@ -361,21 +356,20 @@ export async function scanOpenRouterModels(
   return pMap(
     filtered,
     async (entry) => {
-      const isFree = isFreeOpenRouterModel(entry);
       let tool: ProbeResult = { ok: false, latencyMs: null, skipped: true };
       let image: ProbeResult = { ok: false, latencyMs: null, skipped: true };
       if (probe) {
         const model: OpenAIModel = {
           ...baseModel,
           id: entry.id,
-          name: entry.name || entry.id,
+          name: entry.name,
           contextWindow: entry.contextLength ?? baseModel.contextWindow,
           maxTokens: entry.maxCompletionTokens ?? baseModel.maxTokens,
           input: parseModality(entry.modality),
         };
 
         tool = await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "tool");
-        if (model.input?.includes("image")) {
+        if (model.input.includes("image")) {
           image = await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "image");
         }
       }
@@ -385,7 +379,7 @@ export async function scanOpenRouterModels(
         ...entry,
         provider: "openrouter",
         modelRef: `openrouter/${entry.id}`,
-        isFree,
+        isFree: true,
         tool,
         image,
       };

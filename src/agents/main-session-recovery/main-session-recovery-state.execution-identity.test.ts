@@ -28,7 +28,7 @@ function interruptedEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session-1",
     updatedAt: 100,
-    status: "running",
+    status: "interrupted",
     abortedLastRun: true,
     mainRestartRecovery: recoveryState(),
     ...overrides,
@@ -153,7 +153,7 @@ describe("main session recovery execution identity state", () => {
     if (prepared.kind !== "reserved") {
       throw new Error("expected reservation");
     }
-    expect(prepared.reservation.executionIdentityAdmission).toBeUndefined();
+    expect(entry.mainRestartRecovery?.executionIdentity).toBeUndefined();
 
     expect(
       transitionMainSessionRecovery(entry, {
@@ -253,15 +253,8 @@ describe("main session recovery execution identity state", () => {
       runId: "recovery-1",
       executionIdentity: { state: "enabled" },
     });
-    expect(retry).toMatchObject({
-      kind: "reserved",
-      reservation: {
-        executionIdentityAdmission: {
-          kind: "retry-reference",
-          token: executionIdentity("recovery-1"),
-        },
-      },
-    });
+    expect(retry.kind).toBe("reserved");
+    expect(entry.mainRestartRecovery?.executionIdentity).toEqual(executionIdentity("recovery-1"));
   });
 
   it("does not propagate a previously retained token while collection is disabled", () => {
@@ -280,16 +273,13 @@ describe("main session recovery execution identity state", () => {
       executionIdentity: { state: "disabled" },
     });
 
-    expect(prepared).toMatchObject({ kind: "reserved" });
-    if (prepared.kind !== "reserved") {
-      throw new Error("expected reservation");
-    }
-    expect(prepared.reservation.executionIdentityAdmission).toBeUndefined();
+    expect(prepared.kind).toBe("reserved");
     expect(entry.mainRestartRecovery?.executionIdentity).toBeUndefined();
   });
 
   it("rejects a delayed bind from an older cycle that reused the public run id", () => {
     const entry = interruptedEntry({
+      status: undefined,
       abortedLastRun: false,
       lifecycleRunId: "recovery-1",
       restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],

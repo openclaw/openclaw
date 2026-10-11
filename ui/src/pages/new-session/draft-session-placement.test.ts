@@ -17,7 +17,7 @@ describe("new-session placement target", () => {
           autoDevice: false,
           cloudSelection: { os: "linux", machineClass: "small" },
         },
-      ).target,
+      ),
     ).toEqual(target);
   });
 
@@ -41,9 +41,7 @@ describe("new-session placement target", () => {
       target: { kind: "profile", profileId: "aws", os: "windows/wsl2", machineClass: "tiny" },
     },
   ])("preserves selected placement options for $target.kind", ({ place, target }) => {
-    expect(resolveDraftSessionPlacement({ sessionKey: "", target: null }, place).target).toEqual(
-      target,
-    );
+    expect(resolveDraftSessionPlacement({ sessionKey: "", target: null }, place)).toEqual(target);
   });
 
   it("preserves automatic device selection through the draft placement target", () => {
@@ -56,7 +54,7 @@ describe("new-session placement target", () => {
           autoDevice: true,
           cloudSelection: { os: "", machineClass: "" },
         },
-      ).target,
+      ),
     ).toEqual({ kind: "auto-device" });
   });
 

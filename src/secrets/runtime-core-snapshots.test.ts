@@ -308,7 +308,7 @@ describe("secrets runtime snapshot core lanes", () => {
       const prepare = (version: "old" | "new", env: NodeJS.ProcessEnv) =>
         prepareSecretsRuntimeSnapshot({
           config: asConfig({
-            agents: { list: [{ id: "main", default: true }] },
+            agents: { entries: { main: {} } },
             memory: {
               search: {
                 ...(configuredProviderId ? { provider: configuredProviderId } : {}),

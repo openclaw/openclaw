@@ -8,6 +8,7 @@ import {
 import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -279,27 +280,21 @@ it("propagates queued write revocation and user/custom commit failures without p
   });
 });
 
-it("warns once per synchronous method across manager instances while preserving compatibility results", () => {
+it("deduplicates legacy session methods across managers while preserving immediate results", () => {
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  for (let index = 0; index < 2; index++) {
-    const manager = SessionManager.inMemory();
-    const id = manager.appendCustomEntry("legacy", { index });
-    expect(manager.getEntry(id)).toMatchObject({ id, customType: "legacy", data: { index } });
-    const info = manager.appendSessionInfo("Legacy name");
-    expect(manager.getEntry(info)).toMatchObject({ id: info, type: "session_info" });
-  }
-  for (const [method, replacement] of [
-    ["appendCustomEntry", "appendCustomEntryAsync"],
-    ["appendSessionInfo", "appendSessionInfoAsync"],
-  ]) {
-    const calls = warning.mock.calls.filter(([message]) =>
-      String(message).startsWith(`SessionManager.${method} is deprecated;`),
-    );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.[0]).toContain(replacement);
-    expect(calls[0]?.[1]).toMatchObject({
-      code: "DEP_SESSION_PERSISTENCE",
-      type: "DeprecationWarning",
-    });
-  }
+  withPluginRuntimePluginScope({ pluginId: "session-compat-family" }, () => {
+    for (let index = 0; index < 2; index++) {
+      const manager = SessionManager.inMemory();
+      const id = manager.appendCustomEntry("legacy", { index });
+      expect(manager.getEntry(id)).toMatchObject({ id, customType: "legacy", data: { index } });
+      const info = manager.appendSessionInfo("Legacy name");
+      expect(manager.getEntry(info)).toMatchObject({ id: info, type: "session_info" });
+    }
+  });
+  expect(warning).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining(
+      "Plugin session-compat-family: SessionManager.appendCustomEntry is deprecated; use appendCustomEntryAsync",
+    ),
+    { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
+  );
 });

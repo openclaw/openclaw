@@ -59,6 +59,7 @@ const BOOTSTRAP_LAUNCHER_FILES = [
   "node-sqlite.mjs",
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",
+  "node-runtime-env.mjs",
   "cli-root-options.mjs",
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
@@ -67,6 +68,9 @@ const BOOTSTRAP_LAUNCHER_FILES = [
 ];
 const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
+// Shared runtime chunks that the plugin npm build publishes under this hidden dist
+// directory (see scripts/lib/plugin-npm-runtime-build.mts chunkFileNames).
+const PLUGIN_DIST_SHARED_CHUNK_PREFIX = "dist/.setup";
 const METADATA_KEYS = [
   "name",
   "version",
@@ -127,7 +131,6 @@ function requireRunningBuild(
 }
 
 // Observe creation policy without process.umask(), whose getter mutates process-wide state.
-// Probe again before publication: a changed policy must not silently change archive modes.
 async function observeBootstrapModes(root: string): Promise<readonly number[]> {
   const modes: number[] = [];
   for (const requested of [0o644, 0o755]) {
@@ -329,6 +332,7 @@ export async function prepareNodeBootstrapArtifact(
     // Neither belongs in the node runtime's packaging, validation, or download work.
     (relative) =>
       !relative.startsWith("dist/worker/") &&
+      !relative.startsWith("dist/worker-artifacts/") &&
       !relative.startsWith("dist/control-ui/") &&
       !externalPluginPrefixes.some((prefix) => relative.startsWith(prefix)),
   );
@@ -362,10 +366,18 @@ export async function prepareNodeBootstrapArtifact(
     const pluginFiles: string[] = [];
     const visit = async (directory: string, relativeRoot = ""): Promise<void> => {
       for (const child of await fs.readdir(directory, { withFileTypes: true })) {
-        if (child.name.startsWith(".") || IGNORED_PLUGIN_DIRECTORIES.has(child.name)) {
+        const relative = relativeRoot ? `${relativeRoot}/${child.name}` : child.name;
+        // Published npm plugins keep shared runtime chunks under the hidden dist/.setup
+        // directory. Only that directory itself is exempt from the dot-entry check:
+        // hidden children below it (and ignored directories at every depth, including
+        // inside dist/.setup) keep the private-file exclusions of the host installation.
+        const isSharedChunkDirectory = relative === PLUGIN_DIST_SHARED_CHUNK_PREFIX;
+        if (
+          !isSharedChunkDirectory &&
+          (child.name.startsWith(".") || IGNORED_PLUGIN_DIRECTORIES.has(child.name))
+        ) {
           continue;
         }
-        const relative = relativeRoot ? `${relativeRoot}/${child.name}` : child.name;
         if (relative.split("/").length > 64) {
           throw new Error("Node bootstrap plugin exceeds its directory depth limit");
         }
@@ -523,9 +535,6 @@ export async function prepareNodeBootstrapArtifact(
           sha256: createHash("sha256").update(contents).digest("hex"),
         };
         const inspected = sourceFacts.get(relative);
-        if (inspected && identity.sha256 !== inspected.sha256) {
-          throw new Error(`Node distribution changed after import inspection: ${relative}`);
-        }
         if (entry.scope.patchedMcp) {
           entry.scope.patchedMcp.hashes.set(importerPath, identity.sha256);
         } else {
@@ -569,17 +578,6 @@ export async function prepareNodeBootstrapArtifact(
           `Node distribution ${scope.label} ${scope.patchedMcp ? "has an invalid patched dependency" : "has an incomplete built import closure"}; rebuild and restart the Gateway: ${errors.slice(0, 5).join("; ")}`,
         );
       }
-    }
-    if (!isDeepStrictEqual(await observeBootstrapModes(temporaryRoot), modes)) {
-      throw new Error("Node bootstrap file creation policy changed while packaging");
-    }
-    if (
-      (await fs.readFile(buildInfoPath, "utf8")) !== buildInfo ||
-      !isDeepStrictEqual(await readPackageManifest(packageRoot), sourcePackage)
-    ) {
-      throw new Error(
-        "Gateway build changed while preparing cloud bootstrap; restart the Gateway and retry",
-      );
     }
     pack?.end();
     await archiveDone;

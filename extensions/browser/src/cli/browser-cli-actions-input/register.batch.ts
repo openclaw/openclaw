@@ -7,7 +7,7 @@ import {
   runBrowserCliCommand,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import { runBrowserAction, readActionsPayload } from "./shared.js";
+import { runBrowserAction, readActionsPayload, parseBrowserInputArray } from "./shared.js";
 
 export function registerBrowserBatchCommands(
   browser: Command,
@@ -37,22 +37,10 @@ export function registerBrowserBatchCommands(
           actions: opts.actions,
           actionsFile: opts.actionsFile,
         });
-        if (!payload.trim()) {
-          throw new Error("actions are required");
-        }
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(payload);
-        } catch (cause) {
-          throw new Error("actions must be valid JSON", { cause });
-        }
-        if (!Array.isArray(parsed)) {
-          throw new Error("actions must be a JSON array");
-        }
-        if (!parsed.length) {
+        const actions = parseBrowserInputArray(payload, "actions");
+        if (!actions.length) {
           throw new Error("actions must contain at least one entry");
         }
-        const actions = parsed;
         const targetId = normalizeOptionalString(opts.targetId);
         const request = {
           kind: "batch",

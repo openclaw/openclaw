@@ -63,7 +63,6 @@ describe("prepareGatewayPluginLoad browser plugin integration", () => {
       coreGatewayHandlers: {},
       baseMethods: [],
       pluginIds: ["browser"],
-      logDiagnostics: false,
     }));
 
     expect(loaded.gatewayMethods).toContain("browser.request");

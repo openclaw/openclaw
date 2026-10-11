@@ -20,7 +20,7 @@ scenario:
   codeRefs:
     - extensions/qa-lab/src/bus-state.ts
     - extensions/qa-lab/src/bus-queries.ts
-    - extensions/qa-lab/src/runtime-api.ts
+    - extensions/qa-lab/runtime-api.ts
   execution:
     kind: flow
     summary: Add a synthetic tool-backed bus message and verify sanitized trace assertions.

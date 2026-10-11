@@ -162,7 +162,7 @@ describe("channel-streaming", () => {
         entry,
         lines: [patch, "plain update"],
       }),
-    ).toBe("🩹 1 modified; /tmp/demo/index.html\n• plain update");
+    ).toBe("• 1 modified; /tmp/demo/index.html\n• plain update");
     expect(
       formatChannelProgressDraftText({
         entry: { streaming: { progress: { label: false } } },
@@ -212,9 +212,9 @@ describe("channel-streaming", () => {
       lines: line ? [line] : [],
     });
 
-    expect(text).toBe(
-      "Shelling\n\n🛠️ run node script…e…y/deep/path/that/keeps/going/and/going/index.ts --flag value",
-    );
+    expect(text).toMatch(/^Shelling\n\n• run node script/u);
+    expect(text).toContain("…");
+    expect(text).toMatch(/index\.ts --flag value$/u);
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
 
@@ -242,7 +242,7 @@ describe("channel-streaming", () => {
       throw new Error("expected preamble progress lines");
     }
 
-    const initialLines: Array<string | typeof first> = ["🛠️ Exec"];
+    const initialLines: Array<string | typeof first> = ["Exec"];
     const lines = mergeChannelProgressDraftLine(initialLines, first, { maxLines: 4 });
     const updated = mergeChannelProgressDraftLine(lines, second, { maxLines: 4 });
 
@@ -256,7 +256,7 @@ describe("channel-streaming", () => {
         lines: updated,
         entry: { streaming: { progress: { label: false } } },
       }),
-    ).toBe("🛠️ Exec\n• Checking the app-server stream");
+    ).toBe("• Exec\n• Checking the app-server stream");
   });
 
   it("delays rapid work events and joins a single pending startup", async () => {

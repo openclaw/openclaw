@@ -8,6 +8,7 @@ import {
   PROGRESS_STATUS_PREAMBLE_FRESH_MS,
 } from "./progress-draft-compositor.js";
 import type { ChannelProgressDraftCompositorParams } from "./progress-draft-compositor.types.js";
+import { buildChannelProgressDraftLine } from "./streaming.js";
 
 function createProgress(
   config: ChannelStreamingProgressConfig = { label: "Shelling", toolProgress: true },
@@ -42,6 +43,81 @@ describe("channel progress draft compositor", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps bounded operation state without a preamble or verbose tool log", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false },
+      { preparedItems: true, showWorkStatus: true },
+    );
+    await progress.pushItemEvent({
+      itemId: "read-1",
+      kind: "tool",
+      name: "read",
+      phase: "start",
+      status: "running",
+      title: "Private document",
+      meta: "private/path.txt",
+    });
+    expect(update).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update.mock.lastCall?.[0]).toBe("Read: running");
+    await progress.pushItemEvent({
+      itemId: "exec-2",
+      kind: "tool",
+      name: "exec",
+      phase: "start",
+      status: "running",
+    });
+    await progress.pushItemEvent({
+      itemId: "read-1",
+      kind: "tool",
+      name: "read",
+      phase: "end",
+      status: "completed",
+    });
+    expect(update.mock.lastCall?.[0]).toBe("Exec: running");
+    expect(progress.getSnapshot().lines).toHaveLength(1);
+    expect(JSON.stringify(update.mock.calls)).not.toContain("private/path");
+    await progress.pushItemEvent({ itemId: "exec-2", hideFromChannelProgress: true });
+    expect(progress.getSnapshot().lines).toHaveLength(0);
+    progress.markFinalReplyStarted();
+    const calls = update.mock.calls.length;
+    await progress.pushItemEvent({
+      itemId: "late",
+      kind: "tool",
+      name: "write",
+      status: "running",
+    });
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update).toHaveBeenCalledTimes(calls);
+  });
+
+  it("continues public child state with the detailed tool log disabled", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false },
+      { preparedItems: true, showWorkStatus: true },
+    );
+    await progress.pushPreambleHeadline("Checking the result");
+    await progress.pushItemEvent({
+      itemId: "child",
+      kind: "subagent",
+      title: "Verification",
+      status: "running",
+      summary: "PRIVATE CHILD CONTENT",
+    });
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update.mock.lastCall?.[0]).toContain("Verification: running");
+    expect(update.mock.lastCall?.[0]).toContain("Checking the result");
+    await progress.pushItemEvent({
+      itemId: "child",
+      kind: "subagent",
+      title: "Verification",
+      phase: "end",
+      status: "completed",
+    });
+    expect(update.mock.lastCall?.[0]).toContain("Verification: completed");
+    expect(JSON.stringify(update.mock.calls)).not.toContain("PRIVATE CHILD CONTENT");
+  });
+
   it("counts only work tools and resets per turn", () => {
     let now = 1_000;
     const work = createChannelProgressWorkCounter({ now: () => now });
@@ -58,11 +134,11 @@ describe("channel progress draft compositor", () => {
 
   it("gates reasoning independently of tool progress", async () => {
     const hidden = createProgress(undefined, { reasoningGate: false });
-    await hidden.progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await hidden.progress.pushToolProgress("Exec", { startImmediately: true });
     await hidden.progress.pushReasoningProgress("Reading files");
     expect(hidden.update.mock.calls.every(([text]) => !text.includes("Reading"))).toBe(true);
     const quiet = createProgress({ label: "Shelling", toolProgress: false });
-    await quiet.progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await quiet.progress.pushToolProgress("Exec", { startImmediately: true });
     await quiet.progress.pushReasoningProgress("Reading files");
     expect(quiet.update.mock.lastCall?.[0]).toBe("Shelling\n\n• _Reading files_");
     expect(quiet.update.mock.calls.every(([text]) => !text.includes("Exec"))).toBe(true);
@@ -78,7 +154,7 @@ describe("channel progress draft compositor", () => {
 
   it("cancels delayed startup before final delivery", async () => {
     const { progress, update } = createProgress();
-    await progress.pushToolProgress("🛠️ Exec");
+    await progress.pushToolProgress("Exec");
     progress.markFinalReplyStarted();
     await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
     expect(progress.hasStarted).toBe(false);
@@ -116,12 +192,12 @@ describe("channel progress draft compositor", () => {
     expect(await progress.pushPreambleHeadline("Checking")).toBe(false);
     expect(progress.hasStatusHeadline).toBe(false);
     await progress.pushCommentaryProgress("Checking");
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushToolProgress("Exec", { startImmediately: true });
     await progress.pushCommentaryProgress("Checking the workspace");
-    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n💬 _Checking the workspace_\n🛠️ Exec");
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n💬 _Checking the workspace_\n• Exec");
     expect(progress.getSnapshot().lines).toEqual([
       expect.objectContaining({ text: "💬 _Checking the workspace_" }),
-      "🛠️ Exec",
+      "Exec",
     ]);
     const calls = update.mock.calls.length;
     expect(
@@ -131,9 +207,44 @@ describe("channel progress draft compositor", () => {
     await progress.pushCommentaryProgress("Writing the patch next");
     expect(progress.getSnapshot().lines).toHaveLength(3);
     expect(update.mock.lastCall?.[0]).toBe(
-      "Shelling\n\n💬 _Checking the workspace_\n🛠️ Exec\n💬 _Writing the patch next_",
+      "Shelling\n\n💬 _Checking the workspace_\n• Exec\n💬 _Writing the patch next_",
     );
   });
+
+  it.each([
+    { toolIcons: true, exec: "🛠️ Exec: running" },
+    { toolIcons: undefined, exec: "• Exec: running" },
+  ])(
+    "prefixes generated tool rows with text glyphs when toolIcons is $toolIcons",
+    async ({ toolIcons, exec }) => {
+      const { progress, update } = createProgress(
+        { toolProgress: true, label: false, commentary: true },
+        {
+          toolIcons,
+          commentaryLinePrefix: "💬 ",
+          buildProgressEventLine: (input, options) => {
+            const line = buildChannelProgressDraftLine(input, options);
+            return line?.toolName === "read" ? { ...line, icon: "🧪" } : line;
+          },
+        },
+      );
+      await progress.pushCommentaryProgress("Checking");
+      await progress.pushItemEvent({
+        itemId: "exec-1",
+        kind: "tool",
+        name: "exec",
+        status: "running",
+      });
+      await progress.pushItemEvent({
+        itemId: "read-1",
+        kind: "tool",
+        name: "read",
+        status: "running",
+      });
+      await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+      expect(update.mock.lastCall?.[0]).toBe(`💬 _Checking_\n${exec}\n🧪 Read: running`);
+    },
+  );
 
   it("replaces and retracts only the addressed commentary item", async () => {
     const { progress, update } = createProgress({
@@ -160,59 +271,59 @@ describe("channel progress draft compositor", () => {
     );
     await progress.pushReasoningProgress("Listing");
     await progress.pushReasoningProgress(" the workspace");
-    await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
+    await progress.pushToolProgress("ls", { startImmediately: true });
     await progress.pushReasoningProgress("Picking the largest");
-    await progress.pushToolProgress("🛠️ wc", { startImmediately: true });
+    await progress.pushToolProgress("wc", { startImmediately: true });
     expect(update.mock.lastCall?.[0]).toBe(
-      "Shelling\n\n🧠 _Listing the workspace_\n🛠️ ls\n🧠 _Picking the largest_\n🛠️ wc",
+      "Shelling\n\n🧠 _Listing the workspace_\n• ls\n🧠 _Picking the largest_\n• wc",
     );
     expect(progress.getSnapshot().lines).toEqual([
       "🧠 _Listing the workspace_",
-      "🛠️ ls",
+      "ls",
       "🧠 _Picking the largest_",
-      "🛠️ wc",
+      "wc",
     ]);
   });
 
   it("buffers partial reasoning tags without leaking final answer prose", async () => {
     const { progress, update } = createProgress(undefined, { reasoningLinePrefix: "🧠 " });
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushToolProgress("Exec", { startImmediately: true });
     const calls = update.mock.calls.length;
     await progress.pushReasoningProgress("<thin");
     expect(update).toHaveBeenCalledTimes(calls);
     await progress.pushReasoningProgress("k>Checking files</think>Final answer prose");
-    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n🛠️ Exec\n🧠 _Checking files_");
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n• Exec\n🧠 _Checking files_");
   });
 
   it("keeps literal reasoning tags inside code blocks", async () => {
     const { progress, update } = createProgress(undefined, { reasoningLinePrefix: "🧠 " });
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushToolProgress("Exec", { startImmediately: true });
     await progress.pushReasoningProgress("```html\n<think>literal</think>\n```");
     expect(update.mock.lastCall?.[0]).toBe(
-      "Shelling\n\n🛠️ Exec\n🧠 _```html <think>literal</think> ```_",
+      "Shelling\n\n• Exec\n🧠 _```html <think>literal</think> ```_",
     );
   });
 
   it("replaces repeated formatted reasoning snapshots", async () => {
     const { progress, update } = createProgress(undefined, { reasoningLinePrefix: "🧠 " });
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushToolProgress("Exec", { startImmediately: true });
     await progress.pushReasoningProgress("Thinking\n\n_Reading_");
     await progress.pushReasoningProgress("Thinking\n\n_Reading files_");
-    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n🛠️ Exec\n🧠 _Reading files_");
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n• Exec\n🧠 _Reading files_");
   });
 
   it("keeps tool lines under narration while deduplicating and clearing the headline", async () => {
     const { progress, update } = createProgress();
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushToolProgress("Exec", { startImmediately: true });
     await progress.pushNarrationProgress("Updating config");
-    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nUpdating config\n\n🛠️ Exec");
-    await progress.pushToolProgress("🛠️ Wc", { startImmediately: true });
-    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nUpdating config\n\n🛠️ Exec\n🛠️ Wc");
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nUpdating config\n\n• Exec");
+    await progress.pushToolProgress("Wc", { startImmediately: true });
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nUpdating config\n\n• Exec\n• Wc");
     expect(await progress.pushNarrationProgress("Updating config")).toBe(false);
     await progress.pushNarrationProgress("Restarting");
-    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nRestarting\n\n🛠️ Exec\n🛠️ Wc");
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nRestarting\n\n• Exec\n• Wc");
     await progress.pushNarrationProgress("");
-    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n🛠️ Exec\n🛠️ Wc");
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n• Exec\n• Wc");
   });
 
   it("holds sanitized preambles behind startup and rejects control-only replacements", async () => {
@@ -306,21 +417,21 @@ describe("channel progress draft compositor", () => {
     expect(await progress.pushReasoningProgress("Too late")).toBe(false);
     expect(progress.beginNewTurn()).toBe(true);
     expect(progress.hasStarted).toBe(false);
-    await progress.pushToolProgress("🛠️ Next", { startImmediately: true });
-    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n🛠️ Next");
+    await progress.pushToolProgress("Next", { startImmediately: true });
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n• Next");
     expect(progress.beginNewTurn()).toBe(false);
   });
 
   it("holds narration behind the initial progress delay", async () => {
     const { progress, update } = createProgress({ toolProgress: true });
-    await progress.pushToolProgress("🛠️ Exec");
+    await progress.pushToolProgress("Exec");
     await progress.pushNarrationProgress("Reading config");
     await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS - 1);
     expect(update).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(update).toHaveBeenCalledWith(
-      "Reading config\n\n🛠️ Exec",
-      expect.objectContaining({ flush: true, lines: ["🛠️ Exec"] }),
+      "Reading config\n\n• Exec",
+      expect.objectContaining({ flush: true, lines: ["Exec"] }),
     );
     expect(progress.isVisible).toBe(true);
   });
@@ -388,6 +499,50 @@ describe("channel progress draft compositor", () => {
     expect(progress.getSnapshot().diffStat).toBeUndefined();
   });
 
+  it.each([
+    { action: "react", status: "completed", hidden: true },
+    { action: "react", status: "failed", hidden: false },
+    { action: "react", status: "blocked", hidden: false },
+    { action: "react", status: "unknown", hidden: false },
+    { action: "send", status: "completed", hidden: false },
+  ] as const)("projects message $action/$status progress", async ({ action, status, hidden }) => {
+    const { progress } = createProgress({ toolProgress: true }, { preparedItems: true });
+    await progress.start();
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "message-1",
+        name: "message",
+        phase: "start",
+        args: { action, channel: "slack", target: "C000000001" },
+      }),
+    );
+    expect(progress.getSnapshot().lines).toEqual(
+      action === "react" ? [] : [expect.objectContaining({ toolName: "message" })],
+    );
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "message-1",
+        name: "message",
+        phase: "result",
+        args: { action, channel: "slack", target: "C000000001" },
+        status,
+      }),
+    );
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "read-1",
+        name: "read",
+        phase: "result",
+        args: { path: "README.md" },
+        status: "completed",
+      }),
+    );
+    expect(progress.getSnapshot().lines).toEqual([
+      ...(hidden ? [] : [expect.objectContaining({ id: "tool:message-1", toolName: "message" })]),
+      expect.objectContaining({ id: "tool:read-1", toolName: "read", status: "completed" }),
+    ]);
+  });
+
   it("retains completed edits when clearing a quiet plan", async () => {
     const { progress, update } = createProgress(
       { toolProgress: false, label: false },
@@ -418,7 +573,7 @@ describe("channel progress draft compositor", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const update = vi.fn().mockRejectedValue(new Error("send failed"));
     const { progress } = createProgress(undefined, { update });
-    await progress.pushToolProgress("🛠️ Exec");
+    await progress.pushToolProgress("Exec");
     expect(warn).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
     expect(update).toHaveBeenCalled();
@@ -540,7 +695,7 @@ describe("channel progress draft compositor", () => {
     const { progress, update } = createProgress({ toolProgress: true, label: false });
     await progress.pushPreambleHeadline("Checking Slack.");
     await progress.pushToolProgress(
-      { id: "call", kind: "tool", text: "🛠️ Exec", label: "Exec", toolName: "exec" },
+      { id: "call", kind: "tool", text: "Exec", label: "Exec", toolName: "exec" },
       { startImmediately: true },
     );
     await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
@@ -548,7 +703,7 @@ describe("channel progress draft compositor", () => {
     });
     const snapshot = update.mock.lastCall?.[1].snapshot;
     const expected = {
-      lines: [{ id: "call", kind: "tool", text: "🛠️ Exec", label: "Exec", toolName: "exec" }],
+      lines: [{ id: "call", kind: "tool", text: "Exec", label: "Exec", toolName: "exec" }],
       statusHeadline: "Checking Slack.",
       plan: [{ step: "Patch", status: "in_progress" }],
       planExplanation: "Applying the change.",
@@ -810,10 +965,10 @@ describe("channel progress draft compositor", () => {
   it("keeps rejected delayed updates pending and retryable", async () => {
     const update = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const { progress } = createProgress({ label: "Working", commentary: true }, { update });
-    await progress.pushToolProgress("🛠️ Exec");
+    await progress.pushToolProgress("Exec");
     await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
     expect(progress.isVisible).toBe(false);
-    expect(await progress.pushToolProgress("🛠️ Exec")).toBe(true);
+    expect(await progress.pushToolProgress("Exec")).toBe(true);
     expect(update).toHaveBeenCalledTimes(2);
     expect(progress.isVisible).toBe(true);
   });
@@ -837,7 +992,7 @@ describe("channel progress draft compositor", () => {
         return accepted.promise;
       },
     });
-    const result = progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    const result = progress.pushToolProgress("Exec", { startImmediately: true });
     await started.promise;
     progress.markFinalReplyStarted();
     accepted.resolve(true);

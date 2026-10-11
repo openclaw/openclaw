@@ -1,6 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -10,6 +8,7 @@ import {
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { useSqliteWorkerFault } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFixture,
@@ -18,6 +17,19 @@ import {
   event,
   transcriptMessages,
 } from "./attempt-transcript-journal.test-helpers.js";
+
+const toolResultFault = useSqliteWorkerFault([
+  {
+    name: "fail_copilot_tool_result",
+    match: /^insert into transcript_events\b/u,
+    sql: `CREATE TEMP TRIGGER fail_copilot_tool_result
+      BEFORE INSERT ON main.transcript_events
+      WHEN NEW.event_json LIKE '%result-failed%'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected mid-group failure');
+      END;`,
+  },
+]);
 
 afterEach(() => {
   resetGlobalHookRunner();
@@ -1067,23 +1079,8 @@ describe("Copilot attempt transcript journal", () => {
   });
 
   it("rolls back the complete group when SQLite fails mid-group", async () => {
-    const { journal, session, target, tempDir } = await createInitializedFixture();
-    const sqliteName = (await fs.readdir(tempDir, { recursive: true })).find((name) =>
-      name.endsWith(".sqlite"),
-    );
-    if (!sqliteName) {
-      throw new Error("expected the real SQLite transcript database");
-    }
-    const database = new DatabaseSync(path.join(tempDir, sqliteName));
-    database.exec(`
-      CREATE TRIGGER fail_copilot_tool_result
-      BEFORE INSERT ON transcript_events
-      WHEN NEW.event_json LIKE '%result-failed%'
-      BEGIN
-        SELECT RAISE(ABORT, 'injected mid-group failure');
-      END;
-    `);
-    database.close();
+    const { journal, session, target } = await createInitializedFixture();
+    toolResultFault.enable();
     emitAssistant(session, "assistant-failed", {
       content: "checking",
       toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-failed" }],

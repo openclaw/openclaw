@@ -85,6 +85,8 @@ type ProfileFixture = {
   id: string;
   emails: readonly string[];
   role?: string;
+  effectiveRole?: string;
+  roleSource?: "assigned" | "githubLogin" | "default";
   mergedInto?: string | null;
   githubIdentity?: { login: string } | null;
 };
@@ -134,10 +136,20 @@ export function visitorProfileFixture(
     async request() {
       throw new Error("Expected a mocked Gateway request");
     },
+    subscribeSessionChanges() {
+      throw new Error("Unexpected session change subscription");
+    },
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
     },
+    async withSessionFacts() {
+      throw new Error("Unexpected selected session facts request");
+    },
+    async openPluginPanel() {
+      throw new Error("Unexpected plugin panel request");
+    },
     withUserProfileIdentity,
+    resolveGitHubAccount: async ({ login }) => ({ accountId: 42, login }),
   };
   const request = vi.spyOn(gateway, "request").mockImplementation(response);
   return {
@@ -158,7 +170,6 @@ export function visitorFixture(
     githubAccountIds?: number[];
     githubAccountId?: number;
     githubLogin?: string;
-    githubEmail?: string | null;
     gatewayConfig?: OpenClawConfig;
     profiles?: ProfileFixture[];
     githubProfiles?: Array<{ accountId: number; profileId: string }>;
@@ -270,16 +281,6 @@ export function visitorFixture(
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = requestUrl(input);
     const method = init?.method ?? "GET";
-    if (url.origin === "https://api.github.com") {
-      if (!/^\/users\/[a-z0-9-]+$/.test(url.pathname) || method !== "GET") {
-        throw new Error("Unexpected GitHub request");
-      }
-      return Response.json({
-        id: options.githubAccountId ?? 42,
-        login: options.githubLogin ?? url.pathname.slice("/users/".length),
-        email: options.githubEmail ?? null,
-      });
-    }
     if (url.origin !== "https://api.cloudflare.com" || !url.pathname.startsWith(policiesPath)) {
       throw new Error("Unexpected Cloudflare endpoint");
     }
@@ -334,6 +335,12 @@ export function visitorFixture(
       },
     },
   };
+  const resolveGitHubAccount = vi
+    .spyOn(runtime.gateway, "resolveGitHubAccount")
+    .mockImplementation(async ({ login }) => ({
+      accountId: options.githubAccountId ?? 42,
+      login: options.githubLogin ?? login.toLowerCase(),
+    }));
   const assertCurrent = vi.fn<() => void>();
   const policy = new VisitorPolicyClient(resolved, fetcher, undefined, () => oidcProvider);
   const service = new VisitorAccessService(
@@ -342,7 +349,7 @@ export function visitorFixture(
     policy,
     logger,
     createVisitorAccessReader(runtime),
-    fetcher,
+    runtime.gateway.resolveGitHubAccount,
   );
   services.add(service);
   return {
@@ -350,6 +357,7 @@ export function visitorFixture(
     policy,
     fetcher,
     grants,
+    resolveGitHubAccount,
     gatewayRequest: directory.request,
     setProfiles: directory.setProfiles,
     logger,

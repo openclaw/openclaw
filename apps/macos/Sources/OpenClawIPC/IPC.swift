@@ -13,30 +13,6 @@ public enum Capability: String, Codable, CaseIterable, Sendable {
     case location
 }
 
-public enum CameraFacing: String, Codable, Sendable {
-    case front
-    case back
-}
-
-// MARK: - Requests
-
-/// Notification interruption level (maps to UNNotificationInterruptionLevel)
-public enum NotificationPriority: String, Codable, Sendable {
-    case passive // silent, no wake
-    case active // default
-    case timeSensitive // breaks through Focus modes
-}
-
-/// Notification delivery mechanism.
-public enum NotificationDelivery: String, Codable, Sendable {
-    /// Use macOS notification center (UNUserNotificationCenter).
-    case system
-    /// Use an in-app overlay/toast (no Notification Center history).
-    case overlay
-    /// Prefer system; fall back to overlay when system isn't available.
-    case auto
-}
-
 // MARK: - Canvas geometry
 
 /// Optional placement hints for the Canvas panel.

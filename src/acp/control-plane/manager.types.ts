@@ -66,6 +66,8 @@ export type AcpInitializeSessionInput = {
   agent: string;
   mode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
+  /** Re-read caller-owned resume authority after preparation and return its synchronous initialization guard. */
+  revalidateResume?: () => Promise<() => void>;
   runtimeOptions?: Partial<AcpSessionRuntimeOptions>;
   modelExplicit?: boolean;
   thinkingExplicit?: boolean;
@@ -181,9 +183,13 @@ export type TurnLatencyStats = {
 export type AcpSessionManagerDeps = {
   listAcpSessions: typeof listAcpSessionEntries;
   loadSessionEntry: typeof readAcpSessionEntry;
-  loadSessionEntryAsync: typeof readAcpSessionEntryAsync;
+  loadSessionEntryAsync: (
+    params: Parameters<typeof readAcpSessionEntryAsync>[0],
+  ) => ReturnType<typeof readAcpSessionEntryAsync>;
   prepareSessionControlRead: typeof prepareAcpSessionControlRead;
-  upsertSessionMeta: typeof upsertAcpSessionMeta;
+  upsertSessionMeta: (
+    params: Parameters<typeof upsertAcpSessionMeta>[0],
+  ) => ReturnType<typeof upsertAcpSessionMeta>;
   upsertSessionMetaForControl: typeof upsertAcpSessionMetaForControl;
   getRuntimeBackend: typeof getAcpRuntimeBackend;
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;

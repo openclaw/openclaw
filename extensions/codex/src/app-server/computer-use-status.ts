@@ -16,18 +16,8 @@ export type CodexComputerUseStatusReason =
   | "check_failed"
   | "auto_install_blocked";
 
-type CodexComputerUseInstallationStatus =
-  | "disabled"
-  | "marketplace_missing"
-  | "not_installed"
-  | "unchecked"
-  | "installed_disabled"
-  | "installed";
-
-type CodexComputerUseExposureStatus = "skipped" | "missing" | "available";
-
-type CodexComputerUseStatusSection = {
-  status: string;
+type CodexComputerUseStatusSection<Status extends string> = {
+  status: Status;
   ok: boolean;
   message: string;
 };
@@ -44,12 +34,15 @@ export type CodexComputerUseStatus = {
   marketplaceName?: string;
   marketplacePath?: string;
   tools: string[];
-  installation: CodexComputerUseStatusSection & {
-    status: CodexComputerUseInstallationStatus;
-  };
-  exposure: CodexComputerUseStatusSection & {
-    status: CodexComputerUseExposureStatus;
-  };
+  installation: CodexComputerUseStatusSection<
+    | "disabled"
+    | "marketplace_missing"
+    | "not_installed"
+    | "unchecked"
+    | "installed_disabled"
+    | "installed"
+  >;
+  exposure: CodexComputerUseStatusSection<"skipped" | "missing" | "available">;
   liveTest: CodexComputerUseLiveTestStatus;
   repair?: CodexComputerUseRepairStatus;
   warnings: string[];

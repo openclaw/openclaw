@@ -12,6 +12,7 @@ export type AttachmentBrowserFixture = {
   platform: string;
   touch: number;
   single?: boolean;
+  nativeCapture?: boolean;
   embed?: "ios" | "android";
   webChrome?: boolean;
 };
@@ -34,21 +35,50 @@ export const attachmentBrowserFixtures: AttachmentBrowserFixture[] = [
   },
   {
     name: "Android Chrome",
+    nativeCapture: true,
     userAgent: `${android} Chrome/153.0.0.0 Mobile Safari/537.36`,
     platform: "Linux armv8l",
     touch: 5,
   },
   {
+    name: "Android Edge",
+    nativeCapture: true,
+    userAgent: `${android} Chrome/153.0.0.0 Mobile Safari/537.36 EdgA/153.0.0.0`,
+    platform: "Linux armv8l",
+    touch: 5,
+  },
+  {
     name: "Android Firefox",
+    nativeCapture: true,
     userAgent: "Mozilla/5.0 (Android 14; Mobile; rv:156.0) Gecko/156.0 Firefox/156.0",
     platform: "Linux armv8l",
     touch: 5,
   },
   {
     name: "Android Samsung",
+    nativeCapture: true,
     userAgent: `${android} SamsungBrowser/29.0 Chrome/136.0.0.0 Mobile Safari/537.36`,
     platform: "Linux armv8l",
     touch: 5,
+  },
+  {
+    name: "Android WebView",
+    userAgent: `${android.replace("Pixel 8)", "Pixel 8; wv)")} Version/4.0 Chrome/153.0.0.0 Mobile Safari/537.36`,
+    platform: "Linux armv8l",
+    touch: 5,
+  },
+  {
+    name: "Android unknown app",
+    userAgent: `${android} Chrome/153.0.0.0 Mobile Safari/537.36 UnknownApp/1.0`,
+    platform: "Linux armv8l",
+    touch: 5,
+  },
+  {
+    name: "Android web chrome",
+    userAgent: `${android} Chrome/153.0.0.0 Mobile Safari/537.36`,
+    platform: "Linux armv8l",
+    touch: 5,
+    webChrome: true,
   },
   {
     name: "macOS Safari",

@@ -4,9 +4,8 @@ import {
   createIsolatedRegressionJob,
   setupCronRegressionFixtures,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
-import * as schedule from "./schedule.js";
 import { onTimer } from "./service/timer.test-support.js";
-import { saveCronStore } from "./store.js";
+import { loadCronStore, saveCronStore } from "./store.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-66019-" });
 
@@ -32,6 +31,7 @@ async function createErrorCase(expr = "0 0 31 2 *") {
   });
   return {
     state,
+    storePath,
     run,
     scheduledAt,
     tick: async (at = scheduledAt) => {
@@ -58,27 +58,26 @@ describe("#66019 unresolved next-run regression", () => {
     }
   });
 
-  it("preserves error backoff when maintenance later finds a natural next run", async () => {
-    const { state, run, scheduledAt, tick } = await createErrorCase("0 7 * * *");
-    const naturalNext = scheduledAt + 5_000;
+  it("preserves error backoff when maintenance restores a missing next run", async () => {
+    const { state, storePath, run, scheduledAt, tick } = await createErrorCase("* * * * * *");
     const backoffNext = scheduledAt + 30_000;
-    const nextRunSpy = vi
-      .spyOn(schedule, "computeNextRunAtMs")
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(undefined)
-      .mockReturnValue(naturalNext);
 
     try {
       await tick();
       expect(run).toHaveBeenCalledOnce();
       expect(state.store?.jobs[0]?.state.nextRunAtMs).toBe(backoffNext);
 
-      await tick(naturalNext + 1);
+      // A restored error row can lack its next slot; real schedule maintenance must retain backoff.
+      const stored = await loadCronStore(storePath);
+      delete stored.jobs[0]!.state.nextRunAtMs;
+      delete stored.jobs[0]!.state.pacedNextRunAtMs;
+      await saveCronStore(storePath, stored);
+      await tick(scheduledAt + 5_001);
       expect(run).toHaveBeenCalledOnce();
+      expect(state.store?.jobs[0]?.state.nextRunAtMs).toBe(backoffNext);
       await tick(backoffNext + 1);
       expect(run).toHaveBeenCalledTimes(2);
     } finally {
-      nextRunSpy.mockRestore();
       state.timer?.cancel();
       state.timer = null;
     }

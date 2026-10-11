@@ -912,7 +912,7 @@ class GatewayBootstrapAuthTest {
         assertNull(runtime.pendingGatewayTrust.value)
         assertNull(desiredConnection(runtime, "nodeSession"))
         assertNull(desiredConnection(runtime, "operatorSession"))
-        assertEquals("Offline", runtime.statusText.value)
+        assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
         assertEquals(fingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
         assertEquals(0, gatewayServer.requestCount)
       } finally {
@@ -1669,7 +1669,7 @@ class GatewayBootstrapAuthTest {
     val prompt = waitForGatewayTrustPrompt(runtime)
     assertEquals(
       "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
-      runtime.statusText.value,
+      runtime.gatewayConnectionDisplay.value.statusText,
     )
     assertNull(prompt.fingerprintSha256)
     assertEquals(GatewayTlsProbeFailure.TLS_UNAVAILABLE, prompt.probeFailure)
@@ -1708,7 +1708,7 @@ class GatewayBootstrapAuthTest {
     val prompt = waitForGatewayTrustPrompt(runtime)
     assertEquals(
       "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
-      runtime.statusText.value,
+      runtime.gatewayConnectionDisplay.value.statusText,
     )
     assertNull(prompt.fingerprintSha256)
     assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, prompt.probeFailure)
@@ -1798,13 +1798,13 @@ class GatewayBootstrapAuthTest {
     )
     prefs.gatewayRegistry.setActive(current.stableId)
     writeField(runtime, "connectedEndpoint", current)
-    val currentStatus = runtime.statusText.value
+    val currentStatus = runtime.gatewayConnectionDisplay.value.statusText
 
     assertEquals(GatewayTargetSelection.Unavailable, runBlocking { runtime.switchToGateway(missingStableId) })
 
     assertEquals(current, readField<GatewayEndpoint?>(runtime, "connectedEndpoint"))
     assertEquals(current.stableId, prefs.gatewayRegistry.activeStableId.value)
-    assertEquals(currentStatus, runtime.statusText.value)
+    assertEquals(currentStatus, runtime.gatewayConnectionDisplay.value.statusText)
   }
 
   @Test
@@ -1989,7 +1989,7 @@ class GatewayBootstrapAuthTest {
           withTimeout(5_000) { probeStarted.await() }
           assertTrue(observed.any { it.statusText == "Connecting…" })
           assertFalse(observed.any { it.problem?.isNetworkFailure == true })
-          assertEquals("Verify gateway TLS fingerprint…", runtime.statusText.value)
+          assertEquals("Verify gateway TLS fingerprint…", runtime.gatewayConnectionDisplay.value.statusText)
         } finally {
           runtime.disconnect()
           collector.cancelAndJoin()

@@ -101,49 +101,39 @@ function bindProbe(registry: PluginRegistry, pluginId: string) {
 
 const firstGeneration = { content: [{ type: "text", text: "1" }] };
 
-it("borrows unchanged Gateway instances and keeps them through prepared registry retirement", async () => {
-  const { gateway, gatewayRecord, gatewayInstance, borrowOptions } = setupLender();
-  const prepared = loadOpenClawPlugins(borrowOptions);
-  registries.push(prepared);
-  const freshRecord = prepared.plugins.find((record) => record.id === freshId);
-  const freshInstance = freshRecord && getPluginInstance(freshRecord);
+it.each(["prepared", "inspection"] as const)(
+  "releases a %s registry without disposing borrowed Gateway instances",
+  async (mode) => {
+    const { gateway, gatewayRecord, gatewayInstance, borrowOptions } = setupLender();
+    const { cache: _cache, ...inspectionOptions } = borrowOptions;
+    const inspection =
+      mode === "inspection"
+        ? await acquirePluginRegistryForInspection(inspectionOptions)
+        : undefined;
+    const prepared = inspection?.registry ?? loadOpenClawPlugins(borrowOptions);
+    if (!inspection) {
+      registries.push(prepared);
+    }
+    const freshRecord = prepared.plugins.find((record) => record.id === freshId);
+    const freshInstance = freshRecord && getPluginInstance(freshRecord);
+    expect(prepared.plugins.find((record) => record.id === lenderId)).toBe(gatewayRecord);
+    expect(freshRecord?.status).toBe("loaded");
+    expect(Reflect.get(globalThis, evaluations)).toEqual({ [lenderId]: 1, [freshId]: 1 });
+    await expect(bindProbe(prepared, lenderId).execute("borrowed", {})).resolves.toMatchObject(
+      firstGeneration,
+    );
 
-  // Only the plugin the Gateway lacks evaluates again.
-  expect(prepared.plugins.find((record) => record.id === lenderId)).toBe(gatewayRecord);
-  expect(freshRecord?.status).toBe("loaded");
-  expect(Reflect.get(globalThis, evaluations)).toEqual({ [lenderId]: 1, [freshId]: 1 });
-  await expect(bindProbe(prepared, lenderId).execute("borrowed", {})).resolves.toMatchObject(
-    firstGeneration,
-  );
-
-  // Generation custody activates the prepared registry, then retires it with its last lease.
-  const release = retainPreparedPluginRegistry(prepared);
-  expect(gatewayInstance.owner?.registry).toBe(gateway);
-  await release?.();
-  expect(freshInstance?.acceptingCalls).toBe(false);
-  expect(gatewayInstance.acceptingCalls).toBe(true);
-  expect(gatewayInstance.disposing).toBe(false);
-  await expect(bindProbe(gateway, lenderId).execute("lender", {})).resolves.toMatchObject(
-    firstGeneration,
-  );
-});
-
-it("releases a prepared inspection without disposing borrowed Gateway instances", async () => {
-  const { gatewayRecord, gatewayInstance, borrowOptions } = setupLender();
-  const { cache: _cache, ...inspectionOptions } = borrowOptions;
-  const inspection = await acquirePluginRegistryForInspection(inspectionOptions);
-  const freshRecord = inspection.registry.plugins.find((record) => record.id === freshId);
-  const freshInstance = freshRecord && getPluginInstance(freshRecord);
-  expect(inspection.registry.plugins.find((record) => record.id === lenderId)).toBe(gatewayRecord);
-  await expect(
-    bindProbe(inspection.registry, lenderId).execute("borrowed", {}),
-  ).resolves.toMatchObject(firstGeneration);
-
-  await inspection.release();
-  expect(freshInstance?.acceptingCalls).toBe(false);
-  expect(gatewayInstance.acceptingCalls).toBe(true);
-  expect(gatewayInstance.disposing).toBe(false);
-});
+    const release = inspection?.release ?? retainPreparedPluginRegistry(prepared);
+    expect(gatewayInstance.owner?.registry).toBe(gateway);
+    await release?.();
+    expect(freshInstance?.acceptingCalls).toBe(false);
+    expect(gatewayInstance.acceptingCalls).toBe(true);
+    expect(gatewayInstance.disposing).toBe(false);
+    await expect(bindProbe(gateway, lenderId).execute("lender", {})).resolves.toMatchObject(
+      firstGeneration,
+    );
+  },
+);
 
 it("rolls back a failed borrowing load without retiring borrowed Gateway instances", async () => {
   const { gateway, gatewayInstance, borrowOptions } = setupLender(

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { requireGatewayRecord } from "../src/gateway/test-helpers.assertions.js";
 import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -178,8 +178,12 @@ describe("gateway multi-instance e2e", () => {
 
           await managerClient.request("cron.list", { includeDisabled: true });
 
-          // A separate scheduler process advances the row while the passive Gateway
-          // retains its snapshot. Two Gateways must not share a state directory.
+          // Cron custody is exclusive even when scheduling is disabled. Hand the
+          // database to the offline scheduler only after the Gateway has stopped;
+          // stale in-memory service snapshots are covered by shared-store-runtime.test.ts.
+          await managerClient.stopAndWait();
+          managerClient = undefined;
+          await manager.stopGateway();
           const scheduler = spawnSync(
             process.execPath,
             [
@@ -223,6 +227,8 @@ try {
           expect(before.state.lastRunAtMs).toEqual(expect.any(Number));
           expect(before.state.lastStatus).toBe("ok");
 
+          await manager.startGateway();
+          managerClient = await connectGatewayStatusClient(manager);
           await managerClient.request("cron.update", {
             id: target.id,
             patch: { description: "updated through passive Gateway" },
@@ -311,7 +317,16 @@ try {
               path: path.join(instance.homeDir, "proof-operator-device.sqlite"),
             }),
           });
-          await approveNodePairingForProof(operator, nodeIdentity.deviceId);
+          const pairing = await operator.request<{
+            pending: Array<{ nodeId: string }>;
+            paired: Array<{ nodeId: string; commands?: string[] }>;
+          }>("node.pair.list", {});
+          expect(
+            pairing.pending.find((entry) => entry.nodeId === nodeIdentity.deviceId),
+          ).toBeUndefined();
+          expect(
+            pairing.paired.find((entry) => entry.nodeId === nodeIdentity.deviceId)?.commands,
+          ).toEqual(["system.notify"]);
           await waitForNodeStatus(instance, nodeIdentity.deviceId);
           const startedAt = performance.now();
           const result = await operator.request<{ payload?: { captured?: boolean } }>(
@@ -374,19 +389,4 @@ async function waitForFile(filePath: string): Promise<void> {
       () => {},
     );
   });
-}
-
-async function approveNodePairingForProof(operator: GatewayClient, nodeId: string): Promise<void> {
-  await vi.waitFor(
-    async () => {
-      const pairing = await operator.request<{
-        pending?: Array<{ nodeId?: string; requestId?: string; commands?: string[] }>;
-      }>("node.pair.list", {});
-      const pending = pairing.pending?.find((entry) => entry.nodeId === nodeId);
-      expect(pending?.commands).toEqual(["system.notify"]);
-      expect(pending?.requestId).toEqual(expect.any(String));
-      await operator.request("node.pair.approve", { requestId: pending?.requestId });
-    },
-    { timeout: 15_000, interval: 100 },
-  );
 }

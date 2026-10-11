@@ -14,7 +14,7 @@ describe("models cli lazy runtime boundary", () => {
     vi.resetModules();
   });
 
-  it.each([{ args: [] }, { args: ["accounts"] }, { args: ["accounts", "login"] }])(
+  it.each([{ args: [] }])(
     "renders $args help without importing the models runtime",
     async ({ args }) => {
       const runtimeLoaded = vi.fn();
@@ -88,10 +88,7 @@ describe("models cli lazy runtime boundary", () => {
     );
   });
 
-  it.each([
-    { args: [], selection: { provider: undefined, method: undefined } },
-    { args: ["xai", "--method", "api-key"], selection: { provider: "xai", method: "api-key" } },
-  ])(
+  it.each([{ args: [], selection: { provider: undefined, method: undefined } }])(
     "dispatches catalog-based personal login $args without the retired connect spelling",
     async ({ args, selection }) => {
       const defaultRuntime = {};

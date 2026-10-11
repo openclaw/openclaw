@@ -7,15 +7,11 @@ import { parseBuzzTarget } from "../target.js";
 import { resolveBuzzPublicKey } from "../types.js";
 
 function isSafeBuzzQaRelayUrl(value: string): boolean {
-  try {
-    const relayUrl = new URL(value);
-    return (
-      relayUrl.protocol === "wss:" ||
-      (relayUrl.protocol === "ws:" && isLoopbackHost(relayUrl.hostname))
-    );
-  } catch {
-    return false;
-  }
+  const relayUrl = URL.parse(value);
+  return (
+    relayUrl?.protocol === "wss:" ||
+    (relayUrl?.protocol === "ws:" && isLoopbackHost(relayUrl.hostname))
+  );
 }
 
 const buzzQaCredentialPayloadSchema = z

@@ -1,9 +1,7 @@
 // Persists context-engine runtime quarantines so health surfaces can see
 // failures recorded in sibling runtime processes.
-import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   normalizeContextEngineQuarantineRecord,
-  selectRuntimeHealthClearKeys,
   type ContextEngineQuarantineRecord,
 } from "../plugin-state/runtime-health-records.js";
 import {
@@ -55,7 +53,6 @@ export async function recordPersistedContextEngineQuarantine(
     assertCurrent,
   );
 }
-
 export async function listPersistedContextEngineQuarantines(): Promise<
   PersistedContextEngineRuntimeQuarantine[]
 > {
@@ -85,19 +82,4 @@ export async function clearPersistedContextEngineQuarantineForProcess(
     { kind: "context-engine", engineId },
     assertCurrent,
   );
-}
-
-/** Activation keeps its existing synchronous publication and rollback frame. */
-export function clearPersistedContextEngineQuarantineForActivation(engineId: string): void {
-  try {
-    const store = createCorePluginStateSyncKeyedStore<ContextEngineQuarantineRecord>(storeOptions);
-    for (const key of selectRuntimeHealthClearKeys(store.entries(), process.pid, {
-      kind: "context-engine",
-      engineId,
-    })) {
-      store.delete(key);
-    }
-  } catch {
-    // Activation already cleared its authoritative in-memory quarantine.
-  }
 }

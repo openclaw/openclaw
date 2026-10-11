@@ -161,21 +161,21 @@ export async function createBoundWorker(
   const store = createWorkerSessionPlacementStore({ database });
   const session = { sessionId: "parent-session", agentId: "main", sessionKey: parentSessionKey };
   let placement = await store.startDispatch({ ...session, executionMode: "worker-turn" });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "requested",
     to: "provisioning",
     expectedGeneration: placement.generation,
     patch: { environmentId: "queued-worker-environment" },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "provisioning",
     to: "syncing",
     expectedGeneration: placement.generation,
     patch: { workerBundleHash: "a".repeat(64) },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "syncing",
     to: "starting",
@@ -190,7 +190,7 @@ export async function createBoundWorker(
     sessionId: session.sessionId,
     ownerEpoch: 1,
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "starting",
     to: "active",
@@ -242,10 +242,13 @@ export function createBoundSpawnInvocation(
     completionTarget?: "parent";
   },
   requesterModel?: { provider: string; model: string },
+  senderIsOwner?: boolean,
 ) {
   const { parentSessionKey, parentRunId } = bound;
   const source = createSessionsSpawnTool({
     config: bound.cfg,
+    senderIsOwner,
+    expectedParentSessionId: "parent-session",
     agentSessionKey: parentSessionKey,
     requesterRunId: parentRunId,
     requesterTurnRunId: parentRunId,
@@ -296,6 +299,21 @@ export function createBoundSpawnInvocation(
 type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
 
+export type RequestCustodySpawnCaseOptions = {
+  createBoundParent: () => Promise<BoundParent>;
+  createBoundGateway: (bound: BoundParent) => Promise<{ runtime: GatewayRuntime }>;
+  closeBoundGateway: (
+    bound: BoundParent,
+    runtime: GatewayRuntime,
+    childRunId?: string,
+  ) => Promise<unknown[]>;
+  throwBoundFailures: (failures: unknown[]) => void;
+  parentSessionKey: string;
+  parentRunId: string;
+  assertNoModelExecution: () => void;
+  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
+};
+
 export function registerYieldedRequesterBatchCase(options: {
   createBoundParent: () => Promise<BoundParent>;
   createGuestParent: (audit?: boolean) => Promise<{
@@ -325,7 +343,7 @@ export function registerYieldedRequesterBatchCase(options: {
     async (actor, { signal }) => {
       const registry = await import("../registry/subagent-registry.js");
       const { loadSubagentRegistryFromSqlite } =
-        await import("../registry/subagent-registry.store.sqlite.js");
+        await import("../registry/subagent-registry-state.fixture.test-support.js");
       const { settleSubagentRegistryPersistenceWork } =
         await import("../registry/subagent-registry.persistence.test-support.js");
       const announce = await import("../announce/subagent-announce.js");

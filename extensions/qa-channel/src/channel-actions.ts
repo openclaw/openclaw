@@ -75,16 +75,9 @@ function readQaSendTarget(params: Record<string, unknown>) {
   return undefined;
 }
 
-type QaMessageTarget = {
-  conversationId: string;
-  conversationKind: QaBusMessage["conversation"]["kind"];
-  threadId: string | null;
-};
+type QaMessageTarget = ReturnType<typeof readQaMessageTarget>;
 
-function readQaMessageTarget(
-  params: Record<string, unknown>,
-  action: ChannelMessageActionName,
-): QaMessageTarget {
+function readQaMessageTarget(params: Record<string, unknown>, action: ChannelMessageActionName) {
   const rawTarget = readQaSendTarget(params);
   if (!rawTarget) {
     throw new Error(`qa-channel ${action} requires a target`);

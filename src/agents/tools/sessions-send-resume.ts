@@ -30,6 +30,7 @@ export function captureSessionsSendResumeCaller(): SessionsSendResumeCaller | un
 export async function resumeSessionsSendTask(params: {
   cfg: OpenClawConfig;
   caller: SessionsSendResumeCaller;
+  assertCurrent?: () => void;
   targetAgentId: string;
   sessionKey: string;
   displayKey: string;
@@ -39,13 +40,18 @@ export async function resumeSessionsSendTask(params: {
   callGateway: AgentToolGatewayRequestCaller;
 }): Promise<ReturnType<typeof jsonResult>> {
   try {
+    const assertCurrent = () => {
+      params.caller.assertCurrent();
+      params.assertCurrent?.();
+    };
+    assertCurrent();
     const session = await readAcpSessionEntryAsync({
       cfg: params.cfg,
       agentId: params.targetAgentId,
       sessionKey: params.sessionKey,
-      assertCurrent: params.caller.assertCurrent,
+      assertCurrent,
     });
-    params.caller.assertCurrent();
+    assertCurrent();
     const entry = session?.entry;
     if (
       !entry ||
@@ -74,6 +80,7 @@ export async function resumeSessionsSendTask(params: {
             expectedExistingSessionId: subagentResume.childSessionId,
           },
           assertDispatchCurrent: params.caller.assertCurrent,
+          sessionMutationCommitGuard: params.assertCurrent,
           timeoutMs: 10_000,
         },
         subagentResume,

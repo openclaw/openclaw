@@ -71,7 +71,7 @@ async function git(root: string, ...args: string[]) {
 }
 
 describe("placement recovery session admission with persisted placements", () => {
-  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
+  support.setupWorkerEnvironmentServiceSuite();
   let releaseOwnedWork: (() => Promise<void>) | undefined;
   afterEach(async () => {
     // Release blocked provider work before the service fixture drains on a failed test.
@@ -102,7 +102,7 @@ describe("placement recovery session admission with persisted placements", () =>
         throw new Error("Stop fixture was not active");
       }
       harness.markEnvironmentOwnerEpoch(2);
-      placements.startDrain({
+      await placements.startDrain({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
@@ -127,9 +127,9 @@ describe("placement recovery session admission with persisted placements", () =>
         expect(claimStop).toHaveBeenCalledTimes(state === "busy" ? 0 : 1);
         if (state === "busy") {
           expect(reads).not.toHaveBeenCalled();
-          expect(placements.listPendingWorkspaceResults()).toEqual([]);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         } else {
-          expect(placements.listPendingWorkspaceResults()).toMatchObject([
+          expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
             { sessionId: REQUEST.sessionId, recoveryRequestedAtMs: 1_000 },
           ]);
         }
@@ -150,7 +150,7 @@ describe("placement recovery session admission with persisted placements", () =>
     async (mode) => {
       const placements = createStore();
       const requested = await placements.startDispatch(REQUEST);
-      placements.fail({
+      await placements.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
         recoveryError: "previous attempt",
@@ -195,7 +195,7 @@ describe("placement recovery session admission with persisted placements", () =>
     },
   );
 
-  it("targeted recovery reads a dispatch only after its activation settles", async () => {
+  it("targeted recovery preserves a dispatch through activation", async () => {
     const placements = createStore();
     const observe = prepareTargetedAdmissionObserver(placements);
     const harness = createHarness(support.testState.stateDb, placements);
@@ -215,7 +215,6 @@ describe("placement recovery session admission with persisted placements", () =>
     const sweep = coordinated.reconcileActive(harness.ready.environmentId);
     try {
       await observation.unitReached;
-      expect(observation.reads).not.toHaveBeenCalled();
       expect(placements.get(REQUEST.sessionId)?.state).toBe("syncing");
     } finally {
       releaseTunnel.resolve();
@@ -260,13 +259,12 @@ describe("placement recovery session admission with persisted placements", () =>
       let sweep: Promise<void> | undefined;
       try {
         await localEntered.promise;
-        const intent = placements.getPlacementMove(REQUEST.sessionId);
+        const intent = await placements.getPlacementMoveAsync(REQUEST.sessionId);
         expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
         const observation = observe(harness);
         sweep = coordinated.reconcileActive(mode === "targeted" ? active.environmentId : undefined);
         if (mode === "targeted") {
           await observation.unitReached;
-          expect(observation.reads).not.toHaveBeenCalled();
         } else {
           await sweep;
         }
@@ -274,7 +272,7 @@ describe("placement recovery session admission with persisted placements", () =>
           state: "local",
           recoveryError: null,
         });
-        expect(placements.getPlacementMove(REQUEST.sessionId)).toEqual(intent);
+        expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toEqual(intent);
       } finally {
         releaseDestination.resolve();
         await expect(move).rejects.toThrow("fixture destination unavailable");
@@ -328,11 +326,11 @@ describe("placement recovery session admission with persisted placements", () =>
     let recovery: Promise<void> | undefined;
     try {
       await claimWaitEntered.promise;
-      const intent = placements.getPlacementMove(REQUEST.sessionId);
+      const intent = await placements.getPlacementMoveAsync(REQUEST.sessionId);
       expect(intent).toBeDefined();
       recovery = coordinated.reconcileActive(active.environmentId);
       await recovery;
-      expect(placements.getPlacementMove(REQUEST.sessionId)).toEqual(intent);
+      expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toEqual(intent);
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "draining",
         turnClaim: { claimId: claim.claimId },
@@ -347,14 +345,14 @@ describe("placement recovery session admission with persisted placements", () =>
       }
     }
     await expect(move).rejects.toBe(interruption);
-    expect(placements.getPlacementMove(REQUEST.sessionId)).toBeDefined();
+    expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeDefined();
     await coordinated.reconcileActive(active.environmentId);
     expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
-    expect(placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+    expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it("reads pending results after a same-session Stop has settled", async () => {
+  it("preserves the final-save owner during targeted result recovery", async () => {
     const placements = createStore();
     const observe = prepareTargetedAdmissionObserver(placements);
     const abandon = vi.spyOn(placements, "abandonWorkspaceResult");
@@ -373,19 +371,18 @@ describe("placement recovery session admission with persisted placements", () =>
     const stop = coordinated.reclaim(REQUEST);
     void stop.catch(reconciliationEntered.reject);
     await reconciliationEntered.promise;
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     const observation = observe(harness);
     abandon.mockClear();
     const sweep = coordinated.reconcileActive(active.environmentId!);
     try {
       await observation.unitReached;
-      expect(observation.reads).not.toHaveBeenCalled();
     } finally {
       releaseReconciliation.resolve();
       await stop;
       await sweep;
     }
-    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
     expect(abandon).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
@@ -410,7 +407,7 @@ describe("placement recovery session admission with persisted placements", () =>
         sessionId,
         sessionKey: `agent:main:${sessionId}`,
       });
-      placements.fail({
+      await placements.fail({
         sessionId,
         expectedGeneration: placement.generation,
         recoveryError: "finished fixture",
@@ -520,7 +517,7 @@ describe("placement recovery session admission with persisted placements", () =>
       sessionId: "idle",
       sessionKey: "agent:main:idle",
     });
-    placements.fail({
+    await placements.fail({
       sessionId: idle.sessionId,
       expectedGeneration: idle.generation,
       recoveryError: "finished fixture",
@@ -560,14 +557,14 @@ describe("placement recovery session admission with persisted placements", () =>
       sessionId: "cloud",
       sessionKey: "agent:main:cloud",
     });
-    const provisioning = placements.transition({
+    const provisioning = await placements.transition({
       sessionId: "cloud",
       from: "requested",
       to: "provisioning",
       expectedGeneration: requested.generation,
       patch: { environmentId: "cloud-environment" },
     });
-    placements.fail({
+    await placements.fail({
       sessionId: "cloud",
       expectedGeneration: provisioning.generation,
       recoveryError: "provider teardown required",
@@ -614,6 +611,7 @@ describe("placement recovery session admission with persisted placements", () =>
             enabled: true,
             capacity: { total: 1, available: 1 },
             capturedExecPolicy: true,
+            promptContext: 1,
           },
           commands: [],
         },

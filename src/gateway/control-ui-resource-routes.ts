@@ -80,12 +80,9 @@ export function parseControlUiUserAvatarPath(
   basePath: string,
 ): ControlUiResourcePathMatch {
   const canonical = parseControlUiResourcePath("userAvatar", pathname);
-  if (canonical.matched) {
-    return canonical;
-  }
-  return normalizeControlUiBasePath(basePath)
-    ? parseControlUiResourcePath("userAvatar", pathname, basePath)
-    : canonical;
+  return canonical.matched
+    ? canonical
+    : parseControlUiResourcePath("userAvatar", pathname, basePath);
 }
 
 /** Builds the authenticated conversation-avatar URL for a session. */
@@ -115,17 +112,13 @@ export function matchControlUiResourceUrl(
   if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
     return undefined;
   }
-  try {
-    const origin = "http://openclaw.invalid";
-    const parsed = new URL(value, origin);
-    if (parsed.origin !== origin || `${parsed.pathname}${parsed.search}${parsed.hash}` !== value) {
-      return undefined;
-    }
-    const resource = parseControlUiResourcePath(route, parsed.pathname, basePath);
-    return resource.matched && resource.value
-      ? { value: resource.value, search: parsed.search, hash: parsed.hash }
-      : undefined;
-  } catch {
+  const origin = "http://openclaw.invalid";
+  const parsed = URL.parse(value, origin);
+  if (parsed?.origin !== origin || `${parsed.pathname}${parsed.search}${parsed.hash}` !== value) {
     return undefined;
   }
+  const resource = parseControlUiResourcePath(route, parsed.pathname, basePath);
+  return resource.matched && resource.value
+    ? { value: resource.value, search: parsed.search, hash: parsed.hash }
+    : undefined;
 }

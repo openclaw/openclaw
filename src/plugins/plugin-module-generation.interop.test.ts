@@ -4,6 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import { describe, expect, it } from "vitest";
+import { isPathInside } from "../infra/path-guards.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { createPluginModuleGenerationTestHarness } from "./plugin-module-generation.test-support.js";
 
@@ -153,7 +155,10 @@ describe("native plugin generation interop", () => {
       const namespace = pathToFileURL(directory).href;
       const captured = plugin.captured;
       return Object.entries(cache).filter(
-        ([id]) => id === captured || id.startsWith(directory) || id.startsWith(namespace),
+        ([id]) =>
+          id === captured ||
+          (path.isAbsolute(id) && isPathInside(directory, id)) ||
+          id.startsWith(namespace),
       );
     };
     const first = host(root);
@@ -162,7 +167,7 @@ describe("native plugin generation interop", () => {
     await expect(plugin.read()).resolves.toMatchObject({ value: 42 });
     const owned = records(plugin);
     expect(owned.length).toBeGreaterThan(0);
-    expect(owned.some(([id]) => id === plugin.captured)).toBe(true);
+    expect(owned.some(([id]) => path.relative(plugin.captured, id) === "")).toBe(true);
     if (!process.versions.bun) {
       expect(owned.some(([id]) => !id.startsWith("file:") && id.endsWith(".mjs"))).toBe(true);
       expect(owned.some(([id]) => !id.startsWith("file:") && id.endsWith(".js"))).toBe(true);
@@ -494,7 +499,8 @@ describe("native plugin generation interop", () => {
         read(name: string): Promise<{ value: number }>;
       };
       const first = path.join(root, "node_modules/source-dependency/first.mjs");
-      const specifier = reference === "absolute" ? first : pathToFileURL(first).href;
+      const specifier =
+        reference === "absolute" ? toSafeImportPath(first) : pathToFileURL(first).href;
       await expect(plugin.read(specifier)).resolves.toMatchObject({ value: 42 });
       fs.writeFileSync(first, "export const value = 43;");
       fs.writeFileSync(path.join(pluginRoot, "later.mjs"), "export const value = 2;");
@@ -593,7 +599,8 @@ describe("native plugin generation interop", () => {
         "node_modules/source-dependency/value.mjs": "export const value = 42;",
       });
       const dependency = path.join(root, "node_modules/source-dependency/value.mjs");
-      const specifier = reference === "absolute" ? dependency : pathToFileURL(dependency).href;
+      const specifier =
+        reference === "absolute" ? toSafeImportPath(dependency) : pathToFileURL(dependency).href;
       fs.writeFileSync(
         path.join(root, "entry.mjs"),
         `export const read = async () => (await import(${JSON.stringify(specifier)})).value;`,
@@ -647,7 +654,7 @@ describe("native plugin generation interop", () => {
         reference === "relative"
           ? `../shared/value.${extension}`
           : reference === "absolute"
-            ? shared
+            ? toSafeImportPath(shared)
             : pathToFileURL(shared).href;
       fs.writeFileSync(
         path.join(root, "plugin", `entry.${extension}`),
@@ -659,9 +666,9 @@ describe("native plugin generation interop", () => {
         readLocal(specifier: string): Promise<number>;
       };
       expect(first).toMatchObject({ value: 42 });
-      await expect(first.readLocal(path.join(root, "plugin", `local.${extension}`))).resolves.toBe(
-        17,
-      );
+      await expect(
+        first.readLocal(pathToFileURL(path.join(root, "plugin", `local.${extension}`)).href),
+      ).resolves.toBe(17);
       fs.writeFileSync(shared, "export const answer = 43;");
       expect(host(path.join(root, "plugin"), true).load(`entry.${extension}`)).toMatchObject({
         value: 43,
@@ -729,6 +736,7 @@ describe("native plugin generation interop", () => {
             export const readNamed = () => answer;
             export const required = require("./${filename}");
             export const cached = require.cache[require.resolve("./${filename}")].exports;
+            export const readNamespace = () => namespace;
             export const lazy = () => import("./${filename}");`,
           "lazy.cjs": `exports.load = () => import("./${filename}");`,
         });
@@ -748,6 +756,7 @@ describe("native plugin generation interop", () => {
           answer: number;
           hidden: number;
           readNamed(): number;
+          readNamespace(): Namespace;
           lazy(): Promise<Namespace>;
         };
         const importedValue =
@@ -761,9 +770,11 @@ describe("native plugin generation interop", () => {
         expect(managed.load(filename)).toBe(entry.required);
         expect(entry.reexported).toBe(importedValue);
         expect(entry.namespace.default).toBe(importedValue);
-        expect(await entry.lazy()).toBe(entry.namespace);
+        // Method results expose native namespaces; exported members are instance-bound views.
+        const namespace = entry.readNamespace();
+        expect(await entry.lazy()).toBe(namespace);
         if (first) {
-          expect(first).toBe(entry.namespace);
+          expect(first).toBe(namespace);
         }
         expect(entry.required.getterReads).toBe(process.versions.bun ? 1 : 0);
         entry.required.answer = 43;
@@ -841,6 +852,7 @@ describe("native plugin generation interop", () => {
         export * from "./${filename}";
         export { namespace };
         export const read = () => current;
+        export const readNamespace = () => namespace;
         export const lazy = () => import("./${filename}");`,
         [emptyFilename]: "",
         "empty.cjs": `exports.load = () => import("./${emptyFilename}");`,
@@ -848,18 +860,19 @@ describe("native plugin generation interop", () => {
       const entry = host(root).load("entry.mjs") as {
         current: number;
         value: number;
-        namespace: { default: number; value: number };
         read(): number;
+        readNamespace(): { default: number; value: number };
         update(): void;
         lazy(): Promise<unknown>;
       };
+      const namespace = entry.readNamespace();
       expect(entry.read()).toBe(1);
       entry.update();
       expect(entry.read()).toBe(2);
       expect(entry.current).toBe(2);
       expect(entry.value).toBe(2);
-      expect(entry.namespace.default).toBe(2);
-      expect(await entry.lazy()).toBe(entry.namespace);
+      expect(namespace.default).toBe(2);
+      expect(await entry.lazy()).toBe(namespace);
       const empty = await (host(root).load("empty.cjs") as { load(): Promise<object> }).load();
       expect(Object.hasOwn(empty, "default")).toBe(false);
     },
@@ -895,6 +908,8 @@ describe("native plugin generation interop", () => {
         export const shadowed = shadow({ exports: 2 }, { value: 3 });
         export const required = require("conditional-dependency");
         export const createdRequire = createRequire(import.meta.url)("conditional-dependency");
+        export const readImported = () => imported;
+        export const readRequired = () => required;
         export const lazy = () => import("conditional-dependency");
         export const lazyModule = () => import("./lazy.ts");`,
       "lazy.ts": `import { value, token } from "conditional-dependency";
@@ -918,9 +933,13 @@ describe("native plugin generation interop", () => {
       reexported: string;
       namespace: Dependency;
       shadowed: number;
+      readImported(): Dependency;
+      readRequired(): Dependency;
       lazy: () => Promise<Dependency>;
       lazyModule: () => Promise<Dependency & { required: Dependency }>;
     };
+    const imported = entry.readImported();
+    const required = entry.readRequired();
     expect(entry.imported.value).toBe("require");
     expect(entry.shadowed).toBe(5);
     expect(entry.reexported).toBe("require");
@@ -934,14 +953,14 @@ describe("native plugin generation interop", () => {
     }
     const lazy = await entry.lazy();
     expect(lazy.value).toBe("import");
-    expect(lazy.token).not.toBe(entry.imported.token);
+    expect(lazy.token).not.toBe(imported.token);
     const lazyModule = await entry.lazyModule();
     expect(lazyModule.token).toBe(lazy.token);
     if (process.versions.bun) {
-      expect(lazyModule.required).toEqual(entry.required);
-      expect(lazyModule.required.token).toBe(entry.required.token);
+      expect(lazyModule.required).toEqual(required);
+      expect(lazyModule.required.token).toBe(required.token);
     } else {
-      expect(lazyModule.required).toBe(entry.required);
+      expect(lazyModule.required).toBe(required);
     }
   });
 });

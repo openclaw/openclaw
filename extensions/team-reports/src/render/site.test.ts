@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DAY_MS, describePeriod } from "../periods.js";
 import { githubCounts } from "../reports.fixtures.js";
 import type { PeriodListEntry, PersonDay } from "../store.js";
@@ -12,19 +12,22 @@ import {
   type PeriodIndex,
 } from "./html.js";
 
+const NOW_MS = Date.parse("2026-09-07T16:44:00Z");
+beforeEach(() => vi.spyOn(Date, "now").mockReturnValue(NOW_MS));
+afterEach(() => vi.restoreAllMocks());
+
 const ctx: PageContext = {
   basePath: "/reports",
   nonce: "fixture",
   absoluteUrl: "https://example.test/reports/",
   displayTimezone: "America/Los_Angeles",
-  nowMs: Date.parse("2026-09-07T16:44:00Z"),
 };
 function entry(period: Period, key: string, total = 10): PeriodListEntry {
   const window = describePeriod(period, key);
   return {
     ...window,
-    status: window.untilMs > (ctx.nowMs ?? 0) ? "partial" : "closed",
-    generatedAtMs: Math.min(window.untilMs, ctx.nowMs ?? 0),
+    status: window.untilMs > NOW_MS ? "partial" : "closed",
+    generatedAtMs: Math.min(window.untilMs, NOW_MS),
     activeMembers: 1,
     memberCount: 2,
     githubTotal: total,

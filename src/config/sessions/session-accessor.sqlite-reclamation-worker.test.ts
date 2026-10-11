@@ -42,7 +42,6 @@ import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import type { SqliteReclamationWorkerMessage } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
-import { createSessionEntryReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
@@ -56,8 +55,9 @@ function createEntryFixture(
   return {
     scope,
     entry,
-    plan: createSessionEntryReclamationPlan({
-      databaseOptions,
+    plan: {
+      kind: "entry",
+      databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
       deleteParams: {
         archiveTranscript: false,
         storePath: databaseOptions.path,
@@ -65,7 +65,7 @@ function createEntryFixture(
       },
       preparedTargetSnapshot: [{ entry, sessionKey: scope.sessionKey }],
       materializedPlans: [],
-    }),
+    } satisfies SqliteSessionReclamationPlan,
   };
 }
 
@@ -83,13 +83,13 @@ test("retains one archive Worker across refused and interleaved reclamation oper
         databaseOptions,
       ),
     );
-    let refusalPoint: "admission-request" | "commit-request" | undefined;
+    let refusalPoint: "admission-request" | undefined;
     let superseded = false;
     const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
     const spawn = vi
       .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
-      .mockImplementation((data) => {
-        const worker = create(data);
+      .mockImplementation((data, nativeLocations) => {
+        const worker = create(data, nativeLocations);
         worker.prependListener("message", (message: { type: string }) => {
           if (message.type === refusalPoint) {
             superseded = true;
@@ -101,13 +101,14 @@ test("retains one archive Worker across refused and interleaved reclamation oper
       for (const { scope, plan } of entries) {
         const plans: SqliteSessionReclamationPlan[] = [
           plan,
-          reclamation.createHistoryEvictionReclamationPlan({
-            databaseOptions,
+          {
+            kind: "history-eviction",
+            databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
             diskBudget: {},
             materializedPlans: [],
-            protectedSessionIds: new Set(),
+            protectedSessionIds: [],
             sessionId: scope.sessionId,
-          }),
+          },
           reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions),
           {
             kind: "archive-publish-prepare",
@@ -126,11 +127,7 @@ test("retains one archive Worker across refused and interleaved reclamation oper
         ];
         for (const operation of plans) {
           const refusals =
-            operation.kind === "maintenance-statistics"
-              ? []
-              : operation.kind === "entry"
-                ? (["admission-request", "commit-request"] as const)
-                : (["admission-request"] as const);
+            operation.kind === "maintenance-statistics" ? [] : (["admission-request"] as const);
           for (const point of refusals) {
             refusalPoint = point;
             await expect(
@@ -177,11 +174,13 @@ test.each(["path", "root"] as const)(
       const { plan } = createEntryFixture(scope, databaseOptions);
       const spawned: Worker[] = [];
       const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-        const worker = create(data);
-        spawned.push(worker);
-        return worker;
-      });
+      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+        (data, nativeLocations) => {
+          const worker = create(data, nativeLocations);
+          spawned.push(worker);
+          return worker;
+        },
+      );
       try {
         await runSqliteSessionReclamation({
           forceInProcess: false,
@@ -235,11 +234,13 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
     );
     const workers: Worker[] = [];
     const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
-    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-      const worker = spawn(data);
-      workers.push(worker);
-      return worker;
-    });
+    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+      (data, nativeLocations) => {
+        const worker = spawn(data, nativeLocations);
+        workers.push(worker);
+        return worker;
+      },
+    );
     const reclaim = async (index: number) => {
       const diagnostics: SqliteSessionReclamationDiagnostics = {};
       const fixture = entries[index];
@@ -301,29 +302,31 @@ test.each(["established", "first-created"] as const)(
       const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
       let child: Worker | undefined;
       let revoked = false;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-        const worker = spawn(data);
-        child = worker;
-        worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
-          if (message.type === "lease") {
-            // Native acquisition already committed, but its notification has not reached the owner.
-            const physical = readDatabasePathIdentitySync(sharedPath);
-            const receipt = message.receipt;
-            expect(receipt.sharedStateIdentity).toBe(physical.key);
-            expect(receipt.sharedStatePath).toBe(sharedPath);
-            expect(receipt.agentId).toBe(databaseOptions.agentId);
-            expect(receipt.path).toBe(databaseOptions.path);
-            expect(receipt.ownerPid).toBe(process.pid);
-            expect(admission.identity.key.startsWith("path:")).toBe(
-              sharedState === "first-created",
-            );
-            stateCache.clearOpenClawStateDatabaseOpenFailure(sharedPath);
-            revoked = true;
-            expect(() => admission.assertCurrent()).toThrow("read admission changed");
-          }
-        });
-        return worker;
-      });
+      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+        (data, nativeLocations) => {
+          const worker = spawn(data, nativeLocations);
+          child = worker;
+          worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
+            if (message.type === "lease") {
+              // Native acquisition already committed, but its notification has not reached the owner.
+              const physical = readDatabasePathIdentitySync(sharedPath);
+              const receipt = message.receipt;
+              expect(receipt.sharedStateIdentity).toBe(physical.key);
+              expect(receipt.sharedStatePath).toBe(sharedPath);
+              expect(receipt.agentId).toBe(databaseOptions.agentId);
+              expect(receipt.path).toBe(databaseOptions.path);
+              expect(receipt.ownerPid).toBe(process.pid);
+              expect(admission.identity.key.startsWith("path:")).toBe(
+                sharedState === "first-created",
+              );
+              stateCache.clearOpenClawStateDatabaseOpenFailure(sharedPath);
+              revoked = true;
+              expect(() => admission.assertCurrent()).toThrow("read admission changed");
+            }
+          });
+          return worker;
+        },
+      );
       try {
         await expect(
           runSqliteSessionReclamation({
@@ -476,12 +479,17 @@ test.each(["active key", "provider"] as const)(
         await fs.writeFile(file, "");
         setLoggerOverride({ level: "debug", consoleLevel: "silent", file });
         vi.spyOn(performance, "now").mockReturnValue(0);
-        const plans = vi.spyOn(reclamation, "createSessionMaintenancePlanningOperation");
+        const plans = new Set<
+          Extract<SqliteSessionReclamationPlan, { kind: "maintenance-plan" }>
+        >();
         const runs: Promise<unknown>[] = [];
         const firstRun = createDeferredCore();
         let armed = false;
         const run = reclamationRun.runSqliteSessionReclamation;
         vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation((params) => {
+          if (params.plan.kind === "maintenance-plan") {
+            plans.add(params.plan);
+          }
           armed =
             params.plan.kind === "maintenance-plan" && params.plan.input.preservation !== null;
           const operation = run(params);
@@ -493,9 +501,10 @@ test.each(["active key", "provider"] as const)(
         });
         const workerThreadIds: number[] = [];
         let raced = false;
-        const unregister = registerSessionMaintenancePreserveKeysProvider(() =>
-          change === "provider" && raced ? [unrelated.sessionKey] : [],
-        );
+        const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+          capture: () => (change === "provider" && raced ? [unrelated.sessionKey] : []),
+          dispose() {},
+        }));
         observeSessionMaintenancePlanningWorker({
           afterPrepare() {
             if (raced || !armed) {
@@ -546,7 +555,7 @@ test.each(["active key", "provider"] as const)(
           expect(records).not.toContainEqual(logged("SQLite reclamation Worker failed"));
           expect(records).not.toContainEqual(logged("SQLite automatic session maintenance failed"));
 
-          expect(plans).toHaveBeenCalledTimes(1);
+          expect(plans.size).toBe(1);
         } finally {
           unregister();
           vi.useRealTimers();
@@ -583,8 +592,14 @@ test("retains a selected maintenance row protected after native preparation", as
       workIdentities: [],
       lifecycleIdentities: [],
     };
-    const plan = reclamation.createSessionMaintenancePlanningOperation({
-      databaseOptions: { agentId: active.agentId, env: state.env, path: database.path },
+    const plan = {
+      kind: "maintenance-plan",
+      databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions({
+        agentId: active.agentId,
+        env: state.env,
+        path: database.path,
+      }),
+      materializedPlans: [],
       input: {
         activeSessionKeys: [active.sessionKey],
         archiveDirectory: state.path("archives"),
@@ -592,10 +607,13 @@ test("retains a selected maintenance row protected after native preparation", as
         preservation: protection,
         storePath: database.path,
       },
-    });
+    } satisfies SqliteSessionReclamationPlan;
     const prepared: string[] = [];
     const released: string[] = [];
-    let refreshed = 0;
+    const refreshed = vi.fn(() => ({
+      activeSessionKeys: [active.sessionKey],
+      preservation: protection,
+    }));
     observeSessionMaintenancePlanningWorker({
       afterPrepare(id) {
         prepared.push(id);
@@ -614,13 +632,17 @@ test("retains a selected maintenance row protected after native preparation", as
         runSqliteSessionReclamation({
           forceInProcess: false,
           plan,
-          refreshMaintenanceProtection: () => {
-            refreshed += 1;
-            return { activeSessionKeys: [active.sessionKey], preservation: protection };
-          },
+          refreshMaintenanceProtection: refreshed,
         }),
       ).resolves.toEqual({ kind: "maintenance-plan-stale" });
-      expect(refreshed).toBe(1);
+      expect(refreshed).toHaveReturnedWith({
+        activeSessionKeys: [active.sessionKey],
+        preservation: {
+          providerKeys: [victim.sessionKey],
+          workIdentities: [],
+          lifecycleIdentities: [],
+        },
+      });
       expect(prepared).toHaveLength(1);
       expect(released).toEqual(prepared);
       expect(loadSessionEntry(victim)).toEqual(originalVictim);
