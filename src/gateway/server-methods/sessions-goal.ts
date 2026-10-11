@@ -95,7 +95,7 @@ async function handleSessionGoalMutation(
     const actorFacts = memory
       ? captureSessionActorMutationFacts(memory, target.storeKey, false)
       : binding && captureIncognitoSessionMutationFacts(binding, target.storeKey, false);
-    const assertRouting = captureSessionMutationRouting(cfg, sessionChanged);
+    const assertRouting = captureSessionMutationRouting(cfg, sessionChanged, [request]);
     const assertTarget = (current: ReturnType<typeof resolveSessionSharingTarget>) => {
       // Reset can keep the same session ID. Fence the lifecycle and resolved store as well.
       if (

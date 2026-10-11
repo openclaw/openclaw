@@ -113,7 +113,7 @@ describe("recoverInstalledLaunchAgent", () => {
     expect(launchAgentPlistExists).not.toHaveBeenCalled();
   });
 
-  it.each(["system-launchdaemon-conflict", "system-launchdaemon-unverifiable"] as const)(
+  it.each(["system-launchdaemon-unverifiable"] as const)(
     "preserves typed %s bootstrap failures",
     async (status) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("darwin");

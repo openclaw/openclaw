@@ -375,10 +375,22 @@ export function receiveSqliteWorkerReply(
       job.dispatchState.openNotEntered = true;
     }
     const error = decodeSqliteWorkerReplyError(reply.error);
-    if (job.request.type === "open" && reply.openNotEntered && !reply.retire) {
+    if (
+      job.request.type === "open" &&
+      (reply.openNotEntered || reply.openOutcome === "refused-before-agent-open") &&
+      !reply.retire
+    ) {
       slot.current = undefined;
       const refusal = job.operationAdmission?.admission.failure ?? error;
-      owner.finish(job, refusal, undefined, { kind: "not-entered", error: refusal });
+      if (job.dispatchState && reply.openOutcome === "refused-before-agent-open") {
+        job.dispatchState.openRefused = true;
+      }
+      owner.finish(
+        job,
+        refusal,
+        undefined,
+        reply.openNotEntered ? { kind: "not-entered", error: refusal } : { kind: "completed" },
+      );
       owner.dispatch();
       return;
     }

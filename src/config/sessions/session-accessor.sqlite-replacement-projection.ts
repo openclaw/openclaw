@@ -416,7 +416,6 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               labelClaim: params.labelClaim,
               preparedTranscript: params.preparedTranscript,
               maintenance,
-              maintenanceRunBasis: preparedPreservation?.subagentRunBasis,
             };
             if (incognito) {
               const actor = incognito.actor;

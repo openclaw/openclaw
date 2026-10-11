@@ -576,6 +576,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         assertCurrent();
         const result = await searchRemoteProjects(params.query, {
           assertCurrent,
+          trackExecution: (run) => context.trackExecution(run),
           signal,
           host,
           apiBaseUrl,

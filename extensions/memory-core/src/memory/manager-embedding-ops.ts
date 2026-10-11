@@ -493,14 +493,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     if (this.batch.enabled) {
       return this.batch.concurrency;
     }
-    const configured = this.settings.remote?.nonBatchConcurrency;
-    if (typeof configured === "number" && Number.isFinite(configured)) {
-      return Math.max(1, Math.floor(configured));
-    }
     const provider = this.syncProviderGeneration
       ? this.syncProviderGeneration.provider
       : this.provider;
-    return provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
+    return provider?.id === "local" || provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
   }
 
   private async writeChunks(

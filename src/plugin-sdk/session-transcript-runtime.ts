@@ -77,6 +77,7 @@ export type {
   TranscriptEntryAnchor,
   TranscriptTurnAdmission,
 } from "../config/sessions/session-accessor.js";
+export { scopeCommandTranscriptId } from "../config/sessions/command-transcript.js";
 export { hasPromptImageInput } from "../media/prompt-image-input.js";
 export {
   readSessionTranscriptCatalogPage,

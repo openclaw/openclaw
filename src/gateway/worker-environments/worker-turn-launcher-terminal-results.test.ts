@@ -171,7 +171,6 @@ describe("worker turn launcher terminal results", () => {
         resolveProvider: () => undefined,
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
-        executeInference: vi.fn(),
         inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,

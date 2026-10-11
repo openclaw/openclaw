@@ -574,8 +574,10 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
                 params.preparedProfiles?.readCurrent();
                 const expected = authorizedTargets[0]!;
                 const cfg = params.context.getRuntimeConfig();
-                const assertRoutingCurrent = captureSessionMutationRouting(cfg, () =>
-                  targetChanged(expected.sessionKey),
+                const assertRoutingCurrent = captureSessionMutationRouting(
+                  cfg,
+                  () => targetChanged(expected.sessionKey),
+                  [expected],
                 );
                 return withSelectedStorage(() =>
                   withSessionSharingTarget(
@@ -610,8 +612,10 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
                   targetChanged: () => targetChanged(expected.sessionKey),
                 });
                 const cfg = params.context.getRuntimeConfig();
-                const assertRoutingCurrent = captureSessionMutationRouting(cfg, () =>
-                  targetChanged(expected.sessionKey),
+                const assertRoutingCurrent = captureSessionMutationRouting(
+                  cfg,
+                  () => targetChanged(expected.sessionKey),
+                  [expected],
                 );
                 return consumeSharing(
                   {

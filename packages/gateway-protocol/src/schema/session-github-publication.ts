@@ -151,6 +151,7 @@ export const SessionGitHubStatusResultSchema = closedObject({
 });
 
 export const SessionGitHubOptionsResultSchema = closedObject({
+  stale: Type.Optional(Type.Boolean()),
   personal: Type.Union([PersonalGitHubStatusSchema, Type.Null()]),
   shared: Type.Union([SharedGitHubPublicationPublisherSchema, Type.Null()]),
   sharedUnavailableReason: Type.Optional(
