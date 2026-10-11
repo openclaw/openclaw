@@ -19,6 +19,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext, ReplyDispatchKind } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMergedWhatsAppAccountConfig } from "../../account-config.js";
 import { resolveWhatsAppAdmissionChannelIngress } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import {
@@ -47,7 +48,6 @@ import {
   jidToE164,
   logVerbose,
   resolveChunkMode,
-  resolveIdentityNamePrefix,
   resolveInboundLastRouteSessionKey,
   resolveMarkdownTableMode,
   resolveSendableOutboundReplyParts,
@@ -266,22 +266,6 @@ function createWhatsAppMediaOnlyReplyCoalescer(params: {
     },
     flushAll: () => flushWhere(() => true),
   };
-}
-
-export function resolveWhatsAppResponsePrefix(params: {
-  cfg: ReturnType<LoadConfigFn>;
-  agentId: string;
-  isSelfChat: boolean;
-  pipelineResponsePrefix?: string;
-}): string | undefined {
-  const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
-  return (
-    params.pipelineResponsePrefix ??
-    (configuredResponsePrefix === "auto"
-      ? resolveIdentityNamePrefix(params.cfg, params.agentId)
-      : configuredResponsePrefix) ??
-    (params.isSelfChat ? resolveIdentityNamePrefix(params.cfg, params.agentId) : undefined)
-  );
 }
 
 export function buildWhatsAppInboundTransportContext(
@@ -526,7 +510,7 @@ export function createWhatsAppReplyPlan(params: {
 }): WhatsAppReplyPlan {
   const conversationId = params.conversationId;
   const statusReactionController = params.statusReactionController ?? null;
-  const textLimit = resolveTextChunkLimit(params.cfg, "whatsapp");
+  const textLimit = resolveTextChunkLimit(params.cfg, "whatsapp", params.route.accountId);
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
@@ -539,7 +523,9 @@ export function createWhatsAppReplyPlan(params: {
       ? resolveChannelMessageSourceReplyDeliveryMode({ cfg: params.cfg, ctx: params.context })
       : undefined;
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
-  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.cfg.channels?.whatsapp);
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(
+    resolveMergedWhatsAppAccountConfig({ cfg: params.cfg, accountId: params.route.accountId }),
+  );
   let didSendReply = false;
   let reactionDeferred = false;
   let agentRunOutcome: "completed" | "failed" | undefined;

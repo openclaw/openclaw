@@ -1,4 +1,5 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { resolveChannelMessagingConfig } from "../../channels/plugins/messaging-config.js";
 import { resolveChannelStreamingBlockCoalesce } from "../../channels/streaming.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -41,6 +42,10 @@ function resolveProviderBlockStreamingCoalesce(
 ): BlockStreamingCoalesceConfig | undefined {
   if (!cfg || !providerKey) {
     return undefined;
+  }
+  const resolved = resolveChannelMessagingConfig(cfg, providerKey, accountId);
+  if (resolved) {
+    return resolveChannelStreamingBlockCoalesce(resolved);
   }
   const channelsConfig = cfg.channels as Record<string, unknown> | undefined;
   const providerCfg = channelsConfig?.[providerKey];

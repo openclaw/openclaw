@@ -1,8 +1,9 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ChannelGroups } from "../../config/channel-groups.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentBinding } from "../../config/types.agents.js";
-import type { DmScope } from "../../config/types.base.js";
+import type { ChannelDeliveryStreamingConfig, DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type {
@@ -79,6 +80,16 @@ export type ChannelAccountLinkState = "linked" | "not-linked" | "unknown";
 export type ChannelConfigAdapter<ResolvedAccount> = {
   listAccountIds: (cfg: OpenClawConfig) => string[];
   resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+  /** Complete account-selected messaging settings; leaves canonical config unchanged. */
+  resolveMessagingConfig?: (
+    cfg: OpenClawConfig,
+    accountId?: string | null,
+  ) => {
+    responsePrefix?: string;
+    textChunkLimit?: number;
+    streaming?: ChannelDeliveryStreamingConfig;
+    groups?: ChannelGroups;
+  };
   /** Operational account preparation; preferred over the synchronous compatibility hook. */
   resolveAccountAsync?: (
     cfg: OpenClawConfig,

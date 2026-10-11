@@ -144,6 +144,21 @@ the selector on the proposed remaining map and refuses a deletion that would
 activate a colliding row. Creation with `allowMissing: true` rejects reserved
 object keys instead of writing an account that readers cannot select.
 
+## Account-selected messaging settings
+
+A channel with its own account inheritance rules can expose
+`config.resolveMessagingConfig(cfg, accountId)`. Return the complete selected
+`responsePrefix`, `textChunkLimit`, `streaming`, and `groups` settings through
+this optional adapter. Core consumes these settings for response formatting,
+chunking, block coalescing, and group policy. Omitted values use core defaults;
+core does not merge root fields back into the adapter result. Group maps retain
+the shared rule that an empty single-account map inherits the root map.
+
+Keep `cfg` canonical when passing it into inbound turns. Do not copy resolved
+account fields into `cfg.channels`: durable delivery compares that config with
+the live Gateway config before allowing a reply across a reload. Resolve policy,
+credentials, and transport settings through the channel's account owner instead.
+
 ## Other narrow channel subpaths
 
 For other hot channel paths, prefer the narrow helpers over broader legacy

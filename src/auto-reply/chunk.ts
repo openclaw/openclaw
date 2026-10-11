@@ -10,6 +10,7 @@ import {
   type FenceSpan,
 } from "../../packages/markdown-core/src/fences.js";
 import { scanParenAwareBreakpoints } from "../../packages/markdown-core/src/text-breakpoints.js";
+import { resolveChannelMessagingConfig } from "../channels/plugins/messaging-config.js";
 import type { ChannelId } from "../channels/plugins/types.core.js";
 import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -46,6 +47,10 @@ function resolveChunkConfig(
 ): { channel?: ProviderChunkConfig; account?: ProviderChunkConfig } {
   if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
     return {};
+  }
+  const resolved = cfg && resolveChannelMessagingConfig(cfg, provider, accountId);
+  if (resolved) {
+    return { channel: resolved };
   }
   const channels = cfg?.channels as Record<string, ProviderChunkConfig> | undefined;
   const channel = channels?.[provider];
