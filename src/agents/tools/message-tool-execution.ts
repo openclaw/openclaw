@@ -11,6 +11,7 @@ import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
+import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -19,6 +20,7 @@ import {
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
 import { hasAcceptedMessageActionResult } from "../../infra/outbound/message-action-result-acceptance.js";
+import { resolveEffectiveMessageAccountId } from "../../infra/outbound/message-action-routing.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
 import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-reply-mirror.js";
@@ -487,7 +489,21 @@ function* createMessageToolSteps(
         action,
         args: params,
         channel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
-        accountId,
+        // Key the budget on the account delivery resolves, not the omitted input, so an
+        // omitted-account send shares one slot with explicit and conversations_send sends.
+        resolveAccountId: (route) =>
+          resolveEffectiveMessageAccountId({
+            cfg,
+            channel: route.channel,
+            channelPlugin: resolveOutboundChannelPlugin({
+              channel: route.channel,
+              cfg,
+              agentId: resolvedAgentId,
+            }),
+            accountId,
+            agentId: resolvedAgentId,
+            target: route.target,
+          }),
         currentChannelId: effectiveCurrentChannel.currentChannelId,
         currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
       });
