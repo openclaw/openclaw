@@ -113,6 +113,18 @@ export async function auditScheduledTaskDefinition(
       userSid = identity.stdout.trim();
     }
   }
+  // Task Scheduler canonicalizes the run-as account (case and DOMAIN\ qualifier),
+  // so compare the account name instead of the raw identity string.
+  const accountName = (value: string) => {
+    const trimmed = value.trim();
+    return trimmed.slice(trimmed.lastIndexOf("\\") + 1).toLowerCase();
+  };
+  const sameTaskAccount = (value: string) => {
+    if (!taskUser) {
+      return false;
+    }
+    return value === userSid || accountName(value) === accountName(taskUser);
+  };
   const nativeDefaults: Record<string, string> = {
     // https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-schema
     // DeleteExpiredTaskAfter is excluded: omission disables deletion, unlike explicit PT0S.
@@ -140,10 +152,13 @@ export async function auditScheduledTaskDefinition(
     "Settings.IdleSettings.WaitTimeout": "PT1H",
     "Settings.IdleSettings.StopOnIdleEnd": "true",
     "Settings.IdleSettings.RestartOnIdle": "false",
-    "Settings.UseUnifiedSchedulingEngine": "false",
     "Settings.DisallowStartOnRemoteAppSession": "false",
     "Settings.Volatile": "false",
   };
+  // Task Scheduler rewrites UseUnifiedSchedulingEngine on registration regardless of
+  // the submitted XML (it returns as true), so its value is scheduler-owned rather
+  // than an operator edit (#167778).
+  const nativeManaged = new Set<string>(["Settings.UseUnifiedSchedulingEngine"]);
   const released: Record<string, string> = {
     "Settings.DisallowStartIfOnBatteries": "true",
     "Settings.StopIfGoingOnBatteries": "true",
@@ -205,15 +220,12 @@ export async function auditScheduledTaskDefinition(
           (key === "Actions.Exec.Command" &&
             canonical &&
             samePath(current, canonical.textContent)))) ||
-      (node.tagName === "UserId" &&
-        canonical &&
-        taskUser &&
-        (current.toLowerCase() === taskUser.toLowerCase() || current === userSid))
+      (node.tagName === "UserId" && canonical && sameTaskAccount(current))
     ) {
       continue;
     }
     if (
-      (!canonical && nativeDefaults[key] === current) ||
+      (!canonical && (nativeManaged.has(key) || nativeDefaults[key] === current)) ||
       (canonical &&
         (node.children.length || canonical.children.length || current === canonical.textContent))
     ) {
