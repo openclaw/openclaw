@@ -47,12 +47,14 @@ export function createFixture(sessionIds = ["first", "second"], agentId = "main"
 export function observeReclamationWorkers(onSpawn?: (worker: Worker) => void) {
   const spawned: Worker[] = [];
   const create = archiveWorker.createSqliteTranscriptArchiveWorker;
-  vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-    const worker = create(data);
-    spawned.push(worker);
-    onSpawn?.(worker);
-    return worker;
-  });
+  vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation(
+    (data, nativeLocations) => {
+      const worker = create(data, nativeLocations);
+      spawned.push(worker);
+      onSpawn?.(worker);
+      return worker;
+    },
+  );
   return spawned;
 }
 

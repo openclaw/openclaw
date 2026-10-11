@@ -182,14 +182,7 @@ function findSubsequence(haystack: readonly string[], needle: readonly string[])
     return -1;
   }
   for (let start = 0; start <= haystack.length - needle.length; start += 1) {
-    let matches = true;
-    for (let offset = 0; offset < needle.length; offset += 1) {
-      if (haystack[start + offset] !== needle[offset]) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) {
+    if (needle.every((value, offset) => haystack[start + offset] === value)) {
       return start;
     }
   }
@@ -219,7 +212,7 @@ function replacePosixShellInlineCommand(params: {
     return null;
   }
   const absoluteValueIndex = transportStart + match.valueTokenIndex;
-  const token = params.argv[absoluteValueIndex];
+  const token = params.argv[absoluteValueIndex]?.trimEnd();
   if (token === undefined) {
     return null;
   }

@@ -387,6 +387,7 @@ export function createGatewayWorkerPlacementRuntime(
     warn: params.warn,
   });
   const admissionProvider = createWorkerSessionTurnPlacementProvider({
+    withRequiredSession,
     environments: params.environments,
     placements: params.placements,
     resolveWorkspace,

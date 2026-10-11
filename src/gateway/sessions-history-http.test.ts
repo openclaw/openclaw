@@ -4,11 +4,9 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEntryRows from "../config/sessions/session-accessor.sqlite-status.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";

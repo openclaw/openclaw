@@ -85,6 +85,14 @@ or still-valid admitted input keeps recovery pending. Native parent rotation mus
 the current connection and requester identity checks. A later parent registration cannot
 supply missing historical ownership.
 
+An interrupted admitted completion keeps its complete recovery claim even when
+the saved run status is failed, timed out, or killed. The next visible message or queued
+follow-up resumes that recovery before taking foreground ownership or entering
+the active transcript. Session reuse must not attach the old completion to the
+new message. Recovery still checks the admitted input, requester lifecycle,
+delivery receipt, and replay safety; it does not infer delivery from a terminal
+run status.
+
 Before parent completion admission, native Codex pending assignments retain their
 run, child-thread, native-parent, and known native-turn identities in the existing
 parent binding metadata. Accepted follow-ups can also retain their submission
@@ -1010,6 +1018,13 @@ channels.start --params '{"channel":"<id>"}'`
   See also [Gateway](/gateway) (safe mode paragraph) for the same control-plane
   vs channel-autostart split.
 
+- **Session preparation:** an interrupted session that is still initializing or
+  waiting for workspace setup stays deferred. Recovery rechecks that exact
+  startup candidate when its session preparation changes, without charging a
+  dispatch attempt while it waits. Shutdown or a new Gateway lifecycle cancels
+  the wait; replacing or resetting the session invalidates the old candidate.
+  Archived, expired, restart-tombstoned, and provider-review-blocked sessions
+  still require their normal operator action.
 - **Main-session attempt budget:** three charged automatic dispatch attempts
   per interrupted cycle. Exhaustion tombstones that session until it is
   inspected and replaced.
@@ -1019,10 +1034,13 @@ channels.start --params '{"channel":"<id>"}'`
 - **Logs:** recovery decisions are logged under the
   `main-session-restart-recovery` and `agents/subagent-registry`
   subsystems. Every startup pass includes bounded skip counts by reason such as
-  `live_owner`, `work_start_blocked`, or `dispatch_target_unavailable`, even when
+  `live_owner`, `work_start_pending`, `work_start_blocked`, or
+  `dispatch_target_unavailable`, even when
   other sessions started. Each interrupted main candidate has a structured
   decision line with boot/pass, session and source-run identity, outcome
   (`started`, `settled`, `deferred`, or `blocked`), and the next responsible owner.
+  Work-start decisions name the specific condition, such as
+  `initialization_pending`, `workspace_pending`, `archived`, or `provider_review`.
 - **Reply hooks:** resumed turns run currently loaded `before_agent_reply`
   hooks under the normal user-trigger rules. Automatically delivered replies
   also run the normal `reply_payload_sending` hook before channel delivery,

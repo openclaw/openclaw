@@ -7,6 +7,7 @@ import type {
   OpenKeyedStoreOptions,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  createPluginStateKeyedStoreForTests,
   createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -55,6 +56,11 @@ describe("Reef setup wizard identity binding", () => {
     const runtime = createPluginRuntimeMock();
     runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
       createPluginStateSyncKeyedStoreForTests<T>("reef", {
+        ...options,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+    runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("reef", {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },
       });

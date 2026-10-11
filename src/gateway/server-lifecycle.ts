@@ -453,13 +453,15 @@ export async function prepareGatewayLifecycle(params: {
       step("health-work", () => healthWork.drain()),
     ]);
   };
+  // Set synchronously by prepareClose, before the close plan reaches the prelude.
+  let exitAfterClose = false;
   const runClosePrelude = async () => {
     await beginClosePrelude();
     stopNodeConnectionNotifications();
     watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
       stopDiagnostics: stopGatewayDiagnosticHeartbeat,
-      skillsChangeUnsub: runtimeState.skillsChangeUnsub,
+      skillsChangeUnsub: () => runtimeState.skillsChangeUnsub({ exitAfterClose }),
       disposeNodeReapproval: () => nodeReapprovalCoordinator.dispose(),
       stopChannelHealthMonitor: async () => {
         const monitor = runtimeState?.channelHealthMonitor;
@@ -505,6 +507,7 @@ export async function prepareGatewayLifecycle(params: {
     }
   };
   const prepareClose = async (optsValue?: GatewayCloseOptions) => {
+    exitAfterClose = optsValue?.exitAfterClose === true;
     // Recovery and reply cancellation must precede services that join those replies.
     await markClosePreludeStarted(optsValue);
     const preparation = await shutdownRuntime.prepareGatewayClose(

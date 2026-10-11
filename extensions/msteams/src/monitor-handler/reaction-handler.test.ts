@@ -1,4 +1,3 @@
-// Msteams tests cover reaction handler plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
@@ -52,6 +51,7 @@ function buildDeps(cfg: OpenClawConfig, _runtime?: PluginRuntime): MSTeamsMessag
   return {
     cfg,
     runtime: { error: vi.fn() } as unknown as MSTeamsMessageHandlerDeps["runtime"],
+    accountId: "default",
     appId: "test-app",
     app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: { getAccessToken: vi.fn(async () => "token") },

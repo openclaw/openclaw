@@ -94,7 +94,7 @@ function resolveRelativeImport(importer: string, specifier: string, fsImpl: type
 /**
  * Lists static import/export specifiers from a JavaScript source string.
  */
-export function listStaticImportSpecifiers(source: string) {
+function listStaticImportSpecifiers(source: string) {
   return [...source.matchAll(STATIC_IMPORT_RE)].map((match) => match.groups?.specifier ?? "");
 }
 

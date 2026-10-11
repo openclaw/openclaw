@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +20,20 @@ const recipient: ReefPeerIdentity = {
 };
 
 function rejection(peer: string, id: string, category = "guard_deny"): ReefDeliveryRejection {
-  return { peer, id, recipient, textHash: "a".repeat(64), category };
+  return {
+    peer,
+    id,
+    recipient,
+    textHash: "a".repeat(64),
+    category,
+    recovery: {
+      assertCurrent() {},
+      loadState: async () => undefined,
+      reserve: async () => ({ kind: "reserved" }),
+      complete: async () => true,
+      prepareOutboundDelivery: async () => undefined,
+    },
+  };
 }
 
 async function consumeNotice(_notice: ReefRejectionNotice): Promise<void> {}
@@ -31,7 +45,7 @@ function createNoticeStore() {
   >();
   const key = (value: ReefDeliveryRejection) => `${value.peer}:${value.id}`;
   const store: ConstructorParameters<typeof ReefReceiptNotifier>[1] = {
-    loadState: async (peer) => {
+    loadState: ({ peer }) => {
       let latest: ReefRejectionNoticeState | undefined;
       for (const record of records.values()) {
         if (record.peer !== peer) {
@@ -50,7 +64,7 @@ function createNoticeStore() {
       }
       return latest;
     },
-    reserve: async (value, state) => {
+    reserve: (value, state) => {
       const existing = records.get(key(value));
       if (existing) {
         return { kind: "existing", state: existing.state };
@@ -62,7 +76,7 @@ function createNoticeStore() {
       });
       return { kind: "reserved" };
     },
-    complete: async (value, state) => {
+    complete: (value, state) => {
       const recordKey = key(value);
       const existing = records.get(recordKey);
       if (!existing) {
@@ -254,7 +268,7 @@ describe("ReefReceiptNotifier", () => {
     });
     await first.notifyRejections([rejection("alice", "01JZ0000000000000000000105")]);
 
-    expect(await notices.store.loadState("alice")).toEqual({
+    expect(notices.store.loadState(rejection("alice", "cooldown"))).toEqual({
       lastRejectionAt: 10_000,
       lastResendAt: 10_000,
     });
@@ -288,6 +302,47 @@ describe("ReefReceiptNotifier", () => {
     expect(notify).toHaveBeenCalledTimes(2);
     expect(notify.mock.calls[0]![0]).toMatchObject({ allowResend: false });
     expect(notify.mock.calls[1]![0]).toMatchObject({ allowResend: false });
+  });
+
+  it("preserves the fresh resend cooldown when recovery starts during state loading", async () => {
+    const notices = createNoticeStore();
+    const recovered = rejection("alice", "01JZ0000000000000000000131");
+    const reservedNotice = { lastRejectionAt: 10_000, lastResendAt: 10_000 };
+    await notices.store.reserve(recovered, reservedNotice);
+    const captured = await notices.store.loadState(rejection("alice", "cooldown"));
+    const loadStarted = createDeferred<void>();
+    const loadFinished = createDeferred<ReefRejectionNoticeState | undefined>();
+    vi.spyOn(notices.store, "loadState").mockImplementationOnce(() => {
+      loadStarted.resolve();
+      return loadFinished.promise;
+    });
+    const notify = vi.fn(consumeNotice);
+    let now = 1_000_000;
+    const notifier = new ReefReceiptNotifier(notify, notices.store, {
+      scheduler: createScheduler(),
+      now: () => now,
+    });
+    const fresh = rejection("alice", "01JZ0000000000000000000132");
+    const later = rejection("alice", "01JZ0000000000000000000133");
+
+    const freshNotification = notifier.notifyRejections([fresh]);
+    await loadStarted.promise;
+    const recoveredNotification = notifier.notifyRejections([{ ...recovered, reservedNotice }]);
+    loadFinished.resolve(captured);
+    await Promise.all([freshNotification, recoveredNotification]);
+    now += 1;
+    await notifier.notifyRejections([later]);
+
+    expect(
+      notify.mock.calls.map(([notice]) => ({
+        messageId: notice.messageId,
+        allowResend: notice.allowResend,
+      })),
+    ).toEqual([
+      { messageId: fresh.id, allowResend: true },
+      { messageId: recovered.id, allowResend: false },
+      { messageId: later.id, allowResend: false },
+    ]);
   });
 
   it("fails closed when recovered cooldown state cannot be loaded", async () => {
@@ -339,27 +394,29 @@ describe("ReefReceiptNotifier", () => {
     expect(notify.mock.calls[1]![0]).toMatchObject({ allowResend: false });
   });
 
-  it("retries a fresh rejection after durable state loading fails", async () => {
-    const notices = createNoticeStore();
-    const loadError = new Error("state unavailable");
-    vi.spyOn(notices.store, "loadState").mockImplementationOnce(() => {
-      throw loadError;
-    });
-    const notify = vi.fn(consumeNotice);
-    const onError = vi.fn();
-    const notifier = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-      onError,
-    });
-    const pending = rejection("alice", "01JZ0000000000000000000124");
+  it.each(["loadState", "reserve"] as const)(
+    "retries a fresh rejection after durable %s rejects",
+    async (operation) => {
+      const notices = createNoticeStore();
+      const stateError = new Error("state unavailable");
+      vi.spyOn(notices.store, operation).mockRejectedValueOnce(stateError);
+      const notify = vi.fn(consumeNotice);
+      const onError = vi.fn();
+      const notifier = new ReefReceiptNotifier(notify, notices.store, {
+        scheduler: createScheduler(),
+        onError,
+      });
+      const pending = rejection("alice", "01JZ0000000000000000000124");
 
-    await notifier.notifyRejections([pending]);
-    expect(vi.getTimerCount()).toBe(1);
-    await vi.advanceTimersByTimeAsync(1_000);
+      await notifier.notifyRejections([pending]);
+      expect(notify).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(onError).toHaveBeenCalledWith(loadError, pending.id);
-    expect(notify).toHaveBeenCalledOnce();
-  });
+      expect(onError).toHaveBeenCalledWith(stateError, pending.id);
+      expect(notify).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps a failed dispatch reserved and retries with stop-only guidance", async () => {
     const notices = createNoticeStore();
@@ -435,9 +492,9 @@ describe("ReefReceiptNotifier", () => {
   it("retries durable completion without dispatching the agent twice", async () => {
     const notices = createNoticeStore();
     const originalComplete = notices.store.complete.bind(notices.store);
-    const complete = vi.spyOn(notices.store, "complete").mockImplementationOnce(() => {
-      throw new Error("state unavailable");
-    });
+    const complete = vi
+      .spyOn(notices.store, "complete")
+      .mockRejectedValueOnce(new Error("state unavailable"));
     complete.mockImplementation(originalComplete);
     const notify = vi.fn(consumeNotice);
     const notifier = new ReefReceiptNotifier(notify, notices.store, {
@@ -473,7 +530,7 @@ describe("ReefReceiptNotifier", () => {
       scheduler: createScheduler(),
       now: () => 11_000,
     });
-    const reservedNotice = await notices.store.loadState(pending.peer);
+    const reservedNotice = await notices.store.loadState(pending);
     expect(reservedNotice).toBeDefined();
     await restarted.notifyRejections([{ ...pending, reservedNotice: reservedNotice! }]);
 
@@ -487,10 +544,8 @@ describe("notifyOverdueReefDeliveries", () => {
     const marked = new Set<string>();
     return {
       marked,
-      overdueOutboundDeliveries: vi.fn(async () =>
-        overdue.filter((entry) => !marked.has(entry.id)),
-      ),
-      markOutboundDeliveryOverdueNotified: vi.fn(async (_peer: string, id: string) => {
+      overdueOutboundDeliveries: vi.fn(() => overdue.filter((entry) => !marked.has(entry.id))),
+      markOutboundDeliveryOverdueNotified: vi.fn((_peer: string, id: string) => {
         if (marked.has(id)) {
           return false;
         }

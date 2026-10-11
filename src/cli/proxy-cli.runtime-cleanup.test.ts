@@ -1,27 +1,19 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.types.js";
 
-const {
-  acquireStore,
-  spawnChild,
-  stopServer,
-  startServer,
-  initializeCapture,
-  finalizeCapture,
-  ensureCa,
-  captureSettings,
-} = vi.hoisted(() => ({
-  acquireStore:
-    vi.fn<() => Promise<{ store: AsyncDebugProxyCaptureStore; release: () => Promise<void> }>>(),
-  spawnChild: vi.fn<() => EventEmitter>(),
-  stopServer: vi.fn<() => Promise<void>>(),
-  startServer: vi.fn(),
-  initializeCapture: vi.fn(),
-  finalizeCapture: vi.fn(),
-  ensureCa: vi.fn(),
-  captureSettings: { enabled: false },
-}));
+const { acquireStore, spawnChild, stopServer, startServer, ensureCa, captureSettings } = vi.hoisted(
+  () => ({
+    acquireStore:
+      vi.fn<() => Promise<{ store: AsyncDebugProxyCaptureStore; release: () => Promise<void> }>>(),
+    spawnChild: vi.fn<() => EventEmitter>(),
+    stopServer: vi.fn<() => Promise<void>>(),
+    startServer: vi.fn(),
+    ensureCa: vi.fn(),
+    captureSettings: { enabled: false },
+  }),
+);
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -33,9 +25,13 @@ vi.mock("../proxy-capture/store.async.js", () => ({
 vi.mock("../proxy-capture/proxy-server.js", () => ({
   startDebugProxyServer: startServer,
 }));
-vi.mock("../proxy-capture/runtime.js", () => ({
-  initializeDebugProxyCaptureAsync: initializeCapture,
-  finalizeDebugProxyCaptureAsync: finalizeCapture,
+vi.mock("./local-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./local-state-owner.js")>()),
+  runWithLocalStateOwner: ({
+    runLocal,
+  }: {
+    runLocal: (scope: { env: NodeJS.ProcessEnv; assertCurrent(): void }) => unknown;
+  }) => runLocal({ env: {}, assertCurrent() {} }),
 }));
 vi.mock("../proxy-capture/ca.js", () => ({ ensureDebugProxyCa: ensureCa }));
 vi.mock("../proxy-capture/coverage.js", () => ({ buildDebugProxyCoverageReport: vi.fn() }));
@@ -110,7 +106,6 @@ function createStore(
 
 describe("proxy command cleanup errors", () => {
   it.each([
-    { command: "start", enabled: true, stage: "initialize" },
     { command: "start", enabled: true, stage: "acquire" },
     { command: "start", enabled: true, stage: "ca" },
     { command: "start", enabled: true, stage: "server" },
@@ -134,7 +129,6 @@ describe("proxy command cleanup errors", () => {
         throw sessionFailure;
       };
       const endSession = vi.fn<AsyncDebugProxyCaptureStore["endSession"]>(closeSession);
-      finalizeCapture.mockImplementation(closeSession);
       const upsertSession = vi.fn<AsyncDebugProxyCaptureStore["upsertSession"]>(async () => {});
       const release = vi.fn(async () => {
         order.push("release");
@@ -142,7 +136,6 @@ describe("proxy command cleanup errors", () => {
       });
       acquireStore.mockResolvedValue({ store: createStore(upsertSession, endSession), release });
       const failingOperation = {
-        initialize: initializeCapture,
         acquire: acquireStore,
         upsert: upsertSession,
         ca: ensureCa,
@@ -156,28 +149,68 @@ describe("proxy command cleanup errors", () => {
           : runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] })
       ).catch((error: unknown) => error);
 
-      const acquired = stage !== "initialize" && stage !== "acquire";
-      expect(order).toEqual([
-        "session:start",
-        "session:rejected",
-        ...(acquired ? ["release"] : []),
-      ]);
+      const acquired = stage !== "acquire";
+      expect(order).toEqual(acquired ? ["session:start", "session:rejected", "release"] : []);
       expect(stopServer).not.toHaveBeenCalled();
       expect(spawnChild).not.toHaveBeenCalled();
-      expect(finalizeCapture).toHaveBeenCalledTimes(enabled ? 1 : 0);
-      expect(endSession).toHaveBeenCalledTimes(enabled ? 0 : 1);
+      expect(endSession).toHaveBeenCalledTimes(acquired ? 1 : 0);
       expect(release).toHaveBeenCalledTimes(acquired ? 1 : 0);
+      if (!acquired) {
+        expect(failure).toBe(startupFailure);
+        return;
+      }
       expect(failure).toBeInstanceOf(AggregateError);
       if (!(failure instanceof AggregateError)) {
         throw new Error("Expected aggregate startup and cleanup failure");
       }
-      expect(failure.errors).toEqual([
-        startupFailure,
-        sessionFailure,
-        ...(acquired ? [releaseFailure] : []),
-      ]);
+      expect(failure.errors).toEqual([startupFailure, sessionFailure, releaseFailure]);
     },
   );
+
+  it("forwards a parent-only SIGTERM and settles capture after the child exits", async () => {
+    const launched = createDeferred();
+    const before = new Set(process.listeners("SIGTERM"));
+    const order: string[] = [];
+    const child = Object.assign(new EventEmitter(), {
+      kill: vi.fn((signal: NodeJS.Signals) => {
+        order.push("signal");
+        queueMicrotask(() => child.emit("exit", null, signal));
+        return true;
+      }),
+    });
+    spawnChild.mockImplementation(() => {
+      launched.resolve();
+      return child;
+    });
+    acquireStore.mockResolvedValue({
+      store: createStore(
+        async () => {},
+        async () => {
+          order.push("session");
+        },
+      ),
+      release: async () => {
+        order.push("release");
+      },
+    });
+    stopServer.mockImplementation(async () => {
+      order.push("stop");
+    });
+    const command = runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] });
+    await launched.promise;
+    const onSigterm = process.listeners("SIGTERM").find((listener) => !before.has(listener));
+    if (!onSigterm) {
+      child.emit("exit", 0, null);
+      await command;
+      throw new Error("Proxy child has no parent signal handler");
+    }
+    onSigterm("SIGTERM");
+    await command;
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(order).toEqual(["signal", "stop", "session", "release"]);
+    expect(process.exitCode).toBe(143);
+    expect(process.listeners("SIGTERM")).not.toContain(onSigterm);
+  });
 
   it.each(["success", "error"] as const)(
     "preserves every cleanup error and settles cleanup in order after child %s",
