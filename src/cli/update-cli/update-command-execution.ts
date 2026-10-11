@@ -528,7 +528,7 @@ export async function executeMutableUpdate(
     };
     activationSteps.push(postStopStep);
     await reportUpdateStepCompletion(params.progress, { ...postStopStep, index: 0, total: 0 });
-    // Both install paths enter mutation only after the post-stop schema/authority fence.
+    // Both install paths require schema admission and current publication authority before mutation.
     if (!mutationStarted) {
       preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
       mutationStarted = true;

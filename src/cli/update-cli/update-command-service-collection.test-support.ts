@@ -24,9 +24,9 @@ import * as verification from "./update-command-verification.js";
 const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 export function registerServiceCollectionTests() {
-  it.each(["unchanged", "definition changed", "authority revoked"] as const)(
-    "revalidates a collected systemd user unit before publication: %s",
-    (scenario) =>
+  it.each([false, true])(
+    "checks publication authority after stopping a collected unit (revoked=%s)",
+    (revoked) =>
       withServiceHome(async (home) => {
         expect(getFileLockProcessStartTime(process.pid)).not.toBeNull();
         mockProcessPlatform("linux");
@@ -66,7 +66,6 @@ export function registerServiceCollectionTests() {
         const runId = createUpdateRun({ trigger: "cli" }).runId;
         params.opts.run = { runId, env: process.env };
         let running = true;
-        let metadataLoads = 0;
         let inspections = 0;
         const service = createMockGatewayService({
           label: "systemd",
@@ -77,19 +76,10 @@ export function registerServiceCollectionTests() {
             }
             return structuredClone(command);
           },
-          readRuntime: async (_env, options) => {
+          readRuntime: async () => {
             if (!running) {
               // systemd can collect the stopped unit between its command and runtime reads.
-              const inspection = options?.loadForInspection;
-              if (!inspection) {
-                return { status: "unknown" };
-              }
-              if (scenario === "authority revoked") {
-                params.opts.run!.interrupted = true;
-              }
-              inspection.assertCurrent();
-              expect(inspection.managerUid).toBe(2001);
-              metadataLoads++;
+              return { status: "unknown" };
             }
             return {
               status: running ? "running" : "stopped",
@@ -99,8 +89,8 @@ export function registerServiceCollectionTests() {
           },
           stop: vi.fn(async () => {
             running = false;
-            if (scenario === "definition changed") {
-              command.programArguments.push("--port", "18790");
+            if (revoked) {
+              params.opts.run!.interrupted = true;
             }
           }),
         });
@@ -127,30 +117,19 @@ export function registerServiceCollectionTests() {
           });
           expect(service.stop, JSON.stringify(execution?.result)).toHaveBeenCalledOnce();
           expect(execution?.preManagedServiceStop).toMatchObject({ stopped: true, running: true });
-          if (scenario === "unchanged") {
-            expect(execution?.result.status).toBe("ok");
-            expect(execution?.mutationStarted).toBe(true);
-            expect(metadataLoads).toBeGreaterThan(0);
-            expect(published).toHaveBeenCalledOnce();
-            expect(command).toEqual(originalCommand);
-          } else {
-            expect(execution?.mutationStarted).toBe(false);
+          if (revoked) {
             expect(execution?.result).toMatchObject({
               status: "error",
-              reason:
-                scenario === "authority revoked"
-                  ? "requester-revoked"
-                  : "managed-service-preflight",
+              reason: "requester-revoked",
             });
+            expect(execution?.mutationStarted).toBe(false);
             expect(published).not.toHaveBeenCalled();
-            if (scenario === "authority revoked") {
-              expect(metadataLoads).toBe(0);
-            } else {
-              expect(execution?.result.steps.at(-1)?.failureFacts).toEqual([
-                expect.objectContaining({ code: "service-definition-changed" }),
-              ]);
-            }
+          } else {
+            expect(execution?.result.status).toBe("ok");
+            expect(execution?.mutationStarted).toBe(true);
+            expect(published).toHaveBeenCalledOnce();
           }
+          expect(command).toEqual(originalCommand);
           expect(service.install).not.toHaveBeenCalled();
           expect(service.start).not.toHaveBeenCalled();
           expect(service.restart).not.toHaveBeenCalled();

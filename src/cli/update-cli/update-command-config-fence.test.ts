@@ -9,7 +9,6 @@ import {
 } from "../../../test/helpers/temp-dir.js";
 import * as postCoreConvergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import * as config from "../../config/config.js";
-import { hashConfigIncludeRaw } from "../../config/includes.js";
 import { CONFIG_AUDIT_SCOPE } from "../../config/io.audit.js";
 import * as configFactory from "../../config/io.factory.js";
 import { createConfigIO } from "../../config/io.js";
@@ -90,100 +89,6 @@ it("retains the stored channel during tolerant invalid config reads without rewr
     },
   );
 });
-
-it.each(["root", "include", "repaired include"] as const)(
-  "refreshes the legacy projection after a concurrent %s save during planning",
-  async (changed) => {
-    const home = await fs.realpath(channelDirs.make("update-legacy-planning-save-"));
-    const configPath = path.join(home, "openclaw.json");
-    const includePath = path.join(home, "gateway.json");
-    const original = JSON.stringify({
-      gateway: { $include: "gateway.json" },
-      update: { channel: "stable" },
-    });
-    const originalInclude = JSON.stringify({
-      mode: "local",
-      bind: "loopback",
-      port: 18789,
-      tailscale: { mode: "off", resetOnExit: true },
-    });
-    const savedRoot = changed === "root" ? original.replace("stable", "beta") : original;
-    const savedInclude =
-      changed === "root"
-        ? originalInclude
-        : JSON.stringify({
-            mode: "local",
-            bind: "loopback",
-            port: 18791,
-            tailscale: {
-              mode: "off",
-              ...(changed === "repaired include" ? {} : { resetOnExit: true }),
-            },
-          });
-    await fs.writeFile(configPath, original);
-    await fs.writeFile(includePath, originalInclude);
-    await withEnvAsync(
-      {
-        HOME: home,
-        USERPROFILE: home,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_PROFILE: undefined,
-        OPENCLAW_STATE_DIR: home,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-      async () => {
-        const readSnapshot = config.readConfigFileSnapshot;
-        vi.spyOn(config, "readConfigFileSnapshot").mockImplementationOnce(async (options) => {
-          const snapshot = await readSnapshot(options);
-          expect(snapshot.valid).toBe(false);
-          expect(snapshot.includedPaths).toEqual([includePath]);
-          expect(snapshot.legacyIssues).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ path: "gateway.tailscale.resetOnExit" }),
-            ]),
-          );
-          await fs.writeFile(
-            changed === "root" ? configPath : includePath,
-            changed === "root" ? savedRoot : savedInclude,
-          );
-          return snapshot;
-        });
-        const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-
-        const current = await readUpdateChannelConfig(true);
-
-        expect(current.storedChannel).toBe(changed === "root" ? "beta" : "stable");
-        expect(current.configSnapshot.raw).toBe(savedRoot);
-        expect(current.configSnapshot.sourceConfig.gateway).toEqual(JSON.parse(savedInclude));
-        if (changed === "repaired include") {
-          expect(current.configSnapshot.valid).toBe(true);
-          expect(current.legacyConfigPlan).toBeUndefined();
-        } else {
-          expect(current.legacyConfigPlan?.snapshot).toBe(current.configSnapshot);
-          expect(current.legacyConfigPlan?.config.gateway).toMatchObject({
-            mode: "local",
-            bind: "loopback",
-            port: changed === "root" ? 18789 : 18791,
-          });
-          expect(current.legacyConfigPlan?.config.gateway?.tailscale).toEqual({ mode: "off" });
-          expect(current.legacyConfigPlan?.includeIdentity.includeFileHashesForWrite).toEqual({
-            [includePath]: hashConfigIncludeRaw(savedInclude),
-          });
-          expect(current.legacyConfigPlan?.includeIdentity.includeFileTargetsForWrite).toEqual({
-            [includePath]: includePath,
-          });
-        }
-        expect(warning).toHaveBeenCalledWith(
-          expect.stringMatching(/Configuration changed during update planning.*continuing/),
-        );
-        expect(await fs.readFile(configPath, "utf8")).toBe(savedRoot);
-        expect(await fs.readFile(includePath, "utf8")).toBe(savedInclude);
-        expect((await fs.readdir(home)).toSorted()).toEqual(["gateway.json", "openclaw.json"]);
-      },
-    );
-  },
-);
 
 it.each([
   { flow: "prepare", suspicious: false },

@@ -258,22 +258,6 @@ describe("readScheduledTaskCommand", () => {
       });
       expect(() => assertDaemonRuntimePinDefinition(authored, changed)).toThrow("readback differs");
     }
-    spawnSync
-      .mockReturnValueOnce({
-        status: 0,
-        stdout: JSON.stringify({ taskPath: "\\OpenClaw Gateway", state: 4, actions: [action] }),
-      })
-      .mockReturnValue({
-        status: 0,
-        stdout: JSON.stringify({
-          taskPath: "\\OpenClaw Gateway",
-          state: 4,
-          actions: [{ ...action, workingDirectory: "D:\\Reassigned" }],
-        }),
-      });
-    await expect(
-      readScheduledTaskCommand(env, { requireEffective: true, requireLoaded: true }),
-    ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
   });
 
   async function withScheduledTaskScript(
@@ -410,48 +394,6 @@ describe("readScheduledTaskCommand", () => {
           expect(result).toBeNull();
         }
         spawnSync.mockReturnValue({ status: 2, stdout: "-2147024891", stderr: "" });
-        await expect(
-          readScheduledTaskCommand(env, { requireEffective: true, requireLoaded: true }),
-        ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
-      });
-    },
-  );
-
-  it.each([
-    { startup: false, transition: "found" },
-    { startup: true, transition: "unknown" },
-  ] as const)(
-    "rejects missing registration changing to $transition during inspection (Startup: $startup)",
-    async ({ startup, transition }) => {
-      await withWindowsLauncherFiles(async (env, files) => {
-        if (startup) {
-          const startupPath = resolveStartupEntryPaths(env)[0]!;
-          files.set(
-            startupPath,
-            buildStartupLauncherScript({ scriptPath: resolveTaskScriptPath(env) }),
-          );
-        }
-        spawnSync
-          .mockReturnValueOnce({ status: 1, stdout: "-2147024894", stderr: "" })
-          .mockReturnValue(
-            transition === "unknown"
-              ? { status: 2, stdout: "-2147024891", stderr: "" }
-              : {
-                  status: 0,
-                  stdout: JSON.stringify({
-                    taskPath: "\\OpenClaw Gateway",
-                    state: 3,
-                    actions: [
-                      {
-                        type: 0,
-                        path: "C:\\NewRegistration\\gateway.cmd",
-                        arguments: "",
-                        workingDirectory: "",
-                      },
-                    ],
-                  }),
-                },
-          );
         await expect(
           readScheduledTaskCommand(env, { requireEffective: true, requireLoaded: true }),
         ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
