@@ -338,6 +338,101 @@ it.each(["next-renderable", "last-renderable", "last-assistant"] as const)(
   },
 );
 
+const showWidgetPayload = (viewId: string) => ({
+  kind: "canvas",
+  presentation: { target: "assistant_message", title: "Demo widget", sandbox: "scripts" },
+  view: { id: viewId, url: `/__openclaw__/canvas/documents/${viewId}/index.html` },
+  text: `Widget hosted at /__openclaw__/canvas/documents/${viewId}/index.html`,
+});
+const showWidgetResult = (payload: Record<string, unknown>) => ({
+  content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+  details: payload,
+});
+const toolSearchEnvelopeRow = (result: Record<string, unknown>) => {
+  const envelope = { tool: { id: "show_widget", name: "show_widget", source: "builtin" }, result };
+  return {
+    role: "toolResult",
+    toolName: "tool_search",
+    toolCallId: "call-1",
+    content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+    details: envelope,
+  };
+};
+const nestedToolRow = (result: Record<string, unknown>) => ({
+  role: "custom",
+  customType: "openclaw.nested-tool.v1",
+  display: true,
+  excludeFromContext: true,
+  content: [
+    { type: "toolCall", id: "nested-1", name: "show_widget", arguments: { title: "Demo widget" } },
+    { ...result, type: "toolResult", toolCallId: "nested-1", toolName: "show_widget" },
+  ],
+  details: {
+    runId: "run-1",
+    scopeId: "scope-1",
+    afterEntryId: null,
+    startOrder: 0,
+    parentToolCallId: "call-1",
+    toolCallId: "nested-1",
+    toolName: "show_widget",
+    input: { title: "Demo widget" },
+    result,
+    isError: false,
+    startedAt: 1,
+  },
+  timestamp: 1,
+});
+const widgetCanvasBlock = (payload: Record<string, unknown>, viewId: string) => ({
+  type: "canvas",
+  preview: {
+    kind: "canvas",
+    surface: "assistant_message",
+    render: "url",
+    title: "Demo widget",
+    sandbox: "scripts",
+    url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+    viewId,
+  },
+  rawText: JSON.stringify(payload, null, 2),
+});
+
+it("restores show_widget canvas previews from sanitized tool_search and nested toolResult rows", () => {
+  const payloadA = showWidgetPayload("doc-a");
+  const payloadB = showWidgetPayload("doc-b");
+  const messages = sanitizeChatHistoryMessages([
+    toolSearchEnvelopeRow(showWidgetResult(payloadA)),
+    nestedToolRow(showWidgetResult(payloadB)),
+    { role: "assistant", content: [{ type: "text", text: "Here you go." }] },
+  ]);
+  // Sanitization deletes the tool_search envelope details, so history can only
+  // restore the previews from the envelope and block JSON text.
+  expect("details" in (messages[0] as object)).toBe(false);
+
+  const augmented = augmentChatHistoryWithCanvasBlocks(messages);
+
+  expect(augmented[2]).toEqual({
+    role: "assistant",
+    content: [
+      { type: "text", text: "Here you go." },
+      widgetCanvasBlock(payloadA, "doc-a"),
+      widgetCanvasBlock(payloadB, "doc-b"),
+    ],
+  });
+});
+
+it("restores show_widget canvas previews from live tool_search envelope details", () => {
+  const payload = showWidgetPayload("doc-live");
+  const augmented = augmentChatHistoryWithCanvasBlocks([
+    toolSearchEnvelopeRow(showWidgetResult(payload)),
+    { role: "assistant", content: [{ type: "text", text: "Here you go." }] },
+  ]);
+
+  expect(augmented[1]).toEqual({
+    role: "assistant",
+    content: [{ type: "text", text: "Here you go." }, widgetCanvasBlock(payload, "doc-live")],
+  });
+});
+
 const hostTab = { targetId: "tab-1", target: "host", profile: "work" };
 const nodeTab = { ...hostTab, target: "node", node: "node-1" };
 it.each([
