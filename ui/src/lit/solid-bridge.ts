@@ -1,4 +1,5 @@
-import { render, spread, type JSX } from "@solidjs/web";
+import { insert, render, spread, type JSX } from "@solidjs/web";
+import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
   createRenderEffect,
@@ -6,9 +7,25 @@ import {
   flush,
   onCleanup,
   runWithOwner,
+  untrack,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
+
+/** An isolated outlet for helpers whose owning surface still renders Lit. */
+export function LitContent(props: { content: unknown; class?: string }): JSX.Element {
+  const outlet = document.createElement("span");
+  outlet.style.display = "contents";
+  createRenderEffect(
+    () => ({ content: props.content, className: props.class }),
+    ({ content, className }) => {
+      outlet.className = className ?? "";
+      untrack(() => renderLit(content, outlet));
+    },
+  );
+  onCleanup(() => renderLit(nothing, outlet));
+  return outlet;
+}
 
 type Property<T> = {
   default: T;
@@ -203,7 +220,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       }));
     }
 
-    #mount(children?: () => JSX.Element) {
+    #view(children?: () => JSX.Element) {
       let source: JSX.Element;
       if (!this.#solidOwned) {
         if (!this.#content) {
@@ -214,33 +231,35 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         source = [...this.#content.childNodes];
       }
       this.#mountedApplication = this.#application;
-      this.#dispose = render(() => {
-        const [revision, setRevision] = createSignal(0);
-        this.#notify = () => setRevision((value) => value + 1);
-        const props = {
-          ...defaults,
-          get children() {
-            return children ? children() : source;
+      const [revision, setRevision] = createSignal(0);
+      this.#notify = () => setRevision((value) => value + 1);
+      const props = {
+        ...defaults,
+        get children() {
+          return children ? children() : source;
+        },
+      };
+      for (const [key] of properties) {
+        Object.defineProperty(props, key, {
+          get: () => {
+            revision();
+            return this.#values.get(key);
           },
-        };
-        for (const [key] of properties) {
-          Object.defineProperty(props, key, {
-            get: () => {
-              revision();
-              return this.#values.get(key);
+        });
+      }
+      const view = () => content(props, this.#host);
+      return this.#application
+        ? createComponent(ApplicationProvider, {
+            value: this.#application,
+            get children() {
+              return view();
             },
-          });
-        }
-        const view = () => content(props, this.#host);
-        return this.#application
-          ? createComponent(ApplicationProvider, {
-              value: this.#application,
-              get children() {
-                return view();
-              },
-            })
-          : view();
-      }, this);
+          })
+        : view();
+    }
+
+    #mount(children?: () => JSX.Element) {
+      this.#dispose = render(() => this.#view(children), this);
     }
 
     #disposeRoot() {
@@ -273,7 +292,12 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           },
         );
       }
-      host.#mount(() => props.children);
+      // Solid callers already have a render root; nested render() would flush
+      // effects while the parent component is still constructing its children.
+      insert(
+        host,
+        host.#view(() => props.children),
+      );
       onCleanup(() => host.#disposeRoot());
       return host;
     }

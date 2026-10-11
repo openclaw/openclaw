@@ -14,7 +14,7 @@ import { downloadTextFile } from "../../lib/download.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { resolveUsageOverviewState } from "./cache-status.ts";
 import "../../styles/usage.css";
 import type { ProviderUsageSummary } from "./data-types.ts";

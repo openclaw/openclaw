@@ -19,5 +19,5 @@ export const page = definePage({
       loadUsageRouteData(context, options, snapshot),
     );
   },
-  component: () => import("./usage-page.tsx").then((module) => module.usagePageComponent),
+  component: () => import("./usage-page.ts").then((module) => module.usagePageComponent),
 });

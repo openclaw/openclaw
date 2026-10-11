@@ -12,7 +12,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { projectAgentSelection } from "../../lib/reactive/application.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { locale, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 
 export function UsagePageShell(props: {
   context: ApplicationContext;

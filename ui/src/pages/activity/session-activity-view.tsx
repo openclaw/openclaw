@@ -34,7 +34,7 @@ import {
   resolveUiConfiguredMainKey,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import { ActivitySessionGit } from "./session-activity-git.tsx";
 import { ActivitySessionMedia } from "./session-activity-media.tsx";

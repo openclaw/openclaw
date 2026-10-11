@@ -30,8 +30,7 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { defineSolidBridge, LitContent } from "../../lit/solid-bridge.ts";
 import { ActivityPageController } from "./activity-page-controller.ts";
 import { renderCurrentWork as CurrentWork } from "./current-work-view.tsx";
 import { renderRunInspector as RunInspector } from "./run-inspector-view.tsx";

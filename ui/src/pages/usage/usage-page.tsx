@@ -1,7 +1,5 @@
-import { html } from "lit";
 import { createEffect, createMemo, createSignal } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { UsagePageShell } from "./page-shell.tsx";
@@ -52,18 +50,3 @@ export const UsagePage = defineSolidBridge<{ routeData: UsageRouteData | undefin
   (props) => <UsagePageBody routeData={props.routeData} />,
   { properties: { routeData: { default: undefined, attribute: false } } },
 );
-
-// The legacy router still emits Lit; its host is owned by the Solid bridge.
-export const usagePageComponent = {
-  header: true,
-  render: (data: UsageRouteData | undefined) =>
-    html`<openclaw-usage-page
-      .routeData=${data}
-      ${shellLayoutTraits({
-        toolbarHeader: true,
-        settingsPage: true,
-        settingsWide: true,
-        settingsWorkspace: true,
-      })}
-    ></openclaw-usage-page>`,
-};

@@ -1,5 +1,4 @@
-import { html } from "lit";
-import { createRenderEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -10,8 +9,7 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderMessageImages } from "../chat/components/chat-message-images.ts";
 import {
@@ -356,11 +354,11 @@ function ActivitySessionMediaContent(
   }
   // The projection is seeded once; its source follows the tracked effect below.
   const gatewayProjection = projectGateway(untrack(() => props.context.gateway));
-  createRenderEffect(
+  createEffect(
     () => props.context.gateway,
     (source) => gatewayProjection.replaceSource(source),
   );
-  createRenderEffect(
+  createEffect(
     () => [
       gatewayProjection.read(),
       props.sessionKey,
@@ -368,7 +366,7 @@ function ActivitySessionMediaContent(
       props.revision,
       props.session,
     ],
-    () => refresh(),
+    () => untrack(refresh),
   );
   onSettled(connect);
   onCleanup(dispose);
@@ -390,20 +388,19 @@ function ActivitySessionMediaContent(
   };
   const loadDisplayed = () => load(displayEntry());
   const loadLabel = () => t(displayEntry()?.pending ? "common.loading" : "activity.images.older");
+  const olderButton = (
+    <button
+      class="activity-feed__note-action"
+      disabled={Boolean(displayEntry()?.pending)}
+      onClick={loadDisplayed}
+    >
+      {loadLabel()}
+    </button>
+  );
   const gallery = () => {
     revision();
     // The unported chat gallery owns these children and its resource directives.
-    const previews = older()
-      ? [
-          html`<button
-            class="activity-feed__note-action"
-            ?disabled=${Boolean(displayEntry()?.pending)}
-            @click=${() => load(displayEntry())}
-          >
-            ${loadLabel()}
-          </button>`,
-        ]
-      : [];
+    const previews = older() ? [olderButton] : [];
     return renderMessageImages(displayedImages, imageOptions(), previews);
   };
   const lightboxContent = () => {

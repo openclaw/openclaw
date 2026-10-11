@@ -1,4 +1,4 @@
-import { createRenderEffect, createMemo, For, Show, untrack } from "solid-js";
+import { createEffect, createMemo, For, Show, untrack } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../../src/shared/control-ui-link-reader.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -110,7 +110,7 @@ export const ActivitySessionGit = defineSolidBridge<ActivitySessionGitProps>(
       subscribe: ({ gateway }, notify) => sessionPullRequestsForGateway(gateway).subscribe(notify),
       equality: "revision",
     });
-    createRenderEffect(
+    createEffect(
       () => ({ gateway: props.context.gateway, key: props.sessionKey }),
       ({ gateway, key }) => {
         gatewayProjection.replaceSource(gateway);

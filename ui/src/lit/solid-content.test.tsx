@@ -4,7 +4,7 @@ import { directive } from "lit/directive.js";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { LitContent } from "./solid-content.tsx";
+import { LitContent } from "./solid-bridge.ts";
 
 afterEach(() => document.body.replaceChildren());
 
