@@ -5,7 +5,8 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import "../../styles.css";
 import "./meetings.css";
 import { meetingEntry, meetingPage } from "../../test-helpers/transcripts.test-support.ts";
-import { TranscriptsView, type TranscriptsViewProps } from "./view.tsx";
+import type { TranscriptsViewProps } from "./view-types.ts";
+import { TranscriptsView } from "./view.tsx";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 let container: HTMLDivElement;

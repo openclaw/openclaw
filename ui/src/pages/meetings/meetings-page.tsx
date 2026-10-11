@@ -5,7 +5,7 @@ import type {
   TranscriptsGetResult,
   TranscriptsListResult,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
@@ -33,7 +33,7 @@ type ArchiveReadResults = {
 type OperationState = { kind: "idle" | "loading" | "done" | "error"; message?: string };
 // Requests stay synchronous; the revision only publishes their presentation state.
 function createArchiveRead(run: (signal: AbortSignal) => Promise<void>) {
-  const [revision, setRevision] = createSignal(0);
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let abort: AbortController | null = null;
   let error: unknown = null;
   const publish = () => setRevision((value) => value + 1);
@@ -82,22 +82,30 @@ export const MeetingsPage = defineSolidBridge<{ routeSearch: string }>(
     const projection = projectGateway(context.gateway);
     const gateway = createGatewayConnectionLifecycle(context.gateway.snapshot);
     let active = true;
-    const [drafts, setDrafts] = createSignal<Record<string, string>>({});
-    const [list, setList] = createSignal<TranscriptsListResult | null>(null);
-    const [listDenial, setListDenial] = createSignal<unknown>(null);
-    const [readerDenial, setReaderDenial] = createSignal<unknown>(null);
+    const [drafts, setDrafts] = createSignal<Record<string, string>>({}, { ownedWrite: true });
+    const [list, setList] = createSignal<TranscriptsListResult | null>(null, { ownedWrite: true });
+    const [listDenial, setListDenial] = createSignal<unknown>(null, { ownedWrite: true });
+    const [readerDenial, setReaderDenial] = createSignal<unknown>(null, { ownedWrite: true });
     let accessGeneration = 0;
     let readerCursor: string | null = null;
     let loadedReaderCursor: string | null = null;
     let lastReaderRefresh = 0;
     const [now, setNow] = createSignal(Date.now());
-    const [summary, setSummary] = createSignal<TranscriptsGetResult | null>(null);
-    const [summaryGeneration, setSummaryGeneration] = createSignal<OperationState>({
-      kind: "idle",
+    const [summary, setSummary] = createSignal<TranscriptsGetResult | null>(null, {
+      ownedWrite: true,
     });
+    const [summaryGeneration, setSummaryGeneration] = createSignal<OperationState>(
+      { kind: "idle" },
+      { ownedWrite: true },
+    );
     let summaryAbort: AbortController | null = null;
-    const [readerPages, setReaderPages] = createSignal<TranscriptsGetResult[]>([]);
-    const [exportState, setExportState] = createSignal<OperationState>({ kind: "idle" });
+    const [readerPages, setReaderPages] = createSignal<TranscriptsGetResult[]>([], {
+      ownedWrite: true,
+    });
+    const [exportState, setExportState] = createSignal<OperationState>(
+      { kind: "idle" },
+      { ownedWrite: true },
+    );
     let exportAbort: AbortController | null = null;
     let focusSelection = false;
 
@@ -469,7 +477,7 @@ export const MeetingsPage = defineSolidBridge<{ routeSearch: string }>(
 
     createEffect(summary, (page) => {
       if (page) {
-        void generateMissingSummary(false, page);
+        void untrack(() => generateMissingSummary(false, page));
       }
     });
 
@@ -479,79 +487,81 @@ export const MeetingsPage = defineSolidBridge<{ routeSearch: string }>(
     let connectionAuth: unknown;
     createEffect(
       () => ({ snapshot: projection.read().snapshot, search: props.routeSearch }),
-      ({ snapshot, search }) => {
-        const connectionChanged = gateway.transition(snapshot);
-        const authorizationChanged =
-          snapshot.hello !== connectionHello || snapshot.hello?.auth !== connectionAuth;
-        connectionHello = snapshot.hello;
-        connectionAuth = snapshot.hello?.auth;
-        if (connectionChanged || authorizationChanged) {
-          gateway.invalidate();
-          resetConnection();
-        }
-        const previous = new URLSearchParams(previousSearch);
-        const next = new URLSearchParams(search);
-        const selectorChanged = previous.get("selector") !== next.get("selector");
-        const queryChanged = previous.get("find") !== next.get("find");
-        const listParams = JSON.stringify(transcriptListParams(search));
-        const filtersChanged = previousListParams !== listParams;
-        if (selectorChanged) {
-          cancelSummaryGeneration();
-          setSummary(null);
-          lastReaderRefresh = 0;
-        }
-        if (filtersChanged) {
-          setList(null);
-        }
-        if (previousSearch !== search) {
-          setDrafts((current) => {
-            const nextDrafts = { ...current };
-            for (const key of [...TRANSCRIPT_FILTER_KEYS, "find"]) {
-              if (
-                previous.get(key) !== next.get(key) ||
-                previousSearch === undefined ||
-                (key === "find" && selectorChanged)
-              ) {
-                nextDrafts[key] = next.get(key) ?? "";
+      ({ snapshot, search }) =>
+        untrack(() => {
+          const connectionChanged = gateway.transition(snapshot);
+          const authorizationChanged =
+            snapshot.hello !== connectionHello || snapshot.hello?.auth !== connectionAuth;
+          connectionHello = snapshot.hello;
+          connectionAuth = snapshot.hello?.auth;
+          if (connectionChanged || authorizationChanged) {
+            gateway.invalidate();
+            resetConnection();
+          }
+          const previous = new URLSearchParams(previousSearch);
+          const next = new URLSearchParams(search);
+          const selectorChanged = previous.get("selector") !== next.get("selector");
+          const queryChanged = previous.get("find") !== next.get("find");
+          const listParams = JSON.stringify(transcriptListParams(search));
+          const filtersChanged = previousListParams !== listParams;
+          if (selectorChanged) {
+            cancelSummaryGeneration();
+            setSummary(null);
+            lastReaderRefresh = 0;
+          }
+          if (filtersChanged) {
+            setList(null);
+          }
+          if (previousSearch !== search) {
+            setDrafts((current) => {
+              const nextDrafts = { ...current };
+              for (const key of [...TRANSCRIPT_FILTER_KEYS, "find"]) {
+                if (
+                  previous.get(key) !== next.get(key) ||
+                  previousSearch === undefined ||
+                  (key === "find" && selectorChanged)
+                ) {
+                  nextDrafts[key] = next.get(key) ?? "";
+                }
               }
-            }
-            return nextDrafts;
-          });
-        }
-        if (selectorChanged || queryChanged) {
-          resetReader();
-          cancelExport();
-          focusSelection = previousSearch !== undefined;
-        }
-        if (connectionChanged || authorizationChanged || filtersChanged || selectorChanged) {
-          void listTask.run();
-        }
-        if (connectionChanged || authorizationChanged || selectorChanged) {
-          void summaryTask.run();
-        }
-        if (connectionChanged || authorizationChanged || selectorChanged || queryChanged) {
-          void readerTask.run();
-        }
-        previousSearch = search;
-        previousListParams = listParams;
-      },
+              return nextDrafts;
+            });
+          }
+          if (selectorChanged || queryChanged) {
+            resetReader();
+            cancelExport();
+            focusSelection = previousSearch !== undefined;
+          }
+          if (connectionChanged || authorizationChanged || filtersChanged || selectorChanged) {
+            void listTask.run();
+          }
+          if (connectionChanged || authorizationChanged || selectorChanged) {
+            void summaryTask.run();
+          }
+          if (connectionChanged || authorizationChanged || selectorChanged || queryChanged) {
+            void readerTask.run();
+          }
+          previousSearch = search;
+          previousListParams = listParams;
+        }),
     );
     createEffect(
       () => [props.routeSearch, summary(), readerPages(), readerDenial()],
-      () => {
-        if (!focusSelection) {
-          return;
-        }
-        const target = selection().selector
-          ? host.querySelector<HTMLElement>(
-              ".transcripts-reader h1, .transcripts-reader [role=alert]",
-            )
-          : host.querySelector<HTMLElement>('.transcripts-library input[name="query"]');
-        if (target) {
-          target.focus();
-          focusSelection = false;
-        }
-      },
+      () =>
+        untrack(() => {
+          if (!focusSelection) {
+            return;
+          }
+          const target = selection().selector
+            ? host.querySelector<HTMLElement>(
+                ".transcripts-reader h1, .transcripts-reader [role=alert]",
+              )
+            : host.querySelector<HTMLElement>('.transcripts-library input[name="query"]');
+          if (target) {
+            target.focus();
+            focusSelection = false;
+          }
+        }),
     );
     const timer = globalThis.setInterval(() => refreshLive(), 3_000);
     const activate = () => refreshLive(true);

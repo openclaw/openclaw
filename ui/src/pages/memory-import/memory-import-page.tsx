@@ -45,7 +45,7 @@ export const MemoryImportPage = defineSolidBridge(
     const gateway = projectGateway(context.gateway);
     const agents = projectAgents(context.agents);
     const selection = projectAgentSelection(context.agentSelection);
-    const [revision, setRevision] = createSignal(0);
+    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
     const publish = () => setRevision((value) => value + 1);
     // Request state stays synchronous so a second activation observes the first immediately.
     const state: {

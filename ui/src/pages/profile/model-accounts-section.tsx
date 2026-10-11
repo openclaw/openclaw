@@ -1,4 +1,3 @@
-import { html } from "lit";
 import { For, Show } from "solid-js";
 import type {
   UserModelAccount,
@@ -18,8 +17,8 @@ import {
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
-import type { ModelAccountsState } from "./model-accounts.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
+import type { ModelAccountsState } from "./model-accounts-state.ts";
 
 registerEnglishCatalog(registerModelAccountsEnglish);
 
@@ -142,35 +141,39 @@ function SignIn(props: StateProps) {
             fallback={
               <div class="model-accounts-choice">
                 <LitContent
-                  value={renderPicker({
-                    label: t("profilePage.modelAccounts.provider"),
-                    className: "profile-auth-provider",
-                    value: choice()?.provider || null,
-                    options:
-                      choice()?.providers.map((entry) => ({
-                        value: entry.id,
-                        label: entry.label,
-                      })) ?? [],
-                    disabled: state().busy,
-                    renderLeading: (entry) => renderProviderBrandIcon(entry.value),
-                    onChange: (value) => state().selectProvider(value),
-                  })}
+                  render={() =>
+                    renderPicker({
+                      label: t("profilePage.modelAccounts.provider"),
+                      className: "profile-auth-provider",
+                      value: choice()?.provider || null,
+                      options:
+                        choice()?.providers.map((entry) => ({
+                          value: entry.id,
+                          label: entry.label,
+                        })) ?? [],
+                      disabled: state().busy,
+                      renderLeading: (entry) => renderProviderBrandIcon(entry.value),
+                      onChange: (value) => state().selectProvider(value),
+                    })
+                  }
                 />
                 <Show when={provider()}>
                   <LitContent
-                    value={renderPicker({
-                      label: t("profilePage.modelAccounts.method"),
-                      className: "profile-auth-method",
-                      value: choice()?.method || null,
-                      options:
-                        provider()?.methods.map((method) => ({
-                          value: method.id,
-                          label: method.label,
-                          description: method.hint,
-                        })) ?? [],
-                      disabled: state().busy,
-                      onChange: (value) => state().selectMethod(value),
-                    })}
+                    render={() =>
+                      renderPicker({
+                        label: t("profilePage.modelAccounts.method"),
+                        className: "profile-auth-method",
+                        value: choice()?.method || null,
+                        options:
+                          provider()?.methods.map((method) => ({
+                            value: method.id,
+                            label: method.label,
+                            description: method.hint,
+                          })) ?? [],
+                        disabled: state().busy,
+                        onChange: (value) => state().selectMethod(value),
+                      })
+                    }
                   />
                 </Show>
                 <Show when={!state().busy && !state().error && choice()?.providers.length === 0}>
@@ -202,25 +205,24 @@ function SignIn(props: StateProps) {
               >
                 {(step) => (
                   <LitContent
-                    value={(() => {
+                    render={() => {
                       const renderedStep = step();
+                      const cancelAction = document.createElement("button");
+                      cancelAction.type = "button";
+                      cancelAction.className = "btn btn--sm profile-auth-connect-cancel";
+                      cancelAction.disabled = state().cancelBusy;
+                      cancelAction.textContent = t("profilePage.modelAccounts.cancelAction");
+                      cancelAction.addEventListener("click", () => state().connectStatus("cancel"));
                       return renderWizardStepControls({
                         step: renderedStep,
                         value: state().stepValue,
                         busy: state().busy,
                         inputId: "profile-account-auth-answer",
-                        leadingAction: html`<button
-                          type="button"
-                          class="btn btn--sm profile-auth-connect-cancel"
-                          ?disabled=${state().cancelBusy}
-                          @click=${() => state().connectStatus("cancel")}
-                        >
-                          ${t("profilePage.modelAccounts.cancelAction")}
-                        </button>`,
+                        leadingAction: cancelAction,
                         onValueChange: (value) => state().setStepValue(renderedStep.id, value),
                         onAnswer: (value) => state().answerStep(renderedStep.id, value),
                       });
-                    })()}
+                    }}
                   />
                 )}
               </Show>

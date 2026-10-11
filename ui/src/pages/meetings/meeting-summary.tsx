@@ -1,10 +1,10 @@
 import type { TranscriptsGetResult } from "@openclaw/gateway-protocol";
 import MarkdownIt from "markdown-it";
-import { createMemo } from "solid-js";
+import { Show } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { sanitizedHtml } from "../../lib/solid-dom.ts";
-import type { TranscriptsViewProps } from "./view.tsx";
+import type { TranscriptsViewProps } from "./view-types.ts";
 
 const summaryParser = new MarkdownIt("commonmark");
 
@@ -45,7 +45,7 @@ export function MeetingSummary(props: {
   generation: TranscriptsViewProps["summaryGeneration"];
   onRetry: TranscriptsViewProps["onSummaryRetry"];
 }) {
-  const markdown = createMemo(() => {
+  const markdown = () => {
     const summary = props.page.summary;
     const titleLine = `# ${props.page.session.title || props.page.session.sessionId}\n`;
     return summaryNotesMarkdown(
@@ -55,7 +55,7 @@ export function MeetingSummary(props: {
           : summary.markdown
         : "",
     );
-  });
+  };
   return (
     <section class="transcripts-summary">
       {props.page.summary ? (
@@ -82,12 +82,16 @@ export function MeetingSummary(props: {
                 : t("transcripts.unknown"),
             })}
           </p>
-          <div
-            class="meetings-notes markdown"
-            ref={sanitizedHtml(() =>
-              toSanitizedMarkdownHtml(markdown(), { mode: "document", remoteImages: false }),
+          <Show when={markdown()} keyed>
+            {(content) => (
+              <div
+                class="meetings-notes markdown"
+                ref={sanitizedHtml(() =>
+                  toSanitizedMarkdownHtml(content, { mode: "document", remoteImages: false }),
+                )}
+              />
             )}
-          />
+          </Show>
           <p class="transcripts-caption">{t("transcripts.summaryHint")}</p>
         </>
       ) : props.generation?.kind === "loading" ? (

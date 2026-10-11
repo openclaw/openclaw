@@ -94,8 +94,10 @@ describe("meeting transcript library", () => {
       summary: meetingPage.summary,
     };
     await vi.advanceTimersByTimeAsync(3_000);
-    expect(page.querySelector(".transcripts-summary")?.textContent).toContain(
-      "Reader layout discussed.",
+    await waitForSolid(() =>
+      expect(page.querySelector(".transcripts-summary")?.textContent).toContain(
+        "Reader layout discussed.",
+      ),
     );
   });
 
@@ -413,7 +415,8 @@ describe("meeting transcript library", () => {
         expect.anything(),
       ),
     );
-    button(page, "Next page").click();
+    const nextPage = await waitForSolid(() => button(page, "Next page"));
+    nextPage.click();
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith(
         "transcripts.list",

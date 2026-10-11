@@ -1,14 +1,9 @@
 import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
-import type {
-  TranscriptSessionSummary,
-  TranscriptsExportParams,
-  TranscriptsGetResult,
-  TranscriptsListResult,
-} from "@openclaw/gateway-protocol";
+import type { TranscriptSessionSummary } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { For, createMemo, createEffect } from "solid-js";
+import { For, Show, createMemo, createEffect } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { syncTabGroupLabel } from "../../components/web-awesome-tabs.ts";
@@ -29,6 +24,7 @@ import {
   TRANSCRIPT_ADVANCED_FILTER_KEYS,
   TRANSCRIPT_FILTER_KEYS,
 } from "./route-state.ts";
+import type { TranscriptsViewProps } from "./view-types.ts";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -49,36 +45,6 @@ declare module "@solidjs/web" {
 
 registerEnglishCatalog(registerTranscriptsEnglish);
 registerEnglishCatalog(registerMeetingsEnglish);
-
-export type TranscriptReadState = {
-  summary: TranscriptsGetResult | null;
-  pages: TranscriptsGetResult[];
-  loading: boolean;
-  error: unknown;
-};
-
-export type TranscriptsViewProps = {
-  basePath: string;
-  now: number;
-  search: string;
-  drafts: Readonly<Record<string, string>>;
-  onDraft: (key: string, value: string) => void;
-  connected: boolean;
-  allowed: boolean;
-  list: TranscriptsListResult | null;
-  listLoading: boolean;
-  listError: unknown;
-  reader: TranscriptReadState;
-  readerTab: "text" | "summary";
-  summaryGeneration?: { kind: "idle" | "loading" | "done" | "error"; message?: string };
-  onSummaryRetry?: () => void;
-  exportState: { kind: "idle" | "loading" | "done" | "error"; message?: string };
-  onNavigate: (patch: Record<string, string | null>) => void;
-  onRefresh: () => void;
-  onReaderRetry: () => void;
-  onReaderTab: (tab: "text" | "summary") => void;
-  onDownload: (format: TranscriptsExportParams["format"]) => void;
-};
 
 function transcriptTime(value: string | null | undefined) {
   return value ? new Date(value).toLocaleString() : t("transcripts.unknown");
@@ -520,13 +486,15 @@ function Reader(props: TranscriptsViewProps) {
             aria-labelledby={`transcript-reader-tab-${props.readerTab}`}
           >
             {props.readerTab === "summary" ? (
-              props.reader.summary ? (
-                <MeetingSummary
-                  page={props.reader.summary}
-                  generation={props.summaryGeneration}
-                  onRetry={props.onSummaryRetry}
-                />
-              ) : null
+              <Show when={props.reader.summary}>
+                {(summaryPage) => (
+                  <MeetingSummary
+                    page={summaryPage()}
+                    generation={props.summaryGeneration}
+                    onRetry={props.onSummaryRetry}
+                  />
+                )}
+              </Show>
             ) : (
               <>
                 <form

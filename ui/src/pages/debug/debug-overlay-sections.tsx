@@ -23,7 +23,7 @@ import {
 } from "../../lib/gateway-diagnostics.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import {
   DEBUG_OVERLAY_SECTION_HEADERS,
   type DebugOverlaySectionId,
@@ -82,8 +82,8 @@ export function DebugOverlayWidget(props: {
 }) {
   return (
     <div class="debug-overlay__widget">
-      <LitContent value={renderGatewayCpuVital(props.status, props.history)} />
-      <LitContent value={renderGatewayMemoryVital(props.status, props.history)} />
+      <LitContent render={() => renderGatewayCpuVital(props.status, props.history)} />
+      <LitContent render={() => renderGatewayMemoryVital(props.status, props.history)} />
       <openclaw-sparkline
         class="gateway-vital gateway-vital--ping"
         data-degraded={props.status.pingMs > 250 ? "" : undefined}
@@ -104,7 +104,7 @@ function Status(props: {
 }) {
   return (
     <>
-      <LitContent value={renderGatewayVitals(props.status, props.history)} />
+      <LitContent render={() => renderGatewayVitals(props.status, props.history)} />
       <Show when={props.status.disks?.length}>
         <div class="gateway-vitals debug-overlay__disks">
           <For each={props.status.disks ?? []} keyed={(disk) => disk.path}>

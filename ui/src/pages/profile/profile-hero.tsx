@@ -9,7 +9,7 @@ import "../../components/viewer-facepile.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
+import { LitContent } from "../../lit/solid-bridge.ts";
 
 export type ProfileHeroProps = {
   user?: AuthenticatedUser | null;
@@ -45,7 +45,7 @@ export function ProfileHero(props: ProfileHeroProps) {
     <SettingsGroup>
       <section class="profile-hero">
         <div class="profile-hero__avatar">
-          <Show when={props.user} fallback={<LitContent value={agentAvatar()} />}>
+          <Show when={props.user} fallback={<LitContent render={agentAvatar} />}>
             {(user) => (
               <openclaw-viewer-avatar
                 prop:user={{ ...user(), name: name(), watchedSessions: [] }}
