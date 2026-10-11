@@ -436,11 +436,8 @@ describe("Gateway chat RPCs", () => {
             }),
           }),
         );
-        if (index === 0) {
-          expect(userTexts[0]).not.toContain("/think high");
-        } else {
-          expect(userTexts[0]).toContain("/think high");
-        }
+        // The first-sent model prompt replays as projected, so its directive stays stripped.
+        expect(userTexts[0]).not.toContain("/think high");
       }
     },
   );
