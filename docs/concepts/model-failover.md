@@ -181,8 +181,8 @@ openclaw gateway call sessions.patch --params '{"key":"agent:main:example","mode
 Setting `model: null` returns to the configured default and clears the preference.
 A policy-only opt-in requires an existing explicit user model selection. A locked
 model selection cannot opt in, and an explicit caller fallback list (including
-`[]`) continues to own that run's behavior. No model picker or `/model` default
-behavior changes.
+`[]`, and a `before_model_resolve` hook's `fallbacksOverride`) continues to own
+that run's behavior. No model picker or `/model` default behavior changes.
 
 ## Preferred fallback peers
 
@@ -215,8 +215,8 @@ Agent `models` metadata can override the same setting: omitted `fallbackPriority
 inherits the default metadata; `fallbackPriority: []` clears inherited priority.
 Wildcard and unqualified metadata keys cannot declare it. Priority applies to
 configured fallback chains, including session preferences, cron preflight, and
-eligible compaction fallbacks. Caller-owned explicit lists keep their exact order;
-strict or empty lists never gain a fallback.
+eligible compaction fallbacks. Caller-owned explicit lists, including hook-supplied
+chains, keep their exact order; strict or empty lists never gain a fallback.
 
 ### Upgrade and downgrade
 
