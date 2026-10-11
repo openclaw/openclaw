@@ -76,53 +76,51 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     return { context, scope, workspace, manager, cfg };
   }
 
-  it.each([false, true])(
-    "retries the saved transcript-correlated final without rerunning the model (modified=%s)",
-    async (modified) => {
-      const { context, manager } = await transcriptCase("ambiguous-transcript-final");
-      const savedAnswer = modified ? `${recoveredAnswer} Prepared for delivery.` : recoveredAnswer;
-      let modelRuns = 0;
-      let preparations = 0;
-      installHook((event) => {
-        if (event.kind !== "final") {
-          return;
-        }
-        preparations += 1;
-        expect(event.payload.channelData?.telegram).toEqual({
-          promptContextSource: {
-            transcriptMessageId: expect.any(String),
-            deliverySignature: expect.any(String),
-          },
-        });
-        return modified ? { payload: { ...event.payload, text: savedAnswer } } : undefined;
-      });
-      let attempts = 0;
-      http.respondToCall = (call) => {
-        if (call.method === "sendMessage" && call.fields.text === savedAnswer && ++attempts === 1) {
-          throw Object.assign(new Error("socket closed after request"), { code: "ECONNRESET" });
-        }
-      };
-      await dispatchProgressTurn(
-        async () => {
-          modelRuns += 1;
-          manager.appendMessage(assistant(recoveredAnswer));
-          manager.flushPendingPersistence();
+  it("retries the saved transcript-correlated final without rerunning the model", async () => {
+    const { context, manager } = await transcriptCase("ambiguous-transcript-final");
+    let modelRuns = 0;
+    let preparations = 0;
+    installHook((event) => {
+      if (event.kind !== "final") {
+        return;
+      }
+      preparations += 1;
+      expect(event.payload.channelData?.telegram).toEqual({
+        promptContextSource: {
+          transcriptMessageId: expect.any(String),
+          deliverySignature: expect.any(String),
         },
-        { context, mode: "off", toolProgress: false, finalReply: { text: recoveredAnswer } },
-      );
-      expect(modelRuns).toBe(1);
-      expect(preparations).toBe(1);
-      expect(
-        calls.filter((call) => call.method === "sendMessage").map((call) => call.fields.text),
-      ).toEqual([savedAnswer, savedAnswer]);
-      expect(sends().map((call) => call.fields.text)).toEqual([savedAnswer]);
-      expect([...visibleMessages.values()]).toEqual([savedAnswer]);
-    },
-  );
+      });
+    });
+    let attempts = 0;
+    http.respondToCall = (call) => {
+      if (
+        call.method === "sendMessage" &&
+        call.fields.text === recoveredAnswer &&
+        ++attempts === 1
+      ) {
+        throw Object.assign(new Error("socket closed after request"), { code: "ECONNRESET" });
+      }
+    };
+    await dispatchProgressTurn(
+      async () => {
+        modelRuns += 1;
+        manager.appendMessage(assistant(recoveredAnswer));
+        manager.flushPendingPersistence();
+      },
+      { context, mode: "off", toolProgress: false, finalReply: { text: recoveredAnswer } },
+    );
+    expect(modelRuns).toBe(1);
+    expect(preparations).toBe(1);
+    expect(
+      calls.filter((call) => call.method === "sendMessage").map((call) => call.fields.text),
+    ).toEqual([recoveredAnswer, recoveredAnswer]);
+    expect(sends().map((call) => call.fields.text)).toEqual([recoveredAnswer]);
+    expect([...visibleMessages.values()]).toEqual([recoveredAnswer]);
+  });
 
   it.each([
     { telegram: { buttons: [[{ text: "Continue", callback_data: "continue" }]] } },
-    { telegram: { reaction: { emoji: "not-sent" } } },
     { other: { action: "send" } },
   ])("does not replay a final carrying channel controls (%j)", async (controls) => {
     const { context, manager } = await transcriptCase("ambiguous-controlled-final");

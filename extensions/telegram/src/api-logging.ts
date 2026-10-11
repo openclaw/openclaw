@@ -4,6 +4,7 @@ import {
   formatErrorMessage,
 } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type TelegramApiLogger = (message: string) => void;
 
@@ -29,7 +30,7 @@ function formatTransportDiagnostics(error: unknown): string {
     if (!fields.code && code && /^(?:E[A-Z0-9_]{1,63}|UND_ERR_[A-Z0-9_]{1,56})$/.test(code)) {
       fields.code = code;
     }
-    const syscall = candidate.syscall;
+    const syscall = isRecord(candidate) ? candidate.syscall : undefined;
     if (
       !fields.syscall &&
       typeof syscall === "string" &&
