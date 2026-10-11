@@ -277,7 +277,7 @@ describe("session list resolver cache", () => {
           },
         ]),
       );
-      const store = Object.fromEntries(
+      const store: Record<string, SessionEntry> = Object.fromEntries(
         Array.from({ length: 80 }, (_, index) => {
           const agentId = index % 2 ? "research" : "main";
           return [
