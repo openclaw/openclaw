@@ -53,13 +53,13 @@ export function prepareGatewaySessionLifecycleTargets(params: {
   const creationSelection = params.creation?.selectTargetInLifecycle
     ? createDeferredCore()
     : undefined;
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
   let preparedDatabase: { assertCurrent(): void } | undefined;
   const scopes = params.targets.map(({ target }) => ({
     agentId: target.agentId,
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   }));
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, scopes);
   const creationScope = scopes[0];
   if (params.creation && !creationScope) {
     throw new Error("Session creation preparation requires its original target");

@@ -2,6 +2,7 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import * as creationClaims from "./agent-creation-claim.js";
@@ -20,6 +21,7 @@ import {
   type AgentDatabaseExecutionCaptureConstraints,
   supportsOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-scope.js";
+import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 
 export { supportsOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-scope.js";
 
@@ -29,6 +31,44 @@ const executionState = resolveGlobalSingleton<AgentDatabaseExecutionState>(
   () => ({ owners: new Map(), idle: new Set() }),
 );
 const executions = executionState.owners;
+
+/** Finish native initialization before publishing a newly available agent to readers. */
+export async function prepareOpenClawAgentDatabaseExecution(
+  options: OpenClawAgentDatabaseOptions,
+  assertCurrent: () => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  assertCurrent();
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  try {
+    await runOpenClawAgentWorkerWrite(
+      options,
+      () =>
+        execution.prepare(
+          {
+            assertCurrent,
+            createAdmission: (binding) => () => ({
+              nativeLocations: binding.nativeLocations,
+              admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                binding.authorize(request);
+                assertCurrent();
+                if (!grant()) {
+                  throw new Error(
+                    `Agent ${options.agentId} database preparation admission expired`,
+                  );
+                }
+              }, binding.attachment),
+            }),
+          },
+          signal,
+        ),
+      undefined,
+      signal,
+    );
+  } finally {
+    await execution.release();
+  }
+}
 
 /** Borrow an existing physical owner without opening or preparing a writer. */
 export function captureExistingOpenClawAgentDatabaseExecution(

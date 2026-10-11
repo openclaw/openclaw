@@ -186,7 +186,11 @@ export function withPreparedSessionSharingSource(params: {
     }
   };
   const changed = () => targetChanged(params.targets[0]?.sessionKey ?? "");
-  const assertRoutingCurrent = captureSessionMutationRouting(params.sourceConfig, changed);
+  const assertRoutingCurrent = captureSessionMutationRouting(
+    params.sourceConfig,
+    changed,
+    params.targets,
+  );
   const talkAgentId = params.sourceConfig.talk?.agentId;
   const assertSourceCurrent = () => {
     const cfg = assertSource();

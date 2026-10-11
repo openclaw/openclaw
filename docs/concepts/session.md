@@ -21,7 +21,7 @@ DM channels, with group activity and background work flowing into it — see
 Delivered command exchanges from the shared dispatcher are conversation history
 too. OpenClaw appends the user's command and delivered reply as ordinary
 user/assistant messages. Native menus and command acknowledgements on Discord
-and Telegram, and Slack argument menus, are also retained after delivery.
+and Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
 Later turns and chat history can read these exchanges.
 Login, pairing, and sensitive `/config set` or `/debug set` values are redacted before storage.
 `/new` and `/reset` put their confirmation exchange in the new session; they do not

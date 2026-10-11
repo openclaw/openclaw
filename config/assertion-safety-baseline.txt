@@ -1078,7 +1078,6 @@ packages/ai/src/transports/provider-transport-stream.ts	2
 packages/ai/src/transports/simple-completion-transport.ts	1
 packages/ai/src/transports/transport-stream-shared.ts	1
 packages/ai/src/transports/transport-utils.ts	2
-packages/ai/src/utils/assistant-text-phase.ts	1
 packages/ai/src/utils/credential-redaction.ts	1
 packages/ai/src/utils/oauth/openai-chatgpt-jwt.ts	1
 packages/ai/src/utils/stream-first-event-timeout.ts	2
@@ -1285,7 +1284,6 @@ src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts	4
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-observation.ts	1
 src/agents/embedded-agent-runner/run/context-recovery-state.ts	2
 src/agents/embedded-agent-runner/run/helpers.ts	2
-src/agents/embedded-agent-runner/run/history-image-prune.ts	2
 src/agents/embedded-agent-runner/run/images.ts	6
 src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts	2
 src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts	3
@@ -1878,7 +1876,6 @@ src/context-engine/registry.ts	4
 src/cron/delivery-channel-validation.ts	2
 src/cron/delivery-context.ts	1
 src/cron/delivery-target-validation.ts	3
-src/cron/delivery.ts	1
 src/cron/isolated-agent/delivery-target.ts	1
 src/cron/isolated-agent/helpers.ts	1
 src/cron/isolated-agent/job-fixtures.ts	3
@@ -2701,7 +2698,6 @@ ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-panel.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
-ui/src/components/theme-mode-toggle.ts	1
 ui/src/components/web-awesome.ts	2
 ui/src/components/wizard-step-controls.ts	4
 ui/src/i18n/lib/translate.ts	1
@@ -2725,7 +2721,6 @@ ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	1
 ui/src/lib/sessions/session-key.ts	4
-ui/src/lit/stream-auto-follow-controller.ts	1
 ui/src/lit/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
@@ -2748,9 +2743,6 @@ ui/src/pages/chat/components/chat-composer.ts	4
 ui/src/pages/chat/components/chat-effort-picker.ts	6
 ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
-ui/src/pages/chat/components/chat-message-bubble.ts	1
-ui/src/pages/chat/components/chat-message-confirmation.ts	1
-ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker.ts	4
 ui/src/pages/chat/components/chat-pane-header.ts	2
 ui/src/pages/chat/components/chat-selection-popup.ts	1

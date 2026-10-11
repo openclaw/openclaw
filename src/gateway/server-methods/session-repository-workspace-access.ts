@@ -49,7 +49,9 @@ export async function resolveRepositoryWorkspaceAccess(
     throw new Error("The cloud repository session is unavailable.");
   }
   const sessionId = entry.sessionId;
-  const assertRoutingCurrent = captureSessionMutationRouting(loaded.cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(loaded.cfg, undefined, [
+    { agentId: loaded.agentId, sessionKey: loaded.canonicalKey },
+  ]);
   const assertSessionFacts = (
     current: SessionEntryCurrentFacts | undefined,
     expectedRevision?: number,

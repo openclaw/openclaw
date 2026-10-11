@@ -468,13 +468,13 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       };
     }
   } catch (error) {
-    if (openNotEntered && request.type === "open") {
+    const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
+    if (openNotEntered || refusedOpen) {
       stateContexts.delete(request.actor);
     }
     transfers.cancel();
     pendingResult = undefined;
     pendingInput = undefined;
-    const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
     const originalError = refusedOpen ? error.originalError : error;
     const admissionRefused =
       commandAdmissionRefused ||

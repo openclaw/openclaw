@@ -57,7 +57,7 @@ export async function prepareSessionSharingWorkerGrant(params: {
   if (params.transactionSource && (!params.transactionFacts || params.targets.length !== 1)) {
     throw changed();
   }
-  const assertRouting = captureSessionMutationRouting(params.sourceConfig, changed);
+  const assertRouting = captureSessionMutationRouting(params.sourceConfig, changed, params.targets);
   let active = true;
   const targets = params.targets.map((target) => ({
     ...target,

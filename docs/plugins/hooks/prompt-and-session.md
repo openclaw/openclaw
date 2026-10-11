@@ -29,7 +29,10 @@ provider payloads, start the Gateway with `--raw-stream` and
 Use the phase-specific hooks for new plugins:
 
 - `before_model_resolve`: receives only the current prompt and attachment
-  metadata. Return `providerOverride` or `modelOverride`.
+  metadata. Return `providerOverride`, `modelOverride`, or `fallbacksOverride`.
+  When provided, `fallbacksOverride` replaces the fallback chain for this run;
+  `[]` disables model fallback, so a failed primary fails the run. Omit it to
+  preserve configured fallback behavior.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
@@ -71,13 +74,39 @@ ordinary `before_prompt_build` → finalized tool policy → authorized prompt
 enrichment. `agent_turn_prepare` and queued-injection draining are not wired
 into the Codex or Copilot prompt paths.
 
-For multiple registrations, the first defined provider/model override and
+For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
 restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
 the same runner is skipped while its outer dispatch is active; other hook
 families and independent turns remain available.
 
 Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
+
+### Restrict a run to local models
+
+Return an explicit fallback list when the routing decision must survive a model
+failure. Provider and model overrides alone leave configured fallbacks available.
+
+```typescript
+api.on("before_model_resolve", () => ({
+  providerOverride: "ollama",
+  modelOverride: "qwen3:8b",
+  fallbacksOverride: ["ollama/qwen3:4b"],
+}));
+```
+
+Use `fallbacksOverride: []` to allow only the selected primary. Lists replace each
+other; they are never concatenated. Hooks run in descending priority order, with
+registration order breaking ties. The first defined list wins, including an empty
+list; provider and model overrides are selected independently by the same rule.
+
+The initial routing hook runs before the logical run selects its candidate chain.
+An explicit list stays fixed across attempts, so later candidates are not redirected
+back to the primary by another invocation of the same hook. Each eligible candidate
+keeps its own configured attempt timeout. Session model locks and operator model
+restrictions still apply. These overrides are run-scoped and do not change saved
+configuration or the session's selected model.
+Installation repair retains its separately admitted model list.
 
 ### Handler lifetime
 

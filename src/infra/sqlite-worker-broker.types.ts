@@ -23,7 +23,11 @@ export type RequestBody = SqliteWorkerRequest extends infer Request
     ? Omit<Request, "id">
     : never
   : never;
-type DispatchState = { dispatched: boolean; openNotEntered?: boolean };
+type DispatchState = {
+  dispatched: boolean;
+  openNotEntered?: boolean;
+  openRefused?: boolean;
+};
 export type Job = {
   observation: WorkerRequestObservation;
   signal?: AbortSignal;

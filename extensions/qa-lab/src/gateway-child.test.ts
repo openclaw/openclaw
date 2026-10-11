@@ -1,5 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
-import { EventEmitter, once } from "node:events";
+import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -25,9 +25,7 @@ import {
   createQaGatewayChildLogAccess,
   createQaGatewayChildLogCollector,
   formatQaGatewayProcessBoundaryStartupFailure,
-  monitorQaGatewayChildFailure,
   stopQaGatewayChildProcessTree,
-  throwQaGatewayChildFailure,
 } from "./gateway-child-process.js";
 import {
   needsQaGatewayMigrationRestart,
@@ -171,32 +169,6 @@ describe("runQaGatewayCliCommand", () => {
     } finally {
       await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
     }
-  });
-});
-
-describe("monitorQaGatewayChildFailure", () => {
-  it("records the first pipe failure and stops the detached Gateway child", async () => {
-    const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const close = once(child, "close");
-    const output = createQaGatewayChildLogCollector();
-    const getFailure = monitorQaGatewayChildFailure(child, output);
-    const error = new Error("synthetic gateway stdout read failure");
-
-    child.stdout?.destroy(error);
-    child.stderr?.destroy(new Error("later stderr read failure"));
-
-    await vi.waitFor(() => expect(getFailure()).toEqual({ source: "stdout", error }));
-    await close;
-    expect(output.text()).toContain(
-      "gateway child stdout stream failed: synthetic gateway stdout read failure",
-    );
-    expect(output.text()).not.toContain("later stderr read failure");
-    expect(() => throwQaGatewayChildFailure(getFailure, () => output.text())).toThrow(
-      "gateway child stdout stream failed: synthetic gateway stdout read failure",
-    );
   });
 });
 

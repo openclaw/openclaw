@@ -333,15 +333,16 @@ export class SqliteWorkerBroker {
           if (actor.initialized) {
             await this.lifecycle.closeActor(actor, options.maintenanceScope);
           } else {
-            if (
-              (!actor.openDispatch.dispatched || actor.openDispatch.openNotEntered) &&
-              !actor.slot.failed
-            ) {
+            const nativeOpenMayHaveEntered =
+              actor.openDispatch.dispatched &&
+              !actor.openDispatch.openNotEntered &&
+              !actor.openDispatch.openRefused;
+            if (!nativeOpenMayHaveEntered && !actor.slot.failed) {
               actor.backendClosed = true;
               actor.markNativeStopped();
               actor.cleanupState = "pending";
             }
-            if (actor.openDispatch.dispatched && !actor.openDispatch.openNotEntered) {
+            if (nativeOpenMayHaveEntered) {
               // A throwing factory cannot prove that all partially opened native handles closed.
               this.fail(actor.slot, error);
               await actor.slot.exit;

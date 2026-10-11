@@ -477,7 +477,6 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               labelClaim: params.labelClaim,
               preparedTranscript: params.preparedTranscript,
               maintenance,
-              maintenanceRunBasis: preparedPreservation?.subagentRunBasis,
             };
             if (!workerCommit) {
               return await withSqliteSessionDatabase(

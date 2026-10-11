@@ -106,7 +106,7 @@ export async function prepareSessionSharingRead(params: {
     if (!captured || !projection) {
       return prepareSessionMutationFacts({ ...params, allowMissing: true });
     }
-    const assertRouting = captureSessionMutationRouting(cfg);
+    const assertRouting = captureSessionMutationRouting(cfg, undefined, [params]);
     // Capture before readiness yields so a replacement cannot become the selected session.
     while (projection.needsMembershipPreparation()) {
       await projection.prepareMembership();

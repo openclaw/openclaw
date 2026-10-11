@@ -318,7 +318,8 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   async function hoverBackground(element: HTMLElement, expected: string) {
     const { page } = await import("vitest/browser");
     await page.elementLocator(element).hover();
-    await expect.poll(() => getComputedStyle(element).backgroundColor).toBe(expected);
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+    expect(getComputedStyle(element).backgroundColor).toBe(expected);
   }
 
   it.each(["dark", "light"] as const)(

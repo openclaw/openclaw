@@ -66,7 +66,7 @@ it.each([namedExport, namespaceImport])(
         inventory: previousReleaseInventory,
       }),
     ).toThrow("Cannot resolve current source binding");
-    expect(fs.existsSync(path.join(root, "dist/update-compat-inventory.json"))).toBe(false);
+    expect(fs.existsSync(path.join(root, "dist", chunk.path))).toBe(false);
   },
 );
 

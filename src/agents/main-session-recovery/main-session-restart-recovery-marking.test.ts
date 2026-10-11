@@ -43,6 +43,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
   markRestartAbortedMainSessions,
@@ -398,7 +399,7 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
   }
 });
 
-it.each(["release", "completed", "rotation"] as const)(
+it.each(["release", "completed", "cancelled", "rotation"] as const)(
   "does not commit a restart mark when %s invalidates its owner after planning",
   async (change) => {
     const stateDir = sessionDirs.make();
@@ -407,6 +408,8 @@ it.each(["release", "completed", "rotation"] as const)(
     const sessionId = "closing";
     const resolveGatewayContext = () => undefined;
     let admission: SessionWorkAdmissionLease | undefined;
+    let cancelled = false;
+    const cancellation = createAgentRunDirectAbortError();
     const apply = sessionAccessor.applySessionEntryReplacements;
     let restoreSpy = () => {};
     try {
@@ -415,6 +418,8 @@ it.each(["release", "completed", "rotation"] as const)(
         scope: storePath,
         identities: [sessionKey, sessionId],
         resolveGatewayContext,
+        isSettling: () => cancelled,
+        getAbortReason: () => (cancelled ? cancellation : undefined),
         assertAllowed: () => {},
       });
       const spy = vi
@@ -426,6 +431,12 @@ it.each(["release", "completed", "rotation"] as const)(
               const prepared = await params.update(entries);
               if (change === "rotation") {
                 rotateAgentEventLifecycleGeneration();
+              } else if (change === "cancelled") {
+                cancelled = true;
+                sessionAccessor.replaceSessionEntrySync(
+                  { storePath, sessionKey },
+                  { sessionId, status: "killed", updatedAt: Date.now(), endedAt: 123 },
+                );
               } else {
                 admission?.release();
                 if (change === "completed") {
@@ -455,6 +466,12 @@ it.each(["release", "completed", "rotation"] as const)(
       if (change === "completed") {
         expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
           status: "done",
+          endedAt: 123,
+        });
+      }
+      if (change === "cancelled") {
+        expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+          status: "killed",
           endedAt: 123,
         });
       }

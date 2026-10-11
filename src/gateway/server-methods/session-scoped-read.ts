@@ -36,7 +36,9 @@ export function retainSessionScopedRead(
   if (!narrow && !initialVisibility) {
     return undefined;
   }
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId },
+  ]);
   const read = retainGatewaySessionEntryReadOnly(
     sessionKey,
     agentId,

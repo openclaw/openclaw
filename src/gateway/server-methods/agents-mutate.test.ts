@@ -332,6 +332,11 @@ vi.mock("../../state/agent-deletion-journal.read.js", () => ({
   readAgentDeletionRecoveryHoldsInWorker: async () => [],
 }));
 
+// mock-isolation: Handler fixtures stage storage outcomes without owning an agent database worker.
+vi.mock("../../state/openclaw-agent-execution.js", () => ({
+  prepareOpenClawAgentDatabaseExecution: async () => {},
+}));
+
 vi.mock("../../state/agent-provenance.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/agent-provenance.js")>()),
   recordAgentProvenance: vi.fn(async () => {}),
