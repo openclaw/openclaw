@@ -32,6 +32,7 @@ import { createSessionArchiveState } from "../lib/sessions/session-archive-state
 import type { SessionRequestClient } from "../lib/sessions/session-capability.ts";
 import { createSessionRowProvenance } from "../lib/sessions/session-row-provenance.ts";
 import { createSidebarContextLifecycle } from "./app-sidebar-context-lifecycle.ts";
+import { seedSidebarEveryonePreference } from "./app-sidebar-setup.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
@@ -532,13 +533,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   };
 }
 
-export function createGateway(client: GatewayBrowserClient): ApplicationGateway {
-  return createGatewayHarness(client).gateway;
-}
+export const createGateway = (client: GatewayBrowserClient): ApplicationGateway =>
+  createGatewayHarness(client).gateway;
 
-export function createSessions(agentId: string, keys: string[]): SessionCapability {
-  return createSessionsHarness(agentId, keys).sessions;
-}
+export const createSessions = (agentId: string, keys: string[]): SessionCapability =>
+  createSessionsHarness(agentId, keys).sessions;
 
 export function createContext(
   gateway: ApplicationGateway,
@@ -610,8 +609,8 @@ export async function mountSidebarContext(
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
-  // General behavioral fixtures model the original all-session query contract.
-  Object.assign(sidebar, { variant, navigationScope: "all" });
+  seedSidebarEveryonePreference(context.gateway);
+  Object.assign(sidebar, { variant });
   if (activeRouteId) {
     sidebar.activeRouteId = activeRouteId;
   }
@@ -663,12 +662,6 @@ export const TWO_AGENTS = {
   agents: [{ id: "main", identity: { name: "Molty" } }, { id: "research" }],
 } as AgentsListResult;
 
-export const manyAgents = (count: number) =>
-  ({
-    defaultId: "agent-1",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
-  }) as AgentsListResult;
+export { manyAgents } from "./app-sidebar-setup.ts";
 
 export { catalogErrorPage, catalogPage } from "./app-sidebar-catalog.ts";

@@ -383,7 +383,17 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
             const refreshed = await catalogRefresh;
             observations.push({ action: "held-catalog-refresh", result: refreshed });
-            expect(refreshed, evidence()).toMatchObject({ ok: true });
+            // Recovery changes availability, so the held generation must not publish stale facts.
+            expect(refreshed, evidence()).toMatchObject({
+              ok: false,
+              error: {
+                name: "GatewayClientRequestError",
+                code: "UNAVAILABLE",
+                retryable: true,
+                retryAfterMs: 0,
+                message: expect.stringContaining("catalog generation was superseded"),
+              },
+            });
             let published: ModelsListResult | undefined;
             await expect
               .poll(async () => {

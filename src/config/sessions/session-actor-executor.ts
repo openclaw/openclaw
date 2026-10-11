@@ -15,6 +15,7 @@ import type {
   SessionActorReducer,
   SessionActorTarget,
 } from "./session-actor-contract.js";
+import type { SessionActorStorage } from "./session-actor-storage-contract.js";
 
 export type SessionActorExecutorGuards = {
   target: SessionActorTarget;
@@ -24,6 +25,7 @@ export type SessionActorExecutorGuards = {
 
 /** A backend settles commands and publishes complete state before returning. */
 export type SessionActorExecutor = {
+  storage?: SessionActorStorage;
   snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
   read(authority: SessionActorAuthority): Promise<SessionActorHotState>;
   command<Phase extends SessionActorPhase>(
@@ -69,6 +71,7 @@ export function createSessionActorWithExecutor(params: {
     }
   };
   const executor = params.createExecutor({ target, assertAccepted, assertReadable });
+  const storage = executor.storage;
   const retain = <T>(operation: () => Promise<T>, phase?: PhaseState): Promise<T> => {
     if (phase) {
       assertAccepted();
@@ -133,6 +136,20 @@ export function createSessionActorWithExecutor(params: {
   };
   const bind = (phase?: PhaseState): SessionActor => ({
     target,
+    ...(storage
+      ? {
+          storage: {
+            read(query, authority) {
+              const captured = structuredClone(query);
+              return retain(() => storage.read(captured, authority), phase);
+            },
+            mutate(mutation, authority, observer) {
+              const captured = structuredClone(mutation);
+              return retain(() => storage.mutate(captured, authority, observer), phase);
+            },
+          } satisfies SessionActorStorage,
+        }
+      : {}),
     assertCurrent,
     assertReadable,
     snapshot: (authority) => executor.snapshot(authority),

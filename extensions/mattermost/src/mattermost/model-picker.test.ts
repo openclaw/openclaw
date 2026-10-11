@@ -153,7 +153,7 @@ describe("Mattermost model picker", () => {
     });
   });
 
-  it("falls back to the routed agent default model when no override is stored", () => {
+  it("falls back to the routed agent default model when no override is stored", async () => {
     const testDir = tempDirs.make("case-", sessionRoot);
     const cfg: OpenClawConfig = {
       session: {
@@ -185,7 +185,7 @@ describe("Mattermost model picker", () => {
     };
 
     expect(
-      resolveMattermostModelPickerCurrentModel({
+      await resolveMattermostModelPickerCurrentModel({
         cfg,
         route: {
           agentId: "support",
@@ -250,7 +250,7 @@ describe("Mattermost model picker", () => {
     };
 
     expect(
-      resolveMattermostModelPickerCurrentModel({
+      await resolveMattermostModelPickerCurrentModel({
         cfg,
         route: {
           agentId: "support",
@@ -261,11 +261,22 @@ describe("Mattermost model picker", () => {
       }),
     ).toBe("openai/gpt-5");
     expect(
-      resolveMattermostModelPickerCurrentModel({
+      await resolveMattermostModelPickerCurrentModel({
         cfg,
         route: {
           agentId: "support",
           sessionKey: childSessionKey,
+        },
+        data,
+        readConsistency: "latest",
+      }),
+    ).toBe("anthropic/claude-sonnet-4-5");
+    expect(
+      await resolveMattermostModelPickerCurrentModel({
+        cfg,
+        route: {
+          agentId: "support",
+          sessionKey: `${parentSessionKey}:thread:new-thread`,
         },
         data,
         readConsistency: "latest",

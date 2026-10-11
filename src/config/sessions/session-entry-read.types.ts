@@ -85,6 +85,13 @@ export type SessionExactEntriesWorkerSelection =
       sessionKeys?: never;
       selection: { kind: "session-id"; sessionId: string; orderBy?: "updatedAt" };
       projection: "sharing" | "full";
+    }
+  | {
+      sessionKeys?: never;
+      selection:
+        | { kind: "session-id-or-key"; sessionIdOrKey: string }
+        | { kind: "label"; label: string };
+      projection: "list";
     };
 
 export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {

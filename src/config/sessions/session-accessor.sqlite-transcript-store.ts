@@ -11,7 +11,6 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { redactSecrets } from "../../logging/redact.js";
-import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -72,6 +71,7 @@ import {
   isSteerConfirmationRewrite,
   transcriptRewritePreservesProjection,
 } from "./session-transcript-rewrite-effects.js";
+import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
 import {
   createTranscriptEventInserter,
   createTranscriptPayloadUpdater,
@@ -166,9 +166,12 @@ export function appendTranscriptEventInTransaction(
       const db = getSessionKysely(database.db);
       const actor = readSessionActorTransactionState(database, scope);
       const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
-      if (cursor.initialized) {
-        // The first attempt established this window and the batch cannot delete it.
-        // Even rejected identities update recency; keep each attempt's write in order.
+      let windowUpdatedAt = createdAt;
+      // The existing window can share the final watermark write. Rejected identities
+      // still need their recency-only write, without advancing the transcript fence.
+      const deferWindowTouch =
+        options.touchMutation !== false && Boolean(cursor.initialized || actor?.window);
+      const touchWindow = () => {
         cursor.updateWindow ??= prepareSqliteQuerySync<number>(database.db, (parameter) =>
           db
             .updateTable("session_windows")
@@ -179,10 +182,17 @@ export function appendTranscriptEventInTransaction(
         if (actor?.window) {
           actor.window.updated_at = createdAt;
         }
+      };
+      if (cursor.initialized) {
+        // The first attempt established this window and the batch cannot delete it.
+        if (!deferWindowTouch) {
+          touchWindow();
+        }
       } else {
         ensureTranscriptSessionRoot(database, scope, createdAt, {
           allowStoredAlias: options.allowStoredAlias === true,
           onPlaceholderInserted: options.onPlaceholderInserted,
+          deferExistingWindowTouch: deferWindowTouch,
         });
         ensureTranscriptGenerationInTransaction(database, scope.sessionId);
         cursor.initialized = true;
@@ -192,6 +202,9 @@ export function appendTranscriptEventInTransaction(
         // Reuse compilation within this batch, but read fresh rows after every append.
         cursor.readIdentity ??= createTranscriptIdentityReader(database, scope.sessionId);
         if (cursor.readIdentity(identity.eventId)) {
+          if (deferWindowTouch) {
+            touchWindow();
+          }
           return false;
         }
       }
@@ -199,6 +212,9 @@ export function appendTranscriptEventInTransaction(
         ? readIdempotencyKeyOwner(database, scope.sessionId, identity.messageIdempotencyKey)
         : undefined;
       if (idempotencyKeyOwner && options.idempotencyKeyMode === "dedupe") {
+        if (deferWindowTouch) {
+          touchWindow();
+        }
         return false;
       }
       const seq = cursor.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
@@ -280,16 +296,20 @@ export function appendTranscriptEventInTransaction(
         const entry = readSessionEntryRow(database, scope.sessionKey)?.entry;
         if (entry?.sessionId === scope.sessionId && !entry.compactionQualityDegraded) {
           // A later successful summary cannot recover facts already lost from this history.
-          writeSessionEntry(
+          windowUpdatedAt = writeSessionEntry(
             database,
             scope.sessionKey,
             { ...entry, compactionQualityDegraded: true },
             { previousEntry: entry },
-          );
+          ).updatedAt;
         }
       }
       if (options.touchMutation !== false) {
-        touchTranscriptMutationInTransaction(database, scope.sessionId);
+        touchTranscriptMutationInTransaction(
+          database,
+          scope.sessionId,
+          deferWindowTouch ? windowUpdatedAt : undefined,
+        );
       }
       scheduleTranscriptProjectionReconcile(
         database,
@@ -695,18 +715,6 @@ export function readTranscriptMessageByEventId(
 ): { messageId: string; message: unknown } | undefined {
   const identity = readTranscriptIdentityByEventId(database, scope.sessionId, eventId);
   return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
-}
-
-export function canonicalizeTranscriptEventMedia(event: TranscriptEvent): TranscriptEvent {
-  if (!isRecord(event)) {
-    return event;
-  }
-  const message = event.message;
-  if (event.type !== "message" || !isRecord(message)) {
-    return event;
-  }
-  const canonical = canonicalizePersistedUserMessageMedia(message);
-  return canonical.changed ? { ...event, message: canonical.message } : event;
 }
 
 export function redactTranscriptMessageForStorage<TMessage>(

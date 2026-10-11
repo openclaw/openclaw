@@ -9,9 +9,11 @@ import {
   type ExecApprovalRequest,
 } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
+import { LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { ExecApprovalCard, SidebarApprovalRow } from "./exec-approval-card-solid.tsx";
+import { ExecApprovalCard } from "./exec-approval-card-solid.tsx";
+import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 
 let container: HTMLDivElement;
 
@@ -84,17 +86,20 @@ describe("exec approval card", () => {
     const onDecision = vi.fn();
     const view = mountSolid(
       () =>
-        createComponent(SidebarApprovalRow, {
-          props: {
-            approval: approval({ expiresAtMs: 2_000 }),
-            busy: false,
-            canGrant: true,
-            error: null,
-            onDecision,
-          },
+        createComponent(LitContent, {
+          render: () =>
+            renderSidebarApprovalRow({
+              approval: approval({ expiresAtMs: 2_000 }),
+              busy: false,
+              canGrant: true,
+              error: null,
+              onDecision,
+            }),
         }),
       { container },
     );
+    await container.querySelector<SolidBridgeElement<object>>("openclaw-sidebar-approval-row")!
+      .updateComplete;
     const timer = view.getByRole("timer");
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
     expect(buttons).toHaveLength(3);
@@ -217,15 +222,20 @@ describe("exec approval card", () => {
       mountSolid(
         () =>
           variant === "sidebar"
-            ? createComponent(SidebarApprovalRow, {
-                props: {
-                  ...props,
-                  onDecision: (_event, id, decision) => void onDecision(id, decision),
-                },
+            ? createComponent(LitContent, {
+                render: () =>
+                  renderSidebarApprovalRow({
+                    ...props,
+                    onDecision: (_event, id, decision) => void onDecision(id, decision),
+                  }),
               })
             : createComponent(ExecApprovalCard, { props: { ...props, variant, onDecision } }),
         { container },
       );
+      if (variant === "sidebar") {
+        await container.querySelector<SolidBridgeElement<object>>("openclaw-sidebar-approval-row")!
+          .updateComplete;
+      }
       const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
       expect(buttons.map((button) => button.textContent?.trim())).toEqual([
         "Allow once",
