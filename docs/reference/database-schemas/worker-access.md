@@ -26,6 +26,20 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Managed outgoing media cleanup uses the same retained session reader as media
+serving. Durable session discovery and entry reads execute in the existing
+read workers; bound incognito reads use their actor. Cleanup distinguishes an
+unavailable or ambiguous store from a missing transcript reference and retains
+media when ownership cannot be read. It no longer keeps a separate native
+session selector or discovery cache. Stored media, retention policy, schemas,
+and update behavior are unchanged.
+
+Session accessor kernels remain mixed where released synchronous SDK methods,
+opaque transaction callbacks, or unbound process-held incognito readers still
+call them. A worker caller does not make the shared kernel worker-only. The
+inventory retains those calls as migration debt; raw-row removal guarded by
+Doctor's `expectedRawEntryJson` variant is an offline repair exception.
+
 Node-host configuration writes and one-use GitHub setup handoffs use the existing
 shared-state writer. Handoff consumption deletes and returns the matching live
 row in one statement, so concurrent consumers cannot reuse it. Configuration
