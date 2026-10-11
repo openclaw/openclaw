@@ -72,8 +72,8 @@ import {
 import { waitForChannelStopGracefully } from "./channel-stop-timeout.js";
 import {
   createChannelAccountLifetime,
+  resolveChannelAccountStopFallback,
   runChannelAccountStop,
-  waitForDeferredAccountStart,
   type ChannelAccountLifetime,
   type ChannelAccountStopOutcome,
 } from "./server-channel-account-lifetime.js";
@@ -1138,19 +1138,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           const task =
             store.tasks.get(id) ??
             (optsLocal.strict && retainCleanupOwner ? store.starting.get(id) : undefined);
-          // Idle accounts have no captured teardown; managed getters need cleanup admission.
-          const fallbackStop =
-            !lifetime && plugin
-              ? runPluginCleanup(plugin, () => {
-                  const gateway = plugin.gateway;
-                  const stopAccount = gateway?.stopAccount;
-                  if (stopAccount && !manual && !plugin.config.listAccountIds(cfg).includes(id)) {
-                    return undefined;
-                  }
-                  return gateway && stopAccount ? { gateway, stopAccount } : undefined;
-                })
-              : undefined;
-          if (!abort && !task && !lifetime?.teardown && !fallbackStop) {
+          const fallback = resolveChannelAccountStopFallback(lifetime, plugin, cfg, id, manual);
+          if (!abort && !task && !lifetime?.teardown && !fallback) {
             stopState.settled = true;
             return { status: "fulfilled" };
           }
@@ -1172,7 +1161,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           // Running and failed-stop accounts belong to their admitted plugin and config,
           // even after publication removes the account or replaces its registration.
           const teardown = lifetime?.teardown;
-          if (teardown || (fallbackStop && plugin)) {
+          if (teardown || fallback) {
             // Teardown can outlive the start task. Its own lease permits route and status
             // writes only until this stop attempt completes or times out.
             const stopLease = createPluginRuntimeCapabilityLease("channel account stop");
@@ -1190,10 +1179,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   rootScheduler: opts.scheduler,
                   lease: stopLease,
                   teardown,
-                  fallback:
-                    fallbackStop && plugin
-                      ? { ...fallbackStop, plugin, cfg, accountId: id }
-                      : undefined,
+                  fallback,
                   createFallbackContext: (account, scheduler) =>
                     createAccountContext(
                       channelId,

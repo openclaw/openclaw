@@ -14,7 +14,6 @@ import { withPluginServiceScheduler } from "../plugins/service-scheduler-binding
 import { createPluginServiceSchedulerRunner } from "../plugins/service-scheduler-context.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import type { PluginServiceSchedulerV1 } from "../plugins/service-scheduler.types.js";
-import { createDeferredCore } from "../shared/deferred.js";
 
 export type ChannelAccountLifetime = {
   plugin: ChannelPlugin;
@@ -30,6 +29,35 @@ export type ChannelAccountLifetime = {
 export type ChannelAccountStopOutcome =
   | { status: "fulfilled" }
   | { status: "rejected"; error: unknown };
+
+type ChannelAccountStopFallback = {
+  plugin: ChannelPlugin;
+  gateway: NonNullable<ChannelPlugin["gateway"]>;
+  stopAccount: NonNullable<NonNullable<ChannelPlugin["gateway"]>["stopAccount"]>;
+  cfg: OpenClawConfig;
+  accountId: string;
+};
+
+export function resolveChannelAccountStopFallback(
+  lifetime: ChannelAccountLifetime | undefined,
+  plugin: ChannelPlugin | undefined,
+  cfg: OpenClawConfig,
+  accountId: string,
+  manual: boolean,
+): ChannelAccountStopFallback | undefined {
+  if (lifetime || !plugin) {
+    return undefined;
+  }
+  // Idle accounts have no captured teardown; managed getters need cleanup admission.
+  return runPluginCleanup(plugin, () => {
+    const gateway = plugin.gateway;
+    const stopAccount = gateway?.stopAccount;
+    if (stopAccount && !manual && !plugin.config.listAccountIds(cfg).includes(accountId)) {
+      return undefined;
+    }
+    return gateway && stopAccount ? { plugin, gateway, stopAccount, cfg, accountId } : undefined;
+  });
+}
 
 export function createChannelAccountLifetime(
   plugin: ChannelPlugin,
@@ -57,13 +85,7 @@ export async function runChannelAccountStop(params: {
   rootScheduler: GatewayScheduler;
   lease: PluginRuntimeCapabilityLease;
   teardown: ChannelAccountLifetime["teardown"];
-  fallback?: {
-    plugin: ChannelPlugin;
-    gateway: NonNullable<ChannelPlugin["gateway"]>;
-    stopAccount: NonNullable<NonNullable<ChannelPlugin["gateway"]>["stopAccount"]>;
-    cfg: OpenClawConfig;
-    accountId: string;
-  };
+  fallback?: ChannelAccountStopFallback;
   createFallbackContext: (
     account: unknown,
     scheduler: PluginServiceSchedulerV1,
@@ -116,22 +138,5 @@ export async function runChannelAccountStop(params: {
   } catch (error) {
     params.onError(error);
     return { status: "rejected", error };
-  }
-}
-
-export async function waitForDeferredAccountStart(
-  deferred: Promise<void>,
-  abortSignal: AbortSignal,
-): Promise<void> {
-  if (abortSignal.aborted) {
-    return;
-  }
-  const aborted = createDeferredCore();
-  const onAbort = () => aborted.resolve();
-  abortSignal.addEventListener("abort", onAbort, { once: true });
-  try {
-    await Promise.race([deferred, aborted.promise]);
-  } finally {
-    abortSignal.removeEventListener("abort", onAbort);
   }
 }
