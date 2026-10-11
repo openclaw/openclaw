@@ -4,6 +4,8 @@ import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-ha
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
+import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   beginPreparedModelRuntimePluginDrain,
@@ -20,6 +22,45 @@ async function publishConfigured(config: PreparedModelRuntimeInput["config"]) {
   fixture.mocks.configuredAgentIds = ["default"];
   await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
 }
+
+it.each(["call", "consumer"] as const)(
+  "refuses a model wait from the %s an external reload is draining",
+  async (kind) => {
+    const config = {};
+    await publishConfigured(config);
+    const input = fixture.agentInput("default", config);
+    const instance = new PluginInstance("reloading-plugin");
+    const scope = new PluginInvocationScope(createTestPluginRegistry().registry, [instance], {
+      retained: true,
+    });
+    const start = createDeferred();
+    const abort = new AbortController();
+    const acquire = async () => {
+      await start.promise;
+      const pending = acquireAgentRunPreparedModelRuntime(input, { abortSignal: abort.signal });
+      // An immediate refusal must win; entering the reload wait produces this abort instead.
+      abort.abort(new Error("Model acquisition waited on its own reload"));
+      await using lease = await pending;
+      return lease.snapshot;
+    };
+    const pending = (kind === "call" ? instance.run(acquire) : scope.run(acquire)).catch(
+      (error: unknown) => error,
+    );
+    const release = instance.reserveReplacement();
+    const drain = beginPreparedModelRuntimePluginDrain();
+    try {
+      start.resolve();
+      expect(await pending).toMatchObject({ admissionBlocked: true });
+    } finally {
+      drain.release();
+      release();
+      start.resolve();
+      await pending;
+      scope.release();
+      await instance.dispose();
+    }
+  },
+);
 
 it.each([
   {

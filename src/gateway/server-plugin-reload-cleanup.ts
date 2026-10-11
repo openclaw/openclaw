@@ -410,6 +410,7 @@ export function createPluginReloadCleanup({
         ? new AggregateError([pendingServiceCleanup.error, error], "Previous plugin cleanup failed")
         : error,
     assertResourceHandoff: (pluginIds: ReadonlySet<string>) => {
+      const releases: Array<() => void> = [];
       const generation = getPreparedModelRuntimePluginGeneration();
       const heldInstances =
         generation && getPreparedModelRuntimeBorrowedSnapshot(generation)
@@ -422,7 +423,11 @@ export function createPluginReloadCleanup({
       for (const record of previousRegistry.plugins) {
         if (pluginIds.has(record.id)) {
           const instance = getPluginInstance(record);
-          instance?.reserveReplacement();
+          if (instance?.hasActiveCall) {
+            throw new Error(
+              `Plugin ${record.id} cannot replace itself from its own active call; retry after the call finishes.`,
+            );
+          }
           // A turn retains its instances between callbacks; waiting here would wait on itself.
           if (instance && heldInstances?.has(instance)) {
             throw new Error(
@@ -431,6 +436,10 @@ export function createPluginReloadCleanup({
           }
         }
       }
+      for (const instance of previousInstances(pluginIds)) {
+        releases.push(instance.reserveReplacement());
+      }
+      return () => releases.forEach((release) => release());
     },
     drainInstances,
     drainMemory: async (drain: () => Promise<{ errors: readonly unknown[] }>) => {

@@ -50,6 +50,7 @@ export class PluginInstance {
   private captureModuleRecovery?: () => PluginModuleLoaderRecovery;
   private moduleSourceExists?: false | ((source: string) => boolean);
   private accepting = true;
+  private replacementReserved = false;
   private readonly retainedWork = new Set<object>();
   private readonly calls = new Map<object, PluginInstanceCall>();
   private callsExpired = false;
@@ -151,9 +152,9 @@ export class PluginInstance {
     return this.activeCall() !== undefined;
   }
 
-  /** SDK-reachable compatibility: reload checks callers but no longer reserves instances. */
+  /** The reload is waiting for this instance's live work. */
   get replacementPending(): boolean {
-    return false;
+    return this.replacementReserved;
   }
 
   holdsPendingReplacement(token: object): boolean {
@@ -265,7 +266,10 @@ export class PluginInstance {
         `Plugin ${this.pluginId} cannot replace itself from its own active call; retry after the call finishes.`,
       );
     }
-    return () => {};
+    this.replacementReserved = true;
+    return () => {
+      this.replacementReserved = false;
+    };
   }
 
   /** Retain executable use or idle donor custody through its physical completion. */

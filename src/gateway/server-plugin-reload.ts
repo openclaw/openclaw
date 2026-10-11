@@ -130,6 +130,7 @@ export async function reloadGatewayPlugins(
   let memoryReplacement: ReturnType<typeof prepareMemoryRuntimeReload> | undefined;
   const changedPluginIds = new Set(replacePluginIds);
   let resourceHandoffIds = new Set<string>();
+  let releaseResourceHandoff: (() => void) | undefined;
   const sidecarReplacements: ReturnType<
     NonNullable<GatewayPostReadySidecarHandle["preparePluginReload"]>
   >[] = [];
@@ -250,7 +251,7 @@ export async function reloadGatewayPlugins(
     }
     await checkpoint();
     // Refuse self-reload before stopping the plugin whose callback must finish this request.
-    assertResourceHandoff(resourceHandoffIds);
+    releaseResourceHandoff = assertResourceHandoff(resourceHandoffIds);
     const configEffects = params.prepareConfigEffects({
       pluginIds: changedPluginIds,
       channels: channelTargets,
@@ -591,6 +592,7 @@ export async function reloadGatewayPlugins(
             );
           } else {
             // Restored preparation must be able to retain the still-callable instances.
+            releaseResourceHandoff?.();
             resumeInstances();
             await attempt(recoveryErrors, () =>
               services.resumeMemory(memoryReplacement, previousConfig, true),
@@ -689,6 +691,7 @@ export async function reloadGatewayPlugins(
       { cause: failure },
     );
   } finally {
+    releaseResourceHandoff?.();
     // A completed operation never retains an in-progress channel pause. Failed
     // instances keep their own resource/admission fence until a later safe reload.
     channels.release("failed");
