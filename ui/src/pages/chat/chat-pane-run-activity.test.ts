@@ -55,7 +55,7 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
       expectWorking: true,
       expectWaiting: false,
     },
-  ])("$name", ({ selectedKey, parentActive, expectWorking, expectWaiting }) => {
+  ])("$name", async ({ selectedKey, parentActive, expectWorking, expectWaiting }) => {
     const parentKey = "agent:main:main";
     const childKey = "agent:main:subagent:attachment-fix";
     const parent = {
@@ -99,9 +99,12 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
         ".chat-working-indicator:not(.chat-working-indicator--subagents) .chat-reading-indicator",
       ) !== null,
     ).toBe(expectWorking);
-    // Live transcript rows render once history has loaded; until then the skeleton owns the pane.
-    expect(container.querySelector(".chat-working-indicator--subagents") !== null).toBe(
-      expectWaiting && pane.chatProps?.loading !== true,
+    expect(container.querySelector(".chat-working-indicator--subagents")).toBeNull();
+    await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-chat-composer-run-status",
+    )?.updateComplete;
+    expect(Boolean(container.querySelector(".agent-chat__composer-run-status--waiting"))).toBe(
+      expectWaiting,
     );
   });
 });
@@ -137,7 +140,7 @@ describe("composer run status", () => {
     pane.render();
     const container = createApplicationContextProvider(context);
     const onOpenSubagents = vi.fn();
-    const draw = (children: GatewaySessionRow[]) =>
+    const draw = async (children: GatewaySessionRow[]) => {
       renderChatPropsInto(container, {
         ...expectDefined(pane.chatProps, "chat props"),
         selectedSession: parent,
@@ -161,7 +164,11 @@ describe("composer run status", () => {
         subagentSessionsHydrated: true,
         onOpenSubagents,
       });
-    draw([child]);
+      await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+        "openclaw-chat-composer-run-status",
+      )?.updateComplete;
+    };
+    await draw([child]);
     const line = container.querySelector(".agent-chat__composer-run-status--waiting");
     expect(line).not.toBeNull();
     const elapsed = line?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
@@ -175,7 +182,7 @@ describe("composer run status", () => {
     line?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onOpenSubagents).toHaveBeenCalledExactlyOnceWith(true);
 
-    draw([
+    await draw([
       child,
       { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
     ]);
@@ -184,21 +191,28 @@ describe("composer run status", () => {
     ).toContain("Waiting on 2 subagents");
     expect(container.querySelector(".agent-chat__composer-wait-child")).toBeNull();
 
-    draw([{ ...child, hasActiveRun: false }]);
+    await draw([{ ...child, hasActiveRun: false }]);
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
   });
 
-  it("shows Working only during the current run and leaves idle and approval states empty", () => {
-    const container = document.createElement("div");
+  it("shows Working only during the current run and leaves idle and approval states empty", async () => {
+    const { context } = createRefreshChatPane();
+    const container = document.body.appendChild(createApplicationContextProvider(context));
     onTestFinished(() => {
       render(nothing, container);
+      container.remove();
     });
     const props = createComposerProps();
-    const draw = () => render(renderChatComposer(props), container);
-    draw();
+    const draw = async () => {
+      render(renderChatComposer(props), container);
+      await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+        "openclaw-chat-composer-run-status",
+      )?.updateComplete;
+    };
+    await draw();
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
     props.runActive = true;
-    draw();
+    await draw();
     expect(
       container.querySelector(".agent-chat__composer-footer .agent-chat__composer-run-status")
         ?.textContent,
@@ -207,11 +221,11 @@ describe("composer run status", () => {
       container.querySelector(".agent-chat__composer-notices .agent-chat__composer-run-status"),
     ).toBeNull();
     props.waitingApproval = true;
-    draw();
+    await draw();
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
     props.waitingApproval = false;
     props.runStatus = { phase: "done", runId: "work", sessionKey: props.sessionKey, occurredAt: 1 };
-    draw();
+    await draw();
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
   });
 });

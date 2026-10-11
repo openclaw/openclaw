@@ -36,6 +36,15 @@
   line-height: 1.5;
 }
 
+/* Waiting is an overlay above the composer, so status changes do not resize the transcript. */
+.agent-chat__composer-run-status--waiting {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + 6px);
+  justify-content: center;
+  z-index: 1;
+}
+
 .agent-chat__composer-run-spinner {
   display: inline-flex;
   flex-shrink: 0;

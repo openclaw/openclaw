@@ -103,7 +103,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     roster: SubagentRoster,
   ): void {
     const state = this.state;
-    if (!state || !session || session.archived) {
+    if (this.compact || !state || !session || session.archived) {
       return;
     }
     const identity = JSON.stringify([resolveChatAgentId(state), session.key]);

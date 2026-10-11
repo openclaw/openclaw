@@ -14,7 +14,7 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat waiting on subagents" });
 
 suite.define(() => {
-  it("shows child activity without a redundant wait line and restores the parent's working indicator", async () => {
+  it("keeps one composer wait line with child activity and restores the parent's working indicator", async () => {
     const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactParent
       ? createControlUiE2eArtifactDir("chat-subagent-waiting", artifactParent)
@@ -329,7 +329,10 @@ suite.define(() => {
         const childLink = activityRow.getByRole("button");
         await childLink.waitFor();
         expect(await indicator.count()).toBe(0);
-        // Individual activity stays in the handed-off reply, without another status row.
+        expect(await activePane.locator(".agent-chat__composer-run-status--waiting").count()).toBe(
+          1,
+        );
+        // Individual activity stays in the handed-off reply; the single wait line is in the composer.
         expect(
           await activePane
             .locator(".chat-group.assistant", { hasText: "Backend work is now delegated." })
@@ -377,8 +380,10 @@ suite.define(() => {
         await childLink.waitFor({ state: "hidden" });
         await page.goBack();
         await expect.poll(() => selectedTitle.textContent()).toBe("Build the implementation");
-        await activePane.locator(".chat-working-indicator--subagents").waitFor();
-        expect(await indicator.textContent()).toContain("Waiting on subagents");
+        const waitLine = activePane.locator(".agent-chat__composer-run-status--waiting");
+        await waitLine.waitFor();
+        expect(await waitLine.textContent()).toContain("Waiting on subagents");
+        expect(await indicator.count()).toBe(0);
         await gateway.waitForRequest("sessions.list", {
           after: childRosterReads,
           match: childRosterQuery,
@@ -493,7 +498,7 @@ suite.define(() => {
           deltaText: answerText,
           message: { role: "assistant", content: answerText, timestamp: now + 65_000 },
         });
-        await page.locator(".chat-working-indicator--subagents").waitFor({ state: "detached" });
+        await waitLine.waitFor({ state: "hidden" });
         await page
           .locator(
             ".chat-pane-cache__pane--active .chat-working-indicator:not(.chat-working-indicator--subagents)",

@@ -636,10 +636,11 @@ describe("chat pane header", () => {
     );
   });
 
-  it("hides one branch and lists multiple branches with the active tip marked", () => {
+  it("hides one branch and lists multiple branches with the active tip marked", async () => {
     const one = mountHeader({
       branches: [{ leafEntryId: "only", headline: "Only path", messageCount: 1, active: true }],
     });
+    await one.container.querySelector("openclaw-chat-pane-versions-menu")?.updateComplete;
     expect(one.container.querySelector(".chat-pane__branches-trigger")).toBeNull();
 
     const multiple = mountHeader({
@@ -654,23 +655,21 @@ describe("chat pane header", () => {
         },
       ],
     });
+    await multiple.container.querySelector("openclaw-chat-pane-versions-menu")?.updateComplete;
+    const menu = multiple.container.querySelector(".chat-pane__branches-menu");
     const items = multiple.container.querySelectorAll(".chat-pane__branch-item");
-    expect(multiple.container.querySelector(".chat-pane__branches-trigger")).not.toBeNull();
     // wa-popup anchors to the first slot="trigger" element; a display:contents
     // wrapper (like openclaw-tooltip) has a zero rect and pins the menu to the
     // window's top-left corner, so the slotted trigger must be the button itself.
-    expect(
-      multiple.container
-        .querySelector('.chat-pane__branches-menu > [slot="trigger"]')
-        ?.classList.contains("chat-pane__branches-trigger"),
-    ).toBe(true);
+    const trigger = menu?.querySelector('[slot="trigger"]');
+    expect(trigger?.classList.contains("chat-pane__branches-trigger")).toBe(true);
     expect(items).toHaveLength(2);
     expect(items[0]?.textContent).toContain("Current work");
     expect(items[0]?.getAttribute("data-active")).toBe("true");
     expect(items[0]?.querySelector(".chat-pane__branch-active")).not.toBeNull();
     expect(items[1]?.textContent).toContain("Earlier idea");
 
-    multiple.container.querySelector(".chat-pane__branches-menu")?.dispatchEvent(
+    menu?.dispatchEvent(
       new CustomEvent("wa-select", {
         detail: { item: { value: "other" } },
       }),
@@ -678,7 +677,7 @@ describe("chat pane header", () => {
     expect(multiple.props.onBranchSelect).toHaveBeenCalledWith("other");
   });
 
-  it("disables branch switching while the agent is working", () => {
+  it("disables branch switching while the agent is working", async () => {
     const { container, props } = mountHeader({
       branchSwitchDisabledReason: "Branch switch is unavailable while the agent is working.",
       branches: [
@@ -686,6 +685,7 @@ describe("chat pane header", () => {
         { leafEntryId: "other", headline: "Earlier idea", messageCount: 2, active: false },
       ],
     });
+    await container.querySelector("openclaw-chat-pane-versions-menu")?.updateComplete;
     const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__branches-trigger");
     expect(trigger?.disabled).toBe(true);
     container.querySelector(".chat-pane__branches-menu")?.dispatchEvent(

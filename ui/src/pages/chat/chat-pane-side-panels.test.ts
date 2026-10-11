@@ -125,6 +125,22 @@ it.each([
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
 });
 
+it.each([
+  { label: "compact Home", sessionKey: "agent:main:parent" },
+  { label: "embedded subagent transcript", sessionKey: "agent:main:subagent:parent" },
+])("does not automatically reveal a listed running child in a $label pane", ({ sessionKey }) => {
+  const { pane, state, parent, child, roster } = createPane();
+  pane.compact = true;
+  parent.key = sessionKey;
+  parent.hasActiveSubagentRun = true;
+  child.spawnedBy = sessionKey;
+  state.sessionKey = sessionKey;
+  roster.rows = [child];
+
+  pane.render();
+  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
+});
+
 it("reveals listed subagents even when an ACP sibling cannot be shown in the panel", () => {
   const { pane, state, parent, child, roster } = createPane();
   parent.hasActiveSubagentRun = true;

@@ -50,7 +50,8 @@ import {
   type SlashMenuHost,
 } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft, isChatRunWorking } from "./chat-composer-state.ts";
-import { renderComposerRunStatus, renderFallbackIndicator } from "./chat-composer-status.ts";
+import { renderFallbackIndicator } from "./chat-composer-status.ts";
+import "./chat-composer-run-status.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderChatPermissionPicker } from "./chat-permission-picker.ts";
@@ -359,19 +360,18 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     : nothing;
   return html`
     <div class="agent-chat__composer-shell">
+      ${
+        showComposerInput && props.waitingSubagents
+          ? html`<openclaw-chat-composer-run-status
+              .waitingSubagents=${props.waitingSubagents}
+              .onOpenSubagents=${props.onOpenSubagents}
+            ></openclaw-chat-composer-run-status>`
+          : nothing
+      }
       <div class="chat-footer__context">
         ${props.footerContent ?? nothing}
         <div class="agent-chat__composer-notices">
           ${props.notices ?? nothing} ${composerStatus} ${composerAlerts} ${fallbackStatus}
-          ${
-            showComposerInput && props.waitingSubagents
-              ? renderComposerRunStatus({
-                  waitingSubagents: props.waitingSubagents,
-                  working: false,
-                  onOpenSubagents: props.onOpenSubagents,
-                })
-              : nothing
-          }
         </div>
         ${renderComposerQuestionDock(questionPanelProps)}
         ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing}
@@ -640,12 +640,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-meta agent-chat__composer-context">
-                    ${renderComposerRunStatus({
-                      working:
-                        isChatRunWorking(props) &&
-                        !props.waitingApproval &&
-                        !props.waitingSubagents,
-                    })}
+                    ${
+                      isChatRunWorking(props) && !props.waitingApproval && !props.waitingSubagents
+                        ? html`<openclaw-chat-composer-run-status
+                            .working=${true}
+                          ></openclaw-chat-composer-run-status>`
+                        : nothing
+                    }
                     ${contextNotice}
                   </div>
                   ${

@@ -47,7 +47,7 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
-import { renderChatPaneVersionsMenu } from "./chat-pane-versions-menu.ts";
+import "./chat-pane-versions-menu.tsx";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
@@ -398,7 +398,11 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${props.placementControl ?? nothing} ${props.presence ?? nothing}
       </div>
       <div class="chat-pane__header-trailing">
-        ${props.detailsControl ?? nothing} ${renderChatPaneVersionsMenu(props)}
+        ${props.detailsControl ?? nothing}
+        <openclaw-chat-pane-versions-menu
+          style="display: contents"
+          .menu=${props}
+        ></openclaw-chat-pane-versions-menu>
         <div class="chat-pane__actions">
           ${props.narrow ? nothing : runningSubagents} ${props.runAction ?? nothing}
           ${props.sharingControl ?? nothing} ${renderChatPaneLayoutMenu(props)}

@@ -133,6 +133,9 @@ suite.define(() => {
           "1 running",
         );
         expect(await waitLine.isVisible()).toBe(false);
+        const transcriptHeight = () =>
+          activePane.locator(".chat-thread").evaluate((element) => element.clientHeight);
+        const beforeWaitHeight = await transcriptHeight();
 
         const yieldCall = {
           role: "assistant",
@@ -190,6 +193,9 @@ suite.define(() => {
         await expect
           .poll(async () => (await waitLine.textContent())?.replace(/\s+/g, " ").trim())
           .toBe("Waiting on 1 subagent · Backend review · running 1m 5s View");
+        expect(await waitLine.count()).toBe(1);
+        expect(await activePane.locator(".chat-working-indicator--subagents").count()).toBe(0);
+        expect(await transcriptHeight()).toBe(beforeWaitHeight);
         const mountedPanel = await panel.elementHandle();
         await selectChatLayoutAction(activePane, "Expand Subagents");
         await activePane.locator(".sidebar-region--expanded-side").waitFor();
@@ -241,6 +247,28 @@ suite.define(() => {
           ancestorSessions: [settledParent],
         });
         await waitLine.waitFor({ state: "hidden" });
+        const resumedParent: GatewaySessionRow = {
+          ...settledParent,
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: ["parent-resumed"],
+          startedAt: now + 67_000,
+          updatedAt: now + 67_000,
+          snapshotAt: now + 67_000,
+        };
+        await gateway.setSessionsListResponse(
+          sessionsListResponse([resumedParent, settledChild, next]),
+        );
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey: parent.key,
+          reason: "run-start",
+          ts: now + 67_000,
+          session: resumedParent,
+          ancestorSessions: [],
+        });
+        await activePane.locator(".chat-working-indicator").waitFor();
+        await activePane.locator(".agent-chat__composer-run-status--working").waitFor();
+        expect(await waitLine.count()).toBe(0);
         expect(await panel.isVisible()).toBe(true);
         await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
         await panel.waitFor({ state: "hidden" });

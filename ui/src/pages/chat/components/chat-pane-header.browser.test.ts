@@ -230,6 +230,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           state === "idle"
             ? "position: fixed; top: 80px; left: 80px; width: 1000px"
             : "position: fixed; top: 80px; left: 500px; width: 650px";
+        await container.querySelector("openclaw-chat-pane-versions-menu")?.updateComplete;
         const trigger = container.querySelector<HTMLButtonElement>(
           editor ? ".sidebar-file-view__action" : ".chat-pane__branches-trigger",
         )!;
