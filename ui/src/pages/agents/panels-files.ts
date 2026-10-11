@@ -15,7 +15,7 @@ import { pathDisplayName } from "../../lib/path-display.ts";
 import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
 import { agentFilePreview } from "./agent-file-preview.ts";
 import { renderAgentFileError } from "./file-conflict-callout.ts";
-import { hasAgentFileContent, type AgentFilesViewState } from "./files.ts";
+import { hasAgentFileContent, isAgentFileDirty, type AgentFilesViewState } from "./files.ts";
 import { renderAgentPanelAction } from "./panel-ui.ts";
 
 function getExtensionLabel(fileName: string) {
@@ -106,7 +106,7 @@ export function renderAgentFiles(
   const hasBase = Boolean(editor && Object.hasOwn(editor, "content"));
   const baseContent = editor?.content ?? "";
   const draft = editor?.draft ?? baseContent;
-  const isDirty = hasContent && (!hasBase || draft !== baseContent);
+  const isDirty = isAgentFileDirty(editor);
 
   return html`
     ${renderAgentFileError({

@@ -370,103 +370,142 @@ export const agentFileHandlers: Pick<
       return;
     }
     const { agentId, workspaceDir, name } = resolved;
+    const workspaceChanged = new Error(
+      `Agent workspace changed since "${name}" was read. Your draft is preserved. Reload to use the current workspace file, or Overwrite to save this draft in the current workspace.`,
+    );
+    const respondWorkspaceChanged = () =>
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, workspaceChanged.message, {
+          details: { type: "agent_file_conflict", name },
+        }),
+      );
+    if (params.expectedWorkspace !== undefined && params.expectedWorkspace !== workspaceDir) {
+      respondWorkspaceChanged();
+      return;
+    }
+    const assertWorkspaceCurrent = () => {
+      if (resolveAgentWorkspaceDir(context.getRuntimeConfig(), agentId) !== workspaceDir) {
+        throw workspaceChanged;
+      }
+    };
     const access = getAgentWorkspaceAccess(workspaceDir);
     const filePath = path.join(workspaceDir, name);
     const content = params.content;
     let workspaceRoot: WorkspaceRoot | null = null;
     let conflict: { currentHash: string | undefined } | undefined;
-    if (access) {
-      if (Buffer.byteLength(params.content) > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
-        throw new Error("Workspace document exceeds its write bound");
-      }
-      const assertCurrent = () => {
-        if (getAgentWorkspaceAccess(workspaceDir) !== access) {
-          throw new Error("Workspace access changed while saving an Agent document");
+    try {
+      if (access) {
+        if (Buffer.byteLength(params.content) > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+          throw new Error("Workspace document exceeds its write bound");
         }
-      };
-      const createFileExclusive = access.bridge.createFileExclusive;
-      if (params.expectedMissing && !createFileExclusive) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "This workspace host cannot safely create a missing Agent document. Update its workspace provider, or create the file on that host and reload it before saving.",
-          ),
-        );
-        return;
-      }
-      conflict = await enqueueWorkspaceFileUpdate(async () => {
-        assertCurrent();
-        if (params.expectedMissing && createFileExclusive) {
-          const result = await createFileExclusive({
-            filePath: name,
-            data: content,
-            mkdir: true,
-          });
-          assertCurrent();
-          return result === "exists" ? { currentHash: undefined } : undefined;
+        // A workspace change cannot undo a dispatched remote write; retain its settled outcome.
+        const assertCurrent = () => {
+          if (getAgentWorkspaceAccess(workspaceDir) !== access) {
+            throw new Error("Workspace access changed while saving an Agent document");
+          }
+        };
+        const createFileExclusive = access.bridge.createFileExclusive;
+        if (params.expectedMissing && !createFileExclusive) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "This workspace host cannot safely create a missing Agent document. Update its workspace provider, or create the file on that host and reload it before saving.",
+            ),
+          );
+          return;
         }
-        const expectedHash = params.expectedHash?.toLowerCase();
-        if (expectedHash) {
-          const stat = await access.bridge.stat({ filePath: name });
+        conflict = await enqueueWorkspaceFileUpdate(async () => {
+          assertWorkspaceCurrent();
           assertCurrent();
-          let currentHash: string | undefined;
-          if (stat) {
-            const data = await access.bridge.readFile({
+          if (params.expectedMissing && createFileExclusive) {
+            const result = await createFileExclusive({
               filePath: name,
-              maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+              data: content,
+              mkdir: true,
             });
             assertCurrent();
-            if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
-              throw new Error("Workspace document exceeds its read bound");
-            }
-            currentHash = sha256Hex(data);
+            return result === "exists" ? { currentHash: undefined } : undefined;
           }
-          if (currentHash !== expectedHash) {
-            return { currentHash };
-          }
-        }
-        // Preserve the native editor's best-effort conflict contract. Shell
-        // writers remain independent of this Gateway-owned save queue.
-        await access.bridge.writeFile({ filePath: name, data: params.content, mkdir: true });
-        assertCurrent();
-        return undefined;
-      });
-    } else {
-      await fs.mkdir(workspaceDir, { recursive: true });
-      try {
-        workspaceRoot = await root(workspaceDir);
-        const writeRoot = workspaceRoot;
-        const expectedHash = params.expectedHash?.toLowerCase();
-        conflict = await enqueueWorkspaceFileUpdate(async () => {
-          if (params.expectedMissing) {
-            try {
-              await writeRoot.create(name, content, { encoding: "utf8", atomic: true });
-            } catch (err) {
-              if (err instanceof FsSafeError && err.code === "already-exists") {
-                return { currentHash: undefined };
-              }
-              throw err;
-            }
-            return undefined;
-          }
+          const expectedHash = params.expectedHash?.toLowerCase();
           if (expectedHash) {
-            const currentHash = await readWorkspaceFileHash(writeRoot, name);
+            const stat = await access.bridge.stat({ filePath: name });
+            assertCurrent();
+            let currentHash: string | undefined;
+            if (stat) {
+              const data = await access.bridge.readFile({
+                filePath: name,
+                maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+              });
+              assertCurrent();
+              if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+                throw new Error("Workspace document exceeds its read bound");
+              }
+              currentHash = sha256Hex(data);
+            }
             if (currentHash !== expectedHash) {
               return { currentHash };
             }
           }
-          await writeRoot.write(name, content, { encoding: "utf8" });
+          assertWorkspaceCurrent();
+          // Preserve the native editor's best-effort conflict contract. Shell
+          // writers remain independent of this Gateway-owned save queue.
+          await access.bridge.writeFile({ filePath: name, data: params.content, mkdir: true });
+          assertCurrent();
           return undefined;
         });
-      } catch (err) {
-        if (!(err instanceof FsSafeError)) {
-          throw err;
+      } else {
+        await fs.mkdir(workspaceDir, { recursive: true });
+        try {
+          workspaceRoot = await root(workspaceDir);
+          const writeRoot = workspaceRoot;
+          const expectedHash = params.expectedHash?.toLowerCase();
+          conflict = await enqueueWorkspaceFileUpdate(async () => {
+            assertWorkspaceCurrent();
+            if (params.expectedMissing) {
+              try {
+                await writeRoot.create(name, content, {
+                  encoding: "utf8",
+                  atomic: true,
+                  assertBeforeMutation: assertWorkspaceCurrent,
+                });
+              } catch (err) {
+                if (err instanceof FsSafeError && err.code === "already-exists") {
+                  return { currentHash: undefined };
+                }
+                throw err;
+              }
+              return undefined;
+            }
+            if (expectedHash) {
+              const currentHash = await readWorkspaceFileHash(writeRoot, name);
+              if (currentHash !== expectedHash) {
+                return { currentHash };
+              }
+            }
+            await writeRoot.write(name, content, {
+              encoding: "utf8",
+              assertBeforeMutation: assertWorkspaceCurrent,
+            });
+            return undefined;
+          });
+        } catch (err) {
+          if (!(err instanceof FsSafeError)) {
+            throw err;
+          }
+          respondWorkspaceFileUnsafe(respond, name);
+          return;
         }
-        respondWorkspaceFileUnsafe(respond, name);
-        return;
       }
+    } catch (err) {
+      if (err !== workspaceChanged) {
+        throw err;
+      }
+      respondWorkspaceChanged();
+      return;
     }
     if (conflict) {
       respondWorkspaceFileConflict(respond, name, conflict.currentHash);

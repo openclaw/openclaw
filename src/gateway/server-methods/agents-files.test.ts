@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { GatewayRequestError } from "../../../ui/src/api/gateway.ts";
 import {
@@ -226,6 +227,85 @@ for (const storage of ["local", "remote"] as const) {
           });
           expect(result.ok).toBe(true);
           expect(readMemory()).toBe("explicit blind write");
+        },
+      );
+
+      it.each([false, true])(
+        "rejects workspace changes after write admission (missing: %s)",
+        async (missing) => {
+          if (!missing) {
+            fs.writeFileSync(path.join(storageDir, "MEMORY.md"), "original");
+          }
+          const pending = invokeAgentFilesHandler("agents.files.set", {
+            agentId: "main",
+            name: "MEMORY.md",
+            content: "retained draft",
+            expectedWorkspace: workspace,
+            ...(missing ? { expectedMissing: true } : { expectedHash: hashContent("original") }),
+          });
+          workspace = tempDirs.make("replacement-workspace-");
+          const result = await pending;
+          expect(result).toMatchObject({
+            ok: false,
+            error: { details: { type: "agent_file_conflict" } },
+          });
+          expect(missing ? fs.existsSync(path.join(storageDir, "MEMORY.md")) : readMemory()).toBe(
+            missing ? false : "original",
+          );
+          expect(fs.existsSync(path.join(workspace, "MEMORY.md"))).toBe(false);
+        },
+      );
+
+      it.runIf(storage === "remote").each([false, true])(
+        "reports a dispatched remote write after its workspace changes (missing: %s)",
+        async (missing) => {
+          const bridge = expectDefined(remoteBridge, "remote workspace fixture");
+          if (!missing) {
+            fs.writeFileSync(path.join(storageDir, "MEMORY.md"), "original");
+          }
+          const admitted = createDeferred();
+          const settle = createDeferred();
+          if (missing) {
+            const create = expectDefined(
+              bridge.createFileExclusive?.bind(bridge),
+              "remote creation",
+            );
+            vi.spyOn(bridge, "createFileExclusive").mockImplementation(async (params) => {
+              admitted.resolve();
+              await settle.promise;
+              return create(params);
+            });
+          } else {
+            const write = bridge.writeFile.bind(bridge);
+            vi.spyOn(bridge, "writeFile").mockImplementation(async (params) => {
+              admitted.resolve();
+              await settle.promise;
+              await write(params);
+            });
+          }
+          release?.();
+          release = registerAgentWorkspaceAccess(workspace, { bridge });
+          const originalWorkspace = workspace;
+          const pending = invokeAgentFilesHandler("agents.files.set", {
+            agentId: "main",
+            name: "MEMORY.md",
+            content: "retained draft",
+            expectedWorkspace: workspace,
+            ...(missing ? { expectedMissing: true } : { expectedHash: hashContent("original") }),
+          });
+          await awaitGateBeforeSettlement(
+            admitted.promise,
+            pending,
+            "Remote write was not dispatched",
+          );
+          workspace = tempDirs.make("replacement-workspace-");
+          settle.resolve();
+          expect(await pending).toMatchObject({
+            ok: true,
+            payload: { workspace: originalWorkspace },
+          });
+          expect(readMemory()).toBe("retained draft");
+          expect(fs.existsSync(path.join(workspace, "MEMORY.md"))).toBe(false);
         },
       );
 
