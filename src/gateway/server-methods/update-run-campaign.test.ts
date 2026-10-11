@@ -762,7 +762,7 @@ describe("update.run campaign ownership", () => {
           >
         >
       >();
-    const handoffStarted = createDeferred<void>();
+    const handoffStarted = createDeferred();
     startManagedServiceUpdateHandoffMock.mockImplementationOnce(() => {
       handoffStarted.resolve();
       return deferredUpdate.promise;
