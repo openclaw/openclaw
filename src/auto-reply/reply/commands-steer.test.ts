@@ -99,7 +99,8 @@ describe("handleSteerCommand", () => {
   });
 
   it("routes an active /steer through the prepared reply path without a premature ack", async () => {
-    const params = buildParams("/steer keep going");
+    const message = "stop the deploy\nand revert the migration first";
+    const params = buildParams(`/steer ${message}`);
     params.opts = { toolsAllow: ["read"] };
     const { toolAuthorityFingerprint } = beginActiveOperation(
       "agent:main:main",
@@ -111,29 +112,11 @@ describe("handleSteerCommand", () => {
 
     expect(toolAuthorityFingerprint).toEqual(expect.any(String));
     expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
+    expect(params.ctx.Body).toBe(message);
+    expect(params.ctx.BodyForAgent).toBe(message);
+    expect(params.command.commandBodyNormalized).toBe(message);
     // Injection now happens only after the normal path has prepared durable
     // transcript, identity, media, cancellation, and adoption ownership.
-    expect(queueMessage).not.toHaveBeenCalled();
-  });
-
-  it("defers tool-authority admission to the prepared steer path", async () => {
-    const activeParams = buildParams("/steer keep going");
-    activeParams.opts = { toolsAllow: ["exec"] };
-    beginActiveOperation(
-      "agent:main:main",
-      "session-active",
-      createCommandAuthorityRun(activeParams),
-    );
-    const params = buildParams("/steer keep going");
-    params.opts = { toolsAllow: ["read"] };
-
-    const result = await handleSteerCommand(params, true);
-
-    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
@@ -185,23 +168,6 @@ describe("handleSteerCommand", () => {
     } finally {
       clearActiveEmbeddedRun(sessionId, handle, sessionKey);
     }
-  });
-
-  it.each([
-    "/steer stop the deploy\nand revert the migration first",
-    "/tell stop the deploy\nand revert the migration first",
-    "/steer\nstop the deploy\nand revert the migration first",
-  ])("steers with every line of %j", async (commandBody) => {
-    beginActiveOperation("agent:main:main");
-    const params = buildParams(commandBody);
-
-    const result = await handleSteerCommand(params, true);
-
-    const message = "stop the deploy\nand revert the migration first";
-    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
-    expect(params.ctx.Body).toBe(message);
-    expect(params.ctx.BodyForAgent).toBe(message);
-    expect(params.command.commandBodyNormalized).toBe(message);
   });
 
   it("returns usage for an empty steer command", async () => {

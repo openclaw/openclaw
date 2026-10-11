@@ -5,7 +5,10 @@ import type {
   SessionActorReducer,
 } from "../../config/sessions/session-actor-contract.js";
 import { reduceSessionActorEntry } from "../../config/sessions/session-actor-reducers.js";
-import { withSessionActor } from "../../config/sessions/session-actor-scope.js";
+import {
+  runSessionActorCommand,
+  withSessionActor,
+} from "../../config/sessions/session-actor-scope.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
@@ -115,13 +118,15 @@ export async function withAgentTurnCompletion<T>(
           }
           finished = true;
           await refresh();
-          for (let attempt = 0; ; attempt++) {
-            const { reducers } = project();
-            if (reducers.length === 0 && !pendingFinalDelivery) {
-              return snapshot.entry!;
-            }
-            const committed: { receipt?: SessionActorReceipt } = {};
-            const outcome = await actor.completeTurn(
+          let { reducers } = project();
+          if (reducers.length === 0 && !pendingFinalDelivery) {
+            return snapshot.entry!;
+          }
+          const committed: { receipt?: SessionActorReceipt } = {};
+          const outcome = await runSessionActorCommand(actor, authority, async (current) => {
+            snapshot = current ?? (await actor.read(authority));
+            ({ reducers } = project());
+            return actor.completeTurn(
               {
                 commandId: randomUUID(),
                 phaseId: `complete:${operationKey}`,
@@ -143,35 +148,31 @@ export async function withAgentTurnCompletion<T>(
                 },
               },
             );
-            if (committed.receipt) {
-              snapshot = committed.receipt.postimage;
-              params.publish(snapshot.entry!);
-            }
-            if (outcome.kind === "stale-version" && attempt === 0) {
-              snapshot = outcome.postimage;
-              continue;
-            }
-            if (
-              outcome.kind === "rolled-back" &&
-              outcome.reason !== "stale-state" &&
-              !pendingFinalDelivery &&
-              reducers.every((reducer) => reducer.kind === "usage")
-            ) {
-              await refresh();
-              logVerbose(`failed to persist usage update: ${outcome.error.message}`);
-              return snapshot.entry!;
-            }
-            if (outcome.kind !== "committed") {
-              throw new SqliteWorkerError(
-                outcome.error.message,
-                outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
-              );
-            }
-            if (outcome.failure) {
-              throw new Error(outcome.failure.message);
-            }
+          });
+          if (committed.receipt) {
+            snapshot = committed.receipt.postimage;
+            params.publish(snapshot.entry!);
+          }
+          if (
+            outcome.kind === "rolled-back" &&
+            outcome.reason !== "stale-state" &&
+            !pendingFinalDelivery &&
+            reducers.every((reducer) => reducer.kind === "usage")
+          ) {
+            await refresh();
+            logVerbose(`failed to persist usage update: ${outcome.error.message}`);
             return snapshot.entry!;
           }
+          if (outcome.kind !== "committed") {
+            throw new SqliteWorkerError(
+              outcome.error.message,
+              outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+            );
+          }
+          if (outcome.failure) {
+            throw new Error(outcome.failure.message);
+          }
+          return snapshot.entry!;
         },
       };
       let value: T;

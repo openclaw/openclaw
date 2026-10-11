@@ -9,12 +9,13 @@ import { vi } from "vitest";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 
 export function observePublishedReservations(publishedDb: DatabaseSync, onReserved: () => void) {
-  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
-  vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
+  const publishedPath = publishedDb.location();
+  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+  vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
     async (...args) => {
       const worker = await open(...args);
       if (
-        args[1] === publishedDb &&
+        args[0].path === publishedPath &&
         args[2].moduleUrl.href ===
           resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
       ) {

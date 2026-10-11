@@ -1,6 +1,5 @@
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveSpawnThreadBindingPlacement } from "../../channels/conversation-resolution.js";
-import { getActivePluginChannelRegistrySnapshotFromState } from "../../plugins/runtime-channel-state.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -321,28 +320,12 @@ export async function listSessionBindingsBySessionsAsync(
   }
   const context = captureOpenClawStateWorkerContext();
   const adapters = getActiveRegisteredAdapters();
-  const registry = getActivePluginChannelRegistrySnapshotFromState();
-  const assertCurrent = () => {
-    context.admission.assertCurrent();
-    const current = getActiveRegisteredAdapters();
-    if (
-      getActivePluginChannelRegistrySnapshotFromState() !== registry ||
-      current.length !== adapters.length ||
-      current.some((adapter, index) => adapter !== adapters[index])
-    ) {
-      throw new SessionBindingError(
-        "BINDING_ADAPTER_UNAVAILABLE",
-        "Session binding owners changed during destination listing",
-      );
-    }
-  };
   const prepared = new Map<NativeCapableSessionBindingAdapter, SessionBindingRecord[][]>();
   for (const adapter of adapters) {
     const nativeList = adapter[nativeSessionBindingListBySessions];
     if (!nativeList && !isAsyncAdapter(adapter)) {
       continue;
     }
-    assertCurrent();
     if (isAsyncAdapter(adapter)) {
       adapter.assertCurrent();
     }
@@ -351,7 +334,6 @@ export async function listSessionBindingsBySessionsAsync(
       : isAsyncAdapter(adapter)
         ? await Promise.all(keys.map((key) => adapter.listBySessionAsync(key)))
         : [];
-    assertCurrent();
     if (isAsyncAdapter(adapter)) {
       adapter.assertCurrent();
     }
@@ -360,11 +342,7 @@ export async function listSessionBindingsBySessionsAsync(
     }
     prepared.set(adapter, records);
   }
-  const generic = await listGenericCurrentConversationBindingsBySessionsAsync(keys, {
-    assertCurrent,
-    context,
-  });
-  assertCurrent();
+  const generic = await listGenericCurrentConversationBindingsBySessionsAsync(keys, context);
   return new Map(
     keys.map((key, index) => {
       const results: SessionBindingRecord[] = [];
@@ -373,7 +351,6 @@ export async function listSessionBindingsBySessionsAsync(
         const entries = prepared.has(adapter)
           ? prepared.get(adapter)![index]!
           : adapter.listBySession(key);
-        assertCurrent();
         results.push(...entries);
       }
       results.push(...(generic[index] ?? []));

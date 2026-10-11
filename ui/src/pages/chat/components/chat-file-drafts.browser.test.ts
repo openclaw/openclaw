@@ -6,7 +6,7 @@ import {
 } from "../../../app/stale-chunk-reload.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 import { setFileDraft } from "./chat-file-drafts.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";

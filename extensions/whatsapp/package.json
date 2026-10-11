@@ -45,6 +45,12 @@
       "docsLabel": "whatsapp",
       "blurb": "works with your own number; recommend a separate phone + eSIM.",
       "systemImage": "message",
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "sender",
+        "groupAllowFromFallbackToAllowFrom": true,
+        "warnOnEmptyGroupSenderAllowlist": true
+      },
       "persistedAuthState": {
         "specifier": "./auth-presence",
         "exportName": "hasAnyWhatsAppAuth"

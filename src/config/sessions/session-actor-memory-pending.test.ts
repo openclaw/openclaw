@@ -35,6 +35,7 @@ function fixture() {
       writeToken: "0",
       dependencySessionIds: [scope.sessionId],
       entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true },
+      hasBoard: false,
       participants: [],
       members: [],
       pendingInputs: [],

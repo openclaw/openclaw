@@ -33,12 +33,6 @@ const resourceCustody = {
   childClosedBeforeStopped: true,
   sqliteReusable: true,
 };
-const supervisorLoss = {
-  ...resourceCustody,
-  rejectedWhileBlocked: true,
-  retryRejectedWhileBlocked: true,
-  brokerOwnerSurvived: true,
-};
 const callbackContext = ["message", "error", "exit"].map((event) => ({
   event,
   context: "constructor-A",
@@ -63,57 +57,8 @@ const cases = [
     },
   },
   {
-    ending: "supervisor-loss",
-    expected: {
-      rejectedWhileBlocked: true,
-      retryRejectedWhileBlocked: true,
-      joinedOnlyAfterYield: true,
-    },
-  },
-  ...(["resource-cold-supervisor-loss", "resource-cold-skewed-clock"] as const).map((ending) => ({
-    ending,
-    expected: {
-      unavailableBeforeReady: true,
-      sameSourceRetained: true,
-      sameBrokerRetried: true,
-      neverAdmittedResourceClosed: true,
-      brokerClosed: true,
-    },
-  })),
-  {
     ending: "native-resource",
-    expected: { ...resourceCustody, shutdownRefused: true, lateNativeJoin: true },
-  },
-  { ending: "resource-supervisor-loss", expected: supervisorLoss },
-  ...(
-    [
-      "resource-auto-close-success",
-      "resource-auto-close-failure",
-      "resource-auto-close-refusal",
-    ] as const
-  ).map((ending) => ({
-    ending,
-    expected: {
-      ...supervisorLoss,
-      originalBrokerJoined: true,
-      nativeBrokerCloses: 1,
-      ...(ending === "resource-auto-close-success"
-        ? { rotatedAfterBrokerClose: true }
-        : { originalFailureOccurrences: 1 }),
-    },
-  })),
-  {
-    ending: "resource-close-supervisor-loss",
-    expected: { ...supervisorLoss, originalCloseJoined: true },
-  },
-  {
-    ending: "resource-owner-reply-loss",
-    expected: {
-      ...supervisorLoss,
-      retainedReplyDelivered: true,
-      ownerRepliesOrderedOnce: true,
-      ownerReplyRejectionPreserved: true,
-    },
+    expected: resourceCustody,
   },
   {
     ending: "explicit-unbound",

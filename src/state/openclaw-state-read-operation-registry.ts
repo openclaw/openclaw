@@ -17,6 +17,7 @@ import type { sessionUpstreamReadOperations } from "../sessions/session-upstream
 import type { SkillLibraryReadOperations } from "../skills/library/read.contract.js";
 import type { AgentRecoveryReadOperations } from "./agent-deletion-recovery.read-contract.js";
 import type { agentLifecycleReadOperations } from "./agent-lifecycle-read.kernel.js";
+import type { PublicationReadOperations } from "./github-publication-worker.types.js";
 import {
   createWorkerOperationRegistry,
   type WorkerOperations,
@@ -26,6 +27,7 @@ type Operations = WorkerOperations<typeof localWorkspaceReadOperations> &
   AgentDeletionSessionStoreReadOperations &
   WorkerOperations<typeof legacySessionMigrationReadOperations> &
   AgentRecoveryReadOperations &
+  PublicationReadOperations &
   WorkerOperations<typeof agentLifecycleReadOperations> &
   WorkerOperations<typeof gatewayBootReadOperations> &
   DiagnosticReadOperations &
@@ -43,6 +45,8 @@ export type RegisteredStateReadCommand = SqliteWorkerCommand<Operations>;
 export type RegisteredStateReadResult = Operations[keyof Operations]["output"];
 
 export const stateReadRegistry = createWorkerOperationRegistry<Operations, DatabaseSync>({
+  githubPublications: () =>
+    import("./github-publication.read.worker.js").then((m) => m.publicationReadOperations),
   agentDeletion: () =>
     import("../agents/agent-delete-session-store-safety.kernel.js").then(
       (m) => m.agentDeletionSessionStoreReadOperations,

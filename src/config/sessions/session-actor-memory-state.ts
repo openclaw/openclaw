@@ -121,6 +121,7 @@ export function createSessionActorMemoryState(target: SessionActorTarget): Sessi
       writeToken: "0",
       dependencySessionIds: [],
       entry: undefined,
+      hasBoard: false,
       participants: [],
       members: [],
       pendingInputs: [],

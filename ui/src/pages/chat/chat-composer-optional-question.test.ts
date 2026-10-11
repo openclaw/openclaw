@@ -6,7 +6,7 @@ import { createComposerProps, resetComposerFixture } from "./chat-composer.test-
 import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
 import { resolveComposerQuestionPanel } from "./components/chat-composer-question.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import "./components/chat-question-panel.ts";
+import "./components/chat-question-panel.tsx";
 
 afterEach(() => resetComposerFixture());
 
