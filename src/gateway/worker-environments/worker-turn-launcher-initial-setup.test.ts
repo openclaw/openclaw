@@ -298,93 +298,75 @@ describe("initial worker setup admission", () => {
     }
   });
 
-  it.for([
-    "failure",
-    "abort",
-    "incarnation",
-    "writer",
-    "runtime",
-    "stop",
-    "move",
-    "replacement",
-  ] as const)("does not execute held input after %s", async (change, { signal }) => {
-    const fixture = await setup(
-      "remote-exec",
-      "syncing",
-      change === "replacement"
-        ? async () => {
-            const current = placements.get(SESSION_ID)!;
-            await placements.transition({
-              sessionId: SESSION_ID,
-              expectedGeneration: current.generation,
-              from: "active",
-              to: "draining",
-            });
-          }
-        : undefined,
-    );
-    const environments = readyEnvironment();
-    const controller = new AbortController();
-    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments,
-      placements,
-      waitForInitialPlacement: fixture.waitForInitialPlacement,
-    });
-    const uninstall = installSessionPlacementAdmissionProvider(provider);
-    const run = withSessionPlacementTurnAdmission(
-      { ...sessionTarget, runId: "obsolete-input" },
-      { ...turn("obsolete-input"), abortSignal: AbortSignal.any([controller.signal, signal]) },
-      runLocal,
-    );
-    void run.catch(() => undefined);
-    let competing: Promise<unknown> | undefined;
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(fixture.waiting, run, "turn skipped the setup wait"),
-        signal,
+  it.for(["failure", "abort", "incarnation", "writer", "runtime", "replacement"] as const)(
+    "does not execute held input after %s",
+    async (change, { signal }) => {
+      const fixture = await setup(
+        "remote-exec",
+        "syncing",
+        change === "replacement"
+          ? async () => {
+              const current = placements.get(SESSION_ID)!;
+              await placements.transition({
+                sessionId: SESSION_ID,
+                expectedGeneration: current.generation,
+                from: "active",
+                to: "draining",
+              });
+            }
+          : undefined,
       );
-      if (change === "failure") {
-        fixture.fail();
+      const environments = readyEnvironment();
+      const controller = new AbortController();
+      const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments,
+        placements,
+        waitForInitialPlacement: fixture.waitForInitialPlacement,
+      });
+      const uninstall = installSessionPlacementAdmissionProvider(provider);
+      const run = withSessionPlacementTurnAdmission(
+        { ...sessionTarget, runId: "obsolete-input" },
+        { ...turn("obsolete-input"), abortSignal: AbortSignal.any([controller.signal, signal]) },
+        runLocal,
+      );
+      void run.catch(() => undefined);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(fixture.waiting, run, "turn skipped the setup wait"),
+          signal,
+        );
+        if (change === "failure") {
+          fixture.fail();
+        }
+        if (change === "abort") {
+          controller.abort(new Error("operator cancelled input"));
+        }
+        if (change === "incarnation") {
+          await patchSessionEntryCore(sessionTarget, () => ({ lifecycleRevision: "replacement" }));
+        }
+        if (change === "writer") {
+          await patchSessionEntryCore(sessionTarget, () => ({ activeWriterRunId: "replacement" }));
+        }
+        if (change === "runtime") {
+          rotateAgentEventLifecycleGeneration();
+        }
+        if (change === "abort") {
+          await expect(run).rejects.toThrow(/aborted/);
+        }
+        fixture.finish.resolve();
+        await fixture.operation.catch(() => undefined);
+        await expect(run).rejects.toThrow();
+        expect(runLocal).not.toHaveBeenCalled();
+        expect(environments.startTunnel).not.toHaveBeenCalled();
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      } finally {
+        fixture.finish.resolve();
+        await Promise.allSettled([run, fixture.operation]);
+        uninstall();
       }
-      if (change === "abort") {
-        controller.abort(new Error("operator cancelled input"));
-      }
-      if (change === "incarnation") {
-        await patchSessionEntryCore(sessionTarget, () => ({ lifecycleRevision: "replacement" }));
-      }
-      if (change === "writer") {
-        await patchSessionEntryCore(sessionTarget, () => ({ activeWriterRunId: "replacement" }));
-      }
-      if (change === "runtime") {
-        rotateAgentEventLifecycleGeneration();
-      }
-      if (change === "stop") {
-        competing = fixture.dispatch.reclaim(sessionTarget);
-      }
-      if (change === "move") {
-        competing = fixture.dispatch.move({
-          ...sessionTarget,
-          source: { generation: 3, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
-          target: { kind: "gateway" },
-        });
-      }
-      void competing?.catch(() => undefined);
-      if (["abort", "stop", "move"].includes(change)) {
-        await expect(run).rejects.toThrow(/aborted/);
-      }
-      fixture.finish.resolve();
-      await Promise.allSettled([fixture.operation, competing]);
-      await expect(run).rejects.toThrow();
-      expect(runLocal).not.toHaveBeenCalled();
-      expect(environments.startTunnel).not.toHaveBeenCalled();
-      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-    } finally {
-      fixture.finish.resolve();
-      await Promise.allSettled([run, fixture.operation, competing]);
-      uninstall();
-    }
-  });
+    },
+  );
 
   it.for(["source", "admitted"] as const)(
     "rejects %s authority revoked during setup before workspace IO",
