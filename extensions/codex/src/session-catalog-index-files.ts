@@ -26,7 +26,6 @@ type ReconciliationOwner = {
   assertCurrent(): void;
   requestNativeRefresh(): void;
   report(error: unknown): void;
-  mark(id: string): void;
   put(row: CodexCatalogIndexRow): void;
   remove(id: string): void;
 };
@@ -34,7 +33,6 @@ type ReconciliationOwner = {
 /** Plan file reconciliation; the index retains every publication and lifetime decision. */
 export async function reconcileCodexCatalogFiles(
   root: string,
-  isCurrent: (id: string) => boolean,
   owner: ReconciliationOwner,
 ): Promise<Map<string, CodexCatalogRolloutFingerprint>> {
   const byPath = new Map<string, CodexCatalogIndexRow>();
@@ -62,7 +60,7 @@ export async function reconcileCodexCatalogFiles(
       continue;
     }
     owner.requestNativeRefresh();
-    // Publish a new fingerprint only after its projection survives concurrent native updates.
+    // Failed reads retain their old fingerprint so the next scan can retry.
     observed.delete(file);
     if (known) {
       observed.set(file, known);
@@ -78,9 +76,6 @@ export async function reconcileCodexCatalogFiles(
     owner.assertCurrent();
     if (!thread) {
       observed.set(file, fingerprint);
-      continue;
-    }
-    if (!isCurrent(thread.id)) {
       continue;
     }
     const existing = owner.rows.get(thread.id);
@@ -103,15 +98,11 @@ export async function reconcileCodexCatalogFiles(
       { localSessionsRoot: root, sanitize: sanitizeTerminalText },
     );
     owner.assertCurrent();
-    if (!isCurrent(thread.id)) {
-      continue;
-    }
     observed.set(file, fingerprint);
     const row = projected.rows[0];
     if (!row) {
       continue;
     }
-    owner.mark(row.threadId);
     owner.put(mergeCodexCatalogRolloutRow(row, existing, fingerprint));
     await nextTurn();
   }

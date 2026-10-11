@@ -395,7 +395,7 @@ export function normalizeStoredCronJobs(
       const normalizedAt =
         timestampMsToIsoString(parsedAtMs) ??
         timestampMsToIsoString(parseAbsoluteTimeMs(normalizeOptionalString(sched.at) ?? ""));
-      if (normalizedAt) {
+      if (normalizedAt && (sched.at !== normalizedAt || "atMs" in sched)) {
         sched.at = normalizedAt;
         delete sched.atMs;
         mutated = true;

@@ -143,15 +143,7 @@ export function createAgentDatabaseNativeGeneration(
         source.assertCurrent();
         assertCurrent();
         assertIntegrityVerifierCurrent?.();
-        // The reference checks its captured constraints; this owner checks the path last.
         assertCallerCurrent?.(identity);
-        if (identity) {
-          assertExistingDatabaseIdentity(
-            pathname,
-            `file:${identity.physicalIdentity}`,
-            identity.birthtime,
-          );
-        }
       };
       const cleanup = captureAgentDeletionCleanupAdmission(
         { agentId, path: pathname, env: context.environment },

@@ -147,7 +147,7 @@ function buildUnavailableResult(params: {
     retryAfterMs: PREFLIGHT_CACHE_TTL_MS,
     reason: [
       `This automation uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
-      `The candidate is unavailable for this run; OpenClaw will retry its provider preflight on a later scheduled run.`,
+      `Start the local provider or correct its configured endpoint; OpenClaw will retry its provider preflight on a later scheduled run.`,
       `Last error: ${formatPreflightError(params.error)}`,
     ].join(" "),
   };

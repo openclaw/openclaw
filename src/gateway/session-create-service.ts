@@ -23,13 +23,10 @@ import {
 } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   type SessionEntryCreateWithTranscriptOptions,
   deleteSessionEntryLifecycle,
-  loadExactSessionEntryFromStoreReadOnly,
-  resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
@@ -37,6 +34,7 @@ import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/sessio
 import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   createInternalHookEvent,
   hasInternalHookListeners,
@@ -99,7 +97,12 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
-import { finalizeSessionCreateTarget, readSessionCreateTarget } from "./session-create-target.js";
+import {
+  finalizeSessionCreateTarget,
+  readRequestedSessionCreateTarget,
+  readSessionCreateTarget,
+  validateSessionCreateIncognitoTarget,
+} from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
   prepareGatewaySessionLifecycleTargets,
@@ -118,9 +121,11 @@ import {
   sessionCreationFailure,
   unavailableSessionRequest,
 } from "./session-request-error.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "./session-utils-store-worker.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
@@ -177,28 +182,16 @@ export async function createGatewaySession(
     agentId,
     requestedKey,
   });
-  const explicitTargetParts = parseAgentSessionKey(explicitTargetKey);
   const explicitIncognito = isIncognitoSessionKey(explicitTargetKey);
-  const explicitDashboardIncognito =
-    explicitIncognito &&
-    explicitTargetParts?.agentId === agentId &&
-    explicitTargetParts.rest.startsWith("dashboard:");
-  if (explicitIncognito && params.incognito !== true) {
-    return invalidSessionRequest("incognito-shaped session keys require incognito: true");
-  }
-  if (params.incognito === true && explicitTargetKey) {
-    if (!explicitDashboardIncognito) {
-      return invalidSessionRequest("incognito sessions are web-only");
-    }
-    const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const durableEntry = loadExactSessionEntryFromStoreReadOnly({
+  if (explicitIncognito || params.incognito === true) {
+    const incognitoTarget = await validateSessionCreateIncognitoTarget(
+      params,
       agentId,
-      storePath: durableStorePath,
-      sessionKey: explicitTargetKey,
-      projection: "list",
-    });
-    if (durableEntry || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
-      return invalidSessionRequest("incognito is immutable and requires a new session key");
+      explicitTargetKey,
+      commitGuard,
+    );
+    if (!incognitoTarget.ok) {
+      return incognitoTarget;
     }
   }
   if (
@@ -224,14 +217,8 @@ export async function createGatewaySession(
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return invalidSessionRequest("trusted plugin session owner is not authorized");
   }
-  // Capture the requested incarnation before worker discovery yields to authority preparation.
-  const initialTargetEntry = explicitTargetKey
-    ? resolveSessionEntryAccessTarget({
-        cfg: params.cfg,
-        sessionKey: explicitTargetKey,
-        agentId,
-      }).entry
-    : undefined;
+  const explicitTarget = await readRequestedSessionCreateTarget(params, agentId, explicitTargetKey);
+  const initialTargetEntry = explicitTarget?.entry;
   if (
     explicitTargetKey &&
     isAgentHarnessSessionKey(explicitTargetKey) &&
@@ -305,12 +292,14 @@ export async function createGatewaySession(
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
-  const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.cfg,
-    key: targetSessionKey,
-    agentId,
-    assertActive: commitGuard,
-  });
+  const target =
+    explicitTarget ??
+    (await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: targetSessionKey,
+      agentId,
+      assertActive: commitGuard,
+    }));
   const initializingSessionFailure = () =>
     unavailableSessionRequest(
       `Session ${target.canonicalKey} is still initializing; retry creation later.`,
@@ -477,10 +466,12 @@ export async function createGatewaySession(
     onPhase?.("entry");
     let currentParentSessionEntry = parentSessionEntry;
     if (canonicalParentSessionKey && parentSessionTarget && holdParentLifecycle) {
-      const currentParent = loadGatewaySessionEntryReadOnly(
-        canonicalParentSessionKey,
-        parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
-      );
+      const currentParent = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: params.cfg,
+        key: canonicalParentSessionKey,
+        ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
+        assertActive: commitGuard,
+      });
       const currentParentEntry = currentParent.entry;
       if (
         !currentParentEntry?.sessionId ||
@@ -789,6 +780,7 @@ export async function createGatewaySession(
           personalModelSelection: params.personalModelSelection,
           operatorAuthority,
           preparedModelSelection: params.preparedModelSelection?.ref,
+          pinModelSelection: true,
         });
         if (!patched.ok) {
           return patched;
@@ -1228,9 +1220,14 @@ export async function createGatewaySession(
   }
   if (params.atomicInitialization === true) {
     const initializingSession = createdContext;
-    const stored = loadGatewaySessionEntryReadOnly(initializingSession.key, {
-      agentId: initializingSession.agentId,
-    }).entry;
+    const stored = await readSessionEntryReadOnlyInWorker(
+      {
+        storePath: initializingSession.storePath,
+        sessionKey: initializingSession.key,
+        agentId: initializingSession.agentId,
+      },
+      commitGuard,
+    );
     if (
       !stored ||
       stored.sessionId !== initializingSession.entry.sessionId ||

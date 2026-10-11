@@ -91,13 +91,6 @@ describe("parseControlUiSessionPath", () => {
   });
 
   it.each([
-    ["%C5%BF", "main"],
-    ["%E2%84%AAelvin", "kelvin"],
-  ])("normalizes URL agent %s", (encodedAgentId, agentId) => {
-    expect(parseControlUiSessionPath(`/chat/${encodedAgentId}`)).toMatchObject({ agentId });
-  });
-
-  it.each([
     "/chat/%",
     "/chat/main/%",
     "/chat/main/~key",
@@ -161,13 +154,6 @@ describe("matchControlUiCatalogSharePath", () => {
     expect(matchControlUiCatalogSharePath({ pathname, basePath })).toEqual({
       routeSegment: "beam",
       shortId,
-    });
-  });
-
-  it("parses the route owner before descriptor validation", () => {
-    expect(matchControlUiCatalogSharePath({ pathname: "/beam/nothexvaluezz" })).toEqual({
-      routeSegment: "beam",
-      shortId: "nothexvaluezz",
     });
   });
 

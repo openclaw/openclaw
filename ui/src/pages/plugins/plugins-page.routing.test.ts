@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
@@ -13,6 +12,7 @@ import type {
   PluginListResult,
 } from "../../lib/plugins/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createClient,
   createContext,
@@ -25,6 +25,7 @@ import {
   createRuntimeConfigHarness,
   mountPage,
   resetPluginsPageTestState,
+  settlePlugins,
 } from "./plugins-page.test-support.ts";
 
 const SETTINGS_URL = "/settings/plugins/workboard?view=settings";
@@ -103,9 +104,7 @@ async function mountRoute(
 }
 
 async function settlePage(page: { updateComplete: Promise<boolean> }) {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await settlePlugins();
   await page.updateComplete;
 }
 
@@ -147,13 +146,13 @@ it("a chat install link opens uninstalled plugin details without installing", as
     inventory,
     "/plugins/ch_d2hhdHNhcHA?action=install",
   );
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(context.replace).toHaveBeenCalledWith("plugins", {
       pathname: "/plugins/ch_d2hhdHNhcHA",
       search: "",
     }),
   );
-  await vi.waitFor(() => expect(page.querySelector("h1")).not.toBeNull());
+  await waitForSolid(() => expect(page.querySelector("h1")).not.toBeNull());
   expect(page.querySelector<HTMLButtonElement>(".plugin-catalog-detail__install")?.disabled).toBe(
     false,
   );
@@ -191,7 +190,7 @@ it.each([true, false])("retries failed configuration recovery (write=%s)", async
   };
   const runtimeConfig = createRuntimeConfigHarness(refresh, configState, () => client);
   const { page } = await mountRoute(harness, result, SETTINGS_URL, runtimeConfig);
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(page.querySelector(".plugin-editor .callout button")).not.toBeNull(),
   );
   const retry = [...page.querySelectorAll<HTMLElement>(".plugin-editor .callout")]
@@ -224,7 +223,7 @@ it("commits the focused numeric field before Escape dismisses settings", async (
   );
   const { page, context } = await mountRoute(harness, result, SETTINGS_URL, runtimeConfig);
   const selector = 'input[aria-label="Refresh interval (minutes)"]';
-  await vi.waitFor(() => expect(page.querySelector(selector)).not.toBeNull());
+  await waitForSolid(() => expect(page.querySelector(selector)).not.toBeNull());
   const input = page.querySelector<HTMLInputElement>(selector)!;
   input.focus();
   input.value = "30";
@@ -291,8 +290,8 @@ it("keeps the autosaved inspection when an older optional catalog completes", as
     "/settings/plugins/workboard#configuration",
     runtimeConfig,
   );
-  await vi.waitFor(() => expect(catalogs).toBe(1));
-  await vi.waitFor(() =>
+  await waitForSolid(() => expect(catalogs).toBe(1));
+  await waitForSolid(() =>
     expect(page.querySelector('.plugin-editor input[aria-label="Greeting"]')).not.toBeNull(),
   );
   const input = page.querySelector<HTMLInputElement>(
@@ -313,7 +312,7 @@ it("keeps the autosaved inspection when an older optional catalog completes", as
   runtimeConfig.notify();
   configState.configAutoSaveStatus = "saved";
   runtimeConfig.notify();
-  await vi.waitFor(() => expect(catalogs).toBe(2));
+  await waitForSolid(() => expect(catalogs).toBe(2));
   page.routeData = createPluginsRouteData(
     harness.gateway,
     result,
@@ -350,11 +349,11 @@ it("reports when a listed install becomes unavailable", async () => {
     "plugins.catalog.get": () => current,
   });
   const { page } = await mountRoute(harness, createResult(), "/plugins");
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(page.querySelector('[aria-label="Install Calendar"]')).not.toBeNull(),
   );
   page.querySelector<HTMLButtonElement>('[aria-label="Install Calendar"]')!.click();
-  await vi.waitFor(() => expect(page.textContent).toContain("Plugin availability changed"));
+  await waitForSolid(() => expect(page.textContent).toContain("Plugin availability changed"));
   expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
   expect(page.querySelector<HTMLButtonElement>('[aria-label="Install Calendar"]')?.disabled).toBe(
     false,
@@ -387,18 +386,18 @@ it("keeps the latest Install request while an older catalog detail is pending", 
   });
   const { page } = await mountRoute(harness, createResult(), "/plugins");
   try {
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(page.querySelectorAll(".plugin-catalog-card__install")).toHaveLength(2),
     );
     page.querySelector<HTMLButtonElement>('[aria-label="Install Alpha"]')!.click();
     page.querySelector<HTMLButtonElement>('[aria-label="Install Beta"]')!.click();
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(
         request.mock.calls.filter(([method]) => method === "plugins.catalog.get"),
       ).toHaveLength(2),
     );
     betaRead.resolve(beta!);
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith(
         "plugins.install",
         {
@@ -475,7 +474,7 @@ it.each(["disabled", "needs-setup"] as const)(
       "/settings/plugins/workboard?from=plugins",
     );
 
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(
         [...page.querySelectorAll(".plugin-capability__static strong")].map((row) =>
           row.textContent?.trim(),
@@ -511,7 +510,7 @@ it.each(["disabled", "needs-setup"] as const)(
     );
 
     catalogPending.resolve(catalog);
-    await vi.waitFor(() => expect(page.querySelector(".plugin-metadata__loading")).toBeNull());
+    await waitForSolid(() => expect(page.querySelector(".plugin-metadata__loading")).toBeNull());
     expect(page.querySelector(".plugin-metadata__categories .chip")?.textContent).toBe("tools");
     expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
     tools.resolve({
@@ -537,7 +536,7 @@ it.each(["disabled", "needs-setup"] as const)(
         },
       ],
     });
-    await vi.waitFor(() => expect(page.textContent).toContain("Full board search description"));
+    await waitForSolid(() => expect(page.textContent).toContain("Full board search description"));
     expect(page.textContent).toContain("board_create");
     if (state === "disabled") {
       const breadcrumb = page.querySelector<HTMLAnchorElement>(
@@ -568,9 +567,9 @@ it("uses a late local inventory while catalog metadata is pending", async () => 
     },
   });
   const { page } = await mountRoute(harness, null, `/plugins/${plugin.catalogId}`);
-  await vi.waitFor(() => expect(catalogs).toBe(1));
+  await waitForSolid(() => expect(catalogs).toBe(1));
   local.resolve(result);
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: plugin.id }),
   );
   expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();

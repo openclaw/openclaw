@@ -645,6 +645,16 @@ describe("resumed Claude session gaps", () => {
           provider: "claude-cli",
           tools: [{ name: "sessions_history" }],
         };
+        expect(
+          (
+            await loadCliSessionPromptContext({
+              ...params,
+              ...resumedClaudeSession,
+              nativeSessionId: undefined,
+              rawTranscriptReseedReason: "auth-unknown",
+            })
+          ).sessionGapContext,
+        ).toBeUndefined();
         for (const [index, provider] of ["claude-cli", "mock"].entries()) {
           await appendTranscriptMessage(target, {
             eventId: `user-${index}`,
@@ -690,6 +700,23 @@ describe("resumed Claude session gaps", () => {
           durableContext: undefined,
           reseedMessages: [],
         });
+        for (const reason of ["auth-profile", "auth-epoch", "auth-unknown"] as const) {
+          const fresh = {
+            ...options,
+            nativeSessionId: undefined,
+            rawTranscriptReseedReason: reason,
+          };
+          const replacement = await loadCliSessionPromptContext(fresh);
+          expect(replacement.reseedMessages).toEqual([]);
+          expect(replacement.durableContext).toBeUndefined();
+          expect(replacement.sessionGapContext).toBe(
+            '[OpenClaw: 4 earlier messages in this chat from 1970-01-01T00:00:01.000Z to 1970-01-01T00:00:04.000Z, using "claude-cli/test-model", "mock/test-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:history","limit":100}) to read them; page older messages with offset if needed.]',
+          );
+          expect(replacement.sessionGapContext).not.toContain("PRIVATE-TOKEN");
+          expect(
+            (await loadCliSessionPromptContext({ ...fresh, tools: [] })).sessionGapContext,
+          ).not.toContain("sessions_history");
+        }
         for (const reason of ["auth-profile", "auth-epoch"] as const) {
           expect(
             (await loadCliSessionPromptContext({ ...options, rawTranscriptReseedReason: reason }))
@@ -722,8 +749,13 @@ describe("resumed Claude session gaps", () => {
           }),
         });
         expect(
-          (await loadCliSessionPromptContext({ ...params, ...resumedClaudeSession }))
-            .sessionGapContext,
+          (
+            await loadCliSessionPromptContext({
+              ...params,
+              ...resumedClaudeSession,
+              rawTranscriptReseedReason: "auth-unknown",
+            })
+          ).sessionGapContext,
         ).toBeUndefined();
       } finally {
         admission.close();

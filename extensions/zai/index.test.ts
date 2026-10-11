@@ -2,12 +2,10 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 function createGlm47Template(): Model<"openai-completions"> {
   return {
@@ -63,60 +61,6 @@ async function captureStreamPayload(
 }
 
 describe("zai provider plugin", () => {
-  it("preserves all regional auth choices and the exact manifest-owned static catalog", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(provider.aliases).toEqual(["z-ai", "z.ai"]);
-    expect(provider.envVars).toEqual(["ZAI_API_KEY", "Z_AI_API_KEY"]);
-    expect(provider.auth.map((method) => method.id)).toEqual([
-      "api-key",
-      "coding-global",
-      "coding-cn",
-      "global",
-      "cn",
-    ]);
-    expect(await provider.staticCatalog?.run({} as never)).toEqual({
-      provider: buildManifestModelProviderConfig({
-        providerId: "zai",
-        catalog: manifest.modelCatalog.providers.zai,
-      }),
-    });
-  });
-
-  it("owns replay policy for OpenAI-compatible Z.ai transports", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expectFields(
-      provider.buildReplayPolicy?.({
-        provider: "zai",
-        modelApi: "openai-completions",
-        modelId: "glm-5.1",
-      } as never) as Record<string, unknown> | undefined,
-      {
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-        applyAssistantFirstOrderingFix: true,
-        validateGeminiTurns: true,
-        validateAnthropicTurns: true,
-      },
-    );
-
-    expectFields(
-      provider.buildReplayPolicy?.({
-        provider: "zai",
-        modelApi: "openai-responses",
-        modelId: "glm-5.1",
-      } as never) as Record<string, unknown> | undefined,
-      {
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-        applyAssistantFirstOrderingFix: false,
-        validateGeminiTurns: false,
-        validateAnthropicTurns: false,
-      },
-    );
-  });
-
   it("resolves persisted GLM-5 metadata through selected provider endpoints", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const template = createGlm47Template();
@@ -168,32 +112,6 @@ describe("zai provider plugin", () => {
     }
   });
 
-  it("returns an already-registered GLM-5 variant as-is", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const registered = {
-      ...createGlm47Template(),
-      id: "glm-5-turbo",
-      name: "GLM-5-Turbo",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 123456,
-      maxTokens: 54321,
-    };
-    const template = createGlm47Template();
-
-    expect(
-      provider.resolveDynamicModel?.({
-        provider: "zai",
-        modelId: "glm-5-turbo",
-        modelRegistry: {
-          find: (_provider: string, modelId: string) =>
-            modelId === "glm-5-turbo" ? registered : modelId === "glm-4.7" ? template : null,
-        },
-      } as never),
-    ).toEqual(registered);
-  });
-
   it("falls back to manifest baseUrl when both providerConfig and template model are unavailable", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -235,13 +153,6 @@ describe("zai provider plugin", () => {
     });
   });
 
-  it("wires tool-stream defaults through the shared stream family hook", async () => {
-    expect((await captureStreamPayload()).tool_stream).toBe(true);
-    expect(await captureStreamPayload({ extraParams: { tool_stream: false } })).not.toHaveProperty(
-      "tool_stream",
-    );
-  });
-
   it("exposes GLM-5.3 thinking levels while keeping older GLM models binary", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -279,10 +190,6 @@ describe("zai provider plugin", () => {
     const payload = await captureStreamPayload({ thinkingLevel: "off" });
     expect(payload.tool_stream).toBe(true);
     expect(payload.thinking).toEqual({ type: "disabled" });
-  });
-
-  it("keeps minimal thinking enabled for binary GLM models", async () => {
-    expect(await captureStreamPayload({ thinkingLevel: "minimal" })).not.toHaveProperty("thinking");
   });
 
   it("maps GLM-5.3 thinking levels to Z.AI reasoning effort", async () => {

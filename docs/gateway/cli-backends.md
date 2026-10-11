@@ -37,6 +37,8 @@ Deprecated catalog models are not added at sign-in; an existing entry for one is
 
 When you switch an existing chat away from Claude CLI and back, the first resumed turn includes a short count, time range, and model summary of messages since the last saved Claude CLI reply—not their contents. The note prefixes that native user prompt; OpenClaw's transcript keeps the original user text. When `sessions_history` is available, the note includes the current chat's session key and call shape so Claude can read those messages on demand. An empty Claude reply leaves no saved reply boundary, so the note can repeat on the following turn.
 
+When an account change starts a fresh native Claude session in an existing chat, its first turn receives the same kind of note about earlier messages in the chat. This includes opaque native logins. Claude can read that history on demand through `sessions_history` when tool policy allows it; OpenClaw never automatically replays raw transcript content or durable context across the account boundary. A brand-new chat has no earlier-message note.
+
 The gateway service must have the CLI on its `PATH`. If a deployment needs a
 nonstandard executable path or arguments, register that adapter in a
 [CLI backend plugin](/plugins/cli-backend-plugins) instead of putting launch
@@ -354,10 +356,20 @@ When prompt content changes, a compatible CLI session can resume with an OpenCla
 context note before the current user prompt. Chat history first matches imported
 Claude user turns against the full local text, including any literal quote of the
 note. If that does not match, it ignores one exact context note for comparison, so
-the same turn appears once. Stored transcript text and unmatched imported turns
-remain intact. Native and OpenClaw history share bounded pages and message-anchor
-lookups. The history worker prepares a temporary merged index without modifying
-the canonical transcript. A cold index scans bounded source pages to preserve
+the same turn appears once. Queued system events, including model-switch notices,
+are ignored for matching even after generated conversation metadata and recent
+chat history. Stored OpenClaw and native transcript text remains unchanged.
+For unmatched imported user turns, chat history removes generated
+resume notes, historical requester guidance, and queued system-event prefixes
+from the display copy only. Historical requester guidance is recognized by its
+complete generated prefix; matching canonical user text and later quoted
+guidance remain unchanged.
+Recognized runtime prompts, such as default heartbeat, exec-completion, restart
+recovery, and native compaction prompts, are hidden rather than shown as human
+messages. Matching canonical user turns and quoted text in later content blocks
+remain unchanged. Native and OpenClaw history share bounded pages and
+message-anchor lookups. The history worker prepares a temporary merged index
+without modifying the canonical transcript. A cold index scans bounded source pages to preserve
 global deduplication; subsequent reads select only their requested window. The
 index is discarded when either transcript changes or its database owner closes.
 Reset-archive fallbacks rebuild the index per request because their source files
@@ -375,7 +387,7 @@ This uses existing session metadata and transcript generation/sequence counters.
 
 Explicit caller-owned in-memory context remains caller-supplied input, not permission to read a durable conversation carrying the same identifiers. Authentication invalidations still refuse its recovery prompt and saved session notes. When automatic recovery is refused, the saved transcript remains intact. The next CLI process receives the current request without the saved history or notes.
 
-An admitted resume of the same native Claude session can still receive the count, time range, and models of intervening messages, plus a `sessions_history` call for the current chat when that tool is available. This notice contains no transcript text or saved notes, does not authorize automatic replay, and is never added to a fresh session or after an authentication-profile or epoch change.
+An admitted resume of the same native Claude session can still receive the count, time range, and models of intervening messages, plus a `sessions_history` call for the current chat when that tool is available. A fresh native Claude session after an authentication-profile, epoch, or unknown-identity boundary can receive the same metadata about earlier recorded messages in its existing OpenClaw chat. This notice contains no transcript text or saved notes and does not authorize automatic replay; reading history remains an on-demand tool action subject to the current tool policy.
 
 The notice prefixes only that native user turn. OpenClaw keeps the original user text; native-history imports correlate the prefixed turn with its existing local row instead of adding a duplicate.
 
@@ -541,7 +553,7 @@ When bundle MCP is enabled, OpenClaw:
 The loopback bridge sends keepalive bytes while a tool response or notification
 stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
 bytes are not tool results or agent progress; client request deadlines and the
-overall agent turn timeout still apply.
+current model attempt's timeout still apply.
 
 The shared listener remains available after the turn that first started it completes.
 Later calls use their own run's permissions and caller liveness, without retaining

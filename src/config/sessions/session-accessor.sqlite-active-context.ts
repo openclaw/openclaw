@@ -29,15 +29,13 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleMessageLimit,
 } from "./session-accessor.sqlite-visible-cursor.js";
+import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
 import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import {
-  transcriptEventJsonSql,
-  transcriptEventNavigationSql,
-  transcriptEventResetNavigationSql,
-} from "./transcript-payload.js";
+import { transcriptEventJsonSql, transcriptEventResetNavigationSql } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 function readBoundedRetentionRanges(
   projection: CurrentTranscriptProjection,
@@ -182,6 +180,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
     ignoreReadFence?: boolean;
     readOnly?: boolean;
     resolvedScope?: ResolvedTranscriptReadScope;
+    transaction?: CurrentTranscriptProjection["database"];
     onRead?: (projection: CurrentTranscriptProjection) => void;
   },
 ): SessionTranscriptBoundedActiveContext {
@@ -215,22 +214,18 @@ export function readSessionTranscriptBoundedActiveContextCore(
       transcript
         .select([
           "seq",
+          "navigation_valid",
           /* kysely-allow-raw: reject an oversized header before acquiring its JSON payload. */
           sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
         ])
-        .where(
-          /* kysely-allow-raw: the canonical transcript event type is stored inside event_json. */
-          sql<string>`json_extract(${transcriptEventNavigationSql()}, '$.type')`,
-          "=",
-          "session",
+        .where((eb) =>
+          eb.or([eb("navigation_type", "=", "session"), eb("navigation_valid", "=", 0)]),
         )
         .orderBy("seq", "asc")
         .limit(1),
     );
+    assertTranscriptNavigationValid(header?.navigation_valid);
     const headerBytes = header?.serialized_bytes ?? 0;
-    if (headerBytes > maxBytes) {
-      throw new RangeError("Session transcript header exceeds the active-context byte limit");
-    }
     // Explicit reset retention wins over ordinary exclusion. The window owner
     // selects paired entries; only its newest candidates can fit this bounded read.
     const retained =
@@ -269,17 +264,9 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .orderBy("active.active_position", "desc")
         .limit(maxEvents + 1),
     );
-    const selectedRows: { event_seq: number; active_position: number }[] = [];
-    let serializedBytes = headerBytes;
-    let truncated = false;
-    for (const row of metadata) {
-      if (selectedRows.length >= maxEvents || serializedBytes + row.serialized_bytes > maxBytes) {
-        truncated = true;
-        break;
-      }
-      selectedRows.push(row);
-      serializedBytes += row.serialized_bytes;
-    }
+    const selection = selectBoundedContextRows(metadata, headerBytes, { maxBytes, maxEvents });
+    const { selectedRows } = selection;
+    let { serializedBytes, truncated } = selection;
     const selectedSequences = selectedRows.map((row) => row.event_seq);
     let boundary = executeSqliteQueryTakeFirstSync(
       projection.database.db,
@@ -489,5 +476,6 @@ export function readSessionTranscriptBoundedActiveContextCore(
   return withCurrentProjectionSnapshot(scope, read, {
     readOnly: options.readOnly,
     resolvedScope: options.resolvedScope,
+    transaction: options.transaction,
   });
 }

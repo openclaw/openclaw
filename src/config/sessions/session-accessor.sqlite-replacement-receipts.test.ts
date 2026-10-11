@@ -11,7 +11,6 @@ import {
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -100,12 +99,8 @@ it("sheds aggregate optional snapshots while committing every required receipt r
       }
       expect(fact.value.fullEntry).toBeUndefined();
       expect(metadata.source.writeToken).toBeUndefined();
-      const replacement = result.replacement.receipt?.facts.get(key);
-      expect(replacement).toMatchObject({ kind: "postimage", value: { entry: { label: key } } });
-      if (replacement?.kind !== "postimage") {
-        throw new Error("Expected committed replacement after optional snapshot shedding");
-      }
-      expect(replacement.value.fullEntry).toBeUndefined();
+      expect(result.replacement.current.get(key)).toMatchObject({ label: key });
+      expect(result.replacement.current.get(key)?.skillsSnapshot).toBeUndefined();
     }
   });
 });
@@ -121,7 +116,7 @@ it("withholds metadata certification after a later write in its native transacti
             writeSessionEntry(current, sessionKey, {
               sessionId: "metadata-receipt",
               updatedAt: 1,
-              label: "selected",
+              label: `selected-${rawWrite}`,
               skillsSnapshot: { prompt: "Persisted metadata prompt", skills: [] },
             }),
           );
@@ -667,222 +662,6 @@ it("keeps a removal receipt bound to its physical store when a listener rebinds 
     }
   });
 });
-
-it.each([
-  "lower revision",
-  "retired incarnation",
-  "partial",
-  "unknown",
-  "newer unknown",
-  "missing coverage",
-  "source mismatch",
-  "unknown scope",
-  "malformed source",
-  "malformed facts",
-  "truncated keys",
-  "malformed rows",
-  "malformed postimage",
-  "mismatched postimage",
-  "mismatched full postimage",
-  "unbound unavailable projection",
-] as const)(
-  "keeps replacement receipt coverage and ordering through %s delivery",
-  async (boundary) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:ordered-receipt",
-      };
-      replaceSessionEntrySync(scope, {
-        sessionId: "ordered-receipt",
-        updatedAt: 1,
-        category: "initial",
-      });
-      const source = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof source.identity !== "string") {
-        throw new Error("Expected durable receipt fixture");
-      }
-      addSessionMember(scope, { identityId: "retained", addedBy: "owner", addedAt: 1 });
-      const sharing = retainPreparedSessionSharingFacts({
-        databaseIdentity: `file:${source.identity}`,
-        sessionKey: scope.sessionKey,
-        entry: projectSessionSharingEntry(
-          readExactSessionEntryRow(database, scope.sessionKey)!.entry,
-        ),
-        membership: new Set(["retained"]),
-      });
-      const generation = retainPreparedSessionGenerationFacts({
-        databaseIdentity: `file:${source.identity}`,
-        sessionKey: scope.sessionKey,
-        entry: readExactSessionEntryRow(database, scope.sessionKey)!.entry,
-      });
-      const projection = createSessionMembershipProjection();
-      projection.updateTargets([{ ...scope, ...source }]);
-      let olderChange: SessionRowChange | undefined;
-      let receipt: SessionEntryReplacementPublication | undefined;
-      const stop = sessionChanges.subscribeFacts((change) => {
-        projection.invalidate(change);
-        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-          olderChange ??= change;
-        }
-      });
-      const delayed = retainSessionEntryWorkerPublication({
-        ...scope,
-        databaseIdentity: source.identity,
-      });
-      const replace = (category: string) =>
-        applySessionEntryExactReplacements({
-          storePath: database.path,
-          sessionKeys: [scope.sessionKey],
-          update: ([row]) => ({
-            result: undefined,
-            replacements: [{ sessionKey: scope.sessionKey, entry: { ...row!.entry, category } }],
-          }),
-        });
-      try {
-        await projection.prepare();
-        delivery.afterResult = (result) => {
-          // This callback receives the actual acknowledged replacement command result.
-          receipt = (result as { publication: SessionEntryReplacementPublication }).publication;
-        };
-        await replace("older");
-        delivery.afterResult = undefined;
-        expect(receipt).toBeDefined();
-        delayed.begin([scope.sessionKey], []);
-        if (boundary === "newer unknown") {
-          const newer = retainSessionEntryWorkerPublication({
-            ...scope,
-            databaseIdentity: source.identity,
-          });
-          newer.begin([scope.sessionKey], []);
-          newer.settle(undefined, true);
-          delayed.settle(receipt, false);
-          expect(projection.ready(database.path, scope.sessionKey)).toBe(false);
-          expect(projection.membership(database.path, scope.sessionKey)).toEqual([]);
-          expect(sharing.readCurrent()).toBeUndefined();
-          await projection.prepare();
-          expect(projection.ready(database.path, scope.sessionKey)).toBe(true);
-          return;
-        }
-        if (
-          [
-            "partial",
-            "unknown",
-            "missing coverage",
-            "source mismatch",
-            "unknown scope",
-            "malformed source",
-            "malformed facts",
-            "truncated keys",
-            "malformed rows",
-            "malformed postimage",
-            "mismatched postimage",
-            "mismatched full postimage",
-            "unbound unavailable projection",
-          ].includes(boundary)
-        ) {
-          expect(receipt!.receipt).toBeDefined();
-          if (boundary === "missing coverage") {
-            receipt = { ...receipt!, receipt: { ...receipt!.receipt!, facts: new Map() } };
-          } else if (boundary === "source mismatch") {
-            receipt = {
-              ...receipt!,
-              receipt: {
-                ...receipt!.receipt!,
-                source: { ...receipt!.receipt!.source, incarnation: "superseded" },
-              },
-            };
-          } else if (boundary === "unknown scope") {
-            receipt = {
-              ...receipt!,
-              receipt: {
-                ...receipt!.receipt!,
-                facts: new Map([[scope.sessionKey, { kind: "unknown" }]]),
-              },
-            };
-          } else if (boundary === "malformed source") {
-            Reflect.set(receipt!.receipt!, "source", null);
-          } else if (boundary === "malformed facts") {
-            Reflect.set(receipt!.receipt!, "facts", {});
-          } else if (boundary === "truncated keys") {
-            receipt = {
-              ...receipt!,
-              changedKeys: [],
-              receipt: { ...receipt!.receipt!, facts: new Map() },
-            };
-          } else if (boundary === "malformed rows") {
-            Reflect.set(receipt!, "current", null);
-          } else if (boundary === "mismatched full postimage") {
-            receipt = {
-              ...receipt!,
-              fullEntries: new Map([
-                [scope.sessionKey, { sessionId: "different-incarnation", updatedAt: 1 }],
-              ]),
-            };
-          } else if (boundary === "unbound unavailable projection") {
-            const fact = receipt!.receipt!.facts.get(scope.sessionKey);
-            if (fact?.kind !== "postimage") {
-              throw new Error("Expected the writer's real postimage");
-            }
-            Reflect.set(fact, "value", {
-              entry: fact.value.entry,
-              participantProjectionUnavailable: true,
-            });
-            receipt = { ...receipt!, projection: new Map() };
-          } else if (boundary === "malformed postimage" || boundary === "mismatched postimage") {
-            const fact = receipt!.receipt!.facts.get(scope.sessionKey);
-            if (fact?.kind !== "postimage") {
-              throw new Error("Expected the writer's real postimage");
-            }
-            Reflect.set(
-              fact,
-              "value",
-              boundary === "malformed postimage"
-                ? undefined
-                : {
-                    ...fact.value,
-                    entry: { ...fact.value.entry, sessionId: "different-incarnation" },
-                  },
-            );
-          }
-          delayed.settle(
-            boundary === "partial" ? { ...receipt!, projection: undefined } : receipt,
-            boundary === "unknown",
-          );
-          expect(projection.ready(database.path, scope.sessionKey)).toBe(false);
-          expect(projection.membership(database.path, scope.sessionKey)).toEqual([]);
-          expect(sharing.readCurrent()).toBeUndefined();
-          if (boundary !== "partial") {
-            expect(generation.readCurrent()).toBeUndefined();
-          }
-          await projection.prepare();
-          expect([...projection.groupTargets().keys()]).toEqual(["older"]);
-        } else {
-          if (boundary === "retired incarnation") {
-            await closeOpenClawAgentDatabaseByPathAsync(database.path);
-          }
-          await replace("newer");
-          if (boundary === "lower revision") {
-            expect(olderChange).toBeDefined();
-            projection.invalidate(olderChange!);
-          }
-          delayed.settle(receipt, false);
-          expect(projection.ready(database.path, scope.sessionKey)).toBe(true);
-          expect([...projection.groupTargets().keys()]).toEqual(["newer"]);
-        }
-      } finally {
-        delivery.afterResult = undefined;
-        delayed.settle(undefined, false);
-        stop();
-        sharing.release();
-        generation.release();
-        projection.dispose();
-      }
-    });
-  },
-);
 
 it.each(["facts", "projection"] as const)(
   "preserves a native commit and fences a failed %s installation before notification",

@@ -55,7 +55,7 @@ describe("compaction-safeguard mixed-script summary budget", () => {
     );
   });
 
-  it("cancels when required facts alone exceed the token budget", async () => {
+  it("marks a bounded degraded summary when required facts exceed the token budget", async () => {
     const sessionManager = createQualityGuardSessionManager({ qualityGuardMaxRetries: 0 });
     const event = createCompactionEvent({
       messageText: REQUIRED_ASK,
@@ -64,13 +64,14 @@ describe("compaction-safeguard mixed-script summary budget", () => {
 
     const { result } = await runCompactionScenario(sessionManager, event);
 
-    expect(result.cancel).toBe(true);
-    expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toContain(
-      "cannot fit beside the foreground prompt",
-    );
+    expect(result).toMatchObject({ compaction: { details: { qualityDegraded: true } } });
+    const { summary } = expectCompactionResult(result);
+    expect(estimateStringChars(summary)).toBeLessThanOrEqual(400 * CHARS_PER_TOKEN_ESTIMATE);
+    expect(summary).not.toContain(REQUIRED_ASK);
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
-  it("fails closed when audit-required tail sections cannot fit the artifact cap", async () => {
+  it("drops an oversized identifier so the artifact can still be committed", async () => {
     const latestAsk = "preserve the pending deployment status";
     const identifier = `https://example.com/${"a".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`;
     const oversizedRequiredTail = structuredSummary({ asks: latestAsk, identifiers: identifier });
@@ -83,12 +84,12 @@ describe("compaction-safeguard mixed-script summary budget", () => {
 
     const { result } = await runCompactionScenario(sessionManager, event);
 
-    expect(result).toEqual({ cancel: true });
+    expect(result).toMatchObject({ compaction: { details: { qualityDegraded: true } } });
+    const { summary } = expectCompactionResult(result);
+    expect(summary).toContain(latestAsk);
+    expect(summary).not.toContain(identifier);
+    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancellation(sessionManager)?.error).toMatchObject({
-      code: "summarization_failed",
-      message:
-        "The compaction summary cannot fit beside the foreground prompt and retained history.",
-    });
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 });

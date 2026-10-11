@@ -135,13 +135,6 @@ describe("buildEmbeddedRunPayloads", () => {
       content: [{ type: "text", text: errorJson }],
       ...overrides,
     });
-  const makeStoppedAssistant = () =>
-    makeAssistant({
-      stopReason: "stop",
-      errorMessage: undefined,
-      content: [],
-    });
-
   const expectOverloadedFallback = (payloads: ReturnType<typeof buildPayloads>) => {
     // Overloaded JSON is normalized into stable copy rather than replayed as a
     // raw provider object.
@@ -713,7 +706,11 @@ describe("buildEmbeddedRunPayloads", () => {
   it("does not suppress error-shaped JSON when the assistant did not error", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
-      lastAssistant: makeStoppedAssistant(),
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: errorJsonPretty }],
+      }),
     });
 
     expectSinglePayloadText(payloads, errorJsonPretty.trim());

@@ -238,7 +238,6 @@ export async function applySessionEntryLifecycleMutation(
                         allowCanonicalRepair: params.allowCanonicalRepair,
                         maintenance,
                         descendantRunBasis: params.descendantRunBasis,
-                        maintenanceRunBasis: preparedPreservation?.subagentRunBasis,
                       },
                     }),
                   );
@@ -260,7 +259,6 @@ export async function applySessionEntryLifecycleMutation(
                     databaseOptions: reclamationOptions,
                     materializedPlans: materializedRemovalPlans,
                     descendantRunBasis: params.descendantRunBasis,
-                    maintenanceRunBasis: preparedPreservation?.subagentRunBasis,
                     input: {
                       projected,
                       materializationFailed: removalArchiveMaterializationFailed,

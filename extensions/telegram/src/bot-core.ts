@@ -5,12 +5,10 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  registerSessionBindingAdapterV2,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
   unregisterSessionBindingAdapter,
-  type SessionBindingAdapterV2,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -27,6 +25,10 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  registerSessionBindingAdapterV2,
+  type SessionBindingAdapterV2,
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -257,7 +259,7 @@ export async function createTelegramBotCore(
       accountId: account.accountId,
       groupId: String(chatId),
     });
-  const resolveGroupActivation = (params: {
+  const resolveGroupActivation = async (params: {
     agentId?: string;
     sessionKey: string;
     cfg: OpenClawConfig;
@@ -265,11 +267,12 @@ export async function createTelegramBotCore(
     const agentId = params.agentId ?? ownerAgentId;
     const storePath = telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
     try {
-      const getSessionEntry = telegramDeps.getSessionEntry;
-      const storedActivation = getSessionEntry?.({
-        storePath,
-        sessionKey: params.sessionKey,
-      })?.groupActivation;
+      const storedActivation = (
+        await telegramDeps.getSessionEntryAsync?.({
+          storePath,
+          sessionKey: params.sessionKey,
+        })
+      )?.groupActivation;
       if (storedActivation === "always") {
         return false;
       }
@@ -307,21 +310,22 @@ export async function createTelegramBotCore(
     telegramDeps,
     resolveTelegramGroupConfig,
   };
-  const { nativeCommandNames, nativeCommandCallbackDispatcher } = registerTelegramNativeCommands({
-    ...botContext,
-    cfg,
-    accountId: account.accountId,
-    telegramCfg,
-    mediaMaxBytes,
-    nativeEnabled,
-    nativeSkillsEnabled,
-    resolveGroupPolicy,
-    shouldSkipUpdate,
-    telegramDeps: {
-      ...telegramDeps,
-      sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
-    },
-  });
+  const { nativeCommandNames, nativeCommandCallbackDispatcher } =
+    await registerTelegramNativeCommands({
+      ...botContext,
+      cfg,
+      accountId: account.accountId,
+      telegramCfg,
+      mediaMaxBytes,
+      nativeEnabled,
+      nativeSkillsEnabled,
+      resolveGroupPolicy,
+      shouldSkipUpdate,
+      telegramDeps: {
+        ...telegramDeps,
+        sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
+      },
+    });
   const messageContext = {
     ...botContext,
     nativeCommandNames,

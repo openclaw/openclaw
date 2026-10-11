@@ -341,17 +341,12 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     const pendingTargets = Array.from(this.sessionPendingTargets.values());
     this.sessionPendingFiles.clear();
     this.sessionPendingTargets.clear();
-    if (pendingTargets.length > 0) {
-      const plan = await this.resolveTargetSessionSyncPlan({ sessions: pendingTargets });
-      pending.push(...(plan?.targetArchiveFiles ?? []));
-    }
     for (const sessionFile of pending) {
       this.sessionsDirtyFiles.add(sessionFile);
     }
-    if (pending.length > 0) {
+    if (pending.length > 0 || pendingTargets.length > 0) {
       this.sessionsDirty = true;
-      // Keep both identity and file keys so every transcript backend enters the
-      // targeted queue instead of letting an active sync clear this newer event.
+      // Resolve identities once in the sync owner, after queued work can proceed.
       this.syncInBackground(
         { reason: "session-delta", sessions: pendingTargets, archiveFiles: pending },
         "session update",

@@ -140,7 +140,8 @@ describe("runAcpClientInteractive process lifecycle", () => {
           "--input-type=module",
           "--eval",
           `import { runAcpClientInteractive } from ${JSON.stringify(new URL("./client.ts", import.meta.url).href)};
-         await runAcpClientInteractive({ serverCommand: process.execPath, cwd: process.argv[1] });`,
+         process.exitCode = await runAcpClientInteractive({ serverCommand: process.execPath, cwd: process.argv[1] });
+         console.log("ACP_CLIENT_RETURNED");`,
           dir,
         ],
         env: {
@@ -194,6 +195,7 @@ describe("runAcpClientInteractive process lifecycle", () => {
         );
       });
       expect(prompted, stderr.text()).toBe(true);
+      expect(stdout.text()).toContain("ACP_CLIENT_RETURNED");
       expect(await readFile(promptFile, "utf8")).toBe("status marker");
       expect(result, `${stderr.text()}\n${stdout.text()}`).toBe(code);
       expect(native).toEqual({ code, signal: null });

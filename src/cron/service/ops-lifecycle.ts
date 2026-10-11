@@ -27,13 +27,13 @@ import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
 
-function applyRecoveryResult(params: {
+async function applyRecoveryResult(params: {
   state: CronServiceState;
   proposal: CronRunRecoveryProposal;
   result: CronRunRecoveryResult;
   interruptedRuns: InterruptedStartupRun[];
   skipJobIds?: Set<string>;
-}): boolean {
+}): Promise<boolean> {
   const { state, proposal, result } = params;
   if (result.kind === "live") {
     enrollForeignReceipt(state, result.receipt);
@@ -50,7 +50,7 @@ function applyRecoveryResult(params: {
     return true;
   }
   removeForeignReceipt(state, proposal.jobId);
-  runPostPersistCronNotifications(state, result.notifications);
+  await runPostPersistCronNotifications(state, result.notifications);
   if (result.interrupted) {
     params.interruptedRuns.push(result.interrupted);
   }
@@ -79,9 +79,10 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
     });
     try {
       await recoverCronRunProposals(state, proposals, {
-        onRecovery(proposal, result) {
+        async onRecovery(proposal, result) {
           schedulingChanged =
-            applyRecoveryResult({ state, proposal, result, interruptedRuns }) || schedulingChanged;
+            (await applyRecoveryResult({ state, proposal, result, interruptedRuns })) ||
+            schedulingChanged;
         },
       });
     } finally {
@@ -127,9 +128,9 @@ export async function waitForRunSettlement(
         try {
           await recoverCronRunProposals(state, [proposal], {
             signal,
-            onRecovery(observed, recovered) {
+            async onRecovery(observed, recovered) {
               recovery = recovered;
-              changed = applyRecoveryResult({
+              changed = await applyRecoveryResult({
                 state,
                 proposal: observed,
                 result: recovered,
@@ -278,8 +279,8 @@ async function startOnce(state: CronServiceState): Promise<void> {
     try {
       await recoverCronRunProposals(state, proposals, {
         mode: "startup",
-        onRecovery(proposal, result) {
-          applyRecoveryResult({ state, proposal, result, interruptedRuns, skipJobIds });
+        async onRecovery(proposal, result) {
+          await applyRecoveryResult({ state, proposal, result, interruptedRuns, skipJobIds });
         },
       });
     } finally {

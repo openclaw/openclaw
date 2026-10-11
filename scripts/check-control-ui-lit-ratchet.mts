@@ -1,9 +1,12 @@
 import { pathToFileURL } from "node:url";
+import * as ts from "typescript/unstable/ast";
 import {
   countMigrationSources,
+  isTest,
   readInventorySources,
   type MigrationMetrics,
 } from "./control-ui-solid-inventory.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   compareRatchetCounts,
   parseRatchetArgs,
@@ -21,10 +24,57 @@ const METRICS = [
   "todoSolid2",
 ] as const satisfies readonly (keyof MigrationMetrics)[];
 
-const LIT_INTEROP_EXCEPTIONS: Readonly<Record<string, string>> = {
-  "ui/src/lit/solid-bridge.test.tsx":
-    "Proves Lit callers keep working through the Solid bridge; deleted with the bridge at cutover.",
-};
+// This boundary hosts existing Lit templates for Solid callers until the final Lit cutover.
+const LIT_CONTENT_OWNER = "ui/src/lit/solid-content.tsx";
+
+function loadsModule(node: ts.Node): boolean {
+  return (
+    (ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require"))) ||
+    Boolean(node.forEachChild(loadsModule))
+  );
+}
+
+function isMovedSource(
+  file: string,
+  text: string,
+  previous: ReadonlyMap<string, string>,
+  current: ReadonlyMap<string, string>,
+  baseCounts: ReadonlyMap<string, MigrationMetrics>,
+) {
+  using parser = createNativeTypeScriptParser();
+  const tree = parser.parseSourceFile(file, text);
+  const statements = tree.statements
+    .filter(
+      (node) =>
+        !ts.isImportDeclaration(node) &&
+        !ts.isImportEqualsDeclaration(node) &&
+        !ts.isExportDeclaration(node) &&
+        !(ts.isVariableStatement(node) && loadsModule(node)),
+    )
+    .map((node) => text.slice(node.pos, node.end).trim());
+  return [...baseCounts].some(([source, counts]) => {
+    if (counts.litImports === 0 || isTest(source)) {
+      return false;
+    }
+    const before = previous.get(source)!;
+    const after = current.get(source) ?? "";
+    if (before === text && after !== text) {
+      return true;
+    }
+    // Recognize splits by moved implementation, never by shared import boilerplate.
+    // A heavily rewritten extraction may need to land its move separately.
+    const moved = statements.filter(
+      (statement) => before.includes(statement) && !after.includes(statement),
+    );
+    return (
+      moved.length > 0 &&
+      moved.reduce((sum, statement) => sum + statement.length, 0) >=
+        statements.reduce((sum, statement) => sum + statement.length, 0) / 2
+    );
+  });
+}
 
 function flatten(counts: ReadonlyMap<string, MigrationMetrics>) {
   return new Map(
@@ -66,46 +116,41 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       new Map([...sources].filter(([file]) => changed.has(file)));
     const currentCounts = countMigrationSources(root, changedSources(currentSources));
     const baseCounts = countMigrationSources(root, changedSources(previous));
-    for (const [file, reason] of Object.entries(LIT_INTEROP_EXCEPTIONS)) {
-      if (!reason.trim()) {
-        throw new Error(`Lit interop exception ${file} requires a reason.`);
-      }
-      const current = currentCounts.get(file);
-      if (current) {
-        console.log(
-          `Lit interop exception ${file}: litImports=${current.litImports}, htmlTemplates=${current.htmlTemplates}. ${reason}`,
-        );
-      }
-      for (const counts of [currentCounts, baseCounts]) {
-        const row = counts.get(file);
-        if (row) {
-          counts.set(file, { ...row, litImports: 0, htmlTemplates: 0 });
-        }
-      }
-    }
+    const newLitFiles = [...currentCounts].filter(
+      ([file, counts]) =>
+        counts.litImports > 0 &&
+        !previous.has(file) &&
+        file !== LIT_CONTENT_OWNER &&
+        !isTest(file) &&
+        !isMovedSource(file, currentSources.get(file)!, previous, currentSources, baseCounts),
+    );
     const increasedTotals = compareRatchetCounts(
       totals(currentCounts),
       totals(baseCounts),
     ).increased;
+    const perFileIncreases = compareRatchetCounts(
+      flatten(currentCounts),
+      flatten(baseCounts),
+    ).increased;
+    for (const [title, increases] of [
+      ["Control UI Lit migration metric totals (advisory)", increasedTotals],
+      ["Per-file increases (advisory)", perFileIncreases],
+    ] as const) {
+      if (increases.length > 0) {
+        console.log(
+          `${title}:\n${increases.map(({ entry, current, allowed }) => `  ${entry}: ${current} > ${allowed}`).join("\n")}`,
+        );
+      }
+    }
     if (
-      increasedTotals.length > 0 &&
       reportRatchetFailures(
         [
           {
-            title: "Control UI Lit migration metric totals may not grow:",
-            entries: increasedTotals.map(
-              ({ entry, current, allowed }) => `${entry}: ${current} > ${allowed}`,
-            ),
-          },
-          {
-            title: "Per-file increases (diagnostic):",
-            entries: compareRatchetCounts(
-              flatten(currentCounts),
-              flatten(baseCounts),
-            ).increased.map(({ entry, current, allowed }) => `${entry}: ${current} > ${allowed}`),
+            title: "New Control UI production files must not import Lit:",
+            entries: newLitFiles.map(([file]) => file),
           },
         ],
-        "Lit sites may move between ui/src files, but each metric's total must not grow. Use Solid or offset new sites with removals in the same change.",
+        "Use Solid; see .agents/skills/solid/SKILL.md and defineSolidBridge in ui/src/lit/solid-bridge.ts to mount Solid from Lit.",
       )
     ) {
       return 1;

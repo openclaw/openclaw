@@ -162,16 +162,12 @@ export function resolveExecTarget(params: {
       sandboxAvailable: params.sandboxAvailable,
     })
   ) {
-    const allowedConfig = Array.from(
-      new Set(
-        configuredTarget === "auto" &&
-          params.sandboxAvailable &&
-          (requestedTarget === "gateway" || requestedTarget === "node")
-          ? [renderExecTargetLabel(requestedTarget)]
-          : requestedTarget === "gateway" && !params.sandboxAvailable
-            ? ["gateway", "auto"]
-            : [renderExecTargetLabel(requestedTarget), "auto"],
-      ),
+    const allowedConfig = (
+      configuredTarget === "auto" &&
+      params.sandboxAvailable &&
+      (requestedTarget === "gateway" || requestedTarget === "node")
+        ? [renderExecTargetLabel(requestedTarget)]
+        : [renderExecTargetLabel(requestedTarget), "auto"]
     ).join(" or ");
     throw registerTrustedToolNoStartError(
       new Error(
@@ -727,6 +723,14 @@ export async function runExecProcess({
     requestSignal?.removeEventListener("abort", onRequestCancelled);
   };
   let usingPty = opts.usePty && !opts.sandbox;
+  const emitCompleted = (outcome: ExecProcessOutcome) =>
+    emitExecProcessCompleted({
+      command: opts.command,
+      mode: usingPty ? "pty" : "child",
+      outcome,
+      sessionKey: opts.sessionKey,
+      target: diagnosticTarget,
+    });
   const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
   const spawn = async (input: SpawnInput) => {
     const assertSourceCurrent = assertSourceActive;
@@ -825,13 +829,7 @@ export async function runExecProcess({
     const outcome = await finalizeAndSettleSession(runtimeErrorOutcome(error)).finally(
       releaseExecutionContext,
     );
-    emitExecProcessCompleted({
-      command: opts.command,
-      mode: usingPty ? "pty" : "child",
-      outcome,
-      sessionKey: opts.sessionKey,
-      target: diagnosticTarget,
-    });
+    emitCompleted(outcome);
     throw error;
   } finally {
     launchLifecycle.dispose();
@@ -866,13 +864,7 @@ export async function runExecProcess({
         onUpdate = undefined;
       }
       const finalOutcome = await finalizeAndSettleSession(outcome);
-      emitExecProcessCompleted({
-        command: opts.command,
-        mode: usingPty ? "pty" : "child",
-        outcome: finalOutcome,
-        sessionKey: opts.sessionKey,
-        target: diagnosticTarget,
-      });
+      emitCompleted(finalOutcome);
       return finalOutcome;
     } finally {
       releaseExecutionContext();

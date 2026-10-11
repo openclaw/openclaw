@@ -8,6 +8,7 @@ import {
   readExactSessionEntryRow,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionTranscriptMetadataInDatabase } from "./session-accessor.sqlite-metadata-read.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
 import {
   readCurrentProjectionSnapshot,
@@ -24,7 +25,10 @@ import {
   readTranscriptHeaderFromDatabase,
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
+import type {
+  SessionTranscriptAnchorEntry,
+  SessionTranscriptAnchorFacts,
+} from "./session-transcript-anchor-read.types.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
@@ -43,6 +47,7 @@ export type SessionTranscriptAnchorSelection = {
   includeHeader?: boolean;
   includeWatermark?: boolean;
   includeMessagePresence?: boolean;
+  includeMetadata?: boolean;
   contextValidation?: Parameters<typeof validateSessionTranscriptContextInDatabase>[2];
   contextAuthority?: true | { permissionMode: InternalSessionEntry["permissionMode"] };
   replayValidation?: Pick<
@@ -71,13 +76,14 @@ export async function prepareSessionTranscriptAnchorMessageReader(
     )?.message;
 }
 
-/** Readiness, identities and optional reply-tail facts belong to one snapshot. */
+/** The cohort's entry and optional reply-tail facts belong to the same snapshot. */
 export function readSessionTranscriptAnchorFactsInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   resolved: ResolvedTranscriptScope,
   selection: SessionTranscriptAnchorSelection,
   readMessage?: AnchorMessageReader,
   projection?: CurrentTranscriptProjection,
+  preparedEntry?: SessionTranscriptAnchorEntry,
 ): SessionTranscriptAnchorFacts {
   if (
     projection &&
@@ -100,7 +106,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         ? { generation: projection.version.generation, maxSeq: projection.version.rawSeq }
         : readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId);
     const contextEntry = selection.contextAuthority
-      ? readSessionEntryRow(database, resolved.sessionKey)?.entry
+      ? (preparedEntry ?? readSessionEntryRow(database, resolved.sessionKey)?.entry)
       : undefined;
     const contextAuthority = selection.contextAuthority
       ? {
@@ -127,7 +133,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
     let replayValidated: SessionTranscriptAnchorFacts["replayValidated"];
     const replay = selection.replayValidation;
     if (replay) {
-      const entry = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+      const entry = preparedEntry ?? readSessionEntryRow(database, resolved.sessionKey)?.entry;
       if (
         !entry &&
         replay.allowInitial &&
@@ -163,6 +169,9 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       );
     }
     const validated = {
+      ...(selection.includeMetadata
+        ? { metadata: readSessionTranscriptMetadataInDatabase(database, resolved.sessionId) }
+        : {}),
       ...(selection.includeMessagePresence
         ? { messagePresence: hasSessionTranscriptMessageInDatabase(database, resolved.sessionId) }
         : {}),
@@ -176,7 +185,8 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       ...(replayValidated ? { replayValidated } : {}),
     };
     const entry = selection.includeSession
-      ? readExactSessionEntryRow(database, resolved.sessionKey, "list", "canonical")?.entry
+      ? (preparedEntry ??
+        readExactSessionEntryRow(database, resolved.sessionKey, "list", "canonical")?.entry)
       : undefined;
     const session = entry
       ? { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision }

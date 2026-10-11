@@ -252,7 +252,7 @@ describe("command selection with configured model facts", () => {
       authProfileOverride: "other:shared",
       authProfileOverrideSource: "user",
     };
-    vi.spyOn(authProfiles, "ensureAuthProfileStore").mockReturnValue({
+    vi.spyOn(authProfiles, "ensureAuthProfileStoreAsync").mockResolvedValue({
       version: 1,
       profiles: {
         "other:shared": { type: "api_key", provider: "other", key: "synthetic-model-policy-key" },

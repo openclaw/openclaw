@@ -1,31 +1,48 @@
 /* @vitest-environment jsdom */
-import { afterEach, expect, it, vi } from "vitest";
+import { createComponent } from "solid-js";
+import { expect, it, vi } from "vitest";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import { ChatDetailsSession } from "./chat-details-session.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { ChatSubagentActivityLive } from "./chat-subagent-activity-live.ts";
 
-const mounted: HTMLElement[] = [];
-afterEach(() => {
-  for (const element of mounted.splice(0)) {
-    element.remove();
-  }
-});
 async function mount(overrides: Partial<ChatDetailsProps> = {}) {
-  const element = new ChatDetailsSession();
-  element.props = {
+  const value: ChatDetailsProps = {
     sessionKey: "agent:main:details",
     currentAgentId: "main",
     messages: [],
     selectedSession: { key: "agent:main:details", kind: "direct" },
     ...overrides,
   };
-  element.presented = true;
-  document.body.append(element);
-  mounted.push(element);
+  const view = mountSolid(() =>
+    createComponent(ChatDetailsSession, { props: value, presented: true }),
+  );
+  const element = view.container.querySelector("openclaw-chat-details-session")!;
   await element.updateComplete;
   return element;
 }
+it("retains disclosure state across revisions and resets it for another session", async () => {
+  const element = await mount();
+  const disclosure = element.querySelector<HTMLDetailsElement>(".chat-details-session")!;
+  expect(disclosure.open).toBe(true);
+  disclosure.open = false;
+  disclosure.dispatchEvent(new Event("toggle"));
+  flush();
+
+  element.props = { ...element.props!, detailsWorkspace: { root: "/workspace", label: "Updated" } };
+  await element.updateComplete;
+  expect(element.querySelector<HTMLDetailsElement>(".chat-details-session")!.open).toBe(false);
+
+  element.props = {
+    ...element.props!,
+    sessionKey: "agent:main:other",
+    selectedSession: { key: "agent:main:other", kind: "direct", sessionId: "other" },
+  };
+  await element.updateComplete;
+  expect(element.querySelector<HTMLDetailsElement>(".chat-details-session")!.open).toBe(true);
+});
 it("keeps immutable creator, mutable owner and participants distinct without claiming live presence", async () => {
   const element = await mount({
     selectedSession: {
