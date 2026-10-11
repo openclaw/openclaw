@@ -15,6 +15,7 @@ const mountedProviders: HTMLElement[] = [];
 function fixture(
   initialCard: ProgressCard | null,
   rowDetails: Partial<SidebarSessionHovercardRow> = {},
+  triggerKind: "sidebar" | "markdown" = "sidebar",
 ) {
   let card = initialCard;
   const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
@@ -49,7 +50,15 @@ function fixture(
   const context = {
     gateway,
     basePath: "",
-    sessions: { subscribe: () => () => undefined },
+    agents: {
+      state: {
+        agentsList: { agents: [{ id: "research" }], defaultId: "research", mainKey: "main" },
+      },
+    },
+    sessions: {
+      state: { result: { sessions: [{ key, displayName: "Synthetic provider session" }] } },
+      subscribe: () => () => undefined,
+    },
     agentSelection: {
       state: { selectedId: "research", scopeId: "research" },
       subscribe: () => () => undefined,
@@ -72,6 +81,8 @@ function fixture(
       ...rowDetails,
     }),
   });
+  // Other files may have registered the full sidebar; keep only its lookup seam in view.
+  sidebar.hidden = true;
   const row = document.createElement("div");
   row.className = "sidebar-recent-session";
   row.dataset.sessionKey = key;
@@ -80,9 +91,17 @@ function fixture(
   trigger.className = "sidebar-recent-session__link";
   trigger.href = "#synthetic-provider-session";
   trigger.textContent = "Synthetic provider session";
-  row.append(trigger);
-  sidebar.append(row);
-  provider.append(sidebar);
+  if (triggerKind === "markdown") {
+    trigger.className = "markdown-session-link";
+    trigger.dataset.sessionKey = key;
+    const thread = document.createElement("div");
+    thread.className = "chat-thread";
+    thread.append(trigger);
+    provider.append(sidebar, thread);
+  } else {
+    row.append(trigger);
+    provider.append(sidebar, row);
+  }
   const getReads = () =>
     request.mock.calls.filter(([method]) => method === "progressCard.get").length;
   return {
@@ -198,39 +217,42 @@ describe("progress hovercard provider boundary", () => {
     },
   );
 
-  it("enters by Tab, retains the focused progress href on refresh, and returns focus when removed", async () => {
-    const { userEvent } = await import("vitest/browser");
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const h = fixture(progress(1, `[Open build log](${buildHref})`));
-    await h.mount();
-    h.trigger.focus();
-    await drainTurn();
-    await waitForSolid(() =>
-      expect(portal()?.querySelector(`a[href="${buildHref}"]`)).not.toBeNull(),
-    );
-    expect(h.getReads()).toBe(1);
-    const heldPortal = portal();
-    expect(document.activeElement).toBe(h.trigger);
-    await userEvent.keyboard("{Tab}");
-    await drainTurn();
-    expect(document.activeElement?.getAttribute("href")).toBe(buildHref);
+  it.each(["sidebar", "markdown"] as const)(
+    "enters %s by Tab, retains the focused progress href on refresh, and returns focus when removed",
+    async (triggerKind) => {
+      const { userEvent } = await import("vitest/browser");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const h = fixture(progress(1, `[Open build log](${buildHref})`), {}, triggerKind);
+      await h.mount();
+      h.trigger.focus();
+      await drainTurn();
+      await waitForSolid(() =>
+        expect(portal()?.querySelector(`a[href="${buildHref}"]`)).not.toBeNull(),
+      );
+      expect(h.getReads()).toBe(1);
+      const heldPortal = portal();
+      expect(document.activeElement).toBe(h.trigger);
+      await userEvent.keyboard("{Tab}");
+      await drainTurn();
+      expect(document.activeElement?.getAttribute("href")).toBe(buildHref);
 
-    // Observe outcomes after the normal full commit; do not invoke or reorder afterCommit.
-    h.change(progress(2, `Updated build: [Open build log](${buildHref})`));
-    await drainTurn();
-    await waitForSolid(() => expect(portal()?.textContent).toContain("Updated build:"));
-    expect(portal()).toBe(heldPortal);
-    expect(document.activeElement?.getAttribute("href")).toBe(buildHref);
-    expect(h.getReads()).toBe(2);
+      // Observe outcomes after the normal full commit; do not invoke or reorder afterCommit.
+      h.change(progress(2, `Updated build: [Open build log](${buildHref})`));
+      await drainTurn();
+      await waitForSolid(() => expect(portal()?.textContent).toContain("Updated build:"));
+      expect(portal()).toBe(heldPortal);
+      expect(document.activeElement?.getAttribute("href")).toBe(buildHref);
+      expect(h.getReads()).toBe(2);
 
-    h.change(progress(3, "Updated build complete"));
-    await drainTurn();
-    await waitForSolid(() => expect(portal()?.textContent).toContain("Updated build complete"));
-    expect(portal()).toBe(heldPortal);
-    expect(document.activeElement).toBe(h.trigger);
-    expect(h.getReads()).toBe(3);
-    await userEvent.keyboard("{Escape}");
-    expect(portal()).toBeNull();
-    expect(h.trigger.hasAttribute("aria-controls")).toBe(false);
-  });
+      h.change(progress(3, "Updated build complete"));
+      await drainTurn();
+      await waitForSolid(() => expect(portal()?.textContent).toContain("Updated build complete"));
+      expect(portal()).toBe(heldPortal);
+      expect(document.activeElement).toBe(h.trigger);
+      expect(h.getReads()).toBe(3);
+      await userEvent.keyboard("{Escape}");
+      expect(portal()).toBeNull();
+      expect(h.trigger.hasAttribute("aria-controls")).toBe(false);
+    },
+  );
 });
