@@ -7708,8 +7708,6 @@
 ["src/gateway/server-methods/usage.sessions-usage.test.ts","../../config/config.js","a881b90acbad05c7c3bbe508a8492a3f4b21d9de2ed5e00c9c89ae5f83d37281",1]
 ["src/gateway/server-methods/usage.sessions-usage.test.ts","../session-utils-store-worker.js","b59e9c9d23aad2e8a1bb1e9ea00f72a557abfd49cc55be1ed7ac68f7a958a309",1]
 ["src/gateway/server-methods/usage.status-cache.test.ts","../../infra/provider-usage.load.js","aeba3d726b7a832a11512cc6ae7e91a1332eb15d89c31bc835e54f85c9c83f58",1]
-["src/gateway/server-methods/users-github.test.ts","../../agents/github-oauth-client.js","962987d57bb1c2e70f760384e9565c4ac01728503669a86c7fcc0e3043091ff5",1]
-["src/gateway/server-methods/users-github.test.ts","../../process/exec.js","2ab623867bf07a97a0ebdf3574a96c671ee8d4bee7347ccd928de36ade20934e",1]
 ["src/gateway/server-methods/users-personal-file.test.ts","../../agents/workspace-access.js","bbfd5e87274fb7571d1396fdbea9bc0ed0dc6330ee966ab8a7b935c31f7c748a",1]
 ["src/gateway/server-methods/users-personal-file.test.ts","../../state/user-profile-list.js","b417d4a3dc16635cb33fb270d83d291fc07e0ac471a78e651481494f3f02cf60",1]
 ["src/gateway/server-methods/users.test.ts","../../state/user-profile-email.js","d0f969c2fc1ea7ea324217e56412047ff1479422377ef8e00cdbf56ba6f745aa",1]

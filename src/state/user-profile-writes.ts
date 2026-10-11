@@ -4,7 +4,7 @@ import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-ope
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
-import { publishUserGitHubProfileRetirement } from "./user-github-connection-events.js";
+import { publishUserGitHubConnectionCommit } from "./user-github-connection-events.js";
 import {
   emitUserProfilesChanged,
   fenceUserProfileMutationAuthority,
@@ -99,7 +99,9 @@ async function write<Key extends keyof UserProfileWriteOperations>(
                 }
                 entry.published = true;
                 entry.fence.settle(true);
-                publishUserGitHubProfileRetirement(facts.retiredGitHubProfileIds ?? []);
+                if (facts.githubConnections) {
+                  publishUserGitHubConnectionCommit(facts.githubConnections);
+                }
                 onCommitted?.(facts);
               });
               if (

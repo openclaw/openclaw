@@ -798,7 +798,7 @@ const reviewedOperations = new Map([
           "mergeUserPreferences",
         ],
         evidence:
-          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:325,375,432 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
+          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
       },
     ],
   ],
@@ -1815,7 +1815,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["writePersonalGitHubSecret"],
         evidence:
-          "Counted expression is null DELETE only: src/state/user-github-connections.ts:260 → user-profiles-merge.ts:58 → user-profile-writes.worker.ts:325,375,432. Other value callers pass JSON strings.",
+          "Counted expression is null DELETE only: src/state/user-github-connections.kernel.ts:202 → user-profiles-merge.ts:58 → user-profile-writes.worker.ts:375,425,482. Other value callers pass JSON strings.",
       },
     ],
   ],
@@ -1958,7 +1958,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["mergeUserModelAccounts"],
         evidence:
-          "Only src/state/user-profiles-merge.ts:57, executed by user-profile-writes.worker.ts:325,375,432.",
+          "Only src/state/user-profiles-merge.ts:57, executed by user-profile-writes.worker.ts:375,425,482.",
       },
     ],
   ],
@@ -1988,7 +1988,7 @@ const reviewedOperations = new Map([
           "applyVerifiedGitHubIdentity.writeIdentity",
         ],
         evidence:
-          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. Role authority runs only through user-profiles.worker.ts:152. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
+          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:474,482 and merges :375,425. Role authority runs only through user-profiles.worker.ts:152. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
       },
     ],
   ],
@@ -2004,7 +2004,7 @@ const reviewedOperations = new Map([
           "readProfileAvatarInDatabase",
         ],
         evidence:
-          "Creation/link/merge/sync calls flow through src/state/user-profiles.worker.ts:61,69,71 and user-profile-writes.worker.ts:325,350,359,375,430; identity/avatar reads dispatch only from openclaw-state-read.worker.ts:577,604,631.",
+          "Creation/link/merge/sync calls flow through src/state/user-profiles.worker.ts:61,69,71 and user-profile-writes.worker.ts:375,400,409,425,480; identity/avatar reads dispatch only from openclaw-state-read.worker.ts:577,604,631.",
       },
     ],
   ],
@@ -2015,7 +2015,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["mergeUserProfiles"],
         evidence:
-          "Only src/state/user-profile-writes.worker.ts:325,375,432 executes mergeUserProfiles.",
+          "Only src/state/user-profile-writes.worker.ts:375,425,482 executes mergeUserProfiles.",
       },
     ],
   ],
