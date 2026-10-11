@@ -568,6 +568,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             resolveCliBackendDispatchEligibility: (
               params: Parameters<typeof agent.resolveCliBackendDispatchEligibility>[0],
             ) => invokeSelectedRuntime(() => agent.resolveCliBackendDispatchEligibility(params)),
+            resolveCliBackendDispatchEligibilityAsync: (
+              params: Parameters<typeof agent.resolveCliBackendDispatchEligibilityAsync>[0],
+            ) =>
+              invokeSelectedRuntime(() => agent.resolveCliBackendDispatchEligibilityAsync(params)),
             resolveSessionCatalogCreateTarget: (
               params: Parameters<typeof agent.resolveSessionCatalogCreateTarget>[0],
             ) => invokeSelectedRuntime(() => agent.resolveSessionCatalogCreateTarget(params)),

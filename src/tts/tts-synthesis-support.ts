@@ -27,7 +27,7 @@ import {
   resolvePersonaProviderConfig,
   resolvePrimaryTtsProviderCandidate,
   resolveSpeechProviderTimeoutMs,
-  resolveTtsProvider,
+  resolveTtsProviderAsync,
   resolveTtsProviderCandidates,
   type TtsProviderRegistry,
 } from "./tts-provider-resolution.js";
@@ -95,7 +95,7 @@ type TtsProviderReadyResolution =
       personaBinding?: "missing";
     };
 
-function resolveReadySpeechProvider(params: {
+async function resolveReadySpeechProvider(params: {
   provider: TtsProvider;
   cfg: OpenClawConfig;
   config: ResolvedTtsConfig;
@@ -103,7 +103,7 @@ function resolveReadySpeechProvider(params: {
   voiceModel?: VoiceModelRef;
   target: SpeechSynthesisTarget;
   providerRegistry: TtsProviderRegistry;
-}): TtsProviderReadyResolution {
+}): Promise<TtsProviderReadyResolution> {
   const resolvedProvider = params.providerRegistry.getSpeechProvider(params.provider, params.cfg);
   if (!resolvedProvider) {
     return {
@@ -132,16 +132,18 @@ function resolveReadySpeechProvider(params: {
       personaBinding: "missing",
     };
   }
-  if (
-    !resolvedProvider.isConfigured({
-      cfg: params.cfg,
-      providerConfig: merged.providerConfig,
-      timeoutMs: resolveSpeechProviderTimeoutMs({
-        config: params.config,
-        provider: resolvedProvider,
-      }),
-    })
-  ) {
+  const context = {
+    cfg: params.cfg,
+    providerConfig: merged.providerConfig,
+    timeoutMs: resolveSpeechProviderTimeoutMs({
+      config: params.config,
+      provider: resolvedProvider,
+    }),
+  };
+  const configured = await (resolvedProvider.isConfiguredAsync
+    ? resolvedProvider.isConfiguredAsync(context)
+    : resolvedProvider.isConfigured(context));
+  if (!configured) {
     return {
       kind: "skip",
       reasonCode: "not_configured",
@@ -294,7 +296,12 @@ export async function acquireTtsRequest(
         };
       };
       const providerRegistry = await prepareProviderRegistry();
-      const userProvider = resolveTtsProvider(config, prefsPath, providerRegistry, prefs);
+      const userProvider = await resolveTtsProviderAsync(
+        config,
+        prefsPath,
+        providerRegistry,
+        prefs,
+      );
       const provider =
         providerRegistry.canonicalizeSpeechProviderId(params.providerOverride, cfg) ?? userProvider;
       return {
@@ -407,7 +414,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     const providerStart = Date.now();
     try {
       const providerRegistry = await params.prepareProviderRegistry();
-      const resolvedProvider = resolveReadySpeechProvider({
+      const resolvedProvider = await resolveReadySpeechProvider({
         provider,
         cfg,
         config,

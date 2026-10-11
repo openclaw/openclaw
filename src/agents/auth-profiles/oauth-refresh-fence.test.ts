@@ -536,11 +536,11 @@ describe("OAuth refresh generation fence", () => {
       const observerReadFence = new Promise<void>((resolve) => {
         markObserverReadFence = resolve;
       });
-      const originalLoad = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfiles;
+      const originalLoad = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfilesAsync;
       const loadSpy = vi
-        .spyOn(authProfileStoreRuntime, "loadAuthProfileStoreWithoutExternalProfiles")
-        .mockImplementation((...args: Parameters<typeof originalLoad>) => {
-          const store = originalLoad(...args);
+        .spyOn(authProfileStoreRuntime, "loadAuthProfileStoreWithoutExternalProfilesAsync")
+        .mockImplementation(async (...args: Parameters<typeof originalLoad>) => {
+          const store = await originalLoad(...args);
           const credential = store.profiles[profileId];
           if (
             watchObserverReads &&

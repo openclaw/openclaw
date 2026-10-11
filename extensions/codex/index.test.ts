@@ -15,7 +15,11 @@ import {
   createPluginRuntimeMock,
   createCapturedPluginRegistration,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "openclaw/plugin-sdk/provider-auth";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -54,7 +58,12 @@ const explicitAgentConfig = {
   },
 } as OpenClawConfig;
 
-const modelAuth = { ensureAuthProfileStore, resolveAuthProfileOrder, resolveProviderIdForAuth };
+const modelAuth = {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+  resolveProviderIdForAuth,
+};
 
 function createCodexTestRuntime(
   current?: () => unknown,
