@@ -569,6 +569,7 @@ export abstract class MatrixClientBase {
       await Promise.allSettled(this.liveRoomReadinessOperations);
       clearInterval(this.idbPersistTimer ?? undefined);
       this.idbPersistTimer = null;
+      this.syncStore?.setCryptoDurabilityFence(null);
       this.idbPersistAbortController?.abort();
       const activePeriodicPersist = this.idbPersistPromise;
       try {
@@ -712,6 +713,17 @@ export abstract class MatrixClientBase {
         stateRuntime: this.stateRuntime,
       });
       throwIfMatrixStartupAborted(abortSignal);
+
+      // Received room keys and inbound Olm sessions arrive as to-device events,
+      // which the homeserver does not redeliver once the cursor has moved on.
+      this.syncStore?.setCryptoDurabilityFence(() =>
+        persistIdbToDisk({
+          snapshotPath: this.idbSnapshotPath,
+          databasePrefix: this.cryptoDatabasePrefix,
+          strict: true,
+          stateRuntime: this.stateRuntime,
+        }),
+      );
 
       // Periodically persist to capture new Olm sessions and room keys.
       this.idbPersistTimer = setInterval(() => {
