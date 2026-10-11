@@ -297,7 +297,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             bindingStore,
             identity: bindingIdentity,
             owner: historyOwner,
-            assertLifecycleCurrent: () => submissionStore.assertCurrent(),
+            ...(parentSession?.sessionId === params.sessionId
+              ? { assertLifecycleCurrent: assertParentSessionCurrent }
+              : {}),
           })
         : undefined;
     const assertRegistrationCurrent = () => {

@@ -278,7 +278,14 @@ export class CodexNativeSubagentCompletionDelivery {
     }
     const key = `${requesterSessionKey}\0${childState.runId}`;
     try {
-      state.assignmentStore?.assertCurrent();
+      const assignmentStore = state.assignmentStore;
+      if (assignmentStore) {
+        if (assignmentStore.assertDeliveryOwner) {
+          assignmentStore.assertDeliveryOwner();
+        } else {
+          assignmentStore.assertCurrent();
+        }
+      }
       assertHistoryOwnerMatchesRegistration(
         childState.historyOwner,
         state.historyOwner,
@@ -286,7 +293,7 @@ export class CodexNativeSubagentCompletionDelivery {
         state.historyOwner !== undefined,
       );
     } catch (error) {
-      embeddedAgentLog.warn("Holding native completion with unresolved history owner", {
+      embeddedAgentLog.warn("Native completion delivery owner unresolved", {
         childThreadId: childState.childThreadId,
         error: formatErrorMessage(error),
       });

@@ -14,10 +14,7 @@ import type {
   ToolsInvokeResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { assertGatewayAgentsAdmitted } from "../../test/helpers/gateway-agent-admission.js";
-import {
-  verifyCodexNativeSubagentBridgeProbe,
-  withCodexNativeThreadReader,
-} from "../../test/helpers/gateway-codex-harness-native-subagent.js";
+import { verifyCodexNativeSubagentBridgeWithReader } from "../../test/helpers/gateway-codex-harness-native-subagent.js";
 import {
   createCodexHarnessLiveInstance,
   createCodexHarnessWorkspace as createLiveWorkspace,
@@ -94,6 +91,9 @@ const CODEX_HARNESS_CHAT_IMAGE_PROBE = isTruthyEnvValue(
 const CODEX_HARNESS_MCP_PROBE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE);
 const CODEX_HARNESS_SUBAGENT_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE,
+);
+const CODEX_HARNESS_ROTATION_PROBE = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_ROTATION_PROBE,
 );
 const CODEX_HARNESS_GUARDIAN_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE,
@@ -547,6 +547,9 @@ async function writeLiveGatewayConfig(params: {
             agentRuntime: { id: "codex" },
             ...(params.compactionMode.kind === "full" ? { params: { fastMode: true } } : {}),
           },
+          ...(CODEX_HARNESS_ROTATION_PROBE
+            ? { "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } } }
+            : {}),
         },
         sandbox: { mode: "off" },
       },
@@ -664,6 +667,7 @@ async function requestAgentText(params: {
 
 function recordCodexAttemptIdentity(params: {
   events: CapturedAgentEvent[];
+  expectedModel?: string;
   runId: string;
   preserveNativeTurnSettings?: boolean;
   sessionKey: string;
@@ -677,9 +681,9 @@ function recordCodexAttemptIdentity(params: {
     turnStarting,
     `expected an actual Codex app-server turn for ${params.sessionKey}; events=${JSON.stringify(events)}`,
   ).toBeDefined();
-  const expectedModel = parseModelKey(
-    process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL,
-  ).modelId;
+  const expectedModel =
+    params.expectedModel ??
+    parseModelKey(process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL).modelId;
   expect(turnStarting?.data).toMatchObject({ model: expectedModel });
   const actualEffort = turnStarting?.data?.effort;
   const actualCollaborationEffort = turnStarting?.data?.collaborationEffort;
@@ -2296,6 +2300,10 @@ describeLive("gateway live (Codex harness)", () => {
     "runs gateway agent turns through the plugin-owned Codex app-server harness",
     async (context) => {
       const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
+      if (CODEX_HARNESS_ROTATION_PROBE) {
+        expect(CODEX_HARNESS_SUBAGENT_PROBE).toBe(true);
+        expect(modelKey).toBe("openai/gpt-5.6-sol");
+      }
       const token = `test-${randomUUID()}`;
       const instance = await createCodexHarnessLiveInstance(token, CODEX_HARNESS_AUTH_MODE);
       const { configPath, port } = instance;
@@ -2424,7 +2432,7 @@ describeLive("gateway live (Codex harness)", () => {
                 id?: string;
                 provider?: string;
               }>;
-            }>("models.list", { refresh: true });
+            }>("models.list", { agentId: "dev", refresh: true });
             expect(refreshedCatalog.models).toEqual(
               expect.arrayContaining([
                 expect.objectContaining({
@@ -2473,47 +2481,37 @@ describeLive("gateway live (Codex harness)", () => {
               logCodexLiveStep("native-subagent-bridge-probe:start", { sessionKey });
               // The ordinary harness is agent-scoped. Do not route its child reads
               // through the user-home codex_threads tool or the native session catalog.
-              const codexPackagePath = bundledPluginFileAt(
-                path.resolve(import.meta.dirname, "../.."),
-                "codex",
-                "package.json",
-              );
-              const codexCommand = createRequire(codexPackagePath).resolve(
-                "@openai/codex/bin/codex.js",
-              );
-              await withCodexNativeThreadReader(
-                {
-                  command: process.execPath,
-                  args: [codexCommand, ...nativeProbeArgs],
-                  codexHome: path.join(
-                    resolveAgentDir(probeConfig, "dev", instance.env),
-                    "codex-home",
-                  ),
+              await verifyCodexNativeSubagentBridgeWithReader({
+                annotate: context.annotate,
+                client: activeClient,
+                events: gatewayEvents,
+                sessionKey,
+                observedCodexThreadIds,
+                logCodexLiveStep,
+                requestAgentTextWithEvents,
+                recordCodexAttemptIdentity,
+                requestCodexCommandText,
+                requestAgentText,
+                ...(CODEX_HARNESS_ROTATION_PROBE
+                  ? {
+                      rotation: {
+                        workspace,
+                        observedCodexClientIds,
+                        readSessionId: () =>
+                          readCodexHarnessSessionId({ client: activeClient, sessionKey }),
+                      },
+                    }
+                  : {}),
+                reader: {
+                  repoRoot: path.resolve(import.meta.dirname, "../.."),
+                  agentDir: resolveAgentDir(probeConfig, "dev", instance.env),
                   stateDir: instance.stateDir,
                   cwd: workspace,
                   env: instance.env,
+                  nativeArgs: nativeProbeArgs,
                   requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
                 },
-                (readNativeThread) =>
-                  verifyCodexNativeSubagentBridgeProbe(
-                    {
-                      annotate: context.annotate,
-                      client: activeClient,
-                      events: gatewayEvents,
-                      sessionKey,
-                    },
-                    {
-                      requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
-                      observedCodexThreadIds,
-                      readNativeThread,
-                      logCodexLiveStep,
-                      requestAgentTextWithEvents,
-                      recordCodexAttemptIdentity,
-                      requestCodexCommandText,
-                      requestAgentText,
-                    },
-                  ),
-              );
+              });
               logCodexLiveStep("subagent-probe:done");
               if (CODEX_HARNESS_SUBAGENT_ONLY) {
                 return;

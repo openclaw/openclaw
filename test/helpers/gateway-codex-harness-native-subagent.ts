@@ -1,9 +1,12 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { bundledPluginFileAt } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, type TestContext } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -19,6 +22,11 @@ type NativeSubagentProbeParams = {
   client: GatewayClient;
   events: EventFrame[];
   sessionKey: string;
+  rotation?: {
+    workspace: string;
+    observedCodexClientIds: ReadonlyMap<string, string>;
+    readSessionId: () => Promise<string>;
+  };
 };
 
 type GatewaySession = Pick<NativeSubagentProbeParams, "client" | "sessionKey">;
@@ -39,6 +47,7 @@ type NativeSubagentProbeHarness = {
   ) => Promise<{ runId: string; text: string; events: CapturedAgentEvent[] }>;
   recordCodexAttemptIdentity: (params: {
     events: CapturedAgentEvent[];
+    expectedModel?: string;
     runId: string;
     sessionKey: string;
   }) => void;
@@ -55,7 +64,7 @@ type NativeSubagentProbeHarness = {
  * Gateway owns a separate process, so its in-memory plugin client is not a test
  * surface. Never resume a thread here: the Gateway remains its sole writer.
  */
-export async function withCodexNativeThreadReader(
+async function withCodexNativeThreadReader(
   params: {
     command: string;
     args: string[];
@@ -201,7 +210,43 @@ export async function withCodexNativeThreadReader(
   }
 }
 
-export async function verifyCodexNativeSubagentBridgeProbe(
+/** Compose the probe-owned native reader with the Gateway delivery proof. */
+export async function verifyCodexNativeSubagentBridgeWithReader(
+  params: NativeSubagentProbeParams &
+    Omit<NativeSubagentProbeHarness, "readNativeThread" | "requestTimeoutMs"> & {
+      reader: {
+        repoRoot: string;
+        agentDir: string;
+        stateDir: string;
+        cwd: string;
+        env: NodeJS.ProcessEnv;
+        nativeArgs: string[];
+        requestTimeoutMs: number;
+      };
+    },
+): Promise<void> {
+  const codexPackagePath = bundledPluginFileAt(params.reader.repoRoot, "codex", "package.json");
+  const codexCommand = createRequire(codexPackagePath).resolve("@openai/codex/bin/codex.js");
+  await withCodexNativeThreadReader(
+    {
+      command: process.execPath,
+      args: [codexCommand, ...params.reader.nativeArgs],
+      codexHome: path.join(params.reader.agentDir, "codex-home"),
+      stateDir: params.reader.stateDir,
+      cwd: params.reader.cwd,
+      env: params.reader.env,
+      requestTimeoutMs: params.reader.requestTimeoutMs,
+    },
+    (readNativeThread) =>
+      verifyCodexNativeSubagentBridgeProbe(params, {
+        ...params,
+        requestTimeoutMs: params.reader.requestTimeoutMs,
+        readNativeThread,
+      }),
+  );
+}
+
+async function verifyCodexNativeSubagentBridgeProbe(
   params: NativeSubagentProbeParams,
   {
     requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
@@ -217,6 +262,12 @@ export async function verifyCodexNativeSubagentBridgeProbe(
   const runId = randomUUID();
   const childToken = `CODEX-NATIVE-CHILD-${runId.slice(0, 6).toUpperCase()}`;
   const parentToken = `CODEX-NATIVE-PARENT-${runId.slice(0, 6).toUpperCase()}`;
+  const rotation = params.rotation;
+  const gateName = `codex-native-rotation-${runId}.fifo`;
+  const gatePath = rotation ? path.join(rotation.workspace, gateName) : undefined;
+  if (gatePath) {
+    execFileSync("mkfifo", [gatePath]);
+  }
   const {
     text: initialReply,
     events,
@@ -228,13 +279,21 @@ export async function verifyCodexNativeSubagentBridgeProbe(
     eventPrefix: "codex_app_server.",
     includeAllSessions: true,
     sessionKey: params.sessionKey,
-    message: [
-      "Bridge probe.",
-      "You must use the Codex native spawn_agent tool exactly once before replying.",
-      `Give the subagent this exact instruction: Reply exactly ${childToken} and nothing else.`,
-      "Wait for the subagent result. Do not answer from your own knowledge.",
-      `After the subagent result returns, reply exactly ${parentToken} ${childToken} and nothing else.`,
-    ].join("\n"),
+    message: rotation
+      ? [
+          "Rotation probe. Use the Codex native spawn_agent tool exactly once.",
+          `Give the child this exact task: Run the native exec_command tool with command cat ./${gateName}. Wait for that command to finish, then reply exactly ${childToken} and nothing else.`,
+          "Do not wait for the child or send it another message.",
+          "When the child result arrives later, include its exact result token in your final completion response, even after a model change.",
+          `Reply exactly ${parentToken} and nothing else now.`,
+        ].join("\n")
+      : [
+          "Bridge probe.",
+          "You must use the Codex native spawn_agent tool exactly once before replying.",
+          `Give the subagent this exact instruction: Reply exactly ${childToken} and nothing else.`,
+          "Wait for the subagent result. Do not answer from your own knowledge.",
+          `After the subagent result returns, reply exactly ${parentToken} ${childToken} and nothing else.`,
+        ].join("\n"),
   });
   logCodexLiveStep("native-subagent-bridge-probe:initial-reply", { text: initialReply });
   recordCodexAttemptIdentity({
@@ -266,6 +325,201 @@ export async function verifyCodexNativeSubagentBridgeProbe(
     )
     .toBe(1);
   const childThreadId = [...childIds][0]!;
+  if (rotation && gatePath) {
+    try {
+      expect(initialReply.trim()).toBe(parentToken);
+      const sessionId = await rotation.readSessionId();
+      const clientId = rotation.observedCodexClientIds.get(params.sessionKey);
+      expect(clientId).toBeTypeOf("string");
+      const childBefore = await readNativeThread(childThreadId);
+      expect(childBefore.parentThreadId).toBe(parentThreadId);
+      expect(
+        threadTurns(childBefore).some((turn) =>
+          turnItems(turn).some((item) => item.type === "agentMessage" && item.text === childToken),
+        ),
+      ).toBe(false);
+
+      await requestCodexCommandText({
+        ...params,
+        command: "/model openai/gpt-5.6-luna --runtime codex",
+        expectedText: "Runtime set to codex",
+      });
+      const successorToken = `CODEX-NATIVE-ROTATED-${runId.slice(0, 6).toUpperCase()}`;
+      const successor = await requestAgentTextWithEvents({
+        client: params.client,
+        eventPrefix: "codex_app_server.",
+        sessionKey: params.sessionKey,
+        message: `Reply exactly ${successorToken} and nothing else.`,
+      });
+      recordCodexAttemptIdentity({
+        events: successor.events,
+        expectedModel: "gpt-5.6-luna",
+        runId: successor.runId,
+        sessionKey: params.sessionKey,
+      });
+      const successorThreadId = observedCodexThreadIds.get(params.sessionKey);
+      expect(successor.text.trim()).toBe(successorToken);
+      expect(successorThreadId).toBeTypeOf("string");
+      expect(successorThreadId).not.toBe(parentThreadId);
+      expect(await rotation.readSessionId()).toBe(sessionId);
+      expect(rotation.observedCodexClientIds.get(params.sessionKey)).toBe(clientId);
+      const childStillWaiting = await readNativeThread(childThreadId);
+      expect(
+        threadTurns(childStillWaiting).some((turn) =>
+          turnItems(turn).some((item) => item.type === "agentMessage" && item.text === childToken),
+        ),
+      ).toBe(false);
+
+      await expect
+        .poll(
+          async () => {
+            try {
+              const gate = await fs.open(gatePath, constants.O_WRONLY | constants.O_NONBLOCK);
+              try {
+                await gate.writeFile("release\n");
+              } finally {
+                await gate.close();
+              }
+              return true;
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ENXIO") {
+                return false;
+              }
+              throw error;
+            }
+          },
+          { timeout: CODEX_HARNESS_REQUEST_TIMEOUT_MS, interval: 1_000 },
+        )
+        .toBe(true);
+      await expect
+        .poll(
+          async () =>
+            threadTurns(await readNativeThread(childThreadId)).some(
+              (turn) =>
+                turn.status === "completed" &&
+                turnItems(turn).some(
+                  (item) => item.type === "agentMessage" && item.text === childToken,
+                ),
+            ),
+          { timeout: CODEX_HARNESS_REQUEST_TIMEOUT_MS, interval: 1_000 },
+        )
+        .toBe(true);
+      // Completion submits a new Gateway turn for the physical requester. Its
+      // native creation policy may rotate again; inspect that exact writer,
+      // not an arbitrary thread or the intermediate model-selection turn.
+      const announceRunId = `announce:codex-native:${parentThreadId}:${childThreadId}:succeeded`;
+      const announcementEvents = () =>
+        params.events.flatMap((frame) => {
+          const event = frame.event === "agent" ? asOptionalRecord(frame.payload) : undefined;
+          return event?.runId === announceRunId && event.sessionKey === params.sessionKey
+            ? [event as CapturedAgentEvent]
+            : [];
+        });
+      await expect
+        .poll(
+          () =>
+            announcementEvents().some(
+              (event) => event.stream === "lifecycle" && event.data?.phase === "end",
+            ),
+          { timeout: CODEX_HARNESS_REQUEST_TIMEOUT_MS, interval: 1_000 },
+        )
+        .toBe(true);
+      const completionEvents = announcementEvents();
+      recordCodexAttemptIdentity({
+        events: completionEvents,
+        expectedModel: "gpt-5.6-luna",
+        runId: announceRunId,
+        sessionKey: params.sessionKey,
+      });
+      const completionThreadId = observedCodexThreadIds.get(params.sessionKey)!;
+      expect(completionThreadId).not.toBe(parentThreadId);
+      expect(
+        completionEvents.find(
+          (event) =>
+            event.stream === "codex_app_server.lifecycle" && event.data?.phase === "turn_starting",
+        )?.data?.threadId,
+      ).toBe(completionThreadId);
+      expect(await rotation.readSessionId()).toBe(sessionId);
+      expect(rotation.observedCodexClientIds.get(params.sessionKey)).toBe(clientId);
+      await expect
+        .poll(
+          async () =>
+            threadTurns(await readNativeThread(completionThreadId))
+              .filter((turn) => turn.status === "completed")
+              .flatMap(turnItems)
+              .filter(
+                (item) =>
+                  item.type === "agentMessage" &&
+                  item.phase === "final_answer" &&
+                  typeof item.text === "string" &&
+                  item.text.includes(childToken),
+              ).length,
+          { timeout: CODEX_HARNESS_REQUEST_TIMEOUT_MS, interval: 1_000 },
+        )
+        .toBe(1);
+      const history = await params.client.request<{ messages: unknown[] }>("chat.history", {
+        sessionKey: params.sessionKey,
+        limit: 100,
+      });
+      const deliveredReplies = history.messages.flatMap((message) => {
+        if (asOptionalRecord(message)?.role !== "assistant") {
+          return [];
+        }
+        const text = extractFirstTextBlock(message)?.trim();
+        return text?.includes(childToken) ? [text] : [];
+      });
+      expect(deliveredReplies).toHaveLength(1);
+      if (completionThreadId !== successorThreadId) {
+        expect(
+          threadTurns(await readNativeThread(successorThreadId!))
+            .flatMap(turnItems)
+            .some(
+              (item) =>
+                item.type === "agentMessage" &&
+                typeof item.text === "string" &&
+                item.text.includes(childToken),
+            ),
+        ).toBe(false);
+      }
+      expect(
+        threadTurns(await readNativeThread(parentThreadId))
+          .flatMap(turnItems)
+          .some(
+            (item) =>
+              item.type === "agentMessage" &&
+              item.phase === "final_answer" &&
+              typeof item.text === "string" &&
+              item.text.includes(childToken),
+          ),
+      ).toBe(false);
+      await params.annotate("native-subagent-rotated-parent", {
+        body: JSON.stringify({
+          sessionId,
+          clientId,
+          parentThreadId,
+          successorThreadId,
+          completionThreadId,
+          childThreadId,
+          childToken,
+          deliveredReplies,
+        }),
+        bodyEncoding: "utf-8",
+        contentType: "application/json",
+      });
+      logCodexLiveStep("native-subagent-rotated-parent:complete", {
+        sessionId,
+        clientId,
+        parentThreadId,
+        successorThreadId,
+        completionThreadId,
+        childThreadId,
+        deliveredReplies: deliveredReplies.length,
+      });
+      return;
+    } finally {
+      await fs.rm(gatePath, { force: true });
+    }
+  }
   const assignments: Array<{ turnId: string; result: string; turn: Record<string, unknown> }> = [];
   await observeAssignment(childToken);
   const parentReplies = [`${parentToken} ${childToken}`];

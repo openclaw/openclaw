@@ -5,6 +5,7 @@ import {
   nativeHookRelayTesting,
   onAgentEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { loadNodeExecAvailability } from "openclaw/plugin-sdk/node-selection-runtime";
 import {
@@ -16,7 +17,9 @@ import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
+import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
+import { observeCompletionAttempts } from "./native-subagent-monitor.test-support.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import {
   createTestParams,
@@ -30,6 +33,7 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
@@ -439,5 +443,145 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
       host.closeHost();
       host.closeAdmission();
     }
+  }
+});
+
+it("delivers a native child after parent rotation before a successor run restores assignments", async () => {
+  vi.mocked(loadNodeExecAvailability).mockResolvedValue({
+    cacheKey: "[]",
+    isAvailable: () => false,
+  });
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_tool_call", handler: async () => undefined }]),
+  );
+  const harness = createStartedThreadHarness();
+  const bindingStore = createCodexTestBindingStore();
+  const assignmentRecorded = createDeferred<void>();
+  const mutate = bindingStore.mutate.bind(bindingStore);
+  const observeAssignment = vi.spyOn(bindingStore, "mutate").mockImplementation(async (...args) => {
+    const applied = await mutate(...args);
+    if (
+      applied &&
+      args[1].kind === "record-native-subagent-assignment" &&
+      args[1].assignment.childThreadId === "rotation-child"
+    ) {
+      assignmentRecorded.resolve();
+    }
+    return applied;
+  });
+  const attempts = observeCompletionAttempts();
+  const params = createTestParams();
+  await attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), "rotation-session");
+  params.runtimePlan = createCodexRuntimePlanFixture();
+  setCodexTestModelSupportsTools(params, true);
+  const host = await createAdmittedHostCapabilityTestFixture(params, {
+    nativeModelPolicySupport: "exact",
+  });
+  assert(host.agentHarnessCompletionScope);
+  params.hostCapabilities = host.hostCapabilities;
+  params.agentHarnessCompletionScope = host.agentHarnessCompletionScope;
+  const delivery = vi
+    .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessCompletion")
+    .mockImplementation(async (request) => {
+      assert(request.completionCustody?.isCurrent());
+      assert(request.isSourceSessionAdmissionAllowed());
+      return { delivered: true, path: "direct" };
+    });
+  const notify = (method: string, notificationParams: JsonObject) =>
+    harness.notify({ method, params: notificationParams } as CodexServerNotification);
+  const run = runCodexAppServerAttempt(params, { bindingStore });
+  try {
+    await run.waitForTurnAccepted();
+    await notify("thread/started", {
+      thread: {
+        id: "rotation-child",
+        parentThreadId: "thread-1",
+        source: { subAgent: { thread_spawn: { parent_thread_id: "thread-1", depth: 1 } } },
+      },
+    });
+    await notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "spawn-child",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        status: "completed",
+        senderThreadId: "thread-1",
+        receiverThreadIds: ["rotation-child"],
+      },
+    });
+    await notify("turn/started", {
+      threadId: "rotation-child",
+      turn: { id: "child-turn", status: "inProgress", error: null, items: [] },
+    });
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    };
+    const binding = bindingStore.read(identity);
+    assert(binding);
+    const owner = createCodexNativeSubagentHistoryOwner({
+      parentThreadId: binding.threadId,
+      sessionId: params.sessionId,
+      binding,
+    });
+    assert(owner);
+    await assignmentRecorded.promise;
+    expect(await bindingStore.readNativeSubagentAssignments?.(identity, owner)).toHaveLength(1);
+    const yielded = await harness.handleServerRequest({
+      id: "yield-rotation",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "yield-rotation",
+        namespace: null,
+        tool: "sessions_yield",
+        arguments: { message: "Waiting for the native child" },
+      },
+    });
+    expect(yielded).toMatchObject({ success: true });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, promptError: null });
+    await nativeHookRelayUnregisterQueue.flush();
+    host.closeHost();
+    host.closeAdmission();
+    expect(
+      await bindingStore.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-1",
+        binding: { ...binding, threadId: "thread-2" },
+      }),
+    ).toBe(true);
+    expect(delivery).not.toHaveBeenCalled();
+    const completed = {
+      threadId: "rotation-child",
+      turn: {
+        id: "child-turn",
+        status: "completed",
+        error: null,
+        items: [{ type: "agentMessage", id: "child-final", phase: "final_answer", text: "Done" }],
+      },
+    };
+    await notify("turn/completed", completed);
+    await attempts.settle();
+    expect(delivery).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ childSessionKey: "codex-thread:rotation-child", result: "Done" }),
+    );
+    await notify("turn/completed", completed);
+    await attempts.settle();
+    expect(delivery).toHaveBeenCalledOnce();
+  } finally {
+    harness.close();
+    await Promise.allSettled([run]);
+    await attempts.settle();
+    attempts.restore();
+    observeAssignment.mockRestore();
+    await nativeHookRelayUnregisterQueue.flush();
+    host.closeHost();
+    host.closeAdmission();
   }
 });
