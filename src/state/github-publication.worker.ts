@@ -292,10 +292,11 @@ function sharedMutation(database: OpenClawStateDatabase, input: SharedPublicatio
         claimGitHubPublicationExecutionInDatabase(database, input.requestId, input.instanceId),
       ];
     case "defer":
-      return deferGitHubPublicationRequestsInDatabase(
+      deferGitHubPublicationRequestsInDatabase(
         database,
         selectGitHubPublicationDeferralsInDatabase(database.db, "shared", input.selection),
       );
+      return [];
     case "bindWorkspaceSnapshot":
       return [
         createGitHubPublicationExecutionStoreInDatabase(
