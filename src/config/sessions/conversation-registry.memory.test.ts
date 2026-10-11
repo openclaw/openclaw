@@ -49,6 +49,7 @@ function entry(target: string, updatedAt = 1): SessionEntry {
       kind: "external",
       route: { channel: "discord", target: { to: target } },
       context: { channel: "discord", accountId: "default", to: target },
+      origin: { provider: "discord", accountId: "default", chatType: "channel", to: target },
     },
   };
 }

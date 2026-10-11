@@ -14,6 +14,7 @@ import {
 } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
+import { createSessionActorMemoryConversations } from "./session-actor-memory-conversation-contract.js";
 import { mutateSessionActorMemorySideEffects } from "./session-actor-memory-side-effects.js";
 import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
@@ -358,9 +359,12 @@ it("bounds message-tool outcome rows by occurrence time and insertion order", ()
     ...row,
     id: index + 1,
   }));
+  const conversations = createSessionActorMemoryConversations();
   const context: SessionActorMemoryStorageContext = {
     ...location,
     state,
+    conversations,
+    editConversations: () => conversations,
     get: () => state,
     *entries() {
       yield [sessionKey, state];

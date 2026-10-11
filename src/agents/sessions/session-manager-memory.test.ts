@@ -77,6 +77,9 @@ describe("SessionManager selected memory actor", () => {
     const [firstId, secondId] = await Promise.all(
       messages.map((message) => manager.appendMessageAsync(message)),
     );
+    if (!firstId || !secondId) {
+      throw new Error("Missing fixture message entries");
+    }
     expect(
       manager
         .getBranch()
@@ -115,6 +118,9 @@ describe("SessionManager selected memory actor", () => {
     const { target, run, storage } = await fixture("branch");
     const manager = await run(() => SessionManager.openAsync(target));
     const first = await manager.appendMessageAsync(makeUserMessage("retained", 1));
+    if (!first) {
+      throw new Error("Missing fixture branch entry");
+    }
     await manager.appendMessageAsync(makeUserMessage("omitted", 2));
     await manager.createBranchedSession(first);
     const nextTarget = manager.getSessionTarget()!;
@@ -168,6 +174,9 @@ describe("SessionManager selected memory actor", () => {
     finish.resolve();
     const entryId = await writing;
     await released;
+    if (!entryId) {
+      throw new Error("Missing accepted message entry");
+    }
     expect(manager.getEntry(entryId)).toMatchObject({ message: { content: "accepted" } });
   });
 

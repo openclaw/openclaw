@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
@@ -97,9 +98,9 @@ describe("memory actor transcript turn binding", () => {
         }),
       })),
     );
-    expect((await history()).events.filter((event) => event.type === "message")).toEqual(
-      messages.map((message) => expect.objectContaining({ type: "message", message })),
-    );
+    expect(
+      (await history()).events.filter((event) => isRecord(event) && event.type === "message"),
+    ).toEqual(messages.map((message) => expect.objectContaining({ type: "message", message })));
   });
 
   it("prepares fresh input once and publishes the same canonical bytes on retry", async () => {

@@ -102,7 +102,11 @@ describe("memory collaboration through the public adapters", () => {
     const { actor, scope, run } = await fixture();
     const observed: boolean[] = [];
     const stop = sessionChanges.subscribeFacts((change) => {
-      if (change.sessionKey === scope.sessionKey && change.facts?.kind === "member") {
+      if (
+        "sessionKey" in change &&
+        change.sessionKey === scope.sessionKey &&
+        change.facts?.kind === "member"
+      ) {
         observed.push(
           actor.snapshot(authority)!.members.some((member) => member.identityId === "viewer"),
         );
