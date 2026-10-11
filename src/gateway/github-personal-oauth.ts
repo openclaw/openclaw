@@ -120,6 +120,10 @@ function revalidatePersonalGitHubStatus(
   ) {
     throw new Error("My GitHub connection changed; reload its status.");
   }
+  // Revalidating selection does not refresh the prepared account facts.
+  if (prepared.stale) {
+    current.stale = true;
+  }
   return prepared.state === "unavailable" ? { ...current, state: "unavailable" } : current;
 }
 
@@ -155,12 +159,16 @@ async function resolvePersonalGitHubStatus(
   try {
     // Receipts use the durable selection above; live status must additionally
     // prove the selected profile can authenticate without borrowing native auth.
-    await preparePersonalGitHubPublicationIdentity({
+    const identity = await preparePersonalGitHubPublicationIdentity({
       profileId: record.selection.profileId,
       accountId: record.selection.accountId,
       assertCurrent,
+      forDisplay: true,
     });
-    return revalidatePersonalGitHubStatus(action, status);
+    return {
+      ...revalidatePersonalGitHubStatus(action, status),
+      ...(identity.stale ? { stale: true } : {}),
+    };
   } catch {
     return { ...revalidatePersonalGitHubStatus(action, status), state: "unavailable" };
   }
