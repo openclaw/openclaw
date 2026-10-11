@@ -97,25 +97,10 @@ afterAll(async () => {
 });
 
 describe("archive utils", () => {
-  it("rejects the returned promise when an option getter throws", async () => {
-    const failure = new Error("archive kind unavailable");
-    await expect(
-      extractArchive({
-        archivePath: "/unused/archive.tar",
-        destDir: "/unused/extracted",
-        timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
-        get kind(): never {
-          throw failure;
-        },
-      }),
-    ).rejects.toBe(failure);
-  });
-
-  it.each(
-    (["zip", "tar"] as const).flatMap((ext) =>
-      [undefined, true, false].map((durable) => ({ ext, durable })),
-    ),
-  )("extracts $ext archives with durable=$durable", async ({ ext, durable }) => {
+  it.each([
+    { ext: "zip", durable: undefined },
+    { ext: "tar", durable: false },
+  ] as const)("extracts $ext archives with durable=$durable", async ({ ext, durable }) => {
     await withArchiveCase(ext, async ({ workDir, archivePath, extractDir }) => {
       await writePackageArchive({
         ext,

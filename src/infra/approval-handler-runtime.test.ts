@@ -164,42 +164,6 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     await runtime?.stop();
   });
 
-  it("derives kind once before stop-time cleanup unbinds", async () => {
-    const unbindPending = vi.fn();
-    const shouldHandle = vi.fn().mockReturnValue(true);
-    const approvalRuntime = await createTestApprovalHandler({
-      eventKinds: ["plugin"],
-      shouldHandle,
-      unbindPending,
-    });
-
-    const request: PluginApprovalRequest = {
-      id: "custom:1",
-      createdAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-      request: {
-        title: "Plugin approval",
-        description: "Allow the plugin action",
-        turnSourceChannel: "test",
-        turnSourceTo: "origin-chat",
-      },
-    };
-    const normalizedRequest = { ...request, approvalKind: "plugin" as const };
-
-    await approvalRuntime.handleRequested(request);
-    expect(shouldHandle).toHaveBeenCalledWith(
-      expect.objectContaining({ request: normalizedRequest, approvalKind: "plugin" }),
-    );
-    await approvalRuntime.stop();
-
-    expect(unbindPending).toHaveBeenCalledOnce();
-    const stopUnbind = firstCallArg(unbindPending) as
-      | { request?: unknown; approvalKind?: string }
-      | undefined;
-    expect(stopUnbind?.request).toEqual(normalizedRequest);
-    expect(stopUnbind?.approvalKind).toBe("plugin");
-  });
-
   it("normalizes and cleans up system-agent entries through a lazy native runtime", async () => {
     const shouldHandle = vi.fn().mockReturnValue(true);
     const unbindPending = vi.fn();

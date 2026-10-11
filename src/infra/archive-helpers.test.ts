@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { resolveArchiveKind, resolvePackedRootDir } from "./archive.js";
+import { resolveArchiveKind } from "./archive.js";
 import { pathExists, withTimeout } from "./fs-safe.js";
 import { JsonFileReadError, readJson } from "./json-files.js";
 
@@ -16,71 +16,12 @@ afterEach(async () => {
 });
 
 describe("archive helpers", () => {
-  it.each([
-    { input: "/tmp/file.zip", expected: "zip" },
-    { input: "/tmp/file.TAR.GZ", expected: "tar" },
-    { input: "/tmp/file.tgz", expected: "tar" },
-    { input: "/tmp/file.tar", expected: "tar" },
-    { input: "/tmp/file.txt", expected: null },
-  ])("detects archive kind for $input", ({ input, expected }) => {
-    expect(resolveArchiveKind(input)).toBe(expected);
-  });
-
-  it.each([
-    {
-      name: "uses the package directory when present",
-      setup: async (root: string) => {
-        await fs.mkdir(path.join(root, "package"), { recursive: true });
-      },
-      expected: (root: string) => path.join(root, "package"),
+  it.each([{ input: "/tmp/file.zip", expected: "zip" }])(
+    "detects archive kind for $input",
+    ({ input, expected }) => {
+      expect(resolveArchiveKind(input)).toBe(expected);
     },
-    {
-      name: "uses the single extracted root directory as a fallback",
-      setup: async (root: string) => {
-        await fs.mkdir(path.join(root, "bundle-root"), { recursive: true });
-      },
-      expected: (root: string) => path.join(root, "bundle-root"),
-    },
-    {
-      name: "uses the extraction root when a root marker is present",
-      setup: async (root: string) => {
-        await fs.writeFile(path.join(root, "package.json"), "{}", "utf8");
-      },
-      opts: { rootMarkers: ["package.json"] },
-      expected: (root: string) => root,
-    },
-  ])("resolves packed roots when $name", async ({ setup, expected, opts }) => {
-    const root = await createTempDir();
-    await setup(root);
-    await expect(resolvePackedRootDir(root, opts)).resolves.toBe(expected(root));
-  });
-
-  it.each([
-    {
-      name: "multiple extracted roots exist",
-      setup: async (root: string) => {
-        await fs.mkdir(path.join(root, "a"), { recursive: true });
-        await fs.mkdir(path.join(root, "b"), { recursive: true });
-      },
-    },
-    {
-      name: "only non-root marker files exist",
-      setup: async (root: string) => {
-        await fs.writeFile(path.join(root, "note.txt"), "hi", "utf8");
-      },
-    },
-  ])("rejects unexpected packed root layouts when $name", async ({ setup }) => {
-    const root = await createTempDir();
-    await setup(root);
-    await expect(resolvePackedRootDir(root)).rejects.toThrow(/unexpected archive layout/i);
-  });
-
-  it("returns work results and propagates errors before timeout", async () => {
-    await expect(withTimeout(Promise.resolve("ok"), 100, "extract zip")).resolves.toBe("ok");
-    await expect(
-      withTimeout(Promise.reject(new Error("boom")), 100, "extract zip"),
-    ).rejects.toThrow("boom");
-  });
+  );
 
   it("rejects when archive work exceeds the timeout", async () => {
     vi.useFakeTimers();

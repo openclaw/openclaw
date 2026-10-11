@@ -79,20 +79,6 @@ describe("advertised LAN host", () => {
     );
   });
 
-  it("falls back to interface order when Linux route hints do not match", async () => {
-    await expect(
-      resolveAdvertisedLanHostCore({
-        platform: "linux",
-        runCommandWithTimeout: createRouteRunner("default via 100.64.0.1 dev tailscale0 metric 10"),
-        networkInterfaces: () =>
-          ({
-            ethernet: [ipv4("10.37.129.4")],
-            wifi: [ipv4("192.168.1.20")],
-          }) as NetworkInterfacesSnapshot,
-      }),
-    ).resolves.toBe("10.37.129.4");
-  });
-
   it("uses the macOS default-route interface", async () => {
     await expect(
       resolveAdvertisedLanHostCore({

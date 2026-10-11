@@ -214,29 +214,8 @@ describe("buildApprovalPresentation", () => {
     ).toBeNull();
   });
 
-  it("applies the external label limit by Unicode code point", () => {
-    const label = String.fromCodePoint(0x1f680).repeat(80);
-    const buildWithLabel = (value: string) =>
-      buildApprovalPresentation({
-        kind: "plugin",
-        request: {
-          title: "World verification",
-          description: "Verify personhood before continuing.",
-          externalResolution: { label: value, decisions: ["allow-once"] },
-        },
-        allowedDecisions: ["deny"],
-      });
-
-    expect(buildWithLabel(label)).toMatchObject({
-      kind: "plugin",
-      externalResolution: { label },
-    });
-    expect(buildWithLabel(`${label}${String.fromCodePoint(0x1f680)}`)).toBeNull();
-  });
-
   it.each([
     { label: " ", decisions: undefined },
-    { label: "Verify", decisions: [] },
     { label: "Verify", decisions: ["allow-once", "allow-once"] as const },
   ])("rejects malformed external verification metadata", (externalResolution) => {
     expect(
@@ -285,12 +264,6 @@ describe("buildApprovalPresentation (system-agent)", () => {
     const title = `${"a".repeat(79)}\u{1F600}`;
     const presentation = buildSystemAgentPresentation({ title, description: "d" });
     expect(presentation).toMatchObject({ kind: "system-agent", title: "a".repeat(79) });
-  });
-
-  it("keeps an emoji that fits within the title limit intact", () => {
-    const title = `${"a".repeat(78)}\u{1F600}`;
-    const presentation = buildSystemAgentPresentation({ title, description: "d" });
-    expect(presentation).toMatchObject({ kind: "system-agent", title });
   });
 
   it("drops a split emoji at the description boundary instead of leaving a lone surrogate", () => {

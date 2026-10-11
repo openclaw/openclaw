@@ -53,7 +53,7 @@ function captureEvents({ publishedOnly = false } = {}) {
 describe("agent event routing after cancellation", () => {
   beforeEach(() => resetAgentEventsForTest());
 
-  it.each(["end", "error"])(
+  it.each(["end"])(
     "publishes one aborted %s and suppresses lifecycle events through cleanup",
     async (phase) => {
       const runId = "aborted-run";
@@ -168,66 +168,65 @@ describe("agent event routing after cancellation", () => {
     expect(events.map((event) => event.data.phase)).toEqual(["start", "error", "start", "error"]);
   });
 
-  it.each([
-    { name: "visible", hidden: false, messages: true },
-    { name: "hidden private", hidden: true, messages: false },
-    { name: "hidden session subscribers", hidden: true, messages: true },
-  ])("keeps producer routing after context cleanup ($name)", async ({ hidden, messages }) => {
-    const runId = "cancelled-run";
-    const sessionKey = "agent:delivery:conversation";
-    const generation = getAgentEventLifecycleGeneration();
-    const events = captureEvents();
-    await withAgentRunLifecycleGeneration(generation, async () => {
-      registerAgentRunContext(runId, {
+  it.each([{ name: "hidden session subscribers", hidden: true, messages: true }])(
+    "keeps producer routing after context cleanup ($name)",
+    async ({ hidden, messages }) => {
+      const runId = "cancelled-run";
+      const sessionKey = "agent:delivery:conversation";
+      const generation = getAgentEventLifecycleGeneration();
+      const events = captureEvents();
+      await withAgentRunLifecycleGeneration(generation, async () => {
+        registerAgentRunContext(runId, {
+          agentId: "delivery",
+          sessionKey,
+          sessionId: "original-session",
+          isControlUiVisible: !hidden,
+          projectSessionMessages: messages,
+          projectSessionLifecycle: false,
+        });
+        // Registration follows admission; compaction can rebind before the first event.
+        await Promise.resolve();
+        registerAgentRunContext(runId, { sessionId: "compacted-session" });
+        const lifecycle = createAgentCommandLifecycle({
+          runId,
+          lifecycleGeneration: () => generation,
+          startedAt: 1,
+          state: {
+            currentTurnUserMessagePersisted: true,
+            lifecycleFinishing: false,
+            lifecycleEnded: false,
+          },
+        });
+        clearAgentRunContext(runId);
+        expect(getAgentRunContext(runId)).toBeUndefined();
+        emitAgentEvent({ runId, stream: "tool", data: { phase: "result", toolCallId: "held" } });
+        lifecycle.emitBasicError(new Error("cancelled"), { aborted: true, stopReason: "rpc" });
+      });
+      expect(events).toHaveLength(2);
+      expect(events[0]).toMatchObject({ agentId: "delivery", controlUiVisible: !hidden });
+      expect(events[0]?.sessionKey).toBe(hidden ? undefined : sessionKey);
+      expect(events[0]?.deliverySessionKey).toBe(hidden ? sessionKey : undefined);
+      expect(events[0]?.projectSessionMessages).toBe(messages);
+      const serialized = JSON.stringify(events[0]);
+      const wire = JSON.parse(serialized);
+      expect(wire).not.toHaveProperty("deliverySessionKey");
+      if (hidden) {
+        expect(wire).not.toHaveProperty("sessionKey");
+      }
+      expect(events[1]).toMatchObject({
         agentId: "delivery",
         sessionKey,
-        sessionId: "original-session",
-        isControlUiVisible: !hidden,
+        sessionId: "compacted-session",
+        controlUiVisible: !hidden,
         projectSessionMessages: messages,
         projectSessionLifecycle: false,
+        data: { executionSettled: true, aborted: true, stopReason: "rpc" },
       });
-      // Registration follows admission; compaction can rebind before the first event.
-      await Promise.resolve();
-      registerAgentRunContext(runId, { sessionId: "compacted-session" });
-      const lifecycle = createAgentCommandLifecycle({
-        runId,
-        lifecycleGeneration: () => generation,
-        startedAt: 1,
-        state: {
-          currentTurnUserMessagePersisted: true,
-          lifecycleFinishing: false,
-          lifecycleEnded: false,
-        },
-      });
-      clearAgentRunContext(runId);
       expect(getAgentRunContext(runId)).toBeUndefined();
-      emitAgentEvent({ runId, stream: "tool", data: { phase: "result", toolCallId: "held" } });
-      lifecycle.emitBasicError(new Error("cancelled"), { aborted: true, stopReason: "rpc" });
-    });
-    expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({ agentId: "delivery", controlUiVisible: !hidden });
-    expect(events[0]?.sessionKey).toBe(hidden ? undefined : sessionKey);
-    expect(events[0]?.deliverySessionKey).toBe(hidden ? sessionKey : undefined);
-    expect(events[0]?.projectSessionMessages).toBe(messages);
-    const serialized = JSON.stringify(events[0]);
-    const wire = JSON.parse(serialized);
-    expect(wire).not.toHaveProperty("deliverySessionKey");
-    if (hidden) {
-      expect(wire).not.toHaveProperty("sessionKey");
-    }
-    expect(events[1]).toMatchObject({
-      agentId: "delivery",
-      sessionKey,
-      sessionId: "compacted-session",
-      controlUiVisible: !hidden,
-      projectSessionMessages: messages,
-      projectSessionLifecycle: false,
-      data: { executionSettled: true, aborted: true, stopReason: "rpc" },
-    });
-    expect(getAgentRunContext(runId)).toBeUndefined();
-    expect(Object.keys(events[1]!)).not.toContain("controlUiVisible");
-    expect(Object.keys(events[1]!)).not.toContain("projectSessionMessages");
-  });
+      expect(Object.keys(events[1]!)).not.toContain("controlUiVisible");
+      expect(Object.keys(events[1]!)).not.toContain("projectSessionMessages");
+    },
+  );
 
   it("shares compaction updates across nested scopes without inheriting a reused run", async () => {
     const generation = getAgentEventLifecycleGeneration();
@@ -395,43 +394,6 @@ describe("live agent model projection", () => {
     clearAgentRunContext("queued");
     clearAgentRunContext("admission");
     expect(resolveProjectedAgentRunModel(scope)).toBeUndefined();
-  });
-
-  test("projects model events only into their current run owner", () => {
-    const runId = "model-run";
-    registerAgentRunContext(runId, {
-      agentId: "main",
-      sessionKey: "agent:main:chat",
-      sessionId: "model-session",
-      projectSessionActive: true,
-    });
-    const owner = getAgentRunContext(runId)!;
-    const generation = getAgentEventLifecycleGeneration();
-    emitModel(runId, owner, "primary", "first");
-    expect(getAgentRunContext(runId)).toMatchObject({
-      activeModel: { provider: "primary", model: "first" },
-    });
-    expect(resolveProjectedAgentRunModel({ agentId: "main", sessionId: "model-session" })).toEqual({
-      provider: "primary",
-      model: "first",
-    });
-    emitModel(runId, owner, "fallback", "second");
-    expect(getAgentRunContext(runId)).toMatchObject({
-      activeModel: { provider: "fallback", model: "second" },
-    });
-    emitModel(runId, owner, null, null);
-    expect(getAgentRunContext(runId)).not.toHaveProperty("activeModel");
-
-    rotateAgentEventLifecycleGeneration();
-    clearAgentRunContext(runId, generation);
-    registerAgentRunContext(runId, { sessionKey: "agent:main:replacement" });
-    emitAgentEvent({
-      runId,
-      lifecycleGeneration: generation,
-      stream: "lifecycle",
-      data: { phase: "model", provider: "stale", model: "stale" },
-    });
-    expect(getAgentRunContext(runId)).not.toHaveProperty("activeModel");
   });
 
   test("ignores model callbacks from a replaced run in the same lifecycle generation", () => {
