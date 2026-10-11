@@ -18,6 +18,7 @@ const noops = {
   registerHostedMediaResolver: () => {},
   registerWidgetPresenter: () => {},
   registerMcpServerConnectionResolver: () => {},
+  registerMcpServerRequestHeaderProvider: () => {},
   registerChannel: () => {},
   registerGatewayMethod: () => {},
   registerGatewayAccessPolicy: () => {},
