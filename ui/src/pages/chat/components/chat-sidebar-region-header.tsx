@@ -22,8 +22,11 @@ import {
   type SidebarPanel,
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
-import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
-import type { RegionProps, RegionElement } from "./chat-sidebar-region.runtime.tsx";
+import type {
+  SidebarPanelDefinition,
+  RegionProps,
+  RegionElement,
+} from "./chat-sidebar-region-types.ts";
 
 type SidebarRegionHeaderProps = RegionProps & {
   host: RegionElement;

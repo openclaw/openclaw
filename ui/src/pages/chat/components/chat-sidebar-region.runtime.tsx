@@ -14,10 +14,9 @@ import {
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../../../components/panel-hosted-tabs.ts";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
 import { LitContent, emptyLegacyContent } from "../../../lit/solid-content.tsx";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import {
   SIDEBAR_GEOMETRY_COMMIT_EVENT,
   SIDEBAR_MIN_HEIGHT_PX,
@@ -28,9 +27,7 @@ import {
   sidebarActivePanel,
   isSidebarSlotVisible,
   type SidebarColumn,
-  type SidebarLayout,
   type SidebarPanel,
-  type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import {
   SidebarRegionHeader,
@@ -38,25 +35,7 @@ import {
   sidebarPanelType,
   readRegionHostedTabs,
 } from "./chat-sidebar-region-header.tsx";
-import type {
-  SidebarPanelDefinition,
-  SidebarRegionCallbacks,
-} from "./chat-sidebar-region-types.ts";
-
-export type RegionProps = {
-  panelIdPrefix: string;
-  conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
-  layout: SidebarLayout;
-  panelDefinitions: SidebarPanelDefinition[];
-  fetchFavicon?: LinkFaviconFetcher;
-  callbacks: SidebarRegionCallbacks | null;
-  narrow: boolean;
-  sideFocusLocked: boolean;
-  sideFocusOrigin?: () => HTMLElement | null;
-  availableWidth: number;
-};
-type RegionMethods = { deliverPanelEvent: (slot: SidebarSlotId, event: Event) => boolean };
-export type RegionElement = SolidBridgeElement<RegionProps, RegionMethods>;
+import type { RegionProps, RegionElement, RegionMethods } from "./chat-sidebar-region-types.ts";
 
 function activePanelTab(root: ParentNode | null | undefined) {
   return [...(root?.querySelectorAll<HTMLElementTagNameMap["wa-tab"]>("wa-tab") ?? [])].find(
