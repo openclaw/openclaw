@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
-import { mergePreparedNativeCatalog } from "../prepared-model-runtime.full-catalog.js";
+import { mergePreparedNativeCatalog } from "../prepared-model-runtime.catalog-publication.js";
 import {
   augmentModelCatalogWithAgentHarness,
   augmentPreparedModelCatalogWithAgentHarness,

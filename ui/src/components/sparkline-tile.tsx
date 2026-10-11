@@ -2,14 +2,10 @@ import "../styles/gateway-vitals.css";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { formatDurationCompact } from "../lib/format-duration.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
+import type { SparklineSample } from "../lib/sparkline-types.ts";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
 
-export type SparklineSample = {
-  value: number;
-  at: number;
-  secondary?: string;
-  stack?: readonly number[];
-};
+export type { SparklineSample } from "../lib/sparkline-types.ts";
 
 type SparklineProps = {
   label: string;

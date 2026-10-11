@@ -659,6 +659,7 @@ src/config/sessions/session-model-context-window.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
 src/config/sessions/session-pending-input-operations.types.ts
+src/config/sessions/session-predicate-columns.ts
 src/config/sessions/session-transcript-writer-claim-error.ts
 src/config/sessions/session-source-authority.ts
 src/config/sessions/session-sqlite-target-paths.ts
@@ -682,6 +683,7 @@ src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets-read-availability.ts
 src/config/sessions/targets.ts
 src/config/sessions/transcript-payload.ts
+src/config/sessions/transcript-predicate-fields.ts
 src/config/sessions/transcript-target-binding.ts
 src/config/sessions/version.ts
 src/config/shell-env-expected-keys.ts
@@ -1681,6 +1683,7 @@ src/state/config-machine-state-async.ts
 src/state/config-machine-state-write.ts
 src/state/config-machine-state.ts
 src/state/creator-namespace-migration.ts
+src/state/json-predicate-fields.ts
 src/state/openclaw-agent-board-schema.ts
 src/state/openclaw-agent-canonical-validation-migration.ts
 src/state/openclaw-agent-canonical-validation-receipt.ts
@@ -1734,6 +1737,7 @@ src/state/openclaw-agent-execution-owner.ts
 src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
+src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-message-tool-outcome-schema.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts

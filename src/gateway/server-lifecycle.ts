@@ -120,8 +120,6 @@ export async function prepareGatewayLifecycle(params: {
     onRunnerStateChanged: (nodeId, change) => {
       if (change.availabilityChanged) {
         workerPlacementRuntime?.runnerAvailability.markChanged(nodeId);
-      }
-      if (change.inventoryChanged || change.availabilityChanged) {
         void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
       }
     },
