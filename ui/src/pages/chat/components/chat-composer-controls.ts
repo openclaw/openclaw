@@ -6,10 +6,8 @@ import {
   createMemo,
   getOwner,
   runWithOwner,
-  createRenderEffect,
   createSignal,
   flush,
-  onCleanup,
   type Component,
   type Accessor,
 } from "solid-js";
@@ -114,20 +112,8 @@ export function solidTemplate<P extends object>(component: Component<P>, props: 
   return html`${solidDirective(component, props)}`;
 }
 
-/** Opaque content remains with its existing Lit owner until that caller is ported. */
-export function LitContent(props: { value: unknown }) {
-  const element = document.createElement("span");
-  element.style.display = "contents";
-  createRenderEffect(
-    () => props.value,
-    (value) => {
-      renderLit(value ?? nothing, element);
-    },
-  );
-  onCleanup(() => {
-    renderLit(nothing, element);
-  });
-  return element;
+export function renderComposerContent(value: unknown, container: HTMLElement): void {
+  renderLit(value ?? nothing, container);
 }
 
 export function hasComposerContent(value: unknown): boolean {

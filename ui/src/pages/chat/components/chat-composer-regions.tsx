@@ -1,9 +1,9 @@
 import { createRenderEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
-import { LitContent } from "./chat-composer-controls.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
 import { ChatGoal } from "./chat-composer-goal.tsx";
+import { LitContent } from "./chat-composer-interop.tsx";
 import { renderChatQueueSolid as ChatQueue } from "./chat-composer-queue.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -35,7 +35,7 @@ export function SolidProgressContent(props: {
     () => props.binding,
     (binding) => {
       if (!binding) {
-        return;
+        return undefined;
       }
       const changed = () => setRevision((value) => value + 1);
       binding.owner.addEventListener(PRESENTATION_CHANGED_EVENT, changed);

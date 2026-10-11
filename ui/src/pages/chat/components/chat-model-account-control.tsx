@@ -1,8 +1,8 @@
 import { For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
-import type { ChatModelAccountSectionViewProps } from "./chat-model-account-control.ts";
 import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
+import type { ChatModelAccountSectionViewProps } from "./chat-model-types.ts";
 
 export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewProps) {
   return (

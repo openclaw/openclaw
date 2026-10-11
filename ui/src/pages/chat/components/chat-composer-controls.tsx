@@ -14,7 +14,8 @@ import {
 } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
-import { LitContent, solidTemplate, renderComposerSendTooltip } from "./chat-composer-controls.ts";
+import { solidTemplate, renderComposerSendTooltip } from "./chat-composer-controls.ts";
+import { LitContent } from "./chat-composer-interop.tsx";
 import {
   renderChatVoiceStatus,
   renderMicrophoneActivity,
@@ -389,6 +390,16 @@ function ComposerDictationSendAction(props: {
   onSend: (submissionAction?: Event) => void;
   onPointerDown?: (event: PointerEvent) => void;
 }) {
+  const finishAndSend = async (event: MouseEvent) => {
+    const dictation = props.readDictation();
+    const send = props.onSend;
+    if (dictation.finalizing) {
+      return;
+    }
+    await dictation.finishActive();
+    // Keep the initiating input action when asynchronous dictation finishes.
+    send(event);
+  };
   return (
     <>
       {props.readDictation().active ? (
@@ -405,17 +416,7 @@ function ComposerDictationSendAction(props: {
               class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
               type="button"
               onPointerDown={(event) => props.onPointerDown?.(event)}
-              onClick={async (event: MouseEvent) => {
-                const dictation = props.readDictation();
-                const send = props.onSend;
-                if (dictation.finalizing) {
-                  return;
-                }
-                await dictation.finishActive();
-                // Preserve the input action so submission publishes its pending state
-                // before yielding to delivery, just like typed Send.
-                send(event);
-              }}
+              onClick={(event: MouseEvent) => void finishAndSend(event)}
               aria-disabled={String(props.readDictation().finalizing)}
               aria-label={t("chat.runControls.send")}
             >

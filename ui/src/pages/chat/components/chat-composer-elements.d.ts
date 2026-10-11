@@ -1,7 +1,6 @@
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import type { JSX } from "@solidjs/web";
 import type { McpAppCatalog } from "../../../components/mcp-app-catalog.ts";
 import type { McpAppContextStrip } from "../../../components/mcp-app-context-strip.ts";
 import type {
@@ -9,10 +8,6 @@ import type {
   McpAppResourceMentionDetail,
 } from "../../../components/mcp-app-resources.ts";
 import type { OpenClawModalDialog } from "../../../components/modal-dialog.ts";
-
-type Properties<Element, Keys extends keyof Element> = {
-  [Key in Keys as `prop:${Key & string}`]?: Element[Key];
-};
 
 declare global {
   interface HTMLElementTagNameMap {
@@ -31,58 +26,75 @@ declare module "@solidjs/web" {
     }
 
     interface IntrinsicElements {
-      "wa-popup": HTMLAttributes<WaPopup> &
-        Properties<
-          WaPopup,
-          "active" | "anchor" | "placement" | "strategy" | "distance" | "skidding"
-        > & {
-          active?: boolean;
-          placement?: WaPopup["placement"];
-          strategy?: WaPopup["strategy"];
-          "onWa-reposition"?: EventHandlerUnion<WaPopup, CustomEvent>;
-        };
-      "wa-dropdown": HTMLAttributes<WaDropdown> &
-        Properties<WaDropdown, "open" | "placement" | "distance" | "skidding"> & {
-          open?: boolean;
-          placement?: WaDropdown["placement"];
-          "onWa-show"?: EventHandlerUnion<WaDropdown, CustomEvent>;
-          "onWa-after-show"?: EventHandlerUnion<WaDropdown, CustomEvent>;
-          "onWa-hide"?: EventHandlerUnion<WaDropdown, CustomEvent>;
-          "onWa-after-hide"?: EventHandlerUnion<WaDropdown, CustomEvent>;
-          "onWa-select"?: EventHandlerUnion<WaDropdown, CustomEvent<{ item: WaDropdownItem }>>;
-        };
-      "wa-dropdown-item": HTMLAttributes<WaDropdownItem> &
-        Properties<WaDropdownItem, "value" | "disabled" | "checked" | "type"> & {
-          value?: string;
-          disabled?: boolean;
-          checked?: boolean;
-          type?: WaDropdownItem["type"];
-          variant?: WaDropdownItem["variant"];
-          href?: string;
-          target?: WaDropdownItem["target"];
-          rel?: string;
-        };
-      "openclaw-modal-dialog": HTMLAttributes<OpenClawModalDialog> &
-        Properties<OpenClawModalDialog, "open" | "manual" | "label" | "description"> & {
-          label?: string;
-          description?: string;
-          open?: boolean;
-          manual?: boolean;
-          "onModal-cancel"?: EventHandlerUnion<OpenClawModalDialog, CustomEvent>;
-        };
-      "openclaw-mcp-app-catalog": HTMLAttributes<McpAppCatalog> &
-        Properties<McpAppCatalog, "sessionKey" | "agentId" | "filePath" | "surface"> & {
-          surface?: McpAppCatalog["surface"];
-        };
-      "openclaw-mcp-app-resources": HTMLAttributes<McpAppResources> &
-        Properties<McpAppResources, "sessionKey" | "agentId"> & {
-          "onOpenclaw-mcp-app-resource-mention"?: EventHandlerUnion<
-            McpAppResources,
-            CustomEvent<McpAppResourceMentionDetail>
-          >;
-        };
-      "openclaw-mcp-app-context-strip": HTMLAttributes<McpAppContextStrip> &
-        Properties<McpAppContextStrip, "sessionKey" | "agentId">;
+      "wa-popup": HTMLAttributes<WaPopup> & {
+        "prop:active"?: WaPopup["active"];
+        "prop:anchor"?: WaPopup["anchor"];
+        "prop:placement"?: WaPopup["placement"];
+        "prop:strategy"?: WaPopup["strategy"];
+        "prop:distance"?: WaPopup["distance"];
+        "prop:skidding"?: WaPopup["skidding"];
+        active?: boolean;
+        placement?: WaPopup["placement"];
+        strategy?: WaPopup["strategy"];
+        "onWa-reposition"?: EventHandlerUnion<WaPopup, CustomEvent>;
+      };
+      "wa-dropdown": HTMLAttributes<WaDropdown> & {
+        "prop:open"?: WaDropdown["open"];
+        "prop:placement"?: WaDropdown["placement"];
+        "prop:distance"?: WaDropdown["distance"];
+        "prop:skidding"?: WaDropdown["skidding"];
+        open?: boolean;
+        placement?: WaDropdown["placement"];
+        "onWa-show"?: EventHandlerUnion<WaDropdown, CustomEvent>;
+        "onWa-after-show"?: EventHandlerUnion<WaDropdown, CustomEvent>;
+        "onWa-hide"?: EventHandlerUnion<WaDropdown, CustomEvent>;
+        "onWa-after-hide"?: EventHandlerUnion<WaDropdown, CustomEvent>;
+        "onWa-select"?: EventHandlerUnion<WaDropdown, CustomEvent<{ item: WaDropdownItem }>>;
+      };
+      "wa-dropdown-item": HTMLAttributes<WaDropdownItem> & {
+        "prop:value"?: WaDropdownItem["value"];
+        "prop:disabled"?: WaDropdownItem["disabled"];
+        "prop:checked"?: WaDropdownItem["checked"];
+        "prop:type"?: WaDropdownItem["type"];
+        value?: string;
+        disabled?: boolean;
+        checked?: boolean;
+        type?: WaDropdownItem["type"];
+        variant?: WaDropdownItem["variant"];
+        href?: string;
+        target?: WaDropdownItem["target"];
+        rel?: string;
+      };
+      "openclaw-modal-dialog": HTMLAttributes<OpenClawModalDialog> & {
+        "prop:open"?: OpenClawModalDialog["open"];
+        "prop:manual"?: OpenClawModalDialog["manual"];
+        "prop:label"?: OpenClawModalDialog["label"];
+        "prop:description"?: OpenClawModalDialog["description"];
+        label?: string;
+        description?: string;
+        open?: boolean;
+        manual?: boolean;
+        "onModal-cancel"?: EventHandlerUnion<OpenClawModalDialog, CustomEvent>;
+      };
+      "openclaw-mcp-app-catalog": HTMLAttributes<McpAppCatalog> & {
+        "prop:sessionKey"?: McpAppCatalog["sessionKey"];
+        "prop:agentId"?: McpAppCatalog["agentId"];
+        "prop:filePath"?: McpAppCatalog["filePath"];
+        "prop:surface"?: McpAppCatalog["surface"];
+        surface?: McpAppCatalog["surface"];
+      };
+      "openclaw-mcp-app-resources": HTMLAttributes<McpAppResources> & {
+        "prop:sessionKey"?: McpAppResources["sessionKey"];
+        "prop:agentId"?: McpAppResources["agentId"];
+        "onOpenclaw-mcp-app-resource-mention"?: EventHandlerUnion<
+          McpAppResources,
+          CustomEvent<McpAppResourceMentionDetail>
+        >;
+      };
+      "openclaw-mcp-app-context-strip": HTMLAttributes<McpAppContextStrip> & {
+        "prop:sessionKey"?: McpAppContextStrip["sessionKey"];
+        "prop:agentId"?: McpAppContextStrip["agentId"];
+      };
     }
   }
 }

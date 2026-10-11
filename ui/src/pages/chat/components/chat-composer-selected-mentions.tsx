@@ -4,7 +4,8 @@ import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import "../../../styles/chat/composer-context-strip.css";
-import { LitContent, solidTemplate } from "./chat-composer-controls.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { LitContent } from "./chat-composer-interop.tsx";
 
 function mentionOverflow() {
   let element: HTMLElement | undefined;

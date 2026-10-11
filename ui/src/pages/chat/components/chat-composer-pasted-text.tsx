@@ -8,7 +8,8 @@ import {
 } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
-import { LitContent, solidTemplate } from "./chat-composer-controls.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { LitContent } from "./chat-composer-interop.tsx";
 
 function readTextFromDataUrl(dataUrl: string): string | null {
   const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);

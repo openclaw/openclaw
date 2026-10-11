@@ -12,6 +12,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { solidTemplate } from "./chat-composer-controls.ts";
 import { ChatModelAccountSectionView } from "./chat-model-account-control.tsx";
+import type { ChatModelAccountSectionViewProps } from "./chat-model-types.ts";
 
 registerModelAccountsEnglish();
 
@@ -224,16 +225,3 @@ export function renderChatModelAccountControl(params: {
     viewProps,
   };
 }
-
-export type ChatModelAccountSectionViewProps = {
-  selectionKind: ChatAccountSelection["kind"];
-  disabled: boolean;
-  selectedIdentity: string;
-  options: readonly { value: string; label: string; description?: string; disabled?: boolean }[];
-  currentValue: string;
-  open: boolean;
-  error: string | null;
-  startIndex: number;
-  onToggle: () => void;
-  onSelect: (value: string, event: MouseEvent) => void;
-};

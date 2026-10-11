@@ -22,6 +22,17 @@ function PrivateComposerRecoveryDialog(
   const [copied, setCopied] = createSignal(false);
   const [error, setError] = createSignal("");
   const current = () => !props.signal.aborted && props.isCurrent();
+  const copyText = async () => {
+    if (!current()) {
+      props.finish(false);
+      return;
+    }
+    const didCopy = await copyToClipboard(props.text, current);
+    if (current()) {
+      setCopied(didCopy);
+      setError(didCopy ? "" : t("chat.privateDraftReload.copyFailed"));
+    }
+  };
   return (
     <openclaw-modal-dialog
       label={t("chat.privateDraftReload.title")}
@@ -41,21 +52,7 @@ function PrivateComposerRecoveryDialog(
               <span>{t("chat.privateDraftReload.text")}</span>
               <textarea readOnly rows="6" prop:value={props.text} />
             </label>
-            <button
-              type="button"
-              class="btn"
-              onClick={async () => {
-                if (!current()) {
-                  props.finish(false);
-                  return;
-                }
-                const didCopy = await copyToClipboard(props.text, current);
-                if (current()) {
-                  setCopied(didCopy);
-                  setError(didCopy ? "" : t("chat.privateDraftReload.copyFailed"));
-                }
-              }}
-            >
+            <button type="button" class="btn" onClick={() => void copyText()}>
               {copied() ? t("common.copied") : t("chat.privateDraftReload.copy")}
             </button>
           </>

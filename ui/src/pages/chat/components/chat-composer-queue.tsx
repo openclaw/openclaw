@@ -16,7 +16,8 @@ import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { hasComposerContent, LitContent, solidTemplate } from "./chat-composer-controls.ts";
+import { hasComposerContent, solidTemplate } from "./chat-composer-controls.ts";
+import { LitContent } from "./chat-composer-interop.tsx";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {

@@ -18,7 +18,7 @@ import {
   renderAttachmentReadStatus,
 } from "./chat-attachments.ts";
 import { renderContextNoticeSolid } from "./chat-composer-context.tsx";
-import { hasComposerContent, LitContent } from "./chat-composer-controls.ts";
+import { hasComposerContent } from "./chat-composer-controls.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.tsx";
 import {
   renderChatAbortActionSolid,
@@ -28,6 +28,7 @@ import {
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { GoalComposerMode, type GoalComposerController } from "./chat-composer-goal-mode.tsx";
 import { renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
+import { LitContent } from "./chat-composer-interop.tsx";
 import { HumanMentionMenuView, type HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import type { resolveComposerMenus } from "./chat-composer-menus.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";

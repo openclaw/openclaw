@@ -2,16 +2,7 @@ import { t } from "../../../i18n/index.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { solidTemplate } from "./chat-composer-controls.ts";
 import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
-
-export type ChatModelCatalogStateProps = {
-  state: ModelCatalogState | undefined;
-  hasOptions: boolean;
-  hasSelectableOptions: boolean;
-  onModelSetup?: () => void;
-  errorLabel?: string;
-  retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown };
-  emptyLabel?: string;
-};
+import type { ChatModelCatalogStateProps } from "./chat-model-types.ts";
 
 export function renderChatModelCatalogRefresh(state: ModelCatalogState | undefined) {
   return solidTemplate(ChatModelCatalogRefresh, { state });

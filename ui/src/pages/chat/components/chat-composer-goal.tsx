@@ -94,12 +94,12 @@ function createGoalElapsedRef(goal: () => SessionGoal) {
     () => ({ active: goal().status === "active", elapsed: goalElapsedMs(goal(), Date.now()) }),
     (clock) => {
       if (!element) {
-        return;
+        return undefined;
       }
       const bound = element;
       bound.textContent = formatGoalElapsed(clock.elapsed);
       if (!clock.active) {
-        return;
+        return undefined;
       }
       goalElapsedTimers.set(bound, setInterval(sync, 1000));
       return () => clearGoalElapsedTimer(bound);
@@ -292,7 +292,7 @@ export function renderChatGoalRecoverySolid(
         class="btn btn--sm"
         type="button"
         disabled={!connected || recovery.pending}
-        onClick={recovery.onCheck}
+        onClick={() => void recovery.onCheck()}
       >
         {t(recovery.retired ? "chat.goals.refreshCurrent" : "chat.goals.checkOutcome")}
       </button>

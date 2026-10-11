@@ -14,7 +14,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { LitContent, solidTemplate } from "./chat-composer-controls.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
@@ -23,6 +23,7 @@ import {
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
 } from "./chat-composer-inline-slash.ts";
+import { LitContent } from "./chat-composer-interop.tsx";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,

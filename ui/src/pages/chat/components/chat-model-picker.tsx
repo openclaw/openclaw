@@ -10,7 +10,8 @@ import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-con
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
-import { solidTemplate, LitContent } from "./chat-composer-controls.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { LitContent } from "./chat-composer-interop.tsx";
 import {
   type ChatContextWindowControlParams,
   renderContextWindowControl,

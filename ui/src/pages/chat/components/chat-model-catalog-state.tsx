@@ -5,7 +5,7 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
-import type { ChatModelCatalogStateProps } from "./chat-model-catalog-state.ts";
+import type { ChatModelCatalogStateProps } from "./chat-model-types.ts";
 
 registerModelControlsEnglish();
 
