@@ -129,6 +129,7 @@ export async function startOrResumeThread(
       threadId: string,
       ownerClientId = initialBoundClientId,
       assertCurrent?: () => void,
+      forResume = false,
     ) =>
       releaseCodexBoundLiveThread({
         client: params.client,
@@ -140,6 +141,7 @@ export async function startOrResumeThread(
         assertCurrent,
         withCurrent: authority.withCurrent,
         signal: params.signal,
+        forResume,
       });
     if (binding?.pendingSupervisionBranch) {
       const requestContext = await prepareRequestContext();
@@ -245,8 +247,13 @@ export async function startOrResumeThread(
         ...(await prepareRequestContext()),
         binding,
         stageBindingReplacement,
-        releaseRetainedThread: (threadId, assertCurrent) =>
-          releaseRetainedThread(threadId, initialBoundClientId, assertCurrent),
+        releaseRetainedThread: (threadId, assertCurrent, subscriptionMayExist) =>
+          releaseRetainedThread(
+            threadId,
+            initialBoundClientId,
+            assertCurrent,
+            subscriptionMayExist,
+          ),
         transientRestriction:
           transientDelegationRestriction ||
           transientNativeToolRestriction ||
@@ -573,11 +580,12 @@ export async function startOrResumeThread(
             prebuiltPluginThreadConfig,
             buildLoadedPluginThreadConfig,
             prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
-            releaseRetainedThread: async (assertCurrent) => {
+            releaseRetainedThread: async (assertCurrent, subscriptionMayExist) => {
               await releaseRetainedThread(
                 resumeBinding.threadId,
                 resumeBinding.clientId,
                 assertCurrent,
+                subscriptionMayExist,
               );
             },
           });

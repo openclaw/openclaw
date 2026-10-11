@@ -2,10 +2,8 @@ import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-ru
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
-  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
-  unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import {
   consumeCodexAppServerLiveThread,
@@ -71,6 +69,7 @@ type CodexLiveThreadReleaseParams = {
   assertCurrent?: () => void;
   withCurrent?: (write: () => void) => Promise<void>;
   signal?: AbortSignal;
+  forResume?: boolean;
 };
 
 /** Preserves the caller's abort reason across thread ownership transitions. */
@@ -93,24 +92,6 @@ function codexThreadLifecycleAbortError(signal: AbortSignal): Error {
   );
   error.name = "AbortError";
   return error;
-}
-
-/** Releases consumed subscription ownership or retires an unsafe client. */
-export async function releaseCodexConsumedLiveThread(
-  options: CodexLiveThreadReleaseParams,
-): Promise<void> {
-  const released = await options.lifecycleTiming.measure("retained-thread-unsubscribe", () =>
-    unsubscribeCodexThreadBestEffort(options.client, {
-      threadId: options.threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-      assertCurrent: options.assertCurrent,
-      withCurrent: options.withCurrent,
-    }),
-  );
-  if (released) {
-    return;
-  }
-  return await abandonCodexLiveThreadRelease(options);
 }
 
 async function abandonCodexLiveThreadRelease(
@@ -136,11 +117,15 @@ async function releaseCodexRetainedLiveThread(
         options.threadId,
         options.assertCurrent,
         options.withCurrent,
+        options.forResume,
       ),
     );
   } catch (error) {
     // An owner callback may already have retired the client; do not close it twice.
-    if (error instanceof CodexAppServerUnsafeSubscriptionError) {
+    if (
+      error instanceof CodexAppServerUnsafeSubscriptionError ||
+      error instanceof AgentHarnessPreflightError
+    ) {
       throw error;
     }
     return await abandonCodexLiveThreadRelease(options, error);
@@ -158,7 +143,7 @@ export async function releaseCodexBoundLiveThread(
         createAbortError: codexThreadLifecycleAbortError,
       })
     : undefined;
-  if (changedClient && !previous) {
+  if (changedClient && !previous && !options.forResume) {
     return false;
   }
   const client = previous?.client ?? options.client;
@@ -166,7 +151,7 @@ export async function releaseCodexBoundLiveThread(
     if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
     }
-    return await releaseCodexRetainedLiveThread({
+    const released = await releaseCodexRetainedLiveThread({
       ...options,
       client,
       abandonClient: previous ? undefined : options.abandonClient,
@@ -180,6 +165,11 @@ export async function releaseCodexBoundLiveThread(
           }
         : undefined,
     });
+    if (options.forResume && previous && client !== options.client) {
+      // Releasing the previous connection says nothing about the selected one.
+      await releaseCodexRetainedLiveThread(options);
+    }
+    return released;
   } finally {
     // Rejection must free the lane so the claimed run can still be stopped.
     const retiredExit = previous?.release(

@@ -51,7 +51,10 @@ import { dispatchCodexRequestAttempt } from "./request-admission.js";
 import { createCodexRequestAttempt, remainingCodexRequestTime } from "./request-attempt.js";
 import type { CodexRequestWaiterFinished } from "./request-observation.js";
 import {
+  isCodexAppServerIndeterminateRequestCancellationError,
+  isCodexAppServerIndeterminateTransportError,
   isCodexAppServerOverloadError,
+  CodexAppServerIndeterminateTransportError,
   CodexAppServerRpcError,
   CodexAppServerLocalRequestCancellationError,
 } from "./rpc-error.js";
@@ -96,76 +99,17 @@ type ThreadSessionRequestGuard = (options: {
   abortMessage: string;
 }) => Promise<() => void>;
 
-export { CodexAppServerRpcError } from "./rpc-error.js";
-
-export { isCodexAppServerOverloadError } from "./rpc-error.js";
-
-export function isCodexAppServerRequestTimeoutError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED" &&
-    "reason" in error &&
-    error.reason === "timed out"
-  );
-}
+export {
+  CodexAppServerRpcError,
+  isCodexAppServerConnectionClosedError,
+  isCodexAppServerIndeterminateRequestCancellationError,
+  isCodexAppServerIndeterminateTransportError,
+  isCodexAppServerOverloadError,
+  isCodexAppServerPrewriteRequestCancellationError,
+  isCodexAppServerRequestTimeoutError,
+} from "./rpc-error.js";
 
 export { isCodexAppServerBrokenPipeError } from "./client-diagnostics.js";
-
-class CodexAppServerIndeterminateTransportError extends Error {
-  readonly code = "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE";
-  readonly mayHaveWritten = true;
-
-  constructor(method: string, cause: Error) {
-    super(`${method} transport failed after request write: ${cause.message}`, { cause });
-    this.name = "CodexAppServerIndeterminateTransportError";
-  }
-}
-
-/** True when a local cancellation can leave an app-server request in flight. */
-export function isCodexAppServerIndeterminateRequestCancellationError(
-  error: unknown,
-): error is Error & { code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED"; mayHaveWritten: true } {
-  return hasRequestWriteState(error, "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED", true);
-}
-
-/** True when local cancellation happened before a request write was attempted. */
-export function isCodexAppServerPrewriteRequestCancellationError(
-  error: unknown,
-): error is Error & { code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED"; mayHaveWritten: false } {
-  return hasRequestWriteState(error, "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED", false);
-}
-
-/** True when transport failure cannot prove a written request stopped running. */
-export function isCodexAppServerIndeterminateTransportError(error: unknown): error is Error & {
-  code: "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE";
-  mayHaveWritten: true;
-} {
-  return hasRequestWriteState(error, "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE", true);
-}
-
-function hasRequestWriteState(error: unknown, code: string, written: boolean): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === code &&
-    "mayHaveWritten" in error &&
-    error.mayHaveWritten === written
-  );
-}
-
-export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  if (isCodexAppServerIndeterminateTransportError(error)) {
-    return true;
-  }
-  return (
-    error.message === "codex app-server client is closed" ||
-    error.message.startsWith("codex app-server exited:")
-  );
-}
 
 /** Runtime identity returned by the Codex app-server initialize handshake. */
 export type CodexAppServerRuntimeIdentity = ReturnType<typeof buildCodexAppServerRuntimeIdentity>;
@@ -191,6 +135,7 @@ export class CodexAppServerClient {
   private initializeObservation: ReturnType<typeof this.initializeDiagnostics.begin> | undefined;
   private modelCatalogRevision = 0;
   private closed = false;
+  private readonly releasedThreadSubscriptions = new Set<string>();
   private transportExited = false;
   private nativeExecutionObserved = false;
   private closeError: Error | undefined;
@@ -332,6 +277,11 @@ export class CodexAppServerClient {
 
   getServerVersion(): string | undefined {
     return this.runtimeIdentity?.serverVersion;
+  }
+
+  /** An acknowledged release applies only until this connection subscribes again. */
+  isThreadSubscriptionKnownReleased(threadId: string): boolean {
+    return this.releasedThreadSubscriptions.has(threadId);
   }
 
   getRuntimeIdentity(): CodexAppServerRuntimeIdentity | undefined {
@@ -529,7 +479,7 @@ export class CodexAppServerClient {
     for (let retry = 0; ; retry += 1) {
       const remainingTimeoutMs = remainingCodexRequestTime(method, options.signal, deadline);
       try {
-        return await this.requestOnce<T>(
+        const result = await this.requestOnce<T>(
           method,
           params,
           {
@@ -541,6 +491,8 @@ export class CodexAppServerClient {
           deadline,
           onResponse,
         );
+        this.recordThreadSubscriptionResult(method, params, result);
+        return result;
       } catch (error) {
         // Codex emits -32001 only when ingress rejects a request before enqueue,
         // so retrying mutating methods cannot duplicate server-side work.
@@ -558,6 +510,30 @@ export class CodexAppServerClient {
         );
         await this.waitForOverloadRetry(method, backoffMs, deadline, options.signal);
       }
+    }
+  }
+
+  private recordThreadSubscriptionResult(method: string, params: unknown, result: unknown): void {
+    if (method === "thread/unsubscribe") {
+      if (
+        isJsonObject(params) &&
+        typeof params.threadId === "string" &&
+        isJsonObject(result) &&
+        (result.status === "unsubscribed" ||
+          result.status === "notSubscribed" ||
+          result.status === "notLoaded")
+      ) {
+        this.releasedThreadSubscriptions.add(params.threadId);
+      }
+      return;
+    }
+    if (
+      (method === "thread/start" || method === "thread/resume" || method === "thread/fork") &&
+      isJsonObject(result) &&
+      isJsonObject(result.thread) &&
+      typeof result.thread.id === "string"
+    ) {
+      this.releasedThreadSubscriptions.delete(result.thread.id);
     }
   }
 
@@ -861,6 +837,7 @@ export class CodexAppServerClient {
     }
     this.initializeDiagnostics.closing();
     this.closed = true;
+    this.releasedThreadSubscriptions.clear();
     closeCodexCatalogClientSource(this);
     this.closeError = error;
     this.closeMessageReader();

@@ -1,8 +1,13 @@
 import path from "node:path";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it } from "vitest";
-import { retainCodexAppServerLiveThread } from "./client-runtime.js";
+import {
+  protectCodexAppServerLiveThread,
+  releaseCodexAppServerLiveThread,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
+import type { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import type { RpcRequest } from "./protocol.js";
 import { tempDir, threadStartResult } from "./run-attempt-test-harness.js";
 import {
@@ -23,6 +28,13 @@ type PolicyRefreshFixtures = {
     transport: "stdio" | "websocket" | "unix" | "proxy",
   ) => Promise<ReturnType<typeof createClientHarness>>;
   startOrResumeThread: (params: StartParams) => ReturnType<typeof startOrResumeThreadImpl>;
+  createManualResumeFixture: (options: { wireClient: true }) => Promise<
+    Pick<ReturnType<typeof createFakeCodexAppServerClient>, "client" | "request" | "close"> & {
+      sessionFile: string;
+      threadId: string;
+      start: () => ReturnType<typeof startOrResumeThreadImpl>;
+    }
+  >;
   writeCodexAppServerBinding: typeof writeRawCodexAppServerBinding;
 };
 
@@ -32,6 +44,7 @@ export function registerThreadPolicyRefreshTests({
   createThreadLifecycleAppServerOptions,
   createLeasedLifecycleWireClient,
   startOrResumeThread,
+  createManualResumeFixture,
   writeCodexAppServerBinding,
 }: PolicyRefreshFixtures) {
   it.each([
@@ -146,12 +159,15 @@ export function registerThreadPolicyRefreshTests({
   );
 
   it.each([
-    { nativeStatus: "idle", transport: "websocket" as const },
-    { nativeStatus: "systemError", transport: "stdio" as const },
-    { nativeStatus: "active", transport: "stdio" as const },
+    { nativeStatus: "idle", transport: "websocket" as const, owner: "retained" },
+    { nativeStatus: "systemError", transport: "stdio" as const, owner: "retained" },
+    { nativeStatus: "active", transport: "stdio" as const, owner: "retained" },
+    ...["missing", "released", "previous-available", "previous-lost", "sibling", "protected"].map(
+      (owner) => ({ nativeStatus: "idle", transport: "stdio" as const, owner }),
+    ),
   ])(
-    "keeps ordinary warm configuration honest over $transport across $nativeStatus",
-    async ({ nativeStatus, transport }) => {
+    "keeps ordinary warm configuration honest over $transport across $nativeStatus ($owner owner)",
+    async ({ nativeStatus, transport, owner }) => {
       const developerInstructions = "replacement policy";
       const sessionFile = path.join(tempDir, "ordinary-warm-policy.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
@@ -159,6 +175,9 @@ export function registerThreadPolicyRefreshTests({
       const response = threadStartResult(threadId);
       const methods: string[] = [];
       let subscribed = true;
+      let previousSubscribed = false;
+      let previous: Awaited<ReturnType<typeof createLeasedLifecycleWireClient>> | undefined;
+      let unprotect: (() => void) | undefined;
       const wire = await createLeasedLifecycleWireClient(
         path.join(tempDir, "agent"),
         (request) => {
@@ -173,7 +192,12 @@ export function registerThreadPolicyRefreshTests({
             return { requirements: null };
           }
           if (request.method === "thread/start" || request.method === "thread/resume") {
-            if (!subscribed && nativeStatus === "idle") {
+            if (
+              !subscribed &&
+              !previousSubscribed &&
+              owner !== "sibling" &&
+              nativeStatus === "idle"
+            ) {
               wire.send({
                 method: "thread/status/changed",
                 params: { threadId, status: { type: "notLoaded" } },
@@ -213,13 +237,66 @@ export function registerThreadPolicyRefreshTests({
           ...common,
           developerInstructions: "initial policy",
         });
-        await retainCodexAppServerLiveThread(
-          wire.client,
-          first.threadId,
-          undefined,
-          first.liveThreadConfigFingerprint,
-        );
+        if (owner === "retained" || owner === "released") {
+          await retainCodexAppServerLiveThread(
+            wire.client,
+            first.threadId,
+            undefined,
+            first.liveThreadConfigFingerprint,
+          );
+        }
+        if (owner === "released") {
+          await expect(releaseCodexAppServerLiveThread(wire.client, first.threadId)).resolves.toBe(
+            true,
+          );
+        }
+        if (owner === "previous-available") {
+          previous = await createLeasedLifecycleWireClient(
+            path.join(tempDir, "previous-agent"),
+            (request) => {
+              expect(request.params).toMatchObject({ threadId });
+              if (request.method === "thread/resume") {
+                previousSubscribed = true;
+                return response;
+              }
+              if (request.method === "thread/unsubscribe") {
+                methods.push("previous/unsubscribe");
+                previousSubscribed = false;
+                return { status: "unsubscribed" };
+              }
+              throw new Error(`unexpected previous-client method: ${request.method}`);
+            },
+            "stdio",
+          );
+          await previous.client.request("thread/resume", { threadId }, { timeoutMs: 5_000 });
+          await retainCodexAppServerLiveThread(previous.client, threadId);
+          // The idle subscription keeps this owner available; no unrelated lease
+          // should prevent the lifecycle from waiting for its eventual retirement.
+          releaseLeasedSharedCodexAppServerClient(previous.client);
+        }
+        if (owner === "previous-available" || owner === "previous-lost") {
+          await writeCodexAppServerBinding(sessionFile, {
+            ...(await readCodexAppServerBinding(sessionFile))!,
+            clientId: previous?.client.getInstanceId() ?? "missing-previous-physical-client",
+          });
+        }
+        if (owner === "protected") {
+          unprotect = protectCodexAppServerLiveThread(wire.client, threadId);
+        }
+        const before = await readCodexAppServerBinding(sessionFile);
         const resume = startOrResumeThread({ ...common, developerInstructions });
+        if (owner === "sibling" || owner === "protected") {
+          await expect(resume).rejects.toThrow(
+            owner === "protected" ? "claimed by active work" : "did not confirm unloading",
+          );
+          // A rejected accepted resume also releases its newly acquired subscription.
+          expect(methods.filter((method) => method === "thread/unsubscribe")).toHaveLength(
+            owner === "protected" ? 0 : 2,
+          );
+          expect(methods).not.toContain("thread/inject_items");
+          expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
+          return;
+        }
         if (nativeStatus === "active") {
           await expect(resume).rejects.toThrow("Codex session became active in another runner");
           expect(methods).toEqual([
@@ -245,17 +322,49 @@ export function registerThreadPolicyRefreshTests({
           "config/read",
           "configRequirements/read",
           "thread/start",
+          ...(owner === "released" ? ["thread/unsubscribe"] : []),
           "config/read",
           "configRequirements/read",
           "thread/read",
-          "thread/unsubscribe",
+          ...(owner === "previous-available" ? ["previous/unsubscribe"] : []),
+          ...(owner === "released" ? [] : ["thread/unsubscribe"]),
           "thread/resume",
           "thread/inject_items",
         ]);
+        if (owner === "released") {
+          // The completed release belongs to the old subscription, not the next resume.
+          await expect(
+            startOrResumeThread({ ...common, developerInstructions: "third policy" }),
+          ).resolves.toMatchObject({ threadId });
+          expect(methods.filter((method) => method === "thread/unsubscribe")).toHaveLength(2);
+        }
       } finally {
+        unprotect?.();
+        if (previous) {
+          releaseLeasedSharedCodexAppServerClient(previous.client);
+          previous.client.close();
+        }
         releaseLeasedSharedCodexAppServerClient(wire.client);
         wire.client.close();
       }
     },
   );
+
+  it("resumes a manually attached thread without repeating its acknowledged unsubscribe", async () => {
+    const fixture = await createManualResumeFixture({ wireClient: true });
+    try {
+      await expect(releaseCodexAppServerLiveThread(fixture.client, fixture.threadId)).resolves.toBe(
+        true,
+      );
+      await expect(fixture.start()).resolves.toMatchObject({ threadId: fixture.threadId });
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
+      ).toHaveLength(1);
+      expect(
+        (await readCodexAppServerBinding(fixture.sessionFile))?.pendingResumeConfiguration,
+      ).toBeUndefined();
+    } finally {
+      fixture.close();
+    }
+  });
 }

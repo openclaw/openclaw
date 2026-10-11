@@ -788,6 +788,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     createThreadLifecycleAppServerOptions,
     createLeasedLifecycleWireClient,
     startOrResumeThread,
+    createManualResumeFixture,
     writeCodexAppServerBinding,
   });
 
@@ -2554,9 +2555,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       if (request.method === "thread/read") {
         return { thread: { ...response.thread, path: rolloutPath, status: { type: "notLoaded" } } };
       }
-      if (request.method === "thread/unsubscribe") {
-        return { status: "unsubscribed" };
-      }
       if (request.method === "thread/resume") {
         // Retirement revokes this preparation, while an unrelated live lease drains.
         releaseSibling = retainSharedCodexAppServerClientIfCurrent(wire.client);
@@ -2585,7 +2583,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       expect(wire.writes.map((message) => (JSON.parse(message) as RpcRequest).method)).toEqual([
         ...PREFLIGHT_METHODS,
         "thread/read",
-        "thread/unsubscribe",
         "thread/resume",
       ]);
       expect(releaseSibling).toBeTypeOf("function");
@@ -2595,7 +2592,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       expect(releaseLeasedSharedCodexAppServerClient(wire.client)).toBe(true);
       expect(wire.stdinDestroyed).toBe(false);
       await expect(
-        wire.client.request("thread/read", { threadId, includeTurns: false }),
+        wire.client.request("thread/read", { threadId, includeTurns: false }, { timeoutMs: 5_000 }),
       ).resolves.toMatchObject({
         thread: { id: threadId },
       });

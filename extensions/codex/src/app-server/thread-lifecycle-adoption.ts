@@ -7,7 +7,6 @@ import {
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
-import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
@@ -35,7 +34,6 @@ import type {
   CodexStartOrResumeThreadParams,
   CodexThreadResumePreparation,
 } from "./thread-lifecycle-types.js";
-import { releaseCodexConsumedLiveThread } from "./thread-lifecycle-warm.js";
 import {
   withCodexAppServerThreadMutation,
   withExclusiveCodexAppServerThread,
@@ -113,7 +111,11 @@ export async function withCodexThreadLifecycleBinding(
 type PendingResumeContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
   stageBindingReplacement: (operation: string) => void;
-  releaseRetainedThread: (threadId: string, assertCurrent: () => void) => Promise<boolean>;
+  releaseRetainedThread: (
+    threadId: string,
+    assertCurrent: () => void,
+    subscriptionMayExist: boolean,
+  ) => Promise<boolean>;
   transientRestriction: boolean;
 };
 
@@ -143,25 +145,14 @@ export async function resumePendingCodexThread(
   const prebuiltPluginThreadConfig = params.pluginThreadConfig?.enabled
     ? await lifecycleTiming.measure("plugin-config-build", () => params.pluginThreadConfig?.build())
     : undefined;
-  const clientId = resolveCodexAppServerClientInstanceId(params.client);
   const resumed = await resumeExistingCodexThread(params, {
     ...context,
     prebuiltPluginThreadConfig,
     prepareResume: () =>
       preparePendingCodexThreadResume(params, binding, context.dynamicToolsFingerprint),
-    releaseRetainedThread: async (assertCurrent) => {
-      const released = await context.releaseRetainedThread(binding.threadId, assertCurrent);
+    releaseRetainedThread: async (assertCurrent, subscriptionMayExist) => {
+      await context.releaseRetainedThread(binding.threadId, assertCurrent, subscriptionMayExist);
       assertCurrent();
-      if (!released || (binding.clientId && binding.clientId !== clientId)) {
-        await releaseCodexConsumedLiveThread({
-          client: params.client,
-          abandonClient: params.abandonClient,
-          lifecycleTiming,
-          threadId: binding.threadId,
-          assertCurrent,
-          withCurrent: params.authority?.withCurrent,
-        });
-      }
     },
   });
   if (!resumed) {
@@ -312,6 +303,7 @@ function observeCodexThreadConfiguration(
   return {
     modelProvider: thread.modelProvider,
     dispose,
+    subscriptionMayExist: thread.status.type !== "notLoaded",
     settledSystemError,
     assertConfigured: () => {
       assertCurrent();

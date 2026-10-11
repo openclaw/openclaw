@@ -477,26 +477,50 @@ describe("Codex app-server client runtime", () => {
     },
   );
 
-  it("blocks only the exact thread whose subscription is being released", async () => {
-    const harness = createRuntimeHarness();
+  it.each(["acknowledged", "unknown"] as const)(
+    "joins a pending %s release for resume without blocking a sibling or replaying it",
+    async (outcome) => {
+      const harness = createRuntimeHarness();
+      const releaseGate = createDeferred<void>();
+      const releaseOwner = vi.fn(async () => releaseGate.promise);
+      await retainCodexAppServerLiveThread(harness.client, "thread-a", releaseOwner);
+      await retainCodexAppServerLiveThread(harness.client, "thread-b");
+      const request = vi.spyOn(harness.client, "request");
+      const release = releaseCodexAppServerLiveThread(harness.client, "thread-a");
+      const resume = releaseCodexAppServerLiveThread(
+        harness.client,
+        "thread-a",
+        undefined,
+        undefined,
+        true,
+      );
+      const sameThreadAcquisition = consumeCodexAppServerLiveThread(harness.client, "thread-a");
+      const settled = Promise.allSettled([release, resume, sameThreadAcquisition]);
 
-    const releaseGate = createDeferred<void>();
-    await retainCodexAppServerLiveThread(
-      harness.client,
-      "thread-a",
-      async () => releaseGate.promise,
-    );
-    await retainCodexAppServerLiveThread(harness.client, "thread-b");
-    const release = releaseCodexAppServerLiveThread(harness.client, "thread-a");
-    const sameThreadAcquisition = consumeCodexAppServerLiveThread(harness.client, "thread-a");
-
-    await expect(consumeCodexAppServerLiveThread(harness.client, "thread-b")).resolves.toEqual(
-      expect.objectContaining({ release: expect.any(Function) }),
-    );
-    releaseGate.resolve();
-    await expect(release).resolves.toBe(true);
-    await expect(sameThreadAcquisition).resolves.toBeUndefined();
-  });
+      await expect(consumeCodexAppServerLiveThread(harness.client, "thread-b")).resolves.toEqual(
+        expect.objectContaining({ release: expect.any(Function) }),
+      );
+      if (outcome === "unknown") {
+        const error = new Error("unsubscribe outcome unknown");
+        releaseGate.reject(error);
+        expect(await settled).toEqual([
+          { status: "rejected", reason: error },
+          { status: "rejected", reason: error },
+          { status: "rejected", reason: error },
+        ]);
+        expect(hasCodexAppServerLiveThread(harness.client, "thread-a")).toBe(true);
+      } else {
+        releaseGate.resolve();
+        expect(await settled).toEqual([
+          { status: "fulfilled", value: true },
+          { status: "fulfilled", value: true },
+          { status: "fulfilled", value: undefined },
+        ]);
+      }
+      expect(releaseOwner).toHaveBeenCalledOnce();
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
 
   it("rechecks deletion authority before sending the physical unsubscribe", async () => {
     const harness = createRuntimeHarness();

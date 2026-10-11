@@ -104,5 +104,6 @@ export type CodexThreadResumePreparation = {
   assertConfigured: () => void;
   assertCurrent: () => void;
   dispose: () => void;
+  subscriptionMayExist: boolean;
   settledSystemError: boolean;
 };

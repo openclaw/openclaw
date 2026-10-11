@@ -90,6 +90,7 @@ export function mockClientRuntimeMethods() {
     getTransportPid: (): number | undefined => undefined,
     getRuntimeIdentity: () => ({ serverVersion: getServerVersion() }),
     getServerVersion,
+    isThreadSubscriptionKnownReleased: () => false,
   };
 }
 
