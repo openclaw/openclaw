@@ -35,9 +35,12 @@ declare module "@solidjs/web" {
         Partial<Pick<WaDropdownItem, "value" | "type" | "variant" | "disabled">>;
       "wa-popover": LegacyAttributes<WaPopover> &
         Partial<Pick<WaPopover, "for" | "placement">> & {
+          distance?: number | `${number}`;
           "without-arrow"?: boolean;
           "onWa-show"?: (event: Event) => void;
+          "onWa-after-show"?: (event: Event) => void;
           "onWa-hide"?: (event: Event) => void;
+          "onWa-after-hide"?: (event: Event) => void;
         };
     }
     interface SVGAttributes<T> {

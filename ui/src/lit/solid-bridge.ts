@@ -232,8 +232,10 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         source = [...this.childNodes];
       }
       this.#mountedApplication = this.#application;
-      const viewRoot = () => {
-        const [revision, setRevision] = createSignal(0);
+      const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
+      const view = () => {
+        // Solid-owned hosts publish property updates while their parent renders.
+        const [revision, setRevision] = createSignal(0, { ownedWrite: true });
         this.#notify = () => setRevision((value) => value + 1);
         const props = {
           ...defaults,
@@ -249,39 +251,32 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             },
           });
         }
-        const host = this.#host;
-        const layout = !this.#solidOwned ? shellLayoutOwnerForHost(host) : undefined;
-        const view = () =>
+        const renderContent = () => content(props, this.#host);
+        const contentView = () =>
           layout
             ? createComponent(ShellLayoutProvider, {
-                value: { owner: layout, host },
+                value: { owner: layout, host: this },
                 get children() {
-                  return content(props, host);
+                  return renderContent();
                 },
               })
-            : content(props, host);
+            : renderContent();
         return this.#application
           ? createComponent(ApplicationProvider, {
               value: this.#application,
               get children() {
-                return view();
+                return contentView();
               },
             })
-          : view();
+          : contentView();
       };
-      if (this.#solidOwned) {
-        // The containing Solid renderer owns the flush; nested render() would flush
-        // imperative effects while its component scope is still active.
-        this.#dispose = createRoot((dispose) => {
-          insert(this, viewRoot());
-          return () => {
-            dispose();
-            this.replaceChildren();
-          };
-        });
-      } else {
-        this.#dispose = render(viewRoot, this, source);
-      }
+      // A nested top-level render would flush child effects under the parent's render owner.
+      this.#dispose = this.#solidOwned
+        ? createRoot((dispose) => {
+            insert(this, view());
+            return dispose;
+          })
+        : render(view, this, source);
     }
 
     #disposeRoot() {

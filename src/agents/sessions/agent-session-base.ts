@@ -372,6 +372,7 @@ export abstract class AgentSessionBase {
           message.content,
           message.display,
           message.details,
+          message.timestamp,
         );
       } else if (
         event.message.role === "user" ||
@@ -394,6 +395,7 @@ export abstract class AgentSessionBase {
               retainedSteeringContext.content,
               retainedSteeringContext.display,
               retainedSteeringContext.details,
+              retainedSteeringContext.timestamp,
             );
           }
           const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {

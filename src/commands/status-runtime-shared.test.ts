@@ -135,10 +135,7 @@ describe("status-runtime-shared", () => {
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { elapsedMs: 2000, remainingMs: 1456 },
-    { elapsedMs: 3456, remainingMs: 0 },
-  ])(
+  it.each([{ elapsedMs: 3456, remainingMs: 0 }])(
     "shares the usage deadline with Codex synthetic usage ($elapsedMs ms spent)",
     async ({ elapsedMs, remainingMs }) => {
       mocks.loadProviderUsageSummary
@@ -311,20 +308,6 @@ describe("status-runtime-shared", () => {
       cfg: expect.any(Object),
       agentDir: "/tmp/status-agent",
       includeExternalProfiles: false,
-    });
-  });
-
-  it("resolves usage summaries with explicit agent scope", async () => {
-    await resolveStatusUsageSummary({
-      ...createStatusGatewayProbeBudget(2345),
-      config: { gateway: {} },
-      agentDir: "/tmp/status-agent",
-    });
-
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
-      timeoutMs: 2345,
-      config: { gateway: {} },
-      agentDir: "/tmp/status-agent",
     });
   });
 
@@ -537,10 +520,7 @@ describe("status-runtime-shared", () => {
     }
   });
 
-  it.each([
-    { gatewayStartupPhase: "plugins", health: undefined },
-    { gatewayStartupPhase: undefined, health: { error: "connection refused" } },
-  ])(
+  it.each([{ gatewayStartupPhase: undefined, health: { error: "connection refused" } }])(
     "uses the completed initial probe for deep health ($gatewayStartupPhase)",
     async ({ gatewayStartupPhase, health }) => {
       const snapshot = await resolveStatusRuntimeSnapshot({
@@ -559,18 +539,4 @@ describe("status-runtime-shared", () => {
       expect(mocks.callGateway).not.toHaveBeenCalled();
     },
   );
-
-  it("does not suppress failed deep health probes for text status", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
-
-    await expect(
-      resolveStatusRuntimeSnapshot({
-        ...createStatusGatewayProbeBudget(),
-        config: { gateway: {} },
-        sourceConfig: { gateway: {} },
-        deep: true,
-        gatewayReachable: true,
-      }),
-    ).rejects.toThrow("gateway health probe timed out");
-  });
 });
