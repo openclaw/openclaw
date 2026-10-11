@@ -42,7 +42,7 @@ describe("routed CLI prompts in chat history", () => {
 
         expect(merged).toHaveLength(1);
         expect(merged[0]).toMatchObject({ role: "user", content, provenance });
-        expect(merged[0]?.senderIsOwner).not.toBe(true);
+        expect(merged[0]).not.toMatchObject({ senderIsOwner: true });
       });
     },
   );
