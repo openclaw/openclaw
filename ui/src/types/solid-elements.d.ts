@@ -1,12 +1,14 @@
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
+import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
 import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
+import type { LobsterPetProps } from "../components/lobster-pet-controller.ts";
 import type { MascotMood } from "../components/mascot-pose.ts";
 import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
 export type { JSX } from "@solidjs/web";
@@ -22,6 +24,7 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-lobster-pet": HTMLAttributes<HTMLElement> & ElementProperties<LobsterPetProps>;
       "openclaw-plugin-view": HTMLAttributes<HTMLElement> & {
         "prop:surface": "tool-result";
         "prop:props": ControlUiSurfaceProps["tool-result"];
@@ -124,6 +127,12 @@ declare module "@solidjs/web" {
         Properties<WaDropdownItem> &
         Partial<Pick<WaDropdownItem, "value" | "type" | "variant" | "disabled">> & {
           "onSubmenu-opening"?: (event: CustomEvent<{ item: HTMLElement }>) => void;
+        };
+      "wa-popup": HTMLAttributes<WaPopup> &
+        Properties<WaPopup> & {
+          anchor?: WaPopup["anchor"];
+          placement?: WaPopup["placement"];
+          sync?: WaPopup["sync"];
         };
       "wa-popover": LegacyAttributes<WaPopover> &
         Partial<Pick<WaPopover, "for" | "placement">> & {

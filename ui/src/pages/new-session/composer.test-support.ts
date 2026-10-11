@@ -1,13 +1,15 @@
-import { render, type TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
+import { createComponent, createSignal, flush, getOwner } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
-import { renderNewSessionComposer } from "./composer.ts";
+import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
@@ -37,7 +39,7 @@ export function renderComposer(
     blockedSubmitNotice?: string;
     dictationActive?: boolean;
     dictationPreview?: string;
-    dictationStatus?: TemplateResult;
+    dictationStatus?: JSX.Element;
     nativeTerminal?: boolean;
     onUnsupportedAttachment?: () => void;
     submitting?: boolean;
@@ -71,44 +73,41 @@ export function renderComposer(
   let message = overrides.message ?? "";
   let agentId = overrides.agentId ?? "main";
   let draftOwnerKey = overrides.draftOwnerKey ?? "draft:one";
-  const renderCurrent = () =>
-    render(
-      renderNewSessionComposer({
-        agentId,
-        attachmentDraft,
-        canSubmit: overrides.canSubmit ?? true,
-        context: overrides.context,
-        draftOwnerKey,
-        isCatalogTarget: true,
-        message,
-        visibility: overrides.visibility,
-        draftAvailable: overrides.draftAvailable,
-        toolOverrides: overrides.toolOverrides,
-        modelControl: new NewSessionModelControl(() => undefined),
-        requiresModifier: overrides.requiresModifier ?? false,
-        requestUpdate: renderCurrent,
-        submitDisabledReason: overrides.submitDisabledReason,
-        blockedSubmitNotice: overrides.blockedSubmitNotice,
-        dictationActive: overrides.dictationActive,
-        dictationPreview: overrides.dictationPreview,
-        dictationStatus: overrides.dictationStatus,
-        nativeTerminal: overrides.nativeTerminal,
-        onUnsupportedAttachment: overrides.onUnsupportedAttachment,
-        submitting: overrides.submitting ?? false,
-        textareaController,
-        messageLocked: overrides.messageLocked,
-        onInput: (next) => {
-          message = next;
-          overrides.onInput?.(next);
-          renderCurrent();
-        },
-        onVisibilityChange: overrides.onVisibilityChange,
-        onSubmit: overrides.onSubmit ?? (() => undefined),
-        onBackgroundSubmit: overrides.onBackgroundSubmit,
-      }),
-      container,
-    );
-  renderCurrent();
+  const currentOptions = (): NewSessionComposerOptions => ({
+    agentId,
+    attachmentDraft,
+    canSubmit: overrides.canSubmit ?? true,
+    context: overrides.context,
+    draftOwnerKey,
+    isCatalogTarget: true,
+    message,
+    visibility: overrides.visibility,
+    draftAvailable: overrides.draftAvailable,
+    toolOverrides: overrides.toolOverrides,
+    modelControl: new NewSessionModelControl(() => undefined),
+    requiresModifier: overrides.requiresModifier ?? false,
+    requestUpdate: renderCurrent,
+    submitDisabledReason: overrides.submitDisabledReason,
+    blockedSubmitNotice: overrides.blockedSubmitNotice,
+    dictationActive: overrides.dictationActive,
+    dictationPreview: overrides.dictationPreview,
+    dictationStatus: overrides.dictationStatus,
+    nativeTerminal: overrides.nativeTerminal,
+    onUnsupportedAttachment: overrides.onUnsupportedAttachment,
+    submitting: overrides.submitting ?? false,
+    textareaController,
+    messageLocked: overrides.messageLocked,
+    onInput: (next) => {
+      message = next;
+      overrides.onInput?.(next);
+      renderCurrent();
+    },
+    onVisibilityChange: overrides.onVisibilityChange,
+    onSubmit: overrides.onSubmit ?? (() => undefined),
+    onBackgroundSubmit: overrides.onBackgroundSubmit,
+  });
+  const renderCurrent = () => mounted.rerender();
+  const mounted = mountNewSessionComposer(currentOptions, container);
   const composer = container.querySelector<HTMLElement>(".new-session-page__composer");
   if (!composer) {
     throw new Error("Expected new-session composer");
@@ -119,6 +118,10 @@ export function renderComposer(
     container,
     textareaController,
     rerender: renderCurrent,
+    rerenderWithMessage: (nextMessage: string) => {
+      message = nextMessage;
+      renderCurrent();
+    },
     rerenderForAgent: (nextAgentId: string) => {
       agentId = nextAgentId;
       renderCurrent();
@@ -140,4 +143,32 @@ export function resetComposerTestFixtures() {
     textareaController.disconnect();
   }
   textareaControllers.length = 0;
+}
+
+export function mountNewSessionComposer(
+  read: () => NewSessionComposerOptions,
+  container: HTMLElement,
+) {
+  let update: (options: NewSessionComposerOptions) => void;
+  const mounted = mountSolid(
+    () => {
+      const [options, setOptions] = createSignal(read());
+      update = setOptions;
+      return createComponent(NewSessionComposer, {
+        get options() {
+          return options();
+        },
+      });
+    },
+    { container },
+  );
+  return {
+    ...mounted,
+    rerender() {
+      update(read());
+      if (!getOwner()) {
+        flush();
+      }
+    },
+  };
 }

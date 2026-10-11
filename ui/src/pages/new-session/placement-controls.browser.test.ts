@@ -1,9 +1,12 @@
-import { html, nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
+import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { PlaceBrowserState } from "./place-browser-state.ts";
-import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
-import { renderPickerTemplate } from "./where-chip.test-support.ts";
+import { resolveProjectChip } from "./project-chip.ts";
+import { ProjectChip } from "./project-chip.tsx";
+import { pickerParams } from "./where-chip.test-support.ts";
+import { WhereChip } from "./where-chip.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import placementStyles from "../../styles/new-session.css?inline";
@@ -19,7 +22,7 @@ beforeEach(() => {
   document.body.append(controls);
 });
 afterEach(() => {
-  render(nothing, controls);
+  cleanupSolid();
   controls.remove();
   styles.remove();
 });
@@ -39,7 +42,7 @@ it.each([
     const profileId = shortLabels ? "prod" : "production-europe-development";
     const workspaceLabel = shortLabels ? "app" : "customer-analytics-dashboard";
     const workspace = `/workspace/${workspaceLabel}`;
-    const where = renderPickerTemplate(
+    const where = pickerParams(
       true,
       undefined,
       {
@@ -57,7 +60,7 @@ it.each([
       { popoverOpen: false },
     );
     const onApplyFolder = vi.fn();
-    const project = renderProjectChip({
+    const project = {
       state: resolveProjectChip({
         folder: workspace,
         workspace,
@@ -103,8 +106,14 @@ it.each([
       onBrowserBack: vi.fn(),
       onRegisterProject: vi.fn(),
       onClose: vi.fn(),
-    });
-    render(html`${where}${project}`, controls);
+    };
+    mountSolid(
+      () => [
+        createComponent(WhereChip, { params: where }),
+        createComponent(ProjectChip, { params: project }),
+      ],
+      { container: controls },
+    );
     await document.fonts.ready;
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));

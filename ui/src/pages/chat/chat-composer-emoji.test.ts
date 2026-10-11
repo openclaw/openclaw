@@ -5,7 +5,8 @@ import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
 import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
-import { renderNewSessionComposer } from "../new-session/composer.ts";
+import { mountNewSessionComposer } from "../new-session/composer.test-support.ts";
+import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
 import {
   createComposerContainer,
@@ -54,10 +55,16 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
   const container = createComposerContainer();
   document.body.append(container);
   let retired = false;
+  let native: ReturnType<typeof mountNewSessionComposer> | undefined;
+  let nativeOptions: NewSessionComposerOptions;
   fixtureDisposals.push(() => {
     retired = true;
     attachmentDraft.reset();
-    render(nothing, container);
+    if (native) {
+      native.unmount();
+    } else {
+      render(nothing, container);
+    }
     container.remove();
   });
   let draft = "";
@@ -83,32 +90,36 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     if (retired) {
       return;
     }
-    render(
-      kind === "chat"
-        ? renderChatComposer({ ...props, draft })
-        : renderNewSessionComposer({
-            agentId: "main",
-            context: undefined,
-            draftOwnerKey: "emoji",
-            attachmentDraft,
-            modelControl,
-            isCatalogTarget: true,
-            canSubmit: true,
-            message: draft,
-            requiresModifier,
-            submitting: false,
-            messageLocked: locked,
-            textareaController: controller,
-            requestUpdate: redraw,
-            onInput: (next) => {
-              draft = next;
-              redraw();
-            },
-            onSubmit: send,
-            onBackgroundSubmit: backgroundSend,
-          }),
-      container,
-    );
+    if (kind === "chat") {
+      render(renderChatComposer({ ...props, draft }), container);
+    } else {
+      nativeOptions = {
+        agentId: "main",
+        context: undefined,
+        draftOwnerKey: "emoji",
+        attachmentDraft,
+        modelControl,
+        isCatalogTarget: true,
+        canSubmit: true,
+        message: draft,
+        requiresModifier,
+        submitting: false,
+        messageLocked: locked,
+        textareaController: controller,
+        requestUpdate: redraw,
+        onInput: (next) => {
+          draft = next;
+          redraw();
+        },
+        onSubmit: send,
+        onBackgroundSubmit: backgroundSend,
+      };
+      if (native) {
+        native.rerender();
+      } else {
+        native = mountNewSessionComposer(() => nativeOptions, container);
+      }
+    }
   }
   redraw();
   const textarea = container.querySelector("textarea")!;

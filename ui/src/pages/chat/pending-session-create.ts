@@ -11,7 +11,7 @@ import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { renderCreationComposer } from "../new-session/creation-composer-render.ts";
+import { renderCreationComposer } from "../new-session/creation-composer-render.tsx";
 import { renderNewSessionBody } from "../new-session/draft-body.ts";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";

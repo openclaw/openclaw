@@ -1,9 +1,11 @@
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { NewSessionModelControlView } from "./model-control-view.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
 export function contextWith(
@@ -75,14 +77,18 @@ export function renderControl(
   },
 ) {
   const container = document.createElement("div");
-  render(
-    control.render({
-      ...(agent ? { agent } : {}),
-      agentId,
-      context,
-      sending: false,
-    }),
-    container,
+  mountSolid(
+    () =>
+      createComponent(NewSessionModelControlView, {
+        control,
+        options: {
+          ...(agent ? { agent } : {}),
+          agentId,
+          context,
+          sending: false,
+        },
+      }),
+    { container },
   );
   return container;
 }

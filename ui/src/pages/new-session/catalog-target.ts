@@ -1,8 +1,6 @@
-import { html, nothing } from "lit";
 import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -66,7 +64,7 @@ function isResolvedTarget(data?: NewSessionRouteData): boolean {
   return Boolean(data?.catalogId && data.startTerminal && data.catalogLabel);
 }
 
-function isPendingRouteTarget(data?: NewSessionRouteData): boolean {
+export function isPendingRouteTarget(data?: NewSessionRouteData): boolean {
   return (
     (isTarget(data) && !isResolvedTarget(data)) ||
     Boolean(data?.group && data.groupStatus !== "resolved")
@@ -268,51 +266,4 @@ export class CatalogTargetDiscovery {
       },
     ];
   }
-}
-
-function renderTarget(data?: NewSessionRouteData) {
-  if (!isTarget(data)) {
-    return nothing;
-  }
-  const ready = isResolvedTarget(data);
-  const label = data?.catalogLabel || data?.catalogId || "";
-  return html`<span
-    class="new-session-page__trigger new-session-page__runtime"
-    title=${ready ? t("newSession.nativeTerminalHint") : t("newSession.catalogUnavailable")}
-  >
-    <span class="new-session-page__target-icon" aria-hidden="true">${icons.terminal}</span>
-    <span class="new-session-page__trigger-label">${label}</span>
-  </span>`;
-}
-
-export function renderBar(params: {
-  data?: NewSessionRouteData;
-  agentSelect: unknown;
-  placeSelect: unknown;
-  retrying: boolean;
-  onRetry: () => void;
-  groupPending?: boolean;
-}) {
-  const pending = isPendingRouteTarget(params.data) || params.groupPending === true;
-  return html`
-    <div class="new-session-page__triggers">
-      ${renderTarget(params.data)} ${isTarget(params.data) ? nothing : params.agentSelect}
-      ${params.placeSelect}
-      ${
-        pending
-          ? html`<span class="new-session-page__catalog-unavailable">
-              ${t("newSession.catalogUnavailable")}
-              <button
-                class="btn btn--sm"
-                type="button"
-                ?disabled=${params.retrying}
-                @click=${params.onRetry}
-              >
-                ${params.retrying ? t("common.loading") : t("lazyView.retry")}
-              </button>
-            </span>`
-          : nothing
-      }
-    </div>
-  `;
 }

@@ -1,12 +1,14 @@
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { vi } from "vitest";
-import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { resolveWhereChip, type WhereChipOptions } from "./where-chip.ts";
+import { WhereChip } from "./where-chip.tsx";
 
-export function renderPickerTemplate(
+export function pickerParams(
   isAdmin: boolean,
   autoPlacementMode?: "least-busy" | "eligible-order",
   selection: Partial<Parameters<typeof resolveWhereChip>[0]> = {},
-  presentation: Partial<Parameters<typeof renderWhereChip>[0]> = {},
+  presentation: Partial<WhereChipOptions> = {},
 ) {
   const state = resolveWhereChip({
     environments: [
@@ -40,7 +42,7 @@ export function renderPickerTemplate(
     deviceId: "",
     ...selection,
   });
-  return renderWhereChip({
+  return {
     state,
     gatewayName: "",
     environmentQuery: "",
@@ -64,11 +66,9 @@ export function renderPickerTemplate(
     onConnectMachine: vi.fn(),
     onManageCloudWorkers: vi.fn(),
     ...presentation,
-  });
+  };
 }
 
-export function renderPicker(...args: Parameters<typeof renderPickerTemplate>) {
-  const container = document.createElement("div");
-  render(renderPickerTemplate(...args), container);
-  return container;
+export function renderPicker(...args: Parameters<typeof pickerParams>) {
+  return mountSolid(() => createComponent(WhereChip, { params: pickerParams(...args) })).container;
 }

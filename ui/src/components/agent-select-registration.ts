@@ -16,6 +16,9 @@ declare module "@solidjs/web" {
     interface IntrinsicElements {
       "openclaw-agent-select": HTMLAttributes<AgentSelect> & {
         "prop:options": AgentSelectOption[];
+        "prop:variant"?: AgentSelect["variant"];
+        "prop:identityById"?: AgentSelect["identityById"];
+        "prop:menuLabel"?: string;
         "prop:value": string;
         "prop:accessibleLabel": string;
         "prop:disabled": boolean;

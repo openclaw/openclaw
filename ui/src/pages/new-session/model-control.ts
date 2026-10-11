@@ -17,7 +17,7 @@ import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
-import { renderChatModelControls } from "../chat/components/chat-model-controls.ts";
+import type { renderChatModelControls } from "../chat/components/chat-model-controls.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { CatalogTargetDiscovery } from "./catalog-target.ts";
 import { resolveHostedEnvironments, resolveHostEnvironmentChoice } from "./hosted-environments.ts";
@@ -39,6 +39,13 @@ import {
 import { hasNewSessionModelPreference, type NewSessionPreference } from "./preferences.ts";
 
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+
+export type NewSessionModelRenderOptions = {
+  agent?: GatewayAgentRow;
+  agentId: string;
+  context: ApplicationContext | undefined;
+  sending: boolean;
+};
 
 export class NewSessionModelControl extends NewSessionModelSelection {
   private selectionGeneration = 0;
@@ -614,12 +621,9 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         );
   }
 
-  render(options: {
-    agent?: GatewayAgentRow;
-    agentId: string;
-    context: ApplicationContext | undefined;
-    sending: boolean;
-  }) {
+  renderProps(
+    options: NewSessionModelRenderOptions,
+  ): Parameters<typeof renderChatModelControls>[0] {
     const snapshot = options.context?.gateway.snapshot;
     const sessionKey = `new-session:${normalizeAgentId(options.agentId)}`;
     const sourceResult = options.context?.sessions.state.result ?? null;
@@ -641,7 +645,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.ownsMetadata(client, scope) &&
         this.metadataState.accountSelection === accountSelection,
       );
-    return renderChatModelControls({
+    return {
       ...modelControls,
       renderAccountSection: (model) =>
         renderChatModelAccountControl({
@@ -727,6 +731,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.catalogTargets.retry(metadataClient, this.agentId);
       },
       onRequestUpdate: this.notify,
-    });
+    };
   }
 }

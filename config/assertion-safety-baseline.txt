@@ -2785,7 +2785,6 @@ ui/src/pages/debug/view.ts	3
 ui/src/pages/labs/labs-registry.ts	4
 ui/src/pages/memory-import/view.ts	2
 ui/src/pages/new-session/draft-place-browser.ts	2
-ui/src/pages/new-session/place-browser.ts	1
 ui/src/pages/new-session/preferences.ts	1
 ui/src/pages/plugin/logbook-view.ts	1
 ui/src/pages/plugin/route.ts	1

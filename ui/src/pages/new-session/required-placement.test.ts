@@ -1,9 +1,10 @@
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { renderNewSessionPlaceControls } from "./target-controls.ts";
+import { NewSessionPlaceControls } from "./target-controls-view.tsx";
 
 const runtime = {
   id: "openclaw",
@@ -274,20 +275,23 @@ it("renders required placement as a readonly indicator, not a machine or workspa
   const f = fixture();
   await ready(f);
   const container = document.createElement("div");
-  render(
-    renderNewSessionPlaceControls({
-      context: f.context,
-      data: undefined,
-      gateway: f.gateway,
-      place: f.place,
-      submitting: false,
-      pendingPlacement: false,
-      onConnectMachine: vi.fn(),
-      onNavigate: vi.fn(),
-      onFocusComposer: vi.fn(),
-      requestUpdate: vi.fn(),
-    }),
-    container,
+  mountSolid(
+    () =>
+      createComponent(NewSessionPlaceControls, {
+        params: {
+          context: f.context,
+          data: undefined,
+          gateway: f.gateway,
+          place: f.place,
+          submitting: false,
+          pendingPlacement: false,
+          onConnectMachine: vi.fn(),
+          onNavigate: vi.fn(),
+          onFocusComposer: vi.fn(),
+          requestUpdate: vi.fn(),
+        },
+      }),
+    { container },
   );
   expect(container.textContent).toContain("OpenClaw worker");
   expect(container.querySelector("[data-required-placement]")).not.toBeNull();

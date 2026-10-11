@@ -181,10 +181,17 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         workspace: WORKSPACE,
         workspaceGit: true,
-        featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "system.info"],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.create",
+          "system.info",
+          "fs.listDir",
+        ],
         heldMethods: late === "system info" ? ["system.info"] : [],
         methodResponses: {
           "system.info": systemInfo,
+          "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
           "environments.list": {
             environments: [gatewayEnvironment],
             profiles: [],

@@ -24,6 +24,23 @@ function capacityCaption(row: Element | null | undefined) {
     ?.textContent?.trim();
 }
 
+function expectIconShape(actual: SVGElement | null, expected: SVGElement) {
+  expect(actual).not.toBeNull();
+  for (const attribute of [
+    "viewBox",
+    "fill",
+    "stroke",
+    "stroke-width",
+    "stroke-linecap",
+    "stroke-linejoin",
+  ]) {
+    expect(actual?.getAttribute(attribute)).toBe(expected.getAttribute(attribute));
+  }
+  expect(Array.from(actual?.children ?? [], (child) => child.outerHTML)).toEqual(
+    Array.from(expected.children, (child) => child.outerHTML),
+  );
+}
+
 describe("Where chip", () => {
   it("shows device and cloud skeletons while the catalog loads", () => {
     const container = renderPicker(
@@ -72,16 +89,14 @@ describe("Where chip", () => {
       render(icon, expected);
       const expectedSvg = expected.querySelector("svg")!;
 
-      expect(
-        expectedSvg.isEqualNode(
-          container.querySelector('[data-value="device:model-device"] .session-menu__icon svg'),
-        ),
-      ).toBe(true);
-      expect(
-        expectedSvg.isEqualNode(
-          container.querySelector("#new-session-where-trigger .new-session-page__target-icon svg"),
-        ),
-      ).toBe(true);
+      expectIconShape(
+        container.querySelector('[data-value="device:model-device"] .session-menu__icon svg'),
+        expectedSvg,
+      );
+      expectIconShape(
+        container.querySelector("#new-session-where-trigger .new-session-page__target-icon svg"),
+        expectedSvg,
+      );
       for (const selector of [
         '[data-value="device:model-device"] .session-menu__icon',
         "#new-session-where-trigger .new-session-page__target-icon",
@@ -122,16 +137,14 @@ describe("Where chip", () => {
       render(icon, expected);
       const expectedSvg = expected.querySelector("svg")!;
 
-      expect(
-        expectedSvg.isEqualNode(
-          container.querySelector(`[data-value="${value}"] .session-menu__icon svg`),
-        ),
-      ).toBe(true);
-      expect(
-        expectedSvg.isEqualNode(
-          container.querySelector("#new-session-where-trigger .new-session-page__target-icon svg"),
-        ),
-      ).toBe(true);
+      expectIconShape(
+        container.querySelector(`[data-value="${value}"] .session-menu__icon svg`),
+        expectedSvg,
+      );
+      expectIconShape(
+        container.querySelector("#new-session-where-trigger .new-session-page__target-icon svg"),
+        expectedSvg,
+      );
       expect(
         container.querySelector(`[data-value="${value}"] .new-session-page__device-icon`),
       ).toBeNull();

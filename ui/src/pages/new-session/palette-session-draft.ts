@@ -1,4 +1,4 @@
-import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
@@ -7,12 +7,13 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { showToast } from "../../lib/toast.ts";
+import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
+import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
 import "../../components/web-awesome-popover.ts";
 import "../../styles/new-session.css";
 import "../../styles/chat/composer.css";
-import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
 import {
   appendChatAttachmentFiles,
   handleChatAttachmentPaste,
@@ -23,6 +24,10 @@ import { NewSessionDraftController } from "./draft-controller.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { closeSessionMenus } from "./new-session-runtime.ts";
+import {
+  PaletteSessionAttachments,
+  PaletteSessionRecovery,
+} from "./palette-session-draft-view.tsx";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { PaletteSessionSettings } from "./palette-session-settings.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
@@ -191,11 +196,11 @@ export class PaletteSessionDraft implements ReactiveController {
   }
 
   renderAttachments() {
-    const props = this.attachmentProps();
-    const preview = props ? renderAttachmentPreview(props) : nothing;
-    return preview === nothing
-      ? nothing
-      : html`<div class="cmd-palette__attachments">${preview}</div>`;
+    const params = this.attachmentProps();
+    const preview = params ? renderAttachmentPreview(params) : emptyLegacyContent;
+    return preview === emptyLegacyContent
+      ? emptyLegacyContent
+      : solidContent(PaletteSessionAttachments, { preview });
   }
 
   open() {
@@ -369,7 +374,7 @@ export class PaletteSessionDraft implements ReactiveController {
   renderControls() {
     const draft = this.draft;
     if (!draft) {
-      return nothing;
+      return emptyLegacyContent;
     }
     return this.settings.render({
       draft,
@@ -405,9 +410,7 @@ export class PaletteSessionDraft implements ReactiveController {
 
   renderRecovery() {
     return this.rejectedOpen
-      ? html`<button class="btn btn--sm" type="button" @click=${this.rejectedOpen}>
-          ${t("sessionsView.openSession")}
-        </button>`
+      ? solidContent(PaletteSessionRecovery, { onOpen: this.rejectedOpen })
       : undefined;
   }
 

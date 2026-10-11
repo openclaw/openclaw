@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type * as ComposerDictationModule from "../chat/composer-dictation.ts";
+import { NewSessionDictationView, NewSessionDictationStatus } from "./composer-dictation-view.tsx";
 
 const dictationHarness = vi.hoisted(() => ({
   options: null as null | {
@@ -106,7 +108,7 @@ describe("NewSessionDictationControl", () => {
       requestUpdate: vi.fn(),
     });
 
-    control.render("agent-a");
+    control.prepare("agent-a");
     canCommit = false;
     dictationHarness.options?.onCommit("spoken task");
 
@@ -131,7 +133,9 @@ describe("NewSessionDictationControl", () => {
       requestUpdate: vi.fn(),
     });
     const container = document.createElement("div");
-    render(control.render("agent-a"), container);
+    mountSolid(() => <NewSessionDictationView control={control} ownerKey="agent-a" />, {
+      container,
+    });
     const microphone = container.querySelector<HTMLButtonElement>(".chat-send-btn--voice");
 
     microphone?.click();
@@ -167,7 +171,7 @@ describe("NewSessionDictationControl", () => {
       requestUpdate: vi.fn(),
     });
     const container = document.createElement("div");
-    control.render("agent-a");
+    control.prepare("agent-a");
     const controller = dictationHarness.controllers[0];
     if (!controller) {
       throw new Error("expected dictation controller");
@@ -176,7 +180,24 @@ describe("NewSessionDictationControl", () => {
     controller.active = true;
     controller.transcript = "spoken";
     expect(control.previewDraft()).toBe("draft spoken");
-    render(html`${control.renderStatus()}${control.render("agent-a")}`, container);
+    const [revision, setRevision] = createSignal({});
+    const refresh = () => {
+      setRevision({});
+      flush();
+    };
+    mountSolid(
+      () => (
+        <>
+          <NewSessionDictationStatus control={control} renderRevision={revision()} />
+          <NewSessionDictationView
+            control={control}
+            ownerKey="agent-a"
+            renderRevision={revision()}
+          />
+        </>
+      ),
+      { container },
+    );
     expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(
       "Listening",
     );
@@ -187,7 +208,7 @@ describe("NewSessionDictationControl", () => {
 
     controller.active = true;
     controller.finalizing = true;
-    render(html`${control.renderStatus()}${control.render("agent-a")}`, container);
+    refresh();
     expect(container.querySelector(".agent-chat__dictation-phase--listening")).toBeNull();
     const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
     const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
@@ -213,16 +234,16 @@ describe("NewSessionDictationControl", () => {
       requestUpdate: vi.fn(),
     });
 
-    control.render("agent-a");
+    control.prepare("agent-a");
     const routeAController = dictationHarness.controllers[0];
     routeAController?.handlePointerDown();
     const routeACommit = dictationHarness.options?.onCommit;
 
-    control.render("agent-a");
+    control.prepare("agent-a");
     expect(dictationHarness.controllers).toHaveLength(1);
     expect(routeAController?.active).toBe(true);
 
-    control.render("agent-b");
+    control.prepare("agent-b");
     routeACommit?.("late route A transcript");
 
     expect(routeAController?.active).toBe(false);

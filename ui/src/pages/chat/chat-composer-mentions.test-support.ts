@@ -10,8 +10,8 @@ import {
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
 import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
-import { composerContext } from "../new-session/composer.test-support.ts";
-import { renderNewSessionComposer } from "../new-session/composer.ts";
+import { composerContext, mountNewSessionComposer } from "../new-session/composer.test-support.ts";
+import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
 import {
   createComposerContainer,
@@ -46,6 +46,8 @@ export function composerFixture(
   const container = createComposerContainer();
   document.body.append(container);
   let retired = false;
+  let native: ReturnType<typeof mountNewSessionComposer> | undefined;
+  let nativeOptions: NewSessionComposerOptions;
   const request = createGatewayRequestMock().mockResolvedValue(people);
   const client = createTestGatewayClient((method, params, options) =>
     method === "commands.list" ? { commands: [] } : request(method, params, options),
@@ -65,7 +67,11 @@ export function composerFixture(
   onTestFinished(() => {
     retired = true;
     attachmentDraft.reset();
-    render(nothing, container);
+    if (native) {
+      native.unmount();
+    } else {
+      render(nothing, container);
+    }
     container.remove();
   });
   let draft = initial;
@@ -89,47 +95,54 @@ export function composerFixture(
       ownerKey,
       params: kind === "chat" ? { sessionKey: "agent:main:chat" } : { agentId: "main" },
     };
-    render(
-      kind === "chat"
-        ? renderChatComposer({
-            ...props,
-            submitDisabledReason,
-            draft,
-            mentions,
-            getDraft: () => draft,
-            getMentions: () => mentions,
-            mentionDirectory: unsupported ? undefined : directory,
-            mentionsUnsupported: unsupported,
-            onDraftChange: onInput,
-            onRequestUpdate: renderCurrent,
-            onSlashCommand: slashCommand,
-            canAbort: true,
-            onAbort: abort,
-            onSend: () => send({ draft, mentions }),
-          })
-        : renderNewSessionComposer({
-            agentId: "main",
-            context,
-            draftOwnerKey: ownerKey,
-            attachmentDraft,
-            modelControl,
-            isCatalogTarget: false,
-            message: draft,
-            mentions,
-            getMentions: () => mentions,
-            canSubmit: true,
-            requiresModifier: false,
-            requestUpdate: renderCurrent,
-            submitting: false,
-            textareaController: controller,
-            onInput: (next, selected) => {
-              onInput(next, selected);
-              renderCurrent();
-            },
-            onSubmit: () => send({ draft, mentions }),
-          }),
-      container,
-    );
+    if (kind === "chat") {
+      render(
+        renderChatComposer({
+          ...props,
+          submitDisabledReason,
+          draft,
+          mentions,
+          getDraft: () => draft,
+          getMentions: () => mentions,
+          mentionDirectory: unsupported ? undefined : directory,
+          mentionsUnsupported: unsupported,
+          onDraftChange: onInput,
+          onRequestUpdate: renderCurrent,
+          onSlashCommand: slashCommand,
+          canAbort: true,
+          onAbort: abort,
+          onSend: () => send({ draft, mentions }),
+        }),
+        container,
+      );
+    } else {
+      nativeOptions = {
+        agentId: "main",
+        context,
+        draftOwnerKey: ownerKey,
+        attachmentDraft,
+        modelControl,
+        isCatalogTarget: false,
+        message: draft,
+        mentions,
+        getMentions: () => mentions,
+        canSubmit: true,
+        requiresModifier: false,
+        requestUpdate: renderCurrent,
+        submitting: false,
+        textareaController: controller,
+        onInput: (next, selected) => {
+          onInput(next, selected);
+          renderCurrent();
+        },
+        onSubmit: () => send({ draft, mentions }),
+      };
+      if (native) {
+        native.rerender();
+      } else {
+        native = mountNewSessionComposer(() => nativeOptions, container);
+      }
+    }
   };
   renderCurrent();
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
