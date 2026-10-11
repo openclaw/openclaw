@@ -43,7 +43,10 @@ import {
   openOpenClawAgentSqliteWorkerStoreV2,
   type OpenClawAgentSqliteWorkerStore,
 } from "./openclaw-agent-worker-store.js";
-import { agentWorkerStoreFixtureEntrypoint } from "./openclaw-agent-worker-store.runtime.test-support.js";
+import {
+  agentWorkerStoreFixtureEntrypoint,
+  waitForFixtureEntry,
+} from "./openclaw-agent-worker-store.runtime.test-support.js";
 import type {
   AgentWorkerFixtureOperations,
   bindSqliteWorkerBackend,
@@ -105,22 +108,6 @@ async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   );
   workers.add(worker);
   return { db, worker };
-}
-async function waitForFixtureEntry(marker: string, work: Promise<unknown>, signal: AbortSignal) {
-  // Worker replies and broadcast receipts are unordered; the durable marker is written first.
-  const settled = work.then(
-    () => {
-      if (!fs.existsSync(marker)) {
-        throw new Error("Worker settled before entering the fixture barrier");
-      }
-    },
-    (error: unknown) => {
-      if (!fs.existsSync(marker)) {
-        throw error;
-      }
-    },
-  );
-  await withinTest(Promise.race([receipts.waitFor(marker, "entered"), settled]), signal);
 }
 
 it("V2 preserves absence until explicit worker preparation and rejects retained calls after close", async () => {
@@ -482,11 +469,11 @@ describe.each(["borrowed", "captured"] as const)(
               : worker.run((scope) => scope.execute(command), assertCurrent);
           void work.catch(() => undefined);
           try {
-            await waitForFixtureEntry(preparation.codeMarker, work, signal);
+            await waitForFixtureEntry(receipts, preparation.codeMarker, work, signal);
             expect(fs.existsSync(preparation.commandMarker)).toBe(false);
             expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
             fs.writeFileSync(preparation.codeGate, "release code loading");
-            await waitForFixtureEntry(preparation.commandMarker, work, signal);
+            await waitForFixtureEntry(receipts, preparation.commandMarker, work, signal);
             expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
             current = outcome === "success";
             fs.writeFileSync(preparation.commandGate, "release command preparation");
@@ -532,7 +519,7 @@ describe.each(["borrowed", "captured"] as const)(
           () => undefined,
         );
         try {
-          await waitForFixtureEntry(transactionMarker, native, signal);
+          await waitForFixtureEntry(receipts, transactionMarker, native, signal);
           const observed: string[] = [];
           const writes = ["first", "second"].map((value) =>
             withOpenClawAgentDatabaseWrite(
@@ -579,7 +566,7 @@ describe.each(["borrowed", "captured"] as const)(
           },
         );
         void work.catch(() => undefined);
-        await waitForFixtureEntry(transactionMarker, work, signal);
+        await waitForFixtureEntry(receipts, transactionMarker, work, signal);
         current = false;
         await expect(work).rejects.toThrow("fixture authority revoked");
         expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
@@ -605,7 +592,7 @@ describe.each(["borrowed", "captured"] as const)(
                   (scope) => scope.execute(command),
                   () => undefined,
                 );
-          await waitForFixtureEntry(commitMarker, work, signal);
+          await waitForFixtureEntry(receipts, commitMarker, work, signal);
           let closed = false;
           const close = worker.close().then(() => {
             closed = true;
@@ -1015,7 +1002,7 @@ describe.each(["borrowed", "captured"] as const)(
             }),
           () => undefined,
         );
-        await waitForFixtureEntry(transactionMarker, work, signal);
+        await waitForFixtureEntry(receipts, transactionMarker, work, signal);
         const started = performance.now();
         const maintenance = Promise.resolve(tick());
         expect(performance.now() - started).toBeLessThan(100);
