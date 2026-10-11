@@ -2079,7 +2079,6 @@
  ],
  "new": [
   "packages/gateway-protocol/src/worker-capacity.ts",
-  "src/cli/quote-cli-arg.ts",
   "src/shared/lobster-day.ts",
   "ui/src/components/icons-devices.ts",
   "ui/src/components/lobster-dex.ts",
