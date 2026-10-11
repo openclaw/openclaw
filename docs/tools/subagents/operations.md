@@ -179,7 +179,10 @@ returns `found: true`, `killed: false`, and an explanation without touching chil
 work. Bulk cancellation reports unresolved members and continues independently
 authorized siblings. Inspect the retained run and original execution evidence;
 do not bind it to whichever session currently occupies the same key. Unresolved
-records and cleanup obligations remain retained beyond ordinary cleanup deadlines.
+child-session cleanup obligations are not guessed after ordinary cleanup deadlines.
+For a known owner, an exact-run completion still settles and reaches its requester
+when a historical record lacks the original session identity. OpenClaw records a
+warning and suppresses child-session mutations rather than losing the result.
 
 Registry child lookups use recorded ownership when agents share a raw key.
 Terminal events and session timing updates use that same child owner.

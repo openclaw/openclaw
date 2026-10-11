@@ -176,6 +176,43 @@ export function registerLifecycleDeliveryReceiptCases({
     return { entry, controller, runSubagentAnnounceFlow };
   }
 
+  it("delivers a restored legacy completion without mutating its unbound child session", async () => {
+    const entry = createRunEntry({
+      childSessionIdentity: undefined,
+      expectsCompletionMessage: true,
+    });
+    const warn = vi.fn();
+    const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
+    const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
+      async (params) => {
+        expect(params.suppressChildSessionEffects).toBe(true);
+        await params.onDeliveryResult?.({ delivered: true, path: "steered", deliveredAt: 12_300 });
+        return "delivered";
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      warn,
+      cleanupBrowserSessionsForLifecycleEnd,
+      runSubagentAnnounceFlow,
+    });
+
+    await completeAndJoinCleanup(controller, entry, visibleCompletion);
+
+    expect(readLifecycleRun(entry)).toMatchObject({
+      execution: { status: "terminal", suppressSessionEffects: true },
+      completion: { resultText: "final completion reply" },
+      delivery: { status: "delivered", deliveredAt: 12_300 },
+      cleanupCompletedAt: expect.any(Number),
+    });
+    expect(readLifecycleRun(entry).childSessionIdentity).toBeUndefined();
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    expect(cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("original session identity"), {
+      runId: entry.runId,
+    });
+  });
+
   it("records completion announcement timestamps from transcript delivery", async () => {
     const { entry, controller } = createReceiptFixture(
       { delivered: true, path: "steered", enqueuedAt: 4_100, deliveredAt: 12_300 },

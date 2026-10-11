@@ -228,6 +228,7 @@ export class SubagentLifecycleController {
   private sessionEffectsSuppressed(entry: SubagentRunRecord): boolean {
     const current = this.liveRow(entry);
     return (
+      !(current ?? entry).childSessionIdentity?.sessionId ||
       (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
       this.newerGenerationOwnsSession(entry) ||
       shouldSuppressSubagentRecoverySessionEffects(current ?? entry)

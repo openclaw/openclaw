@@ -8,7 +8,6 @@ import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.ru
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
-  resolveSubagentChildAuthorityError,
 } from "./subagent-child-owner-match.js";
 import {
   ensureDeliveryState,
@@ -123,7 +122,7 @@ export const startSubagentAnnounceCleanupFlow = (
 ): boolean => {
   const params = context.options;
   const publishedEntry = getCurrentSubagentRunOwner(params.runs, observedEntry);
-  if (!publishedEntry || resolveSubagentChildAuthorityError(publishedEntry)) {
+  if (!publishedEntry || !resolveSubagentChildAgentId(publishedEntry)) {
     return false;
   }
   let entry = publishedEntry;
@@ -268,7 +267,7 @@ export const startSubagentAnnounceCleanupFlow = (
         } else if (canDelete && (!sessionId || !lifecycleRevision)) {
           // Without both lifecycle identities, key-only deletion could remove
           // a successor that reused this child session after cleanup yielded.
-          throw new Error("Subagent cleanup requires its original session lifecycle revision.");
+          await suppressChildSessionEffects();
         } else if (canDelete && sessionId && lifecycleRevision) {
           // This durable boundary prevents a late yield from reviving a run
           // after deletion may already have reached the gateway.

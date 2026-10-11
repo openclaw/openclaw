@@ -300,6 +300,39 @@ export function registerDirectSessionCleanupAuthorityTests({
     expect(finalPostimage?.execution.suppressSessionEffects).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
   });
+
+  it("retires direct cleanup without deleting a child lacking a lifecycle revision", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      childSessionIdentity: { sessionId: "child-session-id" },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    using sessionRead = vi.spyOn(sessionEntryRuntime, "loadSessionEntryByKey");
+    sessionRead.mockResolvedValueOnce({ sessionId: "child-session-id", updatedAt: 4_000 });
+    let finalPostimage: SubagentRunRecord | undefined;
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      beforeWrite: ({ postimages }) => {
+        const postimage = postimages.get(entry.runId);
+        if (postimage) {
+          finalPostimage = postimage;
+        }
+      },
+    });
+    const join = observeRootWork();
+
+    expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+    await join();
+
+    expect(sessionRead).toHaveBeenCalledOnce();
+    expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
+    expect(finalPostimage?.execution.suppressSessionEffects).toBe(true);
+    expect(runs.has(entry.runId)).toBe(false);
+    expect(controller.scheduledResumeTimers.size).toBe(0);
+  });
 }
 
 export function registerDeliveryRetryOwnerTests({

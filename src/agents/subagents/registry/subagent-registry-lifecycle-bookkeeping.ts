@@ -4,7 +4,10 @@ import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
-import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
+import {
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthorityError,
+} from "./subagent-child-owner-match.js";
 import { markRequesterSettleWakePending } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
@@ -29,7 +32,7 @@ export async function completeCleanupBookkeeping(
   const params = context.options;
   let entry = getCurrentSubagentRunOwner(params.runs, cleanupParams.entry) ?? cleanupParams.entry;
   const authorityError = resolveSubagentChildAuthorityError(entry);
-  if (authorityError) {
+  if (authorityError && !resolveSubagentChildAgentId(entry)) {
     throw new Error(authorityError);
   }
   const stateContext = cleanupParams.stateContext ?? captureOpenClawStateWorkerContext();
@@ -39,7 +42,7 @@ export async function completeCleanupBookkeeping(
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     if (
       cleanupParams.isCurrent?.() === false ||
-      resolveSubagentChildAuthorityError(current) ||
+      !resolveSubagentChildAgentId(current) ||
       context.sessionEffectsHostCurrent(current) === suppressSessionEffects
     ) {
       throw new Error("Subagent cleanup owner changed before bookkeeping.");

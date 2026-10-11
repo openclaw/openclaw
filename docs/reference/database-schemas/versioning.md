@@ -232,8 +232,10 @@ Historical valid qualified keys remain ownership evidence when the property is
 absent; conflicting or malformed ownership stays unresolved. No DDL, new column,
 schema-version bump, or automatic backfill accompanies this runtime repair.
 Current configuration locates a known owner's store; it does not identify the
-original owner. Unknown-owner or unknown-incarnation records remain unchanged
-and ineligible for ordinary cleanup rather than being guessed or deleted.
+original owner. Unknown-owner records remain unchanged and ineligible for ordinary
+cleanup. A known owner's exact-run completion can still settle and deliver without
+an original session identity; child-session mutations remain suppressed and the
+missing identity is not backfilled.
 
 Same-version rollback is not a guarantee that older writers preserve this
 contract. A codec round trip does not prove existing-row replacement or writable

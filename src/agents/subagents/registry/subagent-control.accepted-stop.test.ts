@@ -506,7 +506,7 @@ it.each([
       controlScope: "children" as const,
     };
     for (const id of ["root", "child", "healthy"]) {
-      await writeSubagentSessionEntry({
+      const storePath = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "main",
         sessionKey: key(id),
@@ -523,7 +523,11 @@ it.each([
         task: "retained cleanup ownership",
         cleanup: "keep",
         collect: id !== "root" || !retiresDuringStop,
-        sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: `${id}-revision` },
+        sessionEntry: loadExactSessionEntryReadOnly({
+          agentId: "main",
+          storePath,
+          sessionKey: key(id),
+        })?.entry,
         expectsCompletionMessage: false,
       });
     }

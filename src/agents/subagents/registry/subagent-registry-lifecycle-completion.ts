@@ -15,7 +15,7 @@ import {
   clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
-import { resolveSubagentChildAuthorityError } from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   prepareSubagentKillSession,
@@ -138,7 +138,7 @@ export async function completeSubagentRunAttempt(
     ? getCurrentSubagentRunOwner(params.runs, completeParams.expectedEntry)
     : params.runs.get(completeParams.runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  if (!selectedOwner || resolveSubagentChildAuthorityError(selectedOwner)) {
+  if (!selectedOwner || !resolveSubagentChildAgentId(selectedOwner)) {
     return;
   }
   let releaseCompletionLock: (() => void) | undefined = await context.acquireTerminalCompletionLock(
@@ -151,6 +151,14 @@ export async function completeSubagentRunAttempt(
     throw new SubagentRegistryMutationRejectedError("Subagent terminal execution changed");
   }
   try {
+    if (!selected.childSessionIdentity?.sessionId) {
+      params.warn(
+        "Subagent completion lacks its original session identity; child session effects are suppressed.",
+        {
+          runId: selected.runId,
+        },
+      );
+    }
     const assertCurrent = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
       if (
@@ -178,7 +186,11 @@ export async function completeSubagentRunAttempt(
     }
     assertCurrent();
     assertSessionBinding();
-    if (selected.collect && !selected.collectorCompletion) {
+    if (
+      selected.collect &&
+      !selected.collectorCompletion &&
+      selected.childSessionIdentity?.sessionId
+    ) {
       collectorSession = await prepareSubagentKillSession(
         params.getRuntimeConfig(),
         selected.childSessionKey,
@@ -475,7 +487,11 @@ function planTerminalCompletion(
       completionReason = SUBAGENT_ENDED_REASON_KILLED;
       completionOutcome = { status: "error", error: killIntent.reason };
       entry.killIntent = undefined;
-      if (killOwnsCurrentLifecycle && entry.execution.suppressSessionEffects !== true) {
+      if (
+        killOwnsCurrentLifecycle &&
+        entry.childSessionIdentity?.sessionId &&
+        entry.execution.suppressSessionEffects !== true
+      ) {
         suppressSessionEffects = false;
         entry.execution = {
           ...entry.execution,
