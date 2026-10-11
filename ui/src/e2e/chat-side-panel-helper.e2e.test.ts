@@ -12,14 +12,14 @@ suite.define(() => {
   it("keeps Subagents open when a batch starts during Layout opening, when visible, and after reopening", async () => {
     await suite.withPage({}, async ({ page }) => {
       const parentKey = "agent:main:helper-parent";
-      const parent: GatewaySessionRow = {
+      const parent = {
         key: parentKey,
         sessionId: "helper-parent",
         kind: "direct",
         label: "Helper parent",
         hasActiveSubagentRun: false,
-      };
-      const child: GatewaySessionRow = {
+      } satisfies GatewaySessionRow;
+      const child = {
         key: "agent:main:subagent:helper-child",
         sessionId: "helper-child",
         kind: "direct",
@@ -29,7 +29,7 @@ suite.define(() => {
         hasActiveRun: true,
         activeRunIds: ["helper-child-run"],
         updatedAt: Date.now(),
-      };
+      } satisfies GatewaySessionRow;
       const gateway = await installMockGateway(page, {
         sessionKey: parentKey,
         sessions: [parent],
