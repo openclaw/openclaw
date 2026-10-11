@@ -230,6 +230,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/session-accessor.sqlite-lifecycle-state.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["assertRawSessionEntryRemovalUnchanged"],
+        evidence:
+          "Doctor-only raw-row removal: commands/doctor-session-canonical-keys.ts constructs expectedRawEntryJson; lifecycle-state.ts and projection-state.ts call this guard only for that removal variant. Ordinary lifecycle reads and writes remain T1.",
+      },
+    ],
+  ],
+  [
     "src/agents/auth-profiles/sqlite-json.ts",
     [
       {
