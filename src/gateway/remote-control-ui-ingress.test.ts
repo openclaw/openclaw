@@ -87,7 +87,13 @@ describe("remote Control UI handle", () => {
     const { host, open } = fixture();
     host.handleSandboxRequest = createSandboxHostHttpRequestHandler();
     const { response } = await (
-      await open()
+      await open({
+        frameAncestors: [
+          "codex-sandbox:",
+          "https://*.web-sandbox.oaiusercontent.com",
+          "https://chatgpt.com",
+        ],
+      })
     ).request({
       surface: "sandbox",
       method: "GET",
@@ -97,7 +103,9 @@ describe("remote Control UI handle", () => {
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("origin-agent-cluster")).toBe("?1");
-    expect(response.headers.get("content-security-policy")).toContain("codex-sandbox:");
+    expect(response.headers.get("content-security-policy")).toContain(
+      "frame-ancestors https://ui.example.test codex-sandbox: https://*.web-sandbox.oaiusercontent.com https://chatgpt.com",
+    );
     await response.body?.cancel();
   });
   it("validates a relative redirect against the requested document path", async () => {
@@ -205,7 +213,15 @@ describe("remote Control UI handle", () => {
     { publicOrigin: "https://user@ui.example.test" },
     { sandboxOrigin: "https://ui.example.test" },
     { frameAncestors: ["*"] },
-    { frameAncestors: ["https://*.example.test"] },
+    { frameAncestors: ["https://*"] },
+    { frameAncestors: ["http://*.example.test"] },
+    { frameAncestors: ["https://ui.*.example.test"] },
+    { frameAncestors: ["https://*example.test"] },
+    { frameAncestors: ["https://**.example.test"] },
+    { frameAncestors: ["https://*.example.test:443"] },
+    { frameAncestors: ["https://*.example.test/path"] },
+    { frameAncestors: ["https://*.example..test"] },
+    { frameAncestors: ["https://*.-example.test"] },
   ])(
     "rejects unsafe presentation $publicOrigin $sandboxOrigin $frameAncestors",
     async (overrides) => {

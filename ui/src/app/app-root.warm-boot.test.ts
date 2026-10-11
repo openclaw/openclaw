@@ -62,6 +62,41 @@ function createWarmSurface(warm = true) {
 }
 
 describe("warm boot app root", () => {
+  it("pins embedded ingress to its serving Gateway and never offers a shared-credential login", () => {
+    document.documentElement.dataset.openclawRemoteIngress = "true";
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+      gatewayUrl: "wss://dev-gateway.example",
+      proxyPath: "/dev-gateway",
+    });
+    window.history.replaceState(
+      {},
+      "",
+      "/chat/main#gatewayUrl=wss%3A%2F%2Fother.example&token=synthetic-token&bootstrapToken=synthetic-bootstrap&nativeControlAuth=wss%3A%2F%2Fother.example",
+    );
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+      gatewayUrl: "wss://other.example",
+      token: "synthetic-native-token",
+    };
+    try {
+      const { snapshot, container, draw } = createWarmSurface(false);
+      expect(runtime!.context.gateway.connection.gatewayUrl).toBe(`ws://${window.location.host}`);
+      expect(runtime!.context.gateway.connection.token).toBe("");
+      expect(runtime!.context.gateway.connection.bootstrapToken).toBe("");
+      expect(runtime!.pendingGatewayConnection).toBeNull();
+      draw();
+      expect(container.querySelector("openclaw-login-gate")).toBeNull();
+      snapshot.phase = "offline";
+      snapshot.lastError = "Ingress unavailable";
+      snapshot.lastErrorCode = "AUTH_DEVICE_TOKEN_MISMATCH";
+      draw();
+      expect(container.querySelector("openclaw-login-gate")).toBeNull();
+      expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
+    } finally {
+      delete document.documentElement.dataset.openclawRemoteIngress;
+      delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
+    }
+  });
+
   it("keeps the login gate out of the first render while application startup is pending", async () => {
     runtime = bootstrapApplication();
     const starting = Promise.withResolvers<void>();

@@ -62,6 +62,7 @@ export async function serveControlUiIndexHtml(
   proxySessionEntry = false,
   bootstrapConfig?: ControlUiBootstrapConfig,
 ) {
+  const ingress = getRemoteControlUiIngressContext(req);
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const preloadRoute =
     uiPath === "/chat" || uiPath.startsWith("/chat/")
@@ -96,7 +97,7 @@ export async function serveControlUiIndexHtml(
       .replace(
         /<html\b/i,
         () =>
-          `<html${basePathAttribute}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}`,
+          `<html${basePathAttribute}${ingress ? ' data-openclaw-remote-ingress="true"' : ""}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}`,
       ),
   );
   const document = sessionEntryPath
@@ -107,7 +108,6 @@ export async function serveControlUiIndexHtml(
       )
     : prepared;
   const hashes = computeInlineScriptHashes(document);
-  const ingress = getRemoteControlUiIngressContext(req);
   if (ingress) {
     assertRemoteControlUiIngressCurrent(ingress);
   }

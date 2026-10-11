@@ -38,6 +38,12 @@ import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import { createGatewayWsTestRequestContext } from "./server/ws-connection.test-helpers.js";
 
 const PUBLIC_ORIGIN = "https://ui.example.test";
+const SANDBOX_ORIGIN = "https://sandbox.ui.example.test";
+const FRAME_ANCESTORS = [
+  "codex-sandbox:",
+  "https://*.web-sandbox.oaiusercontent.com",
+  "https://chatgpt.com",
+];
 const SHARED_TOKEN = "remote-control-ui-integration-shared-token";
 const SCOPES = ["operator.read", "operator.write"] as const;
 const CLIENT = {
@@ -55,6 +61,9 @@ type IngressFrame = {
   payload?: {
     nonce?: string;
     type?: string;
+    controlUiUrl?: string;
+    sandboxUrl?: string;
+    sandboxOrigin?: string;
     auth?: { method: string; role: string; scopes: string[]; deviceToken?: string };
     pending?: unknown[];
     paired?: Array<{
@@ -200,9 +209,9 @@ describe("remote Control UI ingress production composition", () => {
   const openOptions = {
     audienceId: "synthetic-integration-grant",
     publicOrigin: PUBLIC_ORIGIN,
-    sandboxOrigin: "https://sandbox.example.test",
+    sandboxOrigin: SANDBOX_ORIGIN,
     operatorScopeCeiling: SCOPES,
-    frameAncestors: ["https://chat.example.test", "codex-sandbox:"],
+    frameAncestors: FRAME_ANCESTORS,
     signal: grantLifetime.signal,
     assertCurrent: () => grantLifetime.signal.throwIfAborted(),
   };
@@ -222,8 +231,10 @@ describe("remote Control UI ingress production composition", () => {
     config = {
       gateway: {
         auth: { mode: "token", token: SHARED_TOKEN },
+        publicOrigin: "https://direct.example.test",
         controlUi: { enabled: true, basePath: "/claw", root },
       },
+      mcp: { apps: { sandboxOrigin: "https://direct-sandbox.example.test" } },
       skills: { load: { watch: false } },
     };
     await state.writeConfig(config);
@@ -235,7 +246,10 @@ describe("remote Control UI ingress production composition", () => {
       getRuntimeConfig: () => config,
       logGateway: logger,
       broadcastVoiceWakeChanged: () => {},
+      getMcpAppSandboxPort: () => 443,
+      isConnectionActive: (connId: string) => Boolean(clients.getByConnectionId(connId)),
     };
+    Object.assign(requestContext, { resolveGatewayContext: () => requestContext });
     const preauthConnectionBudget = createPreauthConnectionBudget(8);
     attachGatewayWsConnectionHandler({
       wss,
@@ -392,15 +406,39 @@ describe("remote Control UI ingress production composition", () => {
         signal: grantLifetime.signal,
       });
       expect(response.status).toBe(200);
-      expect(await response.text()).toContain(expected);
+      const body = await response.text();
+      expect(body).toContain(expected);
+      if (pathname === "/claw/") {
+        expect(body).toContain('data-openclaw-remote-ingress="true"');
+        expect(body).toContain('data-openclaw-control-ui-base-path="/claw"');
+        expect(response.headers.get("content-security-policy")).toContain(
+          `frame-ancestors ${FRAME_ANCESTORS.join(" ")}`,
+        );
+      }
     }
     const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-remote-browser" });
     const deviceToken = await usePeer(await openRemote(), async (peer) => {
-      const token = expectHello(
-        await connect(peer, { identity, scopes: [...SCOPES] }),
-        "remote-ingress",
-        SCOPES,
+      const hello = await connect(peer, { identity, scopes: [] });
+      const token = expectHello(hello, "remote-ingress", SCOPES);
+      expect(hello.payload?.controlUiUrl).toBe(`${PUBLIC_ORIGIN}/claw`);
+      const preview = await request(peer, "canvas.document.preview", {
+        html: "<p>Ingress preview</p>",
+      });
+      expect(preview).toMatchObject({ ok: true, payload: { sandboxOrigin: SANDBOX_ORIGIN } });
+      const sandboxUrl = new URL(preview.payload!.sandboxUrl!);
+      expect(sandboxUrl.origin).toBe(SANDBOX_ORIGIN);
+      const { response } = await ingress!.request({
+        surface: "sandbox",
+        method: "GET",
+        pathAndQuery: `${sandboxUrl.pathname}${sandboxUrl.search}`,
+        headers: [],
+        signal: grantLifetime.signal,
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-security-policy")).toContain(
+        `frame-ancestors ${PUBLIC_ORIGIN} ${FRAME_ANCESTORS.join(" ")}`,
       );
+      await response.body?.cancel();
       await expectReadWriteWithoutAdmin(peer, "fresh browser");
       return token;
     });
@@ -522,6 +560,14 @@ describe("remote Control UI ingress production composition", () => {
       operatorScopeCeiling: ["operator.read"],
     });
     try {
+      expect(readOnly.presentation).toMatchObject({
+        publicOrigin: PUBLIC_ORIGIN,
+        sandboxOrigin: SANDBOX_ORIGIN,
+      });
+      expect(ingress!.presentation).toMatchObject({
+        publicOrigin: PUBLIC_ORIGIN,
+        sandboxOrigin: SANDBOX_ORIGIN,
+      });
       const readOnlyIdentity = loadOrCreateDeviceIdentity({
         identityKey: "synthetic-read-only-browser",
       });
@@ -581,6 +627,15 @@ describe("remote Control UI ingress production composition", () => {
     } finally {
       await readOnly.close();
     }
+    const { response } = await ingress!.request({
+      surface: "control-ui",
+      method: "GET",
+      pathAndQuery: "/claw/",
+      headers: [],
+      signal: grantLifetime.signal,
+    });
+    expect(response.status).toBe(200);
+    await response.body?.cancel();
   });
 
   it("refuses an unauthenticated host", async () => {

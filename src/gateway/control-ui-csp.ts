@@ -18,12 +18,15 @@ export function validateRemoteControlUiFrameAncestors(
       !origin ||
       origin.protocol !== "https:" ||
       origin.origin !== value ||
-      origin.hostname.includes("*") ||
+      (origin.hostname.includes("*") &&
+        !/^https:\/\/\*\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(
+          value,
+        )) ||
       origin.username ||
       origin.password
     ) {
       throw new Error(
-        "Remote Control UI frame ancestors must be exact HTTPS origins or codex-sandbox:",
+        "Remote Control UI frame ancestors must be exact HTTPS origins, https://*.<domain>, or codex-sandbox:",
       );
     }
   }

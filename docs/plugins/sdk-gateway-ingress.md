@@ -31,7 +31,11 @@ async function openRemoteUi(
     publicOrigin: "https://ui.example.com",
     sandboxOrigin: "https://sandbox.example.com",
     operatorScopeCeiling: ["operator.read", "operator.write"],
-    frameAncestors: ["https://app.example.com"],
+    frameAncestors: [
+      "codex-sandbox:",
+      "https://*.web-sandbox.oaiusercontent.com",
+      "https://chatgpt.com",
+    ],
     signal,
     assertCurrent,
   });
@@ -42,11 +46,19 @@ The public and sandbox origins must be exact, distinct HTTPS origins without
 paths or credentials. WebSocket `origin` is the actual browser Origin and must
 equal this handle's `publicOrigin` exactly. The contextual allowance does not
 change `gateway.publicOrigin`, global allowed origins, or Host fallback policy.
+Multiple live handles may share both origins; `audienceId` identifies each
+plugin-owned grant. The relay must select and authenticate the grant for each
+request on both origins, for example with its own browser session cookie.
+Paths stay unchanged: the configured Control UI mount and existing root-owned
+resource routes remain authoritative. There is no per-handle base-path option.
 Publishing a changed Gateway origin policy retires existing handles; open a new
 handle under the current policy.
 The host validates the entire requested frame ancestor chain, including an
-explicit `codex-sandbox:` ancestor when needed, and applies it only to responses
-served by this handle.
+explicit `codex-sandbox:` ancestor when needed, exact HTTPS origins, and CSP
+wildcard host sources of the form `https://*.<domain>`. Other wildcard forms are
+rejected. The policy applies only to responses served by this handle. Sandbox
+documents also allow the handle's public origin as an ancestor so the nested
+Control UI frame can load them.
 
 `audienceId` identifies the plugin-owned grant; it is not an OAuth token or a
 browser authentication credential or a device-token audience binding. Before
@@ -117,6 +129,19 @@ omits credentials. Core auto-approves it as an ordinary paired device and return
 the ordinary device token in `hello`. There is no separate enrollment API,
 bootstrap credential, storage format, or audience-bound token.
 
+Ingress-served documents carry `data-openclaw-remote-ingress="true"`. The embedded
+UI stays connected to the Gateway serving the document, requests the handle's
+scope ceiling, and ignores shared, bootstrap, and native credentials. It stores
+the device token from `hello` for later loads. A rejected stored token triggers
+one credential-free same-key recovery attempt. The shared-credential login gate,
+Gateway URL and secret controls, and service-worker registration are disabled;
+connection errors and retry remain available.
+
+Hello advertises the handle's public origin, and board, Canvas, and MCP App
+sandbox responses use its sandbox origin. Internal plugin-tab paths remain
+relative to the selected Gateway so their read-cookie paths and registered
+routes remain unchanged; explicitly external tab URLs retain their destinations.
+
 The approved scopes are the requested scopes within `operatorScopeCeiling`;
 omitting scopes grants the full ceiling. The ceiling contains `operator.read`
 and optionally `operator.write`. Requests above that ceiling are refused,
@@ -161,5 +186,5 @@ network proxy. A relay can read and modify the active content it forwards and
 can exercise a compromised browser device's permitted capabilities; the
 connection is not end-to-end encrypted against that relay.
 
-Relay hosting and the embedded browser presentation remain follow-up work;
-this transport alone is not a complete remote UI deployment.
+The relay owns browser-session routing and hosting; this transport alone is not
+a complete remote UI deployment.

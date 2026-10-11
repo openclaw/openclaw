@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { isRemoteControlUiIngress } from "../../app/remote-ingress.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { renderGatewayVitals, type GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import {
@@ -160,6 +161,7 @@ function renderPing(props: ConnectionProps) {
 }
 
 export function renderConnection(props: ConnectionProps) {
+  const remoteIngress = isRemoteControlUiIngress();
   const snapshot = props.hello?.snapshot as { authMode?: GatewayAuthMode } | undefined;
   const connected = props.phase === "connected";
   const busy = ["connecting", "starting", "reconnecting"].includes(props.phase);
@@ -186,37 +188,43 @@ export function renderConnection(props: ConnectionProps) {
 
   const rows = html`
     ${connected ? renderPing(props) : nothing}
-    ${renderSettingsRow({
-      title: t("connection.access.gatewayUrl"),
-      description: t("connection.access.gatewayUrlHint"),
-      control: html`
-        <input
-          class="settings-input"
-          aria-label=${t("connection.access.gatewayUrl")}
-          inputmode="url"
-          autocapitalize="none"
-          autocorrect="off"
-          autocomplete="off"
-          spellcheck="false"
-          .value=${props.settings.gatewayUrl}
-          @input=${(e: Event) => {
-            props.onConnectionChange({ gatewayUrl: (e.target as HTMLInputElement).value });
-          }}
-          placeholder="wss://gateway.example:443"
-        />
-      `,
-    })}
     ${
-      isTrustedProxy
-        ? renderSettingsRow({
-            title: t("connection.access.secret"),
-            description: t("connection.access.trustedProxy"),
-            control: renderSettingsStatus({
-              kind: "ok",
-              label: t("connection.access.trustedProxyStatus"),
-            }),
+      remoteIngress
+        ? nothing
+        : renderSettingsRow({
+            title: t("connection.access.gatewayUrl"),
+            description: t("connection.access.gatewayUrlHint"),
+            control: html`
+              <input
+                class="settings-input"
+                aria-label=${t("connection.access.gatewayUrl")}
+                inputmode="url"
+                autocapitalize="none"
+                autocorrect="off"
+                autocomplete="off"
+                spellcheck="false"
+                .value=${props.settings.gatewayUrl}
+                @input=${(e: Event) => {
+                  props.onConnectionChange({ gatewayUrl: (e.target as HTMLInputElement).value });
+                }}
+                placeholder="wss://gateway.example:443"
+              />
+            `,
           })
-        : renderSecretRow(props, draftAuthMode)
+    }
+    ${
+      remoteIngress
+        ? nothing
+        : isTrustedProxy
+          ? renderSettingsRow({
+              title: t("connection.access.secret"),
+              description: t("connection.access.trustedProxy"),
+              control: renderSettingsStatus({
+                kind: "ok",
+                label: t("connection.access.trustedProxyStatus"),
+              }),
+            })
+          : renderSecretRow(props, draftAuthMode)
     }
     ${
       !connected && props.lastError
