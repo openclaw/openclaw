@@ -2,26 +2,32 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createFeishuThreadBindingManager as createFeishuThreadBindingManagerImpl } from "./thread-bindings.js";
+import {
+  createFeishuThreadBindingManager as createFeishuThreadBindingManagerImpl,
+  getFeishuThreadBindingManager,
+} from "./thread-bindings.js";
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
 type FeishuThreadBindingManager = ReturnType<typeof createFeishuThreadBindingManagerImpl>;
-let trackedManager: FeishuThreadBindingManager | null = null;
+const trackedManagers: FeishuThreadBindingManager[] = [];
 
 function createFeishuThreadBindingManager(
   params: Parameters<typeof createFeishuThreadBindingManagerImpl>[0],
 ): FeishuThreadBindingManager {
-  trackedManager = createFeishuThreadBindingManagerImpl(params);
-  return trackedManager;
+  const manager = createFeishuThreadBindingManagerImpl(params);
+  trackedManagers.push(manager);
+  return manager;
 }
 
 describe("Feishu thread bindings", () => {
   afterEach(() => {
-    trackedManager?.stop();
-    trackedManager = null;
+    for (const manager of trackedManagers) {
+      manager.stop();
+    }
+    trackedManagers.length = 0;
     vi.restoreAllMocks();
   });
 
@@ -226,6 +232,42 @@ describe("Feishu thread bindings", () => {
     expect(service.resolveByConversation(conversation)).toBeNull();
   });
 
+  it("keeps the account's binding adapter live when a stopped overlapping manager tears down", async () => {
+    // Overlapping monitor restarts: the replacement monitor starts before the
+    // previous monitor's teardown finishes. The previous stop must unregister
+    // only its own adapter, never the replacement's live registration.
+    createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+    const replacement = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+
+    const conversation = {
+      channel: "feishu" as const,
+      accountId: "default",
+      conversationId: "oc_group_chat:topic:om_overlap",
+    };
+    await expect(
+      getSessionBindingService().bind({
+        conversation,
+        targetSessionKey: "agent:codex:acp:overlap",
+        targetKind: "session",
+      }),
+    ).resolves.toMatchObject({ conversation });
+
+    // The previous monitor's late teardown stops only the manager it owns.
+    trackedManagers[0].stop();
+
+    expect(
+      getSessionBindingService().getCapabilities({ channel: "feishu", accountId: "default" }),
+    ).toMatchObject({ adapterAvailable: true });
+    await expect(
+      getSessionBindingService().bind({
+        conversation,
+        targetSessionKey: "agent:codex:acp:overlap",
+        targetKind: "session",
+      }),
+    ).resolves.toMatchObject({ conversation });
+    expect(getFeishuThreadBindingManager("default")).toBe(replacement);
+  });
+
   it("clears account-scoped bindings when the manager stops", async () => {
     const manager = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
 
@@ -254,7 +296,7 @@ describe("Feishu thread bindings", () => {
       }),
     ).toBeNull();
 
-    const restarted = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+    createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
     const conversation = {
       channel: "feishu",
       accountId: "default",
@@ -268,9 +310,9 @@ describe("Feishu thread bindings", () => {
 
     manager.stop();
 
-    expect(createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" })).toBe(
-      restarted,
-    );
+    // A later start owns a fresh manager and adapter; the shared binding data
+    // survives the ownership handover.
+    createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
     expect(getSessionBindingService().resolveByConversation(conversation)).toEqual(replacement);
   });
 
