@@ -540,12 +540,15 @@ describe("plugin session actions", () => {
       ]
     >([
       ["approvals admits a custom approval action", "approve", [APPROVALS_SCOPE]],
+      ["read cannot approve", "approve", [READ_SCOPE], APPROVALS_SCOPE],
       ["write cannot approve", "approve", [WRITE_SCOPE], APPROVALS_SCOPE],
       ["read admits a read action", "view", [READ_SCOPE]],
       ["write satisfies read", "view", [WRITE_SCOPE]],
       ["talk admits a talk action", "talk", [TALK_SCOPE]],
       ["write satisfies talk", "talk", [WRITE_SCOPE]],
+      ["admin admits a talk action", "talk", [ADMIN_SCOPE]],
       ["read cannot talk", "talk", [READ_SCOPE], TALK_SCOPE],
+      ["no scopes cannot talk", "talk", [], TALK_SCOPE],
       [
         "write reports missing approvals after satisfying talk",
         "talk-approve",
@@ -557,6 +560,11 @@ describe("plugin session actions", () => {
         "talk-approve",
         [WRITE_SCOPE, APPROVALS_SCOPE],
       ],
+      [
+        "talk and approvals satisfy both requirements",
+        "talk-approve",
+        [TALK_SCOPE, APPROVALS_SCOPE],
+      ],
       ["admin satisfies both requirements", "talk-approve", [ADMIN_SCOPE]],
       ["write cannot read talk secrets", "talk-secrets", [WRITE_SCOPE], TALK_SECRETS_SCOPE],
       ["write cannot administer", "admin", [WRITE_SCOPE], ADMIN_SCOPE],
@@ -565,6 +573,8 @@ describe("plugin session actions", () => {
       ["write admits an action with default scopes", "default-write", [WRITE_SCOPE]],
       ["talk cannot perform a default-write action", "default-write", [TALK_SCOPE], WRITE_SCOPE],
       ["read cannot perform a default-write action", "default-write", [READ_SCOPE], WRITE_SCOPE],
+      ["no scopes cannot perform a default-write action", "default-write", [], WRITE_SCOPE],
+      ["admin admits an action with default scopes", "default-write", [ADMIN_SCOPE]],
     ])("%s", async (_name, actionId, scopes, missingScope) => {
       const response = await callRegisteredSessionActionThroughGatewayForTest({
         pluginId,

@@ -483,6 +483,7 @@ src/plugins/clawhub.test.ts
 src/plugins/clawhub.ts
 src/plugins/commands.test.ts
 src/plugins/contracts/host-hooks.contract.test.ts
+src/plugins/contracts/plugin-sdk-subpaths.test.ts
 src/plugins/contracts/scheduled-turns.contract.test.ts
 src/plugins/contracts/tts-contract-suites.ts
 src/plugins/discovery.test.ts
