@@ -106,7 +106,9 @@ function runAuthModelCommand<T extends object>(
           await run(opts, defaultRuntime);
         },
       }).catch((error: unknown) => {
-        if (!cancellationConfirmed) throw error;
+        if (!cancellationConfirmed) {
+          throw error;
+        }
         defaultRuntime.log("Login session closed. Credentials already saved were not undone.");
       });
       return;

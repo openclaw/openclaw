@@ -372,6 +372,8 @@ protected inputs, and model-access choices. `--provider`, `--method`,
 `--device-code`, and `--agent` select the declared credential-only plugin flow.
 Omit the provider or method to choose from the available flows. An unavailable
 or ambiguous plugin method is not silently replaced with a different login.
+The menu reads the selected local configuration, including `plugins.load.paths`,
+and honors plugin disablement and allowlists.
 
 For these online logins, `--profile-id`, `--force`, `--set-default`, and Copilot
 `--yes` are refused before starting sign-in because the Gateway login API does

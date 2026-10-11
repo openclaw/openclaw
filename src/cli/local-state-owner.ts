@@ -194,13 +194,13 @@ export async function runWithLocalStateOwner<T>(params: {
         onSignalAbort: params.onGatewaySignalAbort,
         onResponse: params.onGatewayResponse
           ? async (request, connectionSignal) => {
-              const guardedRequest: GatewayRequestFunction = (method, input, options) => {
+              const guardedRequest: GatewayRequestFunction = (method, requestParams, options) => {
                 assertTargetCurrent();
                 const current = readLockPayloadSync(paths.ownerLockPath, true);
                 if (!current || current.ownerId !== owner.ownerId || current.pid !== owner.pid) {
                   refuse(new Error("Gateway owner changed during the operation"));
                 }
-                return request(method, input, options);
+                return request(method, requestParams, options);
               };
               await params.onGatewayResponse!(
                 guardedRequest,

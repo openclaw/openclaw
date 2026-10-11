@@ -8,7 +8,7 @@ import type { runModelsAuthLoginFlowCore } from "./auth.js";
 
 type PersistProviderAuthCall = Parameters<typeof persistProviderAuthProfilesAfterLogin>[0];
 
-export function registerModelsAuthAuthorityTests(params: {
+export function registerModelsAuthAuthorityTests(fixture: {
   mocks: {
     createClackPrompter: Mock;
     persistProviderAuthProfilesAfterLogin: Mock;
@@ -19,7 +19,7 @@ export function registerModelsAuthAuthorityTests(params: {
   runModelsAuthLoginFlowCore: typeof runModelsAuthLoginFlowCore;
   setProviderAuthResult: (result: ProviderAuthResult) => void;
 }) {
-  const { mocks, createRuntime, runModelsAuthLoginFlowCore } = params;
+  const { mocks, createRuntime, runModelsAuthLoginFlowCore } = fixture;
   it.each(["cancelled", "revoked"] as const)(
     "does not complete a saved login when authority is %s during a rejected refresh",
     async (reason) => {
@@ -70,7 +70,9 @@ export function registerModelsAuthAuthorityTests(params: {
         runtime: createRuntime(),
         prompter: mocks.createClackPrompter(),
         assertCurrent: () => {
-          if (!current) throw new Error("Login authority ended.");
+          if (!current) {
+            throw new Error("Login authority ended.");
+          }
         },
       }),
     ).rejects.toThrow("Login authority ended.");
@@ -96,7 +98,9 @@ export function registerModelsAuthAuthorityTests(params: {
         runtime: createRuntime(),
         prompter: mocks.createClackPrompter(),
         assertCurrent: () => {
-          if (!current) throw new Error("Login authority ended.");
+          if (!current) {
+            throw new Error("Login authority ended.");
+          }
         },
       }),
     ).rejects.toThrow("Login authority ended.");
@@ -110,7 +114,7 @@ export function registerModelsAuthAuthorityTests(params: {
     async (boundary) => {
       let current = true;
       let published = false;
-      params.setProviderAuthResult({
+      fixture.setProviderAuthResult({
         profiles: [
           {
             profileId: "openai:saved",
@@ -130,8 +134,11 @@ export function registerModelsAuthAuthorityTests(params: {
         ) => {
           const prepared = mutator({});
           current = false;
-          if (boundary === "beforeCommit") await beforeCommit?.();
-          else writeOptions?.assertCurrent?.();
+          if (boundary === "beforeCommit") {
+            await beforeCommit?.();
+          } else {
+            writeOptions?.assertCurrent?.();
+          }
           published = true;
           return prepared;
         },
@@ -143,7 +150,9 @@ export function registerModelsAuthAuthorityTests(params: {
           runtime: createRuntime(),
           prompter: mocks.createClackPrompter(),
           assertCurrent: () => {
-            if (!current) throw new Error("Login authority ended.");
+            if (!current) {
+              throw new Error("Login authority ended.");
+            }
           },
         }),
       ).rejects.toThrow("Login authority ended.");

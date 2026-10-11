@@ -41,8 +41,12 @@ function gateway(results: Array<WizardNextResult | Error>) {
   ): Promise<T> => {
     calls.push({ method, params });
     const result = method === "wizard.cancel" ? { status: "cancelled" } : results.shift();
-    if (!result) throw new Error("Unexpected wizard request");
-    if (result instanceof Error) throw result;
+    if (!result) {
+      throw new Error("Unexpected wizard request");
+    }
+    if (result instanceof Error) {
+      throw result;
+    }
     return result as T;
   };
   return { request, calls };

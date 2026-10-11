@@ -744,7 +744,11 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       };
       const response = responseWork;
       const stopped = stopGatewayClient(client);
-      void (response ? stopped.finally(() => response.catch(() => {})) : stopped).finally(complete);
+      if (response) {
+        void Promise.allSettled([stopped, response]).then(complete);
+      } else {
+        void stopped.then(complete, complete);
+      }
     };
     const stop = (err?: Error, value?: T) => {
       if (settled) {

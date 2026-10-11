@@ -5,6 +5,11 @@ import type {
   WizardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import {
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+} from "../../config/io.invalid-config.js";
 import type { GatewayRequestFunction } from "../../gateway/call.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resolveManifestDeclaredProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
@@ -26,7 +31,17 @@ export async function readGatewayLoginParams(
 ): Promise<SystemAgentSetupAuthStartParams> {
   const provider = opts.provider ? normalizeManualAuthProvider(opts.provider) : undefined;
   const method = normalizeLowercaseStringOrEmpty(opts.method);
+  const snapshot = await readConfigFileSnapshot({
+    observe: false,
+    isolateEnv: true,
+    skipPluginValidation: true,
+  });
+  signal.throwIfAborted();
+  if (!snapshot.valid) {
+    throw createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+  }
   const choices = resolveManifestDeclaredProviderAuthChoices({
+    config: snapshot.runtimeConfig,
     includeUntrustedWorkspacePlugins: false,
     includeWorkspacePlugins: false,
   }).filter(
@@ -54,7 +69,9 @@ export async function readGatewayLoginParams(
           })),
         })
         .catch((error: unknown) => {
-          if (error instanceof WizardCancelledError) throw new ExitError(0);
+          if (error instanceof WizardCancelledError) {
+            throw new ExitError(0);
+          }
           throw error;
         });
   signal.throwIfAborted();
@@ -67,10 +84,12 @@ async function answerLoginStep(
   signal: AbortSignal,
 ): Promise<unknown> {
   const message = sanitizeTerminalText(step.message ?? step.title ?? "Continue");
-  if (step.externalUrl)
+  if (step.externalUrl) {
     await prompter.note(sanitizeTerminalText(step.externalUrl), "Open this URL to continue");
-  if (step.deviceCode)
+  }
+  if (step.deviceCode) {
     await prompter.note(sanitizeTerminalText(step.deviceCode.code), step.title ?? "Device code");
+  }
   switch (step.type) {
     case "text": {
       if (!process.stdin.isTTY && step.sensitive) {
@@ -83,7 +102,9 @@ async function answerLoginStep(
         initialValue: typeof step.initialValue === "string" ? step.initialValue : undefined,
         signal,
       });
-      if (step.sensitive) registerSecretValueForRedaction(value);
+      if (step.sensitive) {
+        registerSecretValueForRedaction(value);
+      }
       return value;
     }
     case "select":
@@ -100,7 +121,9 @@ async function answerLoginStep(
       });
     case "confirm":
     case "action":
-      if (step.executor === "gateway") return undefined;
+      if (step.executor === "gateway") {
+        return undefined;
+      }
       return prompter.confirm({
         message,
         initialValue: typeof step.initialValue === "boolean" ? step.initialValue : undefined,
@@ -112,6 +135,7 @@ async function answerLoginStep(
       await prompter.note(message, step.title);
       return undefined;
   }
+  return undefined;
 }
 
 async function answerBrowserStep(
@@ -144,11 +168,15 @@ async function answerBrowserStep(
       }
       signal.throwIfAborted();
       if (answered) {
-        if ("error" in answered) throw answered.error;
+        if ("error" in answered) {
+          throw answered.error;
+        }
         return answered;
       }
       const next = await request<WizardNextResult>("wizard.next", { sessionId }, { signal });
-      if (next.done || next.step?.id !== step.id) return { next };
+      if (next.done || next.step?.id !== step.id) {
+        return { next };
+      }
     }
   } finally {
     prompt.abort();
@@ -172,7 +200,9 @@ export async function runGatewayLoginWizard(
     );
     while (!result.done) {
       signal.throwIfAborted();
-      if (result.error) runtime.error(sanitizeTerminalText(result.error));
+      if (result.error) {
+        runtime.error(sanitizeTerminalText(result.error));
+      }
       const step = result.step;
       let value: unknown;
       if (step?.type === "text" && step.externalUrl) {
@@ -198,21 +228,30 @@ export async function runGatewayLoginWizard(
           { signal, timeoutMs: 25 * 60_000 },
         );
       } catch (error) {
-        if (step?.type !== "text" || !step.externalUrl) throw error;
+        if (step?.type !== "text" || !step.externalUrl) {
+          throw error;
+        }
         // A browser callback can finish between the terminal answer and its RPC.
         // Reconcile that session's terminal result, without replaying the answer.
         const current = await request<WizardNextResult>("wizard.next", { sessionId }, { signal });
-        if (!current.done) throw error;
+        if (!current.done) {
+          throw error;
+        }
         result = current;
       }
     }
     done = true;
-    if (result.status === "cancelled") throw new WizardCancelledError(result.error);
-    if (result.status === "error")
+    if (result.status === "cancelled") {
+      throw new WizardCancelledError(result.error);
+    }
+    if (result.status === "error") {
       throw new Error(result.error ?? "Gateway provider login failed.");
+    }
     runtime.log("Provider sign-in saved and connection update confirmed by the Gateway.");
   } catch (error) {
-    if (!done && !signal.aborted) await request("wizard.cancel", { sessionId, closeInput: true });
+    if (!done && !signal.aborted) {
+      await request("wizard.cancel", { sessionId, closeInput: true });
+    }
     if (error instanceof WizardCancelledError) {
       runtime.log("Login session closed. Credentials already saved were not undone.");
       return;
