@@ -749,7 +749,7 @@ async function resolveGatewayConnection(
         [
           "No Gateway is running on this machine.",
           "Fix: run `openclaw chat` to chat here without a Gateway, or start one with `openclaw gateway`.",
-          "To use a Gateway on another machine, run `openclaw tui <Gateway URL>` and approve the pairing request there.",
+          "To use a Gateway on another machine, run `openclaw tui <Gateway URL>` once with that Gateway's token or password, then approve the pairing request in its Control UI.",
         ].join("\n"),
       );
     }
