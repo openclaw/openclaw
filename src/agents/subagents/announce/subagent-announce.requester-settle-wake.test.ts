@@ -1046,6 +1046,55 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     });
   });
 
+  it.each(["main", "nested", "reset", "cancelled", "successful"] as const)(
+    "keeps a quiet restart continuation private to its original %s parent",
+    async (scenario) => {
+      const requesterSessionKey = scenario === "nested" ? "agent:main:subagent:middle" : REQUESTER;
+      sessionStore[requesterSessionKey] = {
+        sessionId: "sess-parent",
+        lifecycleRevision: scenario === "reset" ? "replacement" : "original",
+      };
+      const child = makeSettledChild({
+        runId: "quiet-interrupted",
+        requesterSessionKey,
+        expectsCompletionMessage: false,
+        completionTarget: "parent",
+        completionRequesterSessionId: "sess-parent",
+        completionRequesterLifecycleRevision: "original",
+        suppressCompletionDelivery: scenario === "cancelled",
+        delivery: { status: "not_required" },
+        execution: {
+          status: "terminal",
+          startedAt: 2_000,
+          endedAt: 3_000,
+          interruptionReason: scenario === "successful" ? undefined : "gateway-restart",
+          outcome: scenario === "successful" ? { status: "ok" } : { status: "error" },
+        },
+      });
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+      const shouldContinue = scenario === "main" || scenario === "nested";
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(
+          wakeParams({ requesterSessionKey, settledEntry: child }),
+        ),
+      ).toBe(shouldContinue);
+      expect(deliverSpy).toHaveBeenCalledTimes(shouldContinue ? 1 : 0);
+      if (shouldContinue) {
+        const delivery = deliveredCallArg();
+        expect(delivery).toMatchObject({
+          completionTarget: "parent",
+          completionRequesterSessionId: "sess-parent",
+          completionRequesterLifecycleRevision: "original",
+          expectsCompletionMessage: false,
+        });
+        expect(delivery.triggerMessage).toContain("Reconcile every listed unfinished child");
+        expect(delivery.triggerMessage).toContain(child.childSessionKey);
+        expect(delivery.triggerMessage).toContain("Process this result privately");
+      }
+      expect(child.requesterSettleWake).toBeUndefined();
+    },
+  );
+
   it("wakes the settled batch's parent with interrupted child identities and continuation guidance", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({
