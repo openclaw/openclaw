@@ -43,6 +43,11 @@ import {
   WorkspaceBootstrapSeedConflictError,
 } from "./workspace-bootstrap-publish.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
+import {
+  type ExtraBootstrapResolution,
+  patternWalkRootStaysInWorkspace,
+  resolveExtraBootstrapPatternPaths as resolveLocalExtraBootstrapPatternPaths,
+} from "./workspace-extra-bootstrap-walker.js";
 import { createWorkspaceFileMutationGuard } from "./workspace-file-mutation-guard.js";
 import {
   createLoadedWorkspaceBootstrapFile,
@@ -1082,21 +1087,19 @@ async function* walkWorkspaceFiles(
 async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
-): Promise<string[]> {
-  if (!getAgentWorkspaceAccess(workspaceDir) && typeof fs.glob === "function") {
-    try {
-      const matches: string[] = [];
-      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
-        matches.push(match);
-      }
-      return matches;
-    } catch {
-      // Fall through to the local matcher before treating the pattern as literal.
-    }
+): Promise<ExtraBootstrapResolution> {
+  // Discovery owner splits on workspace access. A local workspace uses the
+  // hardened walker module (fs.glob where present, a Minimatch symlink-descent
+  // fallback where absent) with realpath containment and per-match failure
+  // isolation. A remote workspace stays bridge-owned — never local fs — and lists
+  // directories through access.bridge.readDirectory via walkWorkspaceFiles, which
+  // rechecks the binding after each awaited listing.
+  if (!getAgentWorkspaceAccess(workspaceDir)) {
+    return resolveLocalExtraBootstrapPatternPaths(workspaceDir, pattern);
   }
 
   if (typeof path.matchesGlob !== "function") {
-    return [pattern];
+    return { matches: [pattern], failures: [] };
   }
 
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);
@@ -1109,7 +1112,16 @@ async function resolveExtraBootstrapPatternPaths(
   )) {
     matches.push(candidate);
   }
-  return matches.length > 0 ? matches : [pattern];
+  return { matches: matches.length > 0 ? matches : [pattern], failures: [] };
+}
+
+function invalidBootstrapFilenameDiagnostic(filePath: string): ExtraBootstrapLoadDiagnostic {
+  const baseName = path.basename(filePath);
+  return {
+    path: filePath,
+    reason: "invalid-bootstrap-filename",
+    detail: `unsupported bootstrap basename: ${baseName}`,
+  };
 }
 
 export async function loadExtraBootstrapFilesWithDiagnostics(
@@ -1123,10 +1135,24 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     return { files: [], diagnostics: [] };
   }
   const resolvedDir = resolveUserPath(dir);
+  // Remote workspaces are bridge-owned: the Gateway host cannot canonicalize
+  // remote paths, so the realpath-aware containment pre-gate runs only for local
+  // workspaces. Remote patterns use lexical containment here and the bridge
+  // discovery path enforces the rest.
+  const access = getAgentWorkspaceAccess(resolvedDir);
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
+  // Every candidate — glob match, literal, or failed match — is keyed by the
+  // absolute path the loader reads, so relative, absolute, and literal spellings
+  // of one file load once and a file that faults under overlapping patterns
+  // surfaces a single diagnostic. That keeps the handler's "failed for N
+  // path(s)" a true distinct-path count.
   const resolvedPaths = new Set<string>();
+  const failedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
-    if (!isPathInside(resolvedDir, path.resolve(resolvedDir, resolveGlobWalkRoot(pattern)))) {
+    const walkRootContained = access
+      ? isPathInside(resolvedDir, path.resolve(resolvedDir, resolveGlobWalkRoot(pattern)))
+      : await patternWalkRootStaysInWorkspace(resolvedDir, pattern);
+    if (!walkRootContained) {
       diagnostics.push({
         path: path.resolve(resolvedDir, pattern),
         reason: "security",
@@ -1136,12 +1162,40 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     }
     try {
       if (hasGlobPattern(pattern)) {
-        const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
+        const { matches, failures, nativeGlobError } = await resolveExtraBootstrapPatternPaths(
+          resolvedDir,
+          pattern,
+        );
+        // fs.glob failed but the fallback walk recovered the pattern: warn so the
+        // fault stays visible without dropping the files that did load.
+        if (nativeGlobError !== undefined) {
+          workspaceLogger.warn("Extra bootstrap glob failed; used fallback directory walk.", {
+            pattern,
+            reason: nativeGlobError,
+            consoleMessage: `Extra bootstrap glob failed; used fallback directory walk: pattern=${pattern} reason=${nativeGlobError}`,
+          });
+        }
         for (const match of matches) {
-          resolvedPaths.add(match);
+          resolvedPaths.add(path.resolve(resolvedDir, match));
+        }
+        // Per-match isolation: a readable match loads normally while each match
+        // that failed canonicalization surfaces as its own diagnostic, instead of
+        // one failing match discarding the whole pattern. Only a fault on a file
+        // that could enter bootstrap context is an operator-visible `io`.
+        for (const failure of failures) {
+          const filePath = path.resolve(resolvedDir, failure.path);
+          if (failedPaths.has(filePath)) {
+            continue;
+          }
+          failedPaths.add(filePath);
+          diagnostics.push(
+            VALID_BOOTSTRAP_NAMES.has(path.basename(filePath))
+              ? { path: filePath, reason: "io", detail: failure.detail }
+              : invalidBootstrapFilenameDiagnostic(filePath),
+          );
         }
       } else {
-        resolvedPaths.add(pattern);
+        resolvedPaths.add(path.resolve(resolvedDir, pattern));
       }
     } catch (error) {
       diagnostics.push({
@@ -1153,15 +1207,13 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
 
   const files: WorkspaceBootstrapFile[] = [];
-  for (const relPath of resolvedPaths) {
-    const filePath = path.resolve(resolvedDir, relPath);
-    const baseName = path.basename(relPath);
+  for (const filePath of resolvedPaths) {
+    if (failedPaths.has(filePath)) {
+      continue;
+    }
+    const baseName = path.basename(filePath);
     if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
-      diagnostics.push({
-        path: filePath,
-        reason: "invalid-bootstrap-filename",
-        detail: `unsupported bootstrap basename: ${baseName}`,
-      });
+      diagnostics.push(invalidBootstrapFilenameDiagnostic(filePath));
       continue;
     }
     const loaded = await readWorkspaceFileWithGuards({
