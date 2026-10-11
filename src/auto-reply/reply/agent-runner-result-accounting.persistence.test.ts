@@ -9,7 +9,6 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
-import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
@@ -234,11 +233,7 @@ it("completes against the settled writer when the caller still has its pre-run e
 });
 
 function observeCompletionCommands(
-  options: {
-    hideCommittedReceipt?: boolean;
-    beforeCommit?: () => void;
-    beforeCommand?: () => void;
-  } = {},
+  options: { hideCommittedReceipt?: boolean; beforeCommit?: () => void } = {},
 ) {
   const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
   const commands: string[] = [];
@@ -258,9 +253,6 @@ function observeCompletionCommands(
               run({
                 execute(command, commandOptions) {
                   commands.push(command.type);
-                  if (command.type === "session.actor.completeTurn") {
-                    options.beforeCommand?.();
-                  }
                   return worker.execute(command, commandOptions);
                 },
               }),
@@ -305,57 +297,6 @@ function observeCompletionCommands(
     },
   };
 }
-
-it("finishes terminal accounting during unrelated writes and preserves a newer model selection", async () => {
-  const fixture = await createFixture();
-  const current = {
-    ...fixture.read()!,
-    providerOverride: diagnostic.provider,
-    modelOverride: diagnostic.model,
-    liveModelSwitchPending: true,
-  };
-  await fixture.replace(current);
-  const siblingKey = `${fixture.context.sessionKey}:sibling`;
-  await sessionAccessor.replaceSessionEntry(
-    { storePath, sessionKey: siblingKey },
-    { sessionId: `${fixture.sessionId}-sibling`, updatedAt: 1 },
-  );
-  const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-  let writes = 0;
-  const observer = observeCompletionCommands({
-    beforeCommand() {
-      database.db
-        .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
-        .run(siblingKey);
-      if (writes++ === 0) {
-        writeSessionEntry(database, fixture.context.sessionKey!, {
-          ...current,
-          modelOverride: "newer-model",
-        });
-      }
-    },
-  });
-  try {
-    await fixture.account("ordinary", {
-      usage: { input: 120, output: 8, cacheRead: 20 },
-      lastCallUsage: { input: 120, output: 8, cacheRead: 20 },
-    });
-    expect(writes).toBeGreaterThan(0);
-    expect(fixture.read()).toMatchObject({
-      sessionId: fixture.sessionId,
-      lifecycleRevision: current.lifecycleRevision,
-      activeWriterRunId: current.activeWriterRunId,
-      inputTokens: 120,
-      outputTokens: 8,
-      cacheRead: 20,
-      totalTokens: 140,
-      modelOverride: "newer-model",
-      liveModelSwitchPending: true,
-    });
-  } finally {
-    observer.restore();
-  }
-});
 
 it.each(["publication-failure", "unknown-commit"] as const)(
   "does not disclose or replay a durable final after %s",

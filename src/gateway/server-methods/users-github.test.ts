@@ -33,6 +33,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { dumpGitBackupDatabase } from "../../snapshot/git-backup-codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { observeUserGitHubConnectionAuthority } from "../../state/user-github-connection-events.js";
 import {
   observeUserGitHubProfileRetirement,
   readUserGitHubConnection,
@@ -43,6 +44,7 @@ import {
   expireUserGitHubAuthorization,
   updateUserGitHubConnection,
 } from "../../state/user-github-connections.test-support.js";
+import type { UserGitHubConnectionCommit } from "../../state/user-github-connections.types.js";
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.js";
@@ -275,23 +277,29 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     }
     const pending = await start();
     const action = { owner: owner(), assertCurrent: () => {} };
+    const publications: UserGitHubConnectionCommit[] = [];
+    const unobserve = observeUserGitHubConnectionAuthority((commit) => publications.push(commit));
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     try {
       withPluginRuntimePluginScope({ pluginId: "personal-github-legacy-service-test" }, () => {
         expect(lifecycle.personal.cancelAuthorization(action, pending.requestId)).toBe(true);
         expect(readUserGitHubConnection(owner())?.pending).toBeUndefined();
+        expect(publications).toHaveLength(1);
         expect(lifecycle.personal.cancelAuthorization(action, pending.requestId)).toBe(false);
+        expect(publications).toHaveLength(1);
         const previous = readUserGitHubConnection(owner())?.generation;
         expect(lifecycle.personal.disconnect(action)).toBeUndefined();
         const disconnected = readUserGitHubConnection(owner());
         expect(disconnected?.generation).not.toBe(previous);
         expect(disconnected?.selection).toEqual({ kind: "disconnected" });
+        expect(publications).toHaveLength(2);
       });
       expect(warning).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("personal.cancelAuthorizationAsync"),
         { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
       );
     } finally {
+      unobserve();
       warning.mockRestore();
     }
   });
@@ -712,7 +720,15 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       await start();
       const retired: string[] = [];
       const observedOwners: Array<string | undefined> = [];
+      const authorityOwners: Array<string | undefined> = [];
+      const authoritySeenAtRetirement: number[] = [];
+      const publications: UserGitHubConnectionCommit[] = [];
+      const unobserveAuthority = observeUserGitHubConnectionAuthority((publication) => {
+        authorityOwners.push(resolvePersonalGitHubOwner(owner()));
+        publications.push(publication);
+      });
       const unobserve = observeUserGitHubProfileRetirement((ids) => {
+        authoritySeenAtRetirement.push(publications.length);
         observedOwners.push(resolvePersonalGitHubOwner(owner()));
         retired.push(...ids);
       });
@@ -720,6 +736,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         await linkCanonicalUserProfileEmail("alice@example.test", owner(bob));
       } finally {
         unobserve();
+        unobserveAuthority();
       }
       expect(retired).toEqual(
         target === "absent" || source.selection.kind !== "connected"
@@ -727,11 +744,23 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
           : [source.selection.profileId],
       );
       expect(observedOwners).toEqual(target === "absent" ? [] : [owner(bob)]);
+      expect(authorityOwners).toEqual([owner(bob)]);
+      expect(authoritySeenAtRetirement).toEqual(target === "absent" ? [] : [1]);
       const merged = readUserGitHubConnection(owner(bob));
       expect(merged?.selection).toEqual((previousTarget ?? source).selection);
       expect(merged?.pending).toBeUndefined();
       expect(merged?.generation).not.toBe(source.generation);
       expect(merged?.generation).not.toBe(previousTarget?.generation);
+      expect(publications).toEqual([
+        {
+          kind: "user-github-connection",
+          databasePath: openOpenClawStateDatabase().path,
+          changedOwners: [owner(), owner(bob)],
+          retiredProfileIds: retired,
+        },
+      ]);
+      expect(JSON.stringify(publications)).not.toContain(tokens.accessToken);
+      expect(JSON.stringify(publications)).not.toContain(tokens.refreshToken);
     },
   );
 

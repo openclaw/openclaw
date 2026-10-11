@@ -2,10 +2,9 @@
 //
 // Shared (isolate: false) jsdom lanes re-evaluate the module graph for every test
 // file, so each file gets freshly evaluated component classes. jsdom keeps custom
-// element definitions on the window instead, outside that graph. Every Control UI
-// component registers with `if (!customElements.get(tag))`, so a definition that
-// survives the reset pins the tag to the previous file's class: the next file's
-// `document.createElement(tag)` then builds elements closed over the earlier file's
+// element definitions on the window instead, outside that graph. A definition
+// surviving the reset can reject registration or pin a tag to the previous file's
+// class. The next file's `document.createElement(tag)` then closes over the earlier file's
 // module instances, and its own singletons, module mocks, and spies are never the
 // ones production reaches. Registry lifetime has to match graph lifetime.
 //
@@ -29,8 +28,15 @@ export type CustomElementTracking = {
 // Conservative on an unreadable stack: keeping a repo tag costs a stale class in
 // one lane, dropping a dependency tag would leave it unupgraded for the whole run.
 export function isRepoOwnedDefineStack(stack: string | undefined): boolean {
-  // [0] "Error", [1] the patched define in this module, [2] the module calling it.
-  const callerFrame = (stack ?? "").split("\n")[2] ?? "";
+  // Vitest spies forward to the tracked define; they do not own the registered class.
+  const callerFrame =
+    (stack ?? "")
+      .split("\n")
+      .slice(2)
+      .find(
+        (frame) =>
+          !/[\\/]node_modules[\\/]vitest[\\/]dist[\\/]chunks[\\/]spy\.[^\\/]+\.js:/u.test(frame),
+      ) ?? "";
   return callerFrame.trim() !== "" && !/[\\/]node_modules[\\/]/u.test(callerFrame);
 }
 

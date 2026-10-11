@@ -44,9 +44,9 @@ import {
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
-import "./chat-audio-player.ts";
+import "./chat-audio-player.tsx";
 import "../../../components/solid/mcp-app-panel.tsx";
-import "./chat-video-player.ts";
+import "./chat-video-player.tsx";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import { isPdfAttachment } from "./chat-pdf-preview.ts";
 import type {
@@ -55,7 +55,7 @@ import type {
   ChatDetailPanelContent,
 } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
-import { isTextAttachment } from "./chat-text-attachment.ts";
+import { isTextAttachment } from "./chat-text-attachment.tsx";
 import "./session-diff-panel.ts";
 
 registerFilePreviewEnglish();

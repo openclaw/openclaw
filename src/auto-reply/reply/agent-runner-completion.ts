@@ -5,7 +5,10 @@ import type {
   SessionActorReducer,
 } from "../../config/sessions/session-actor-contract.js";
 import { reduceSessionActorEntry } from "../../config/sessions/session-actor-reducers.js";
-import { withSessionActor } from "../../config/sessions/session-actor-scope.js";
+import {
+  runSessionActorCommand,
+  withSessionActor,
+} from "../../config/sessions/session-actor-scope.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
@@ -115,32 +118,37 @@ export async function withAgentTurnCompletion<T>(
           }
           finished = true;
           await refresh();
-          const { reducers } = project();
+          let { reducers } = project();
           if (reducers.length === 0 && !pendingFinalDelivery) {
             return snapshot.entry!;
           }
           const committed: { receipt?: SessionActorReceipt } = {};
-          const outcome = await actor.completeTurn(
-            {
-              commandId: randomUUID(),
-              phaseId: `complete:${operationKey}`,
-              reducers,
-              bookkeeping: {
-                sessionId: expected.sessionId,
-                lifecycleRevision: expected.lifecycleRevision ?? null,
-                writerRunId: expected.writerRunId,
-                expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
-                ...(pendingFinalDelivery ? { lifecycle: { updatedAt: Date.now() } } : {}),
+          const outcome = await runSessionActorCommand(actor, authority, async (current) => {
+            snapshot = current ?? (await actor.read(authority));
+            ({ reducers } = project());
+            return actor.completeTurn(
+              {
+                commandId: randomUUID(),
+                phaseId: `complete:${operationKey}`,
+                expected: snapshot.version,
+                reducers,
+                bookkeeping: {
+                  sessionId: expected.sessionId,
+                  lifecycleRevision: expected.lifecycleRevision ?? null,
+                  writerRunId: expected.writerRunId,
+                  expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
+                  ...(pendingFinalDelivery ? { lifecycle: { updatedAt: Date.now() } } : {}),
+                },
+                pendingFinalDelivery,
               },
-              pendingFinalDelivery,
-            },
-            authority,
-            {
-              committed: (receipt) => {
-                committed.receipt = receipt.receipt;
+              authority,
+              {
+                committed: (receipt) => {
+                  committed.receipt = receipt.receipt;
+                },
               },
-            },
-          );
+            );
+          });
           if (committed.receipt) {
             snapshot = committed.receipt.postimage;
             params.publish(snapshot.entry!);

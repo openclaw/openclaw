@@ -9,7 +9,7 @@ import {
   ModelSetupWizardRunner,
   type ModelSetupWizardCompletion,
 } from "../pages/model-setup/wizard-runner.ts";
-import { renderModelSetupWizard } from "../pages/model-setup/wizard-view.ts";
+import { renderModelSetupWizard, type WizardViewProps } from "../pages/model-setup/wizard-view.ts";
 import "../styles/model-setup.css";
 registerSettingsEnglish();
 
@@ -63,34 +63,38 @@ export class WizardLoginController {
     void this.runner.cancel();
   }
 
-  render(
+  viewProps(
     options: {
       mode?: "auth" | "activate";
       busy?: boolean;
       refreshWarning?: string | null;
       doneMessage?: string;
     } = {},
-  ) {
+  ): WizardViewProps {
     const state = this.runner.state;
+    return {
+      mode: options.mode ?? "auth",
+      state:
+        state.phase === "step" ? { ...state, busy: state.busy || Boolean(options.busy) } : state,
+      refreshWarning: options.refreshWarning ?? null,
+      doneMessage: options.doneMessage,
+      cancellationNotice: this.cancellationNotice,
+      value: this.value,
+      onValueChange: (value) => {
+        this.value = value;
+        this.host.requestUpdate();
+      },
+      onAnswer:
+        this.options.onAnswer ??
+        ((value, includeValue) => void this.runner.answer(value, includeValue)),
+      onCancel: () => void this.cancel(),
+      onClose: this.options.onClose,
+    };
+  }
+
+  render(options: Parameters<WizardLoginController["viewProps"]>[0] = {}) {
     return html`<div @modal-cancel=${(event: Event) => event.preventDefault()}>
-      ${renderModelSetupWizard({
-        mode: options.mode ?? "auth",
-        state:
-          state.phase === "step" ? { ...state, busy: state.busy || Boolean(options.busy) } : state,
-        refreshWarning: options.refreshWarning ?? null,
-        doneMessage: options.doneMessage,
-        cancellationNotice: this.cancellationNotice,
-        value: this.value,
-        onValueChange: (value) => {
-          this.value = value;
-          this.host.requestUpdate();
-        },
-        onAnswer:
-          this.options.onAnswer ??
-          ((value, includeValue) => void this.runner.answer(value, includeValue)),
-        onCancel: () => void this.cancel(),
-        onClose: this.options.onClose,
-      })}
+      ${renderModelSetupWizard(this.viewProps(options))}
     </div>`;
   }
 

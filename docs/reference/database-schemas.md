@@ -23,6 +23,11 @@ CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
 
+Once Gateway startup holds exclusive state ownership, it inspects the previous
+Gateway lease directly in a read-only worker instead of copying the shared
+database. Fresh or unverifiable owners still prevent startup; Doctor's schema
+repair admission keeps its private snapshot.
+
 Borrowed worker transactions obtain their initial host grant before `BEGIN
 IMMEDIATE`; writes with domain or publication facts still revalidate those facts
 at commit. Transcript-index preflight and sweep instead admit one bounded derived
@@ -57,12 +62,6 @@ receipts distinguish explicit absence from incomplete coverage and preserve know
 commits independently of reply delivery. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness)
 for ordering, rollback, and the writer families that still retain native guards.
-
-Session input and terminal bookkeeping commands validate their captured session,
-lifecycle, writer, and input predicates inside the actor transaction. Unrelated
-memory-index or trajectory writes can invalidate cached actor state without
-rejecting those commands. The shared unsettled-writer fence still applies, and
-failed writer admission releases its native bookkeeping before later commands.
 
 SQLite format, schema-version, integrity, canonical-index, and
 table-existence validation runs once per physical database per process load,
@@ -130,6 +129,8 @@ Admitted schema facts survive data-only transaction settlement. Committed write
 receipts invalidate cached row facts. A settled write releases its receipt fence
 even when an independent read cursor remains open on the same connection. Active
 write cursors and explicit transactions retain their fence until settlement.
+Rejected writer admission leaves no native mutation depth behind, so a later
+settled write can release its receipt fence normally.
 This changes no schema, stored data, or update behavior. Transaction-local views of
 schema facts end with their SQLite snapshot; the next transaction consumes the
 process's published facts without repeating validation.
