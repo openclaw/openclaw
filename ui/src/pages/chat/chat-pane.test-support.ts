@@ -331,6 +331,7 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
       },
     },
     config: {
+      subscribe: () => () => {},
       current: {
         assistantIdentity: {
           agentId: null,
@@ -467,6 +468,7 @@ export function createSessionContext(
       },
     },
     config: {
+      subscribe: () => () => {},
       current: {
         assistantIdentity: { name: "Molty" },
         terminalEnabled: false,

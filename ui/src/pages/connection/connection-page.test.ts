@@ -21,7 +21,8 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import "./connection-page.tsx";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { DebugOverlay } from "../debug/debug-overlay.ts";
+import type { DebugOverlayElement } from "../debug/debug-overlay-state.ts";
+import "../debug/debug-overlay.ts";
 type ConnectionPage = SolidBridgeElement<object>;
 const mounts: Array<() => void> = [];
 
@@ -177,7 +178,9 @@ describe("ConnectionPage ping", () => {
     const statusReads = () => request.mock.calls.filter(([method]) => method === "system.info");
     expect(statusReads()).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(5_000);
-    const overlay = new DebugOverlay();
+    const overlay = document.createElement("openclaw-debug-overlay") as DebugOverlayElement & {
+      readonly updateComplete: Promise<boolean>;
+    };
     provider.append(overlay);
     overlay.open("minimized");
     await settleLitElement(overlay);

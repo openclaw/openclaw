@@ -361,6 +361,39 @@ describe("llama-server setup", () => {
     expect(result.defaultModel).toBe("llama-cpp/qwen/model:Q4_K_M");
   });
 
+  it.each([
+    { name: "saved false", saved: false },
+    { name: "saved true", saved: true },
+    { name: "unset", saved: undefined },
+  ])(
+    "forwards the $name private-network setting to interactive and non-interactive discovery",
+    async ({ saved }) => {
+      const config = configWithProvider({
+        request: saved === undefined ? {} : { allowPrivateNetwork: saved },
+      });
+      discoverMock.mockResolvedValue(successfulDiscovery());
+
+      await runLlamaServerSetup(
+        interactiveContext({
+          config,
+          env: {},
+          prompter: {
+            text: vi.fn(async () => "http://localhost:8080/v1"),
+            confirm: vi.fn(async () => false),
+          },
+        }),
+      );
+      const nonInteractive = nonInteractiveContext({ customBaseUrl: "http://localhost:8080/v1" });
+      nonInteractive.config = config;
+      await validateLlamaServerNonInteractive(nonInteractive);
+
+      expect(discoverMock).toHaveBeenCalledTimes(2);
+      for (const [call] of discoverMock.mock.calls) {
+        expect(call.allowPrivateNetwork).toBe(saved);
+      }
+    },
+  );
+
   it("does not send stored credentials to a replacement endpoint", async () => {
     discoverMock.mockResolvedValue(successfulDiscovery());
     runtimeApiKeyMock.mockResolvedValue("stored-profile-key");

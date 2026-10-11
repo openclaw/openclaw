@@ -2,14 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 import "./board-widget-cell.ts";
+
+const disposers: Array<() => void> = [];
+function mountElement(element: HTMLElement): void {
+  disposers.push(mountSolid(() => element, { container: document.body }).unmount);
+}
 
 class TestMcpAppView extends HTMLElement {
   sessionKey = "";
   viewId = "";
   fillContainer = false;
   override title = "";
+  teardown = vi.fn(async () => {});
+  restartAfterTeardown = vi.fn();
 }
 
 if (!customElements.get("mcp-app-view")) {
@@ -71,7 +79,7 @@ async function mount(
   cell.sessionKey = "agent:main:test";
   cell.callbacks = currentCallbacks;
   cell.active = active;
-  document.body.append(cell);
+  mountElement(cell);
   await settle(cell);
   return cell;
 }
@@ -144,6 +152,9 @@ function stubChangingVisibility() {
 }
 
 afterEach(() => {
+  for (const dispose of disposers.splice(0)) {
+    dispose();
+  }
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -175,7 +186,7 @@ describe("board MCP App cell lifecycle", () => {
     );
     await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
 
-    expect(cell.querySelector("mcp-app-view") as TestMcpAppView).toMatchObject({
+    expect(cell.querySelector("mcp-app-view")).toMatchObject({
       fillContainer: true,
       sessionKey: "agent:main:test",
       viewId: "fixed-view",
@@ -251,21 +262,26 @@ describe("board MCP App cell lifecycle", () => {
     expect(widgetAppView).toHaveBeenCalledOnce();
   });
 
-  it("treats the bridge expiry event as authoritative", async () => {
+  it("awaits native teardown before replacing an expired app with its stale notice", async () => {
+    const retired = deferred();
     const refreshWidgetAppView = vi.fn(async () => ({
       status: "stale" as const,
       error: "lease rejected",
     }));
     const cell = await mount(widget(), callbacks({ refreshWidgetAppView }));
     await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
-
-    cell
-      .querySelector("mcp-app-view")
-      ?.dispatchEvent(
-        new CustomEvent("openclaw-mcp-app-view-expired", { bubbles: true, composed: true }),
-      );
+    const view = cell.querySelector("mcp-app-view")!;
+    const teardown = vi.spyOn(view, "teardown").mockImplementation(() => retired.promise);
+    view.dispatchEvent(
+      new CustomEvent("openclaw-mcp-app-view-expired", { bubbles: true, composed: true }),
+    );
     await settle(cell);
 
+    expect(teardown).toHaveBeenCalled();
+    expect(cell.querySelector("mcp-app-view")).toBe(view);
+    expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).toBeNull();
+    retired.resolve();
+    await settle(cell);
     expect(cell.querySelector("mcp-app-view")).toBeNull();
     expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).not.toBeNull();
   });
@@ -435,7 +451,7 @@ describe("board MCP App cell lifecycle", () => {
 
     cell.remove();
     await Promise.resolve();
-    document.body.append(cell);
+    mountElement(cell);
     await settle(cell);
 
     await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledTimes(2));

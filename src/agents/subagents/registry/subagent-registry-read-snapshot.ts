@@ -21,7 +21,6 @@ import {
   type SubagentRunsCache,
 } from "./subagent-registry-read-cache.js";
 import type {
-  SubagentMaintenanceDurableBasis,
   SubagentRunReadRecord,
   SubagentRunsDurableBasis,
 } from "./subagent-registry-read.types.js";
@@ -291,7 +290,6 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
 }
 
 export type PreparedSubagentMaintenanceRead = {
-  readonly basis?: SubagentMaintenanceDurableBasis;
   capture(): ReadonlyMap<string, SubagentRunMaintenanceRecord>;
 };
 
@@ -347,18 +345,9 @@ export async function prepareSubagentMaintenanceReadSnapshot(
     throw new Error("Unexpected subagent maintenance read result");
   }
   const persisted = reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
-  const basis: SubagentMaintenanceDurableBasis = Object.freeze({
-    databasePath: context.admission.databasePath,
-    databaseIdentity: context.admission.identity.key,
-    ...(context.admission.identity.birthtime
-      ? { databaseBirthtime: context.admission.identity.birthtime }
-      : {}),
-    digest: reply?.maintenanceDigest ?? null,
-  });
   return {
-    basis,
     capture() {
-      // Capture current published protection; worker deletion also compares the durable basis.
+      // The owner publishes committed changes before the final maintenance grant.
       return capture(persisted);
     },
   };

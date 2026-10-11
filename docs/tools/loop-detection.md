@@ -94,6 +94,13 @@ as duration, PID, session ID, and working directory.
 For typed terminal failures, it also ignores diagnostic timestamps, explicit
 attempt or retry counters, elapsed durations, and labeled process IDs. Other
 text and numbers remain significant, so a new failure cause resets the streak.
+
+For successful `memory_search` results, comparison preserves ordered hits and
+their content while ignoring per-call debug timings and the aggregate hit score,
+which changes with temporal decay. Changes to hit order, paths, snippets, line
+ranges, warnings, or other stable result metadata still count as progress. Scores
+and debug data remain in the delivered result; error results keep full comparison.
+
 Outbound message-send results are hashed with volatile per-call ids (message id, file id, timestamp)
 stripped, so delivery IDs alone do not make repeated equivalent sends look like
 progress. When a run id is available, history is evaluated only within that run,
