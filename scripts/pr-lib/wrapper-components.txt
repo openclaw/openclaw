@@ -254,6 +254,7 @@ src/agents/auth-profiles/sqlite-read-pool.ts
 src/agents/configured-provider-fallback.ts
 src/agents/configured-provider-model.ts
 src/agents/defaults.ts
+src/agents/failover/signal.ts
 src/agents/glob-pattern.ts
 src/agents/github-host-runtime.ts
 src/agents/github-host.ts

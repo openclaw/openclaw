@@ -1,5 +1,6 @@
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import {
+  buildAgentRunFallbackReceipt,
   formatAgentRunRouteChange,
   normalizeAgentRunTerminalReceipt,
   type AgentRunTerminalReceipt,
@@ -112,6 +113,10 @@ export function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(pa
         ...params.result.meta.agentMeta,
         terminalReceipt: {
           ...terminalReceipt,
+          fallback: buildAgentRunFallbackReceipt({
+            attempts: params.fallbackAttempts,
+            existing: terminalReceipt.fallback,
+          }),
           requested,
           rerouted:
             terminalReceipt.rerouted ||
@@ -143,6 +148,7 @@ export function buildRunEntryTerminal(params: {
   runId: string;
   requested: { provider: string; model: string };
   sessionId: string;
+  fallbackAttempts: FallbackAttempt[];
 }): EmbeddedAgentRunEntryTerminal {
   const meta = params.result.meta;
   const outcome = params.outcome;
@@ -181,6 +187,7 @@ export function buildRunEntryTerminal(params: {
             responseModel: agentMeta.model,
           },
           successfulToolNames: ["message"],
+          fallback: buildAgentRunFallbackReceipt({ attempts: params.fallbackAttempts }),
           sourceReplyDelivered: true as const,
           rerouted: isProviderModelRerouted(params.requested, {
             provider: agentMeta.provider,
@@ -192,6 +199,10 @@ export function buildRunEntryTerminal(params: {
     normalizedTerminalReceipt?.runId === params.runId
       ? {
           ...normalizedTerminalReceipt,
+          fallback: buildAgentRunFallbackReceipt({
+            attempts: params.fallbackAttempts,
+            existing: normalizedTerminalReceipt.fallback,
+          }),
           terminalDisposition: terminalReply.disposition === "visible" ? "visible" : "not-visible",
         }
       : undefined;

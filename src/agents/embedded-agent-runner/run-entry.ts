@@ -634,6 +634,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       runId: params.identity.runId,
       requested: { provider: params.selection.provider, model: params.selection.model },
       sessionId: params.identity.sessionId,
+      fallbackAttempts: fallbackResult.attempts,
     });
     const acceptedTerminal =
       !params.abortSignal?.aborted &&

@@ -176,6 +176,7 @@ describe("runEmbeddedAgentEntry", () => {
         model: "fallback-model",
         responseModel: "producer-model",
       },
+      fallback: { occurred: true, reason: "format" },
       rerouted: true,
     });
     expect(channel.result.terminal.metadata.assistantTranscriptIdempotencyKey).toBe(
@@ -195,7 +196,7 @@ describe("runEmbeddedAgentEntry", () => {
       disposition: "visible",
       text: "fallback complete",
       modelRouteChange:
-        "Model route changed: primary-provider/primary-model → fallback-provider/producer-model.",
+        "Model route changed: primary-provider/primary-model → fallback-provider/producer-model (fallback reason: format).",
     });
     expect(channel.candidateLeases[0]).toBe(channel.candidateLeases[1]);
     expect(state.selectAgentHarness).toHaveBeenCalledWith(
