@@ -716,11 +716,13 @@ describe("subagent registry sqlite store", () => {
   });
 
   it.each([undefined, "parent"] as const)(
-    "omits retained bodies from every duplicate envelope (completion target: %s)",
+    "projects duplicate envelopes without rewriting stored bodies (completion target: %s)",
     (completionTarget) => {
       const marker = "retained-duplicate-body:" + "x".repeat(2_048);
       const run = createRun({
         completionTarget,
+        model: "réglage\u0000模型",
+        generation: 3,
         task: marker,
         execution: { status: "terminal", outcome: { status: "ok", error: marker } },
         completion: { required: true, resultText: marker },
@@ -728,7 +730,8 @@ describe("subagent registry sqlite store", () => {
       });
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
       let payload = bindSubagentRunRecord(run)
-        .payload_json.replace('"execution":', '"execution":{"status":"invalid"},"execution":')
+        .payload_json.replace('"generation":3', '"generation":3e0')
+        .replace('"execution":', '"execution":{"status":"invalid"},"execution":')
         .replace('"completion":', '"completion":{"required":false},"completion":')
         .replace('"delivery":', '"delivery":{"status":"failed"},"delivery":');
       if (completionTarget === "parent") {
@@ -746,22 +749,17 @@ describe("subagent registry sqlite store", () => {
         execution: { status: "terminal" },
         delivery: { status: "pending" },
       });
-      const parse = vi.spyOn(JSON, "parse");
-      try {
-        expect(
-          loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(
-            run.runId,
-          ),
-        ).toMatchObject({
-          execution: { status: "terminal" },
-          delivery: { status: "pending" },
-        });
-        expect(parse.mock.calls.some(([text]) => text.includes("retained-duplicate-body:"))).toBe(
-          false,
-        );
-      } finally {
-        parse.mockRestore();
-      }
+      const projected = loadSubagentSessionListRunsFromSqlite(
+        undefined,
+        openOpenClawStateDatabase(),
+      ).get(run.runId);
+      expect(projected).toMatchObject({
+        model: "réglage\u0000模型",
+        generation: 3,
+        execution: { status: "terminal" },
+        delivery: { status: "pending" },
+      });
+      expect(JSON.stringify(projected)).not.toContain("retained-duplicate-body:");
       expect(
         db.prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?").get(run.runId)
           ?.payload_json,

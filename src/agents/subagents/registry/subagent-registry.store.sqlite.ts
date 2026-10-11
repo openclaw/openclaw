@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { sql, type ExpressionBuilder, type RawBuilder } from "kysely";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sql, type ExpressionBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -174,11 +175,9 @@ const subagentSessionListPaths = [
   "expectsCompletionMessage",
 ];
 
-function projectSessionListJsonMembers(
-  payload: RawBuilder<unknown>,
+function createSessionListProjection(
   paths: readonly string[],
-  depth: number,
-): RawBuilder<string> {
+): (payload: Record<string, unknown>) => Record<string, unknown> {
   const members = new Map<string, string[]>();
   for (const path of paths) {
     const separator = path.indexOf(".");
@@ -189,48 +188,29 @@ function projectSessionListJsonMembers(
     }
     members.set(key, children);
   }
-  const alias = `member_${depth}`;
-  const key =
-    /* kysely-allow-raw: depth aliases belong to this static metadata projection. */ sql.ref(
-      `${alias}.key`,
-    );
-  const type =
-    /* kysely-allow-raw: depth aliases belong to this static metadata projection. */ sql.ref(
-      `${alias}.type`,
-    );
-  const value =
-    /* kysely-allow-raw: depth aliases belong to this static metadata projection. */ sql.ref(
-      `${alias}.value`,
-    );
-  const cursor =
-    /* kysely-allow-raw: this recursive projection owns every generated alias. */ sql.id(alias);
-  const nested = [...members].flatMap(([name, children]) =>
-    children.length
-      ? [
-          sql`WHEN ${key} = ${name} AND ${type} = 'object' THEN json(${projectSessionListJsonMembers(value, children, depth + 1)})`,
-        ]
-      : [],
+  const fields = [...members].map(
+    ([key, children]) =>
+      [key, children.length ? createSessionListProjection(children) : undefined] as const,
   );
-  // JSON.parse owns last-key selection. Scalar leaves retain invalid container types, not bodies.
-  return /* kysely-allow-raw: bounded registry metadata excludes every retained body, including duplicated envelopes. */ sql<string>`(SELECT json_group_object(${key}, CASE
-    ${sql.join(nested, sql` `)}
-    WHEN ${type} = 'object' THEN json('{}') WHEN ${type} = 'array' THEN json('[]')
-    WHEN ${type} = 'true' THEN json('true') WHEN ${type} = 'false' THEN json('false')
-    ELSE ${value} END)
-    FROM json_each(${payload}) AS ${cursor}
-    WHERE ${key} IN (${sql.join([...members.keys()])}))`;
+  return (payload) =>
+    Object.fromEntries(
+      fields.flatMap(([key, project]) => {
+        if (!Object.hasOwn(payload, key)) {
+          return [];
+        }
+        const value = payload[key];
+        // Invalid containers keep their type without retaining their bodies.
+        return [
+          [key, isRecord(value) ? (project?.(value) ?? {}) : Array.isArray(value) ? [] : value],
+        ];
+      }),
+    );
 }
 
-const subagentSessionListPayload = projectSessionListJsonMembers(
-  /* kysely-allow-raw: fixed column in the materialized registry metadata relation. */ sql.ref(
-    "payload_json",
-  ),
-  [
-    ...subagentSessionListPaths,
-    ...subagentSessionListPaths.map((path) => `parentCompletion.${path}`),
-  ],
-  0,
-);
+const projectSessionListPayload = createSessionListProjection([
+  ...subagentSessionListPaths,
+  ...subagentSessionListPaths.map((path) => `parentCompletion.${path}`),
+]);
 
 function readSubagentSessionListRows(
   scope: { controllerSessionKeys?: readonly string[] },
@@ -269,14 +249,24 @@ function readSubagentSessionListRows(
         "requester_store_path",
         "controller_store_path",
         "created_at",
-        subagentSessionListPayload.as("payload_json"),
+        "payload_json",
       ])
       .where(
         /* kysely-allow-raw: malformed payloads cannot enter JSON member projection. */ sql<boolean>`json_valid(payload_json) AND json_type(payload_json) = 'object'`,
       )
       .orderBy("created_at", "asc")
       .orderBy("run_id", "asc"),
-  ).rows;
+  ).rows.flatMap((row) =>
+    row.payload_json === null
+      ? []
+      : [
+          {
+            ...row,
+            // The SQL predicate admits objects; JSON.parse owns duplicate-key precedence.
+            payload_json: JSON.stringify(projectSessionListPayload(JSON.parse(row.payload_json))),
+          },
+        ],
+  );
 }
 
 function loadScopedSubagentRuns(
