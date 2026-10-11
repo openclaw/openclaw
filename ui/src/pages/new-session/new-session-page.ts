@@ -105,10 +105,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
   };
   @state() private imageLightbox: ImageLightboxItem | null = null;
   @state() private agentPickerOpen = false;
-  private readonly groupRouteRevalidation = new catalog.GroupRouteRevalidation(
-    () => this.data,
-    () => this.context?.revalidate("new-session"),
-  );
   private readonly draft: NewSessionDraftController;
   private readonly gateway: DraftGatewayState;
   private readonly browser: DraftPlaceBrowser;
@@ -199,10 +195,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       .watchStore(() => this.context?.theme)
       .watchStore(() => this.context?.agents)
       .watchStore(() => this.context?.agentIdentity)
-      .watchStore(
-        () => this.context?.sessions,
-        (sessions) => this.groupRouteRevalidation.synchronize(sessions),
-      )
+      .watchStore(() => this.context?.sessions)
       .watchStore(() => this.context?.placementStartup)
       .watchStore(() => this.context?.runtimeConfig)
       .watch(

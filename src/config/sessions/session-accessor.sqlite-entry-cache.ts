@@ -51,6 +51,7 @@ import {
 } from "./session-accessor.sqlite-entry-revision.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { captureSessionEntryPublicationSource } from "./session-entry-publication-source.js";
 import type { SessionEntrySnapshot } from "./session-entry-snapshots.js";
@@ -236,7 +237,9 @@ export function trackSessionEntryCacheWrite(
   write: () => void,
 ): SqliteSessionEntryCacheWriteGeneration | undefined {
   const before =
-    sessionEntryCaches.has(database.db) && getAdmittedSqliteSchemaFacts(database.db)
+    !readSessionActorTransactionState(database) &&
+    sessionEntryCaches.has(database.db) &&
+    getAdmittedSqliteSchemaFacts(database.db)
       ? readSessionNodesGeneration(database.db)
       : undefined;
   write();

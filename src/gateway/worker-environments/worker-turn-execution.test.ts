@@ -32,7 +32,7 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
-  completeWorkerLaunchDescriptor,
+  parseWorkerLaunchDescriptor,
   parseWorkerLaunchPlan,
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
@@ -771,9 +771,12 @@ describe("worker turn execution", () => {
       let descriptor: WorkerLaunchPlan | undefined;
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         descriptor = roundTripWorkerLaunchDescriptor(
-          completeWorkerLaunchDescriptor(plan, {
-            kind: "unix",
-            socketPath: "/tmp/worker-approval.sock",
+          parseWorkerLaunchDescriptor({
+            ...plan,
+            connectionEndpoint: {
+              kind: "unix",
+              socketPath: "/tmp/worker-approval.sock",
+            },
           }),
         );
         throw new WorkerRunnerCapacityError();
