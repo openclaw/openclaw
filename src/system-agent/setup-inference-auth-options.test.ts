@@ -29,6 +29,7 @@ describe("setup inference install options", () => {
     const choice = {
       ...metaEntry,
       assistantVisibility: "detected-only" as const,
+      onboardingFeatured: true,
       appGuidedAuth: "oauth" as const,
       appGuidedSecret: true,
       appGuidedDiscovery: true,
@@ -67,6 +68,33 @@ describe("setup inference install options", () => {
         featured: false,
       },
     ]);
+  });
+
+  it("preserves featured placement and artwork before and after provider installation", () => {
+    const choice = {
+      ...metaEntry,
+      appGuidedSecret: true,
+      onboardingFeatured: true,
+      icon: "https://meta.example/icon.png",
+      website: "https://meta.example/",
+    };
+    const expected = expect.objectContaining({
+      id: "meta-api-key",
+      kind: "install",
+      featured: true,
+      icon: choice.icon,
+      website: choice.website,
+    });
+    expect(listSetupInferenceInstallOptions([choice], [])).toEqual([expected]);
+    expect(listSetupInferenceAuthOptions([choice])).toEqual([expected]);
+    expect(listSetupInferenceManualProviders([choice])).toEqual([
+      expect.objectContaining({ id: "meta-api-key" }),
+    ]);
+    expect(listSetupInferenceAuthOptions([{ ...choice, onboardingFeatured: false }])).toEqual([]);
+    expect(listSetupInferenceAuthOptions([{ ...choice, appGuidedDiscovery: true }])).toEqual([]);
+    expect(
+      listSetupInferenceInstallOptions([{ ...choice, onboardingScopes: ["image-generation"] }], []),
+    ).toEqual([]);
   });
 
   it("does not duplicate choices already supplied by an installed manifest", () => {

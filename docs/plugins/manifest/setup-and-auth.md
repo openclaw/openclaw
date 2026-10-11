@@ -86,6 +86,12 @@ When a manifest choice is selected, setup resolves its `provider` and `method` i
 | `channelLogin`         | No       | `{ aliases?: string[] }`                                              | A fixed-input OAuth or device-code method that private chat can run. Requires `credentialOnly`; aliases enable explicit commands such as `/login codex`.   |
 | `onboardingScopes`     | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`.                                                   |
 
+`onboardingFeatured: true` also exposes an API-key choice in the app's main
+provider list when `appGuidedSecret: true`; the pasted-key picker remains
+available. Official external catalog choices can carry `onboardingFeatured`,
+`icon`, and `website` before installation. After installation, the plugin's
+manifest supplies these fields, so publish matching metadata in both places.
+
 `platforms` uses Node.js platform names; unknown names are removed. The restriction
 applies before setup, login, CLI flag, and install-catalog choices are offered. It describes the host running OpenClaw,
 not the connected app or browser. It does not change saved plugin enablement or
@@ -138,6 +144,13 @@ A provider can also
 expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
 when the local service is reachable but no model qualifies for automatic setup.
 The availability check is also read-only.
+
+Catalog entries for external providers can also declare `appGuidedSecret` when
+one pasted key and provider defaults are sufficient. This makes the choice
+available in app setup before installation. Connecting runs the normal plugin
+installation and capability approval flow before using the supplied key. The
+published plugin manifest must declare the same capability so the choice remains
+available after installation.
 
 ### Login choices
 

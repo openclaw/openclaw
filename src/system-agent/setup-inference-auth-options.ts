@@ -124,16 +124,10 @@ export function listSetupInferenceInstallOptions(
       continue;
     }
     options.set(entry.choiceId, {
-      ...projectChoicePresentation({
-        choiceId: entry.choiceId,
-        ...(entry.modelTarget ? { modelTarget: entry.modelTarget } : {}),
-        providerId: entry.providerId,
-        choiceLabel: entry.choiceLabel,
-        choiceHint: entry.choiceHint,
-      }),
+      ...projectChoicePresentation(entry),
       ...(entry.groupLabel?.trim() ? { groupLabel: entry.groupLabel.trim() } : {}),
       kind: "install",
-      featured: false,
+      featured: entry.onboardingFeatured === true,
     });
   }
   return [...options.values()].toSorted(compareSetupInferenceOptions);
@@ -174,7 +168,8 @@ export function listSetupInferenceAuthOptions(
     choices: authChoices,
     include: (choice) =>
       Boolean(choice.appGuidedAuth) ||
-      (choice.appGuidedSecret !== true && choice.appGuidedDiscovery !== true),
+      (choice.appGuidedDiscovery !== true &&
+        (choice.appGuidedSecret !== true || choice.onboardingFeatured === true)),
     project: (choice, id) => ({
       ...projectChoicePresentation(choice, id),
       ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),

@@ -21,6 +21,7 @@ import {
   resolveManifestProviderAuthChoices,
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";
+import { normalizeSetupPresentationHttpsUrl } from "./setup-presentation-url.js";
 
 /** Provider setup choice paired with install metadata for the owning plugin. */
 export type ProviderInstallCatalogEntry = ProviderAuthChoiceMetadata & {
@@ -233,6 +234,12 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
           choiceId,
           choiceLabel,
           ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+          ...(choice.icon ? { icon: normalizeSetupPresentationHttpsUrl(choice.icon) } : {}),
+          ...(choice.website
+            ? { website: normalizeSetupPresentationHttpsUrl(choice.website) }
+            : {}),
+          ...(choice.onboardingFeatured === true ? { onboardingFeatured: true } : {}),
+          ...(choice.appGuidedSecret === true ? { appGuidedSecret: true } : {}),
           ...(choice.modelTarget ? { modelTarget: choice.modelTarget } : {}),
           ...(choice.assistantPriority !== undefined
             ? { assistantPriority: choice.assistantPriority }
