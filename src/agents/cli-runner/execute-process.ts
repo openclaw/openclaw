@@ -7,11 +7,17 @@ import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
 } from "../../infra/event-session-routing.js";
+import {
+  CLAUDE_CODE_USAGE_PROVIDER,
+  noteClaudeCodeSessionRoute,
+  recordObservedProviderUsageWindows,
+} from "../../infra/provider-usage.observed.js";
 import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-model-stream-progress.js";
 import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
+import { getActiveSkillEnvKeysCore } from "../../skills/runtime/env-overrides.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { transformCliResultText } from "../cli-output-results.js";
@@ -37,6 +43,7 @@ import {
   createCliTimeoutError,
   resolveCliNoOutputTimeoutDecision,
 } from "./no-output-timeout-policy.js";
+import { shouldRecordObservedClaudeUsage } from "./observed-usage.js";
 import { createCliOutputFailoverError } from "./output-error.js";
 import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
@@ -129,6 +136,20 @@ export async function executeCliProcess(params: {
     params.assertCurrent();
   }
 
+  const recordsHostClaudeUsage = shouldRecordObservedClaudeUsage({
+    backendId: context.backendResolved.id,
+    effectiveAuthProfileId: context.effectiveAuthProfileId,
+    nodePlacement: params.nodePlacement,
+    runEnv: params.env,
+    gatewayClaudeConfigDir: process.env.CLAUDE_CONFIG_DIR,
+    skillEnvKeys: getActiveSkillEnvKeysCore(),
+    backendArgs: [...(params.backend.args ?? []), ...(params.backend.resumeArgs ?? [])],
+  });
+  if (context.backendResolved.id === CLAUDE_CODE_USAGE_PROVIDER && runParams.sessionKey) {
+    // /status shows the host login's windows only to sessions this check admits.
+    noteClaudeCodeSessionRoute(runParams.sessionKey, recordsHostClaudeUsage);
+  }
+
   const streamingParser = hasJsonlOutput
     ? createCliJsonlStreamingParser({
         backend: params.backend,
@@ -161,6 +182,9 @@ export async function executeCliProcess(params: {
           // semantic record for this Agent call may move the recovery clock.
           backendActivity?.observeAttributedAgentProgress(parentToolUseId);
         },
+        onRateLimitWindows: recordsHostClaudeUsage
+          ? (windows) => recordObservedProviderUsageWindows(CLAUDE_CODE_USAGE_PROVIDER, windows)
+          : undefined,
       })
     : null;
   let stdoutTail = "";

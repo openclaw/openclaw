@@ -1,3 +1,4 @@
+import type { UsageWindow } from "../infra/provider-usage.types.js";
 import type {
   CliBackendConfig,
   CliBackendJsonlUsage,
@@ -149,4 +150,6 @@ export type CliJsonlStreamingParserOptions = {
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
   /** Semantic subagent work for an active parent Agent call. Not a parent-lane event. */
   onAttributedSubagentProgress?: (parentToolUseId: string) => void;
+  /** Claude subscription windows from a `rate_limit_event`, observed as the turn streams. */
+  onRateLimitWindows?: (windows: UsageWindow[]) => void;
 };
