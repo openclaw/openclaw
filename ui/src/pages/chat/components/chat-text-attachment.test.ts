@@ -2,8 +2,9 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 
 async function mountAttachment(
   overrides: Partial<Extract<SidebarContent, { kind: "attachment" }>> = {},
@@ -323,7 +324,7 @@ it("aborts a closed preview and reloads it after remount", async () => {
   const panel = await mountAttachment();
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   panel.remove();
-  expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  await waitForSolid(() => expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true));
   document.body.append(panel);
   await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Reloaded text"));
 });

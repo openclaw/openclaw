@@ -10,6 +10,7 @@ import {
 import type {
   NativeModelBinding,
   NativeModelSource,
+  NativePendingChild,
   NativeSubagentMonitorRuntime,
   ParentOwner,
   ParentRegistrationHandle,
@@ -55,6 +56,7 @@ type ParentDependencies = {
   drainAdmissions: (state: ParentState, owner: ParentOwner, turnId: string) => void;
   clearAdmissions: () => void;
   prune: (state: ParentState) => void;
+  pendingChildren: (state: ParentState) => NativePendingChild[];
   interruptModelExecution?: (threadId: string, turnId: string) => void;
 };
 
@@ -303,6 +305,10 @@ export async function registerNativeSubagentParent(
       dependencies.clearAdmissions();
       notifyNativeModelSourceWaiters(registeredState);
     },
+    listPendingChildren: () =>
+      registered && dependencies.states.get(parentThreadId) === registeredState
+        ? dependencies.pendingChildren(registeredState)
+        : [],
     unregister: () => {
       if (!registered) {
         return settlement ?? Promise.resolve();

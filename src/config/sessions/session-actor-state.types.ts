@@ -40,6 +40,7 @@ export type SessionActorHotState = {
   dependencySessionIds: string[];
   /** Includes the canonical turn, lifecycle, recovery, and pendingFinalDelivery fields. */
   entry: SessionEntry | undefined;
+  hasBoard: boolean;
   participants: SessionParticipantRecord[];
   members: SessionMember[];
   pendingInputs: Array<Omit<SessionPendingInputRow, "message_json">>;

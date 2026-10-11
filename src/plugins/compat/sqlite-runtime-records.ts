@@ -38,6 +38,6 @@ export const SQLITE_RUNTIME_COMPAT_RECORDS = [
       "src/state/openclaw-agent-worker-store.test.ts",
     ],
     releaseNote:
-      "Agent SQLite plugins can prepare and write through the canonical worker without borrowing a writable host handle. Memory Core uses worker commands for origin, standing-intent and forget mutations. Raw SDK compatibility remains available until the next Plugin SDK major; schemas, stored data and update behavior are unchanged.",
+      "Agent SQLite plugins can prepare and write through the canonical worker without borrowing a writable host handle. Memory Core uses worker commands for vector, metadata, origin, standing-intent and forget mutations. Raw SDK compatibility remains available until the next Plugin SDK major; schemas, stored data and update behavior are unchanged.",
   },
 ] as const satisfies readonly PluginCompatRecord[];

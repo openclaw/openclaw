@@ -38,6 +38,7 @@ function fixture() {
           continuationTurns: 0,
         },
       },
+      hasBoard: false,
       participants: [],
       members: [],
       pendingInputs: [],

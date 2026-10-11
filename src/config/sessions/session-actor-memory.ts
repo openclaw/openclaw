@@ -39,6 +39,7 @@ function emptyState(target: SessionActorTarget): SessionActorMemoryState {
       writeToken: "0",
       dependencySessionIds: [],
       entry: undefined,
+      hasBoard: false,
       participants: [],
       members: [],
       pendingInputs: [],

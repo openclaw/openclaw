@@ -77,12 +77,10 @@ export async function findDeliveryIntentOwners(
     return [];
   }
   const captured = context ?? captureDeliveryQueueStateContext(stateDir);
-  const owners = await executeDeliveryQueueOperation(captured, stateDir, {
+  return executeDeliveryQueueOperation(captured, stateDir, {
     type: "deliveryQueue.findIntentOwners",
     input: { ids: [...ids] },
   });
-  captured.workerContext.admission.assertCurrent();
-  return owners;
 }
 
 function preparedBatchFromLowLevelInput(params: QueuedDeliveryPayload): PreparedOutboundBatch {
@@ -386,7 +384,6 @@ async function readOutboundDeliveries(
     { type: "deliveryQueue.outbound", ...input },
     { context: captured.workerContext, current: true },
   );
-  captured.workerContext.admission.assertCurrent();
   if (!reply) {
     return [];
   }
