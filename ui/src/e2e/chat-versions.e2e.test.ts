@@ -126,7 +126,7 @@ suite.define(() => {
         await info.press("ArrowDown");
         await page.keyboard.press("Enter");
         const switched = await gateway.waitForRequest("sessions.branches.switch");
-        expect(switched.params?.leafEntryId).toBe("earlier");
+        expect(switched.params).toMatchObject({ leafEntryId: "earlier" });
         await expect.poll(() => menuSurface.isVisible()).toBe(false);
       },
     );
