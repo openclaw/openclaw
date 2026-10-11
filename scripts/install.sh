@@ -1239,6 +1239,8 @@ NO_ONBOARD=${OPENCLAW_NO_ONBOARD:-0}
 NO_PROMPT=${OPENCLAW_NO_PROMPT:-0}
 DRY_RUN=${OPENCLAW_DRY_RUN:-0}
 INSTALL_METHOD=${OPENCLAW_INSTALL_METHOD:-}
+INSTALL_RUNTIME=${OPENCLAW_RUNTIME:-node}
+BUN_PATH=${OPENCLAW_BUN_PATH:-}
 OPENCLAW_VERSION=${OPENCLAW_VERSION:-latest}
 USE_BETA=${OPENCLAW_BETA:-0}
 GIT_DIR=${OPENCLAW_GIT_DIR:-"$(resolve_openclaw_effective_home)/openclaw"}
@@ -1264,6 +1266,8 @@ Options:
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
   --version <version|dist-tag|spec>    npm install target (default: latest)
+  --runtime node|bun                  Runtime (default: node); Bun uses the OpenClaw fork
+  --bun-path <absolute path>          Use an existing OpenClaw Bun fork executable
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
   --no-git-update                      Skip git pull for existing checkout
@@ -1276,6 +1280,8 @@ Options:
 
 Environment variables:
   OPENCLAW_INSTALL_METHOD=git|npm
+  OPENCLAW_RUNTIME=node|bun
+  OPENCLAW_BUN_PATH=/absolute/path/to/bun
   OPENCLAW_VERSION=latest|next|<semver>|<spec>
   OPENCLAW_BETA=0|1
   OPENCLAW_GIT_DIR=...
@@ -1326,7 +1332,7 @@ parse_args() {
                 HELP=1
                 shift
                 ;;
-            --install-method|--method|--version|--git-dir|--dir)
+            --install-method|--method|--version|--git-dir|--dir|--runtime|--bun-path)
                 if [[ $# -lt 2 || "${2:-}" == --* ]]; then
                     ui_error "Missing value for $1"
                     return 2
@@ -1334,6 +1340,8 @@ parse_args() {
                 case "$1" in
                     --install-method|--method) INSTALL_METHOD="$2" ;;
                     --version) OPENCLAW_VERSION="$2" ;;
+                    --runtime) INSTALL_RUNTIME="$2" ;;
+                    --bun-path) BUN_PATH="$2" ;;
                     --git-dir|--dir)
                         GIT_DIR="$2"
                         GIT_DIR_EXPLICIT=${2:+1}
@@ -1666,11 +1674,15 @@ persist_shell_path_prepend() {
         contract="${target%%:*}"
         rc="${target#*:}"
         if [[ "$contract" == "fish" ]]; then
-            path_line="fish_add_path -- \"${path_expr}\""
+            if [[ "${3:-prepend}" == append ]]; then
+                path_line="fish_add_path --move --prepend -- \"${path_expr}\""
+            else
+                path_line="fish_add_path -- \"${path_expr}\""
+            fi
         else
             path_line="export PATH=\"${path_expr}:\$PATH\""
         fi
-        if ! persist_path_line_to_profile "$rc" "$path_line"; then
+        if ! persist_path_line_to_profile "$rc" "$path_line" "${3:-prepend}"; then
             failed=1
         fi
     done
@@ -1756,6 +1768,7 @@ prepare_safe_profile_parent() {
 
 persist_path_line_to_profile() {
     local profile="$1" path_line="$2" rc tmp_rc original_mode
+    local placement="${3:-prepend}"
     rc="$profile"
     if [[ -L "$profile" ]]; then
         rc="$(resolve_safe_profile_target "$profile")" || return 1
@@ -1765,7 +1778,13 @@ persist_path_line_to_profile() {
     fi
 
     prepare_safe_profile_parent "$rc" || return 1
-    if [[ "$(sed -n '1p' "$rc" 2>/dev/null || true)" == "$path_line" ]]; then
+    local current_line
+    if [[ "$placement" == append ]]; then
+        current_line="$(tail -n 1 "$rc" 2>/dev/null || true)"
+    else
+        current_line="$(sed -n '1p' "$rc" 2>/dev/null || true)"
+    fi
+    if [[ "$current_line" == "$path_line" ]]; then
         return 0
     fi
     tmp_rc="$(mktemp "${rc}.openclaw-tmp.XXXXXX")"
@@ -1779,10 +1798,11 @@ persist_path_line_to_profile() {
         chmod u+w "$tmp_rc" || return 1
     fi
     if ! {
-        printf '%s\n' "$path_line"
+        [[ "$placement" != prepend ]] || printf '%s\n' "$path_line"
         if [[ -f "$rc" ]]; then
             grep -Fvx "$path_line" "$rc" || true
         fi
+        [[ "$placement" != append ]] || printf '\n%s\n' "$path_line"
     } > "$tmp_rc"; then
         ui_warn "Failed to write shell profile: ${profile}"
         return 1
@@ -3154,7 +3174,11 @@ is_gateway_daemon_loaded() {
         return 1
     fi
 
-    printf '%s' "$status_json" | node -e '
+    local status_runtime=node
+    if [[ "$INSTALL_RUNTIME" == "bun" ]]; then
+        status_runtime="$BUN_PATH"
+    fi
+    printf '%s' "$status_json" | "$status_runtime" -e '
 const fs = require("fs");
 const raw = fs.readFileSync(0, "utf8").trim();
 if (!raw) process.exit(1);
@@ -3303,12 +3327,400 @@ retire_git_wrapper_after_npm_install() {
     ui_success "Previous git wrapper retired"
 }
 
+# Read a string at an exact JSON object path without a bootstrap runtime. The
+# registry contains nested version fields and escaped prose; regex extraction
+# cannot distinguish them. Only the selected metadata must be printable ASCII.
+bun_json_string() {
+    LC_ALL=C awk -v wanted="$2" '
+    function fail() { bad=1; exit 1 }
+    function space() { while (substr(json,pos,1) ~ /^[ \t\r\n]$/) pos++ }
+    function string(    result,c,e,h,n,i) {
+        if (substr(json,pos++,1) != "\"") fail()
+        while (pos <= length(json)) {
+            c=substr(json,pos++,1)
+            if (c == "\"") return result
+            if (c ~ /[[:cntrl:]]/) fail()
+            if (c == "\\") {
+                e=substr(json,pos++,1)
+                if (e == "u") {
+                    h=substr(json,pos,4); pos+=4
+                    if (length(h)!=4 || h ~ /[^0-9a-fA-F]/) fail()
+                    n=0
+                    for (i=1;i<=4;i++) n=n*16+index("0123456789abcdef",tolower(substr(h,i,1)))-1
+                    c=(n>=32 && n<=126) ? sprintf("%c",n) : "\\u" h
+                } else if (e == "\"" || e == "\\" || e == "/") c=e
+                else if (e ~ /^[bfnrt]$/) c="\\" e
+                else fail()
+            }
+            result=result c
+        }
+        fail()
+    }
+    function value(path,    c,key,text,start,idx) {
+        space(); c=substr(json,pos,1)
+        if (c == "{" || c == "[") {
+            pos++; space()
+            if (substr(json,pos,1) == (c=="{" ? "}" : "]")) { pos++; return }
+            while (1) {
+                if (c == "{") { space(); key=string(); space(); if(substr(json,pos++,1)!=":") fail() }
+                else key=idx++
+                value(path "/" key); space()
+                text=substr(json,pos++,1)
+                if(text == (c=="{" ? "}" : "]")) return
+                if(text != ",") fail()
+            }
+        }
+        if (c == "\"") text=string()
+        else {
+            start=pos
+            while (pos<=length(json) && substr(json,pos,1) !~ /[ \t\r\n,}\]]/) pos++
+            text=substr(json,start,pos-start)
+            if(text !~ /^(true|false|null|-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?)$/) fail()
+        }
+        if(path==wanted) {
+            if(c!="\"" || ++found!=1 || text ~ /[^ -~]/ || text ~ /\\[ubfnrt]/) fail()
+            selected=text
+        }
+    }
+    { json=json $0 "\n" }
+    END {
+        if(bad) exit 1
+        pos=1; value(""); space()
+        if(bad || pos<=length(json) || found!=1) exit 1
+        print selected
+    }' "$1"
+}
+
+bun_sha256() {
+    if [[ "$OS" == "macos" ]]; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        sha256sum "$1" | awk '{print $1}'
+    fi
+}
+
+read_bun_pin() {
+    local pin="$1"
+    if ! { BUN_TAG="$(bun_json_string "$pin" /tag)" &&
+        BUN_REVISION="$(bun_json_string "$pin" /revision)" &&
+        BUN_ASSET="$(bun_json_string "$pin" "/artifacts/$BUN_PLATFORM/asset")" &&
+        BUN_ARCHIVE_SHA="$(bun_json_string "$pin" "/artifacts/$BUN_PLATFORM/sha256")" &&
+        BUN_EXECUTABLE="$(bun_json_string "$pin" "/artifacts/$BUN_PLATFORM/executable")" &&
+        BUN_EXECUTABLE_SHA="$(bun_json_string "$pin" "/artifacts/$BUN_PLATFORM/executableSha256")"; }; then
+        ui_error "Missing or invalid Bun pin for ${BUN_PLATFORM}. Choose a published OpenClaw version with a Bun artifact, or use --runtime node."
+        return 1
+    fi
+    if [[ ! "$BUN_TAG" =~ ^[a-zA-Z0-9._+-]+$ || ! "$BUN_ASSET" =~ ^[a-zA-Z0-9._+-]+\.zip$ ||
+          ! "$BUN_EXECUTABLE" =~ ^[a-zA-Z0-9._+-]+/bun$ ||
+          ! "$BUN_ARCHIVE_SHA" =~ ^[a-f0-9]{64}$ || ! "$BUN_EXECUTABLE_SHA" =~ ^[a-f0-9]{64}$ ||
+          ! "$BUN_REVISION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]+\+[a-f0-9]+$ ]]; then
+        ui_error "Invalid OpenClaw Bun pin. Choose another published version or use --runtime node."
+        return 1
+    fi
+}
+
+validate_bun_path() {
+    if [[ "$BUN_PATH" != /* || ! -f "$BUN_PATH" || ! -x "$BUN_PATH" || "$BUN_PATH" == *$'\n'* || "$BUN_PATH" == *$'\r'* ]]; then
+        ui_error "--bun-path must be an absolute, executable, single-line path to the OpenClaw Bun fork."
+        return 1
+    fi
+    if [[ -n "${BUN_EXECUTABLE_SHA:-}" && "$(bun_sha256 "$BUN_PATH")" != "$BUN_EXECUTABLE_SHA" ]]; then
+        ui_error "Bun executable does not match the OpenClaw fork checksum; stock Bun is unsupported here. Omit --bun-path to download the pinned fork."
+        return 1
+    fi
+    local revision
+    revision="$("$BUN_PATH" --revision)" || return 1
+    if [[ ! "$revision" =~ ^[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]+\+[a-f0-9]+$ ||
+          ( -n "${BUN_REVISION:-}" && "$revision" != "$BUN_REVISION" ) ]]; then
+        ui_error "Bun does not match the OpenClaw fork pin (${BUN_REVISION:-custom package}); stock Bun is unsupported here. Omit --bun-path to download the pinned fork, or supply its verified executable."
+        return 1
+    fi
+}
+
+ensure_bun_unzip() {
+    command -v unzip >/dev/null 2>&1 && return 0
+    if [[ "$OS" == "linux" ]]; then
+        require_sudo
+        if command -v apt-get >/dev/null 2>&1; then
+            run_quiet_step "Updating package index" apt_get_update
+            run_quiet_step "Installing unzip" apt_get_install unzip
+        else
+            local -a cmd=()
+            if command -v dnf >/dev/null 2>&1; then cmd=(dnf install -y -q unzip)
+            elif command -v yum >/dev/null 2>&1; then cmd=(yum install -y -q unzip)
+            elif command -v pacman >/dev/null 2>&1 && is_arch_linux; then cmd=(pacman -Sy --noconfirm unzip)
+            fi
+            if [[ ${#cmd[@]} -gt 0 ]]; then
+                is_root || cmd=(sudo "${cmd[@]}")
+                run_quiet_step "Installing unzip" "${cmd[@]}"
+            fi
+        fi
+    fi
+    command -v unzip >/dev/null 2>&1 || {
+        ui_error "Install unzip with your system package manager, then rerun --runtime bun."
+        return 1
+    }
+}
+
+stage_bun() {
+    local target="$1" work archive
+    if [[ -f "$target" ]] && [[ "$(bun_sha256 "$target")" == "$BUN_EXECUTABLE_SHA" ]]; then
+        BUN_PATH="$target"
+        validate_bun_path
+        return
+    fi
+    ensure_bun_unzip
+    mkdir -p "${target%/*}"
+    work="$(mktemp -d "${target%/*}/.stage.XXXXXX")"
+    TMPFILES+=("$work")
+    archive="$work/bun.zip"
+    run_quiet_step "Downloading OpenClaw Bun" download_file \
+        "${OPENCLAW_INSTALL_BUN_RELEASE_BASE_URL:-https://github.com/openclaw/bun/releases/download}/$BUN_TAG/$BUN_ASSET" "$archive"
+    if [[ "$(bun_sha256 "$archive")" != "$BUN_ARCHIVE_SHA" ]]; then
+        ui_error "Bun archive checksum mismatch; no binary was executed. Retry or choose another published version."
+        return 1
+    fi
+    # Extract only the pinned entry, never archive-controlled filesystem paths.
+    unzip -p "$archive" "$BUN_EXECUTABLE" > "$work/bun"
+    if [[ "$(bun_sha256 "$work/bun")" != "$BUN_EXECUTABLE_SHA" ]]; then
+        ui_error "Bun executable checksum mismatch; no binary was executed. Retry the download."
+        return 1
+    fi
+    chmod 755 "$work/bun"
+    BUN_PATH="$work/bun"
+    validate_bun_path
+    mv -f "$work/bun" "$target"
+    BUN_PATH="$target"
+    ui_success "Verified OpenClaw Bun ${BUN_REVISION}"
+}
+
+ensure_bun_sqlite() {
+    [[ "$OS" == "macos" ]] || return 0
+    if [[ -z "${OPENCLAW_SQLITE_LIBRARY:-}" ]]; then
+        # Discover an existing Homebrew without requiring it on the caller PATH.
+        if ! command -v brew >/dev/null 2>&1; then
+            if [[ -x /opt/homebrew/bin/brew ]]; then prepend_path_dir /opt/homebrew/bin
+            elif [[ -x /usr/local/bin/brew ]]; then prepend_path_dir /usr/local/bin
+            fi
+        fi
+        install_homebrew
+        HOMEBREW_PREFIX="$(brew --prefix)"
+        export HOMEBREW_PREFIX
+        if [[ ! -f "$HOMEBREW_PREFIX/opt/sqlite/lib/libsqlite3.dylib" ]]; then
+            run_quiet_step "Installing SQLite for Bun" brew install sqlite
+        fi
+        export OPENCLAW_SQLITE_LIBRARY="$HOMEBREW_PREFIX/opt/sqlite/lib/libsqlite3.dylib"
+    fi
+    if [[ ! -f "$OPENCLAW_SQLITE_LIBRARY" ]] || ! "$BUN_PATH" -e '
+        const { Database } = require("bun:sqlite");
+        Database.setCustomSQLite(process.env.OPENCLAW_SQLITE_LIBRARY);
+        const db = new Database(":memory:");
+        const [a,b,c] = db.query("select sqlite_version() as v").get().v.split(".").map(Number);
+        if (!(a>3 || (a===3 && (b>51 || (b===51 && c>=3) || (b===50 && c>=7) || (b===44 && c>=6))))) process.exit(1);
+        db.close();
+        const native = new (require("node:sqlite").DatabaseSync)(":memory:", {allowExtension:true});
+        native.enableLoadExtension(true); native.close();
+    '; then
+        ui_error "Bun needs a WAL-safe, extension-capable SQLite library. Run brew install sqlite, or set OPENCLAW_SQLITE_LIBRARY to a supported libsqlite3.dylib for this architecture."
+        return 1
+    fi
+}
+
+# Package lifecycle deliberately retains a Node launcher when Node is visible.
+# Hide only node in a temporary PATH projection so this explicit Bun install
+# receives the package-owned Bun launcher, even on a machine with Node installed.
+bun_package_path() {
+    local work dir file name projected="" index=0
+    work="$(mktemp -d)"
+    TMPFILES+=("$work")
+    local -a dirs=()
+    IFS=: read -r -a dirs <<< "$PATH"
+    for dir in "${dirs[@]}"; do
+        [[ "$dir" == /* && -d "$dir" ]] || continue
+        if [[ -x "$dir/node" ]]; then
+            mkdir "$work/$index"
+            for file in "$dir"/*; do
+                name="${file##*/}"
+                [[ "$name" != node && -f "$file" && -x "$file" ]] || continue
+                ln -s "$file" "$work/$index/$name"
+            done
+            dir="$work/$index"
+            index=$((index+1))
+        fi
+        projected="${projected:+$projected:}$dir"
+    done
+    BUN_PACKAGE_PATH="$projected"
+}
+
+install_with_bun() {
+    if [[ "${INSTALL_METHOD:-npm}" == "git" ]]; then
+        ui_error "--runtime bun cannot build git checkouts. Use --runtime node for git, or --install-method npm for Bun."
+        return 2
+    fi
+    if [[ -n "$INSTALL_METHOD" && "$INSTALL_METHOD" != "npm" ]]; then
+        ui_error "Invalid --install-method: ${INSTALL_METHOD}. Use npm with --runtime bun."
+        return 2
+    fi
+    INSTALL_METHOD=npm
+    detect_os_or_die
+    local arch
+    arch="$(gum_detect_arch)"
+    [[ "$arch" != x86_64 ]] || arch=x64
+    if [[ "$arch" != x64 && "$arch" != arm64 ]] ||
+        { [[ "$OS" == linux ]] && { is_alpine_linux || ! getconf GNU_LIBC_VERSION >/dev/null 2>&1; }; }; then
+        ui_error "Bun installer supports macOS and glibc Linux on x64/arm64. Use --runtime node or a supported host."
+        return 1
+    fi
+    BUN_PLATFORM="${OS/macos/darwin}-$arch"
+    local registry pin version target installed_pin package_root old_claw
+    local custom_spec=false
+    registry="${OPENCLAW_INSTALL_NPM_REGISTRY:-https://registry.npmjs.org}"
+    mktempfile pin
+    mktempfile version
+    if [[ ! "$OPENCLAW_VERSION" =~ ^[a-zA-Z0-9][a-zA-Z0-9._+-]*$ || "$(to_lowercase_ascii "$OPENCLAW_VERSION")" == main ]]; then
+        if [[ -z "$BUN_PATH" ]]; then
+            ui_error "Bun needs a published npm version or dist-tag. For local tarballs, paths, or git specs, supply --bun-path with the matching OpenClaw fork."
+            return 2
+        fi
+        custom_spec=true
+        # Custom packages supply their pin after installation. The caller owns
+        # this executable; the package pin must match before any CLI is run.
+    fi
+    local resolved=""
+    BUN_TAG="" BUN_REVISION="" BUN_EXECUTABLE_SHA=""
+    if [[ "$custom_spec" != true ]]; then
+        local requested="$OPENCLAW_VERSION"
+        if [[ "$USE_BETA" == 1 ]]; then requested=beta; fi
+        if ! download_file "$registry/openclaw/$requested" "$version"; then
+            if [[ "$USE_BETA" == 1 ]]; then
+                download_file "$registry/openclaw/latest" "$version"
+            else
+                ui_error "Cannot resolve published OpenClaw version. Check --version and your registry connection."
+                return 1
+            fi
+        fi
+        resolved="$(bun_json_string "$version" /version)" || {
+            ui_error "Invalid npm registry version metadata. Check OPENCLAW_INSTALL_NPM_REGISTRY or retry."
+            return 1
+        }
+        if [[ ! "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$ ]]; then
+            ui_error "Registry did not return an exact published npm version."
+            return 1
+        fi
+        [[ "$custom_spec" == true ]] || OPENCLAW_VERSION="$resolved"
+        local pin_url="${OPENCLAW_INSTALL_BUN_PIN_URL:-https://raw.githubusercontent.com/openclaw/openclaw/v$resolved/scripts/lib/openclaw-bun.json}"
+        pin_url="${pin_url//\{version\}/$resolved}"
+        download_file "$pin_url" "$pin" || {
+            ui_error "No Bun pin for OpenClaw ${resolved}. Choose a version with a published pin or use --runtime node."
+            return 1
+        }
+        read_bun_pin "$pin"
+    fi
+    target="$(resolve_openclaw_user_path "$(resolve_openclaw_effective_home)/.openclaw/tools/bun-$BUN_TAG/bun")"
+    if [[ -n "$BUN_PATH" ]]; then
+        validate_bun_path || return 1
+        target="$BUN_PATH"
+    fi
+    ui_kv "Runtime" "bun (Node remains the default)"
+    ui_kv "OpenClaw version" "$OPENCLAW_VERSION"
+    ui_kv "Bun pin" "${BUN_TAG:-from custom package (checked after install)}"
+    ui_kv "Bun asset" "${BUN_ASSET:-provided executable}"
+    ui_kv "Bun target" "$target"
+    if [[ "$DRY_RUN" == 1 ]]; then
+        ui_info "Would verify and stage Bun, ensure macOS SQLite, install the trusted package, and pin any existing Gateway service."
+        ui_success "Dry run complete (no changes made)"
+        return 0
+    fi
+    # The existing bounded daemon probe allocates files in a subshell. Keep all
+    # Bun-install scratch under one registered directory, including those files.
+    local bun_work
+    bun_work="$(mktemp -d)"
+    TMPFILES+=("$bun_work")
+    local TMPDIR="$bun_work"
+    export TMPDIR
+    [[ -n "$BUN_PATH" ]] || stage_bun "$target"
+    ensure_bun_sqlite
+    old_claw="$(command -v openclaw || true)"
+    bun_package_path
+    run_quiet_step "Installing OpenClaw with Bun" env PATH="$BUN_PACKAGE_PATH" \
+        OPENCLAW_PACKAGE_BUN_LAUNCHER="$BUN_PATH" "$BUN_PATH" add -g --trust \
+        "$(resolve_package_install_spec openclaw "$OPENCLAW_VERSION")"
+    local bin_dir
+    bin_dir="$("$BUN_PATH" pm bin -g)"
+    if [[ "$bin_dir" != /* || "$bin_dir" == *$'\n'* || "$bin_dir" == *$'\r'* ]]; then
+        ui_error "Bun returned an invalid global bin directory. Check your Bun global install configuration."
+        return 1
+    fi
+    OPENCLAW_BIN="$bin_dir/openclaw"
+    # Verify the package-generated launcher and use its recorded package root,
+    # including custom global directories, instead of guessing ~/.bun/install.
+    if [[ -L "$OPENCLAW_BIN" ]] || ! grep -Fxq "#openclaw-bun=$BUN_PATH" "$OPENCLAW_BIN"; then
+        ui_error "Bun did not generate the expected launcher. Rerun with the matching fork and trusted package lifecycle scripts."
+        return 1
+    fi
+    package_root="$(sed -n 's/^#openclaw-entry=\(.*\)\/openclaw.mjs$/\1/p' "$OPENCLAW_BIN")"
+    installed_pin="$package_root/scripts/lib/openclaw-bun.json"
+    if [[ ! -f "$installed_pin" ]]; then
+        ui_error "Installed package lacks scripts/lib/openclaw-bun.json. Choose a newer published version that includes its Bun pin; this version cannot pass runtime verification."
+        return 1
+    fi
+    if [[ "$custom_spec" == true ]]; then
+        read_bun_pin "$installed_pin"
+        validate_bun_path || return 1
+    fi
+    if [[ "$(bun_json_string "$installed_pin" /tag)" != "$BUN_TAG" ||
+          "$(bun_json_string "$installed_pin" /revision)" != "$BUN_REVISION" ||
+          "$(bun_json_string "$installed_pin" "/artifacts/$BUN_PLATFORM/asset")" != "$BUN_ASSET" ||
+          "$(bun_json_string "$installed_pin" "/artifacts/$BUN_PLATFORM/executable")" != "$BUN_EXECUTABLE" ||
+          "$(bun_json_string "$installed_pin" "/artifacts/$BUN_PLATFORM/sha256")" != "$BUN_ARCHIVE_SHA" ||
+          "$(bun_json_string "$installed_pin" "/artifacts/$BUN_PLATFORM/executableSha256")" != "$BUN_EXECUTABLE_SHA" ]]; then
+        ui_error "Installed package Bun pin differs from the staged runtime. Retry with a matching published version and --bun-path, or omit --bun-path."
+        return 1
+    fi
+    local output
+    output="$("$OPENCLAW_BIN" --version)"
+    if [[ "$custom_spec" != true && "$(extract_openclaw_semver "$output")" != "$resolved" ]]; then
+        ui_error "Installed launcher returned an unexpected version: ${output}. Rerun the installer."
+        return 1
+    fi
+    prepend_path_dir "$bin_dir"
+    local escaped_bin="$bin_dir"
+    escaped_bin="${escaped_bin//\\/\\\\}"
+    escaped_bin="${escaped_bin//\$/\\$}"
+    escaped_bin="${escaped_bin//\`/\\\`}"
+    escaped_bin="${escaped_bin//\"/\\\"}"
+    persist_shell_path_prepend "$bin_dir" "$escaped_bin" append
+    if [[ -n "$old_claw" && "$old_claw" != "$OPENCLAW_BIN" ]]; then
+        ui_info "Bun bin directory now takes precedence over ${old_claw} in this session and persisted PATH."
+    fi
+    if is_gateway_daemon_loaded "$OPENCLAW_BIN"; then
+        run_quiet_step "Pinning existing Gateway to Bun" "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
+    elif [[ "$NO_ONBOARD" != 1 ]] && ! has_openclaw_config; then
+        if is_promptable; then
+            "$OPENCLAW_BIN" onboard --install-daemon --daemon-runtime bun </dev/tty
+            # Onboarding has no runtime-path option; record the exact fork now.
+            "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
+        else
+            ui_info "Run: $OPENCLAW_BIN onboard --install-daemon --daemon-runtime bun"
+            ui_info "Then: $OPENCLAW_BIN gateway install --runtime bun --runtime-path $BUN_PATH --force"
+        fi
+    fi
+    ui_success "OpenClaw installed with Bun: ${output}"
+    [[ "$VERIFY_INSTALL" != 1 ]] || verify_installation
+}
+
 # Main installation flow
 main() {
     if [[ "$HELP" == "1" ]]; then
         print_usage
         return 0
     fi
+
+    case "$INSTALL_RUNTIME" in
+        bun) install_with_bun; return $? ;;
+        node) ;;
+        *) ui_error "Invalid --runtime: ${INSTALL_RUNTIME}. Use --runtime node|bun."; return 2 ;;
+    esac
 
     # A dry run must stay side-effect free; gum bootstrap may download binaries.
     if [[ "$DRY_RUN" != "1" ]]; then
