@@ -70,9 +70,6 @@ export async function settleExecProcessExit({
         for (const owner of readExecRequestOwners(session) ?? []) {
           owner.cleanupUncertain = true;
         }
-      } else {
-        // Uncertain cleanup retains its agent owner for later deletion retries.
-        delete session.agentId;
       }
       settleExecSessionFinalization(session);
     }
