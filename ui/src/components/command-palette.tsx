@@ -53,7 +53,7 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
       props,
       () => context,
       legacyHost,
-      lifecycle.host.requestUpdate,
+      () => lifecycle.host.requestUpdate(),
     );
     controllers.set(host, controller);
     Object.defineProperty(host, "isOpen", { configurable: true, get: () => controller.isOpen });

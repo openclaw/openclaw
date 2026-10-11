@@ -41,7 +41,7 @@ async function renderDivider() {
   }));
 
   await divider.updateComplete;
-  await nextFrame();
+  nextFrame();
   return divider;
 }
 
@@ -213,7 +213,7 @@ describe("resizable-divider", () => {
     dispatchPointer(document, "pointermove", 220, 7);
     dispatchPointer(document, "pointermove", 120, 7);
     expect(resized).not.toHaveBeenCalled();
-    await nextFrame();
+    nextFrame();
     expectLastResizeRatio(resized, 0.65);
     expect(resized).toHaveBeenCalledTimes(1);
     expect(resizeEnded).not.toHaveBeenCalled();

@@ -481,7 +481,7 @@ function LoginGateContent(props: { model: LoginGateProps; host: LoginGateElement
       (props.model.reconnectAt ?? 0) > now(),
     (running) => {
       if (!running) {
-        return;
+        return undefined;
       }
       let timer: ReturnType<typeof setInterval> | undefined;
       const update = () => {

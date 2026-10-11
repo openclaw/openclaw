@@ -80,7 +80,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
     () => props.context,
     (context) => {
       if (!context) {
-        return;
+        return undefined;
       }
       const releases = [context.gateway, context.agents, context.agentSelection].map((source) =>
         source.subscribe(publish),
@@ -140,7 +140,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
       applyingProviderId !== null ||
       done
     ) {
-      return;
+      return undefined;
     }
     const controller = new AbortController();
     abortPlan = controller;

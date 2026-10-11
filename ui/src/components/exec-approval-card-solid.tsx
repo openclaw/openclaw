@@ -293,9 +293,10 @@ function SidebarApprovalRowContent(props: SidebarApprovalRowProps) {
               {sessionTitle()}
             </span>
             <openclaw-approval-countdown
-              class={`sidebar-approval-row__timer ${
-                expiryUrgent() ? "sidebar-approval-row__timer--urgent" : ""
-              }`}
+              class={[
+                "sidebar-approval-row__timer",
+                { "sidebar-approval-row__timer--urgent": expiryUrgent() },
+              ]}
               role="timer"
               aria-label={expiryLabel()}
               title={expiryLabel()}
@@ -326,9 +327,11 @@ function SidebarApprovalRowContent(props: SidebarApprovalRowProps) {
                   <>
                     <button
                       type="button"
-                      class={`btn btn--xs ${
-                        decision === "deny" ? "btn--ghost" : ""
-                      } sidebar-approval-row__action sidebar-approval-row__action--${decision}`}
+                      class={[
+                        "btn btn--xs sidebar-approval-row__action",
+                        `sidebar-approval-row__action--${decision}`,
+                        { "btn--ghost": decision === "deny" },
+                      ]}
                       aria-label={t("execApproval.decisionRequest", {
                         decision: label(),
                         command: command(),
@@ -402,7 +405,11 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
     <>
       {" "}
       <div
-        class={`exec-approval-card exec-approval-card--${props.variant} exec-approval-card--severity-${severity()}`}
+        class={[
+          "exec-approval-card",
+          `exec-approval-card--${props.variant}`,
+          `exec-approval-card--severity-${severity()}`,
+        ]}
         data-approval-id={active().id}
       >
         <div class="exec-approval-header">
@@ -479,7 +486,7 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
                         ? `${label()} (${decisionShortcut(decision)})`
                         : label()
                     }
-                    onClick={() => props.onDecision(active().id, decision)}
+                    onClick={() => void props.onDecision(active().id, decision)}
                   >
                     <span>{label()}</span>
                   </button>

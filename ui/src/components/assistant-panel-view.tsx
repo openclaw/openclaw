@@ -44,7 +44,7 @@ export function AssistantPanelView(props: {
   return (
     <>
       <section
-        class={`assistant-panel assistant-panel--${dock()}`}
+        class={["assistant-panel", `assistant-panel--${dock()}`]}
         style={style()}
         hidden={!visible()}
         aria-label={t("assistantPanel.title")}
@@ -54,7 +54,7 @@ export function AssistantPanelView(props: {
         <Show when={resizer()}>
           {(geometry) => (
             <resizable-divider
-              class={`assistant-panel-resizer assistant-panel-resizer--${dock()}`}
+              class={["assistant-panel-resizer", `assistant-panel-resizer--${dock()}`]}
               prop:orientation={geometry().orientation}
               prop:label={t("assistantPanel.resize")}
               prop:splitRatio={geometry().splitRatio}
