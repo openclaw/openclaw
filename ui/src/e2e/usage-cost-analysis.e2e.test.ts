@@ -189,6 +189,13 @@ suite.define(() => {
           await page
             .getByRole("combobox", { name: "Time zone", exact: true })
             .selectOption(timeZone);
+          await expect
+            .poll(() =>
+              page
+                .locator("main.content")
+                .evaluate((content) => getComputedStyle(content).paddingTop),
+            )
+            .toBe("0px");
           const dateInputs = await page.locator(".usage-date-input").all();
           expect(dateInputs).toHaveLength(2);
           for (const input of dateInputs) {
