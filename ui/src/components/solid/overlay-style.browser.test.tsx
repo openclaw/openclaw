@@ -177,8 +177,11 @@ describe("native overlay presentation", () => {
       await userEvent.keyboard("{End}");
       const last = item("Action 28", "people-large");
       expect(document.activeElement).toBe(last);
-      expect(last.getBoundingClientRect().bottom).toBeLessThanOrEqual(childBox.bottom);
-      expect(last.getBoundingClientRect().top).toBeGreaterThanOrEqual(childBox.top);
+      const currentChildBox = expectWithinViewport(surface("people-large"));
+      const lastBox = last.getBoundingClientRect();
+      expect(currentChildBox.height).toBeLessThanOrEqual(420);
+      expect(lastBox.bottom).toBeLessThanOrEqual(currentChildBox.bottom);
+      expect(lastBox.top).toBeGreaterThanOrEqual(currentChildBox.top);
     },
   );
 
