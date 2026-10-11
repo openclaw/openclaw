@@ -34,6 +34,7 @@ import {
   mergePreparedModelCatalogInventory,
   mergePreparedNativeCatalog,
   prepareModelCatalogPublication,
+  retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.catalog-publication.js";
 import {
   preparedProviderCatalogCredentials,
@@ -48,7 +49,6 @@ import {
 import {
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,
-  retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
@@ -193,8 +193,7 @@ export async function createFullModelCatalogAccess(
   ): Publication => {
     const catalog = project(nextInventory, configuredRuntimeModels);
     setCatalogAuth(catalog, getPreparedModelFullCatalogAuth(nextInventory.catalog) ?? currentAuth);
-    catalog.authoritative =
-      acquiredNative && !catalog.refreshFailed ? catalog.authoritative : false;
+    catalog.authoritative = acquiredNative && !catalog.refreshFailed && catalog.authoritative;
     if (
       acquiredNative &&
       eligibleProviders.every((provider) => nextInventory.providers.has(provider))
@@ -265,10 +264,13 @@ export async function createFullModelCatalogAccess(
     return { previous, current: published, staticCatalog };
   };
   const acquireProviderCatalog = async (
-    providerIds: readonly string[] | undefined,
+    requestedProviderIds: readonly string[] | undefined,
     refresh: boolean,
-  ): Promise<PreparedModelCatalogCandidate> =>
-    limitFullModelCatalogBuild(async () => {
+  ): Promise<PreparedModelCatalogCandidate> => {
+    const providerIds = requestedProviderIds
+      ? [...preparedSyntheticAuthProviderScope(requestedProviderIds)]
+      : undefined;
+    return limitFullModelCatalogBuild(async () => {
       assertCurrent();
       const providers = providerIds ?? eligibleProviders;
       const {
@@ -354,6 +356,7 @@ export async function createFullModelCatalogAccess(
         nativeCatalogAcquired: published.nativeCatalogAcquired,
       };
     });
+  };
 
   const acquireNativeCatalog = (
     providerIds?: readonly string[],

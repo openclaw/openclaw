@@ -291,13 +291,12 @@ export function createGatewayChatMetadataRuntime(params: {
     return preparing;
   };
 
-  const runRefresh = async (version: number) => {
+  const runRefresh = async (version: number, facts: PreparedGenerationFacts) => {
     if (version !== refreshVersion) {
       return;
     }
     assertOpen();
     try {
-      const facts = captureGenerationFacts(deps);
       if (current && generationFactsMatch(current.facts, facts)) {
         return;
       }
@@ -361,7 +360,7 @@ export function createGatewayChatMetadataRuntime(params: {
       invalidate(true);
     }
     const version = ++refreshVersion;
-    const promise = refreshTail.catch(() => {}).then(() => runRefresh(version));
+    const promise = refreshTail.catch(() => {}).then(() => runRefresh(version, facts));
     refreshTail = promise;
     const generationReady = createDeferredCore();
     pending = {

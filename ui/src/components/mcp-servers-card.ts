@@ -63,7 +63,6 @@ class McpServersCard extends OpenClawLightDomElement {
   @state() private busy = false;
   @state() private message: McpServerMessage | null = null;
   @state() private formOpen = false;
-  private feedbackGeneration = 0;
   private readonly login = new WizardLoginController(this, {
     getClient: () => this.context?.gateway.snapshot.client ?? null,
     getAgentId: () => null,
@@ -76,16 +75,8 @@ class McpServersCard extends OpenClawLightDomElement {
     .effect(
       () => this.context?.runtimeConfig,
       (runtimeConfig) => {
-        const generation = this.feedbackGeneration;
         this.requestUpdate();
         void runtimeConfig.ensureLoaded().catch((error: unknown) => {
-          if (
-            generation !== this.feedbackGeneration ||
-            !this.isConnected ||
-            runtimeConfig !== this.context?.runtimeConfig
-          ) {
-            return;
-          }
           this.message = {
             kind: "error",
             text: formatUiError(error),
@@ -93,9 +84,6 @@ class McpServersCard extends OpenClawLightDomElement {
         });
         const unsubscribe = runtimeConfig.subscribe(() => this.requestUpdate());
         return () => {
-          // Async config work belongs to one connected source. Retire its UI
-          // feedback before a replacement source or retained card can reuse it.
-          this.feedbackGeneration += 1;
           this.busy = false;
           this.message = null;
           unsubscribe();
@@ -163,13 +151,9 @@ class McpServersCard extends OpenClawLightDomElement {
     if (!this.context || !this.canMutate() || this.busy) {
       return false;
     }
-    const generation = this.feedbackGeneration;
     this.busy = true;
     this.message = null;
     const result = await patchMcpServers(this.context.runtimeConfig, options);
-    if (generation !== this.feedbackGeneration) {
-      return false;
-    }
     this.busy = false;
     if (!result.ok) {
       this.message = { kind: "error", text: result.error };

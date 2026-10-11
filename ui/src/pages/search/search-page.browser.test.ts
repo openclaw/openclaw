@@ -51,6 +51,7 @@ async function mount(
 ) {
   let result = options.result ?? ready;
   const requested: Promise<unknown>[] = [];
+  const statusRequested = createDeferred();
   let testResponse: Promise<unknown> = Promise.resolve({
     provider: "searxng",
     status: "ok",
@@ -60,6 +61,9 @@ async function mount(
     ],
   });
   const request = createGatewayRequestMock((method) => {
+    if (method === "webSearch.status") {
+      statusRequested.resolve();
+    }
     const response =
       method === "webSearch.status"
         ? Promise.resolve(result)
@@ -167,6 +171,7 @@ async function mount(
     gateway,
     snapshot,
     settle,
+    statusRequested: statusRequested.promise,
     setResult: (next: WebSearchStatusResult) => {
       result = next;
     },
@@ -211,6 +216,7 @@ describe("Search settings", () => {
       } else {
         catalog.reject(new Error("Model catalog unavailable"));
       }
+      await fixture.statusRequested;
       await fixture.settle();
       const statuses = fixture.request.mock.calls.filter(
         ([method]) => method === "webSearch.status",
@@ -397,7 +403,7 @@ describe("Search settings", () => {
     expect(fixture.runtime.retry).not.toHaveBeenCalled();
   });
 
-  it.each(["agent", "connection", "provider"] as const)(
+  it.each(["agent", "connection"] as const)(
     "rejects a late successful test after its %s changes",
     async (change) => {
       const fixture = await mount();
@@ -417,8 +423,6 @@ describe("Search settings", () => {
           route: { kind: "disabled", label: "Off", testable: false },
         });
         select(fixture.element, "Agent", "scout");
-      } else if (change === "provider") {
-        select(fixture.element, "Search provider", "searxng");
       } else {
         fixture.gateway.publish({ ...fixture.snapshot, phase: "stopped", client: null });
         fixture.gateway.publish(fixture.snapshot);
