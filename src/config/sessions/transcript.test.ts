@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import { recordDeliveredCommandExchange } from "../../plugin-sdk/session-transcript-runtime.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { InternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
@@ -12,6 +13,7 @@ import {
   OPENCLAW_DELIVERY_MIRROR_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+  isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -167,6 +169,54 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       storePath: override.storePath ?? fixture.storePath(),
     })) as Array<{ message?: unknown }>;
   }
+
+  it("appends replayable, redacted command exchanges exactly once without changing prior rows", async () => {
+    await writeTranscriptStore();
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      text: "Earlier reply",
+    });
+    const before = await loadFixtureMessages();
+    const params = {
+      sessionKey,
+      storePath: fixture.storePath(),
+      commandText: "/login openai",
+      commandId: "login-message",
+      replyText: "Sign in at https://example.test/device?state=secret-state\nCode: EXAMPLE-CODE",
+      replyId: "device-code",
+    };
+    expect((await recordDeliveredCommandExchange(params)).ok).toBe(true);
+    expect((await recordDeliveredCommandExchange(params)).ok).toBe(true);
+    expect(
+      (
+        await recordDeliveredCommandExchange({
+          ...params,
+          replyId: "complete",
+          replyText: "Login complete.",
+        })
+      ).ok,
+    ).toBe(true);
+    const after = await loadFixtureMessages();
+    expect(after.slice(0, before.length)).toEqual(before);
+    const messages = after.slice(before.length).map((event) => event.message);
+    expect(messages).toEqual([
+      expect.objectContaining({ role: "user", content: [{ type: "text", text: "/login openai" }] }),
+      expect.objectContaining({
+        role: "assistant",
+        content: [
+          { type: "text", text: "Sign in at [login URL redacted]\nCode: [login code redacted]" },
+        ],
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "Login complete." }],
+      }),
+    ]);
+    expect(messages.some(isTranscriptOnlyOpenClawAssistantMessage)).toBe(false);
+    expect(JSON.stringify(after)).not.toContain("EXAMPLE-CODE");
+    expect(JSON.stringify(after)).not.toContain("secret-state");
+  });
 
   it("uses configured session.store when storePath is omitted", async () => {
     const tempDir = sessionDirs.make();

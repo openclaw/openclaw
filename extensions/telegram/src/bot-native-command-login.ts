@@ -70,6 +70,7 @@ export async function executeTelegramLoginCommand(params: {
       dispatch.route.agentId,
     ].join(":"),
   };
+  let deliveredReply = 0;
   const sendLoginMessage = async (text: string, parseMode?: "HTML") => {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
@@ -80,6 +81,11 @@ export async function executeTelegramLoginCommand(params: {
           ...(parseMode ? { parse_mode: parseMode } : {}),
         }),
     });
+    await dispatch.recordDeliveredReply(
+      params.commandText,
+      parseMode === "HTML" ? text.replace(/<[^>]*>/g, "") : text,
+      String(++deliveredReply),
+    );
   };
   const assertCurrent = (config = dispatch.telegramDeps.getRuntimeConfig()) => {
     dispatch.assertOwnerCurrent?.();
@@ -102,6 +108,9 @@ export async function executeTelegramLoginCommand(params: {
       replies: [reply],
       ...dispatch.deliveryOptions,
     });
+    if (result.delivered && reply.text) {
+      await dispatch.recordDeliveredReply(params.commandText, reply.text, String(++deliveredReply));
+    }
     return result.delivered;
   };
   const prepared = await prepareProviderChannelLogin({
@@ -305,6 +314,11 @@ export async function executeTelegramLoginCommand(params: {
             token: dispatch.opts.token,
             accountId: dispatch.route.accountId,
           },
+        );
+        await dispatch.recordDeliveredReply(
+          params.commandText,
+          terminalMessage,
+          String(++deliveredReply),
         );
       }
     } catch (error) {

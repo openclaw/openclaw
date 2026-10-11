@@ -96,6 +96,11 @@ export type TelegramCommandDispatch = TelegramCommandExecutorParams &
     nativeCommandRuntime: TelegramNativeCommandRuntime;
     deliveryOptions: DeliveryBaseOptions;
     loadDeliveryRuntime: () => Promise<TelegramNativeCommandDeliveryRuntime>;
+    recordDeliveredReply: (
+      commandText: string,
+      replyText: string,
+      replyId: string,
+    ) => Promise<void>;
   };
 
 export async function resolveTelegramNativeCommandThreadContext(params: {
@@ -406,6 +411,10 @@ export async function prepareTelegramCommandDispatch(
     linkPreview: runtimeTelegramCfg.linkPreview,
     richMessages,
   };
+  let transcriptSessionId = nativeCommandRuntime.getSessionEntry({
+    agentId: route.agentId,
+    sessionKey: auth.targetSessionKey,
+  })?.sessionId;
   return {
     ...params,
     telegramDeps,
@@ -415,5 +424,23 @@ export async function prepareTelegramCommandDispatch(
     nativeCommandRuntime,
     deliveryOptions,
     loadDeliveryRuntime: loadTelegramNativeCommandDeliveryRuntime,
+    recordDeliveredReply: async (commandText, replyText, replyId) => {
+      const result = await nativeCommandRuntime.recordDeliveredCommandExchange({
+        config: runtimeCfg,
+        agentId: route.agentId,
+        sessionKey: auth.targetSessionKey,
+        expectedSessionId: transcriptSessionId,
+        assertCurrent: auth.assertOwnerCurrent,
+        commandText,
+        replyText,
+        commandId: `telegram:${route.accountId}:${auth.chatId}:${params.msg.message_id}`,
+        replyId,
+      });
+      if (result.ok) {
+        transcriptSessionId = result.target.sessionId;
+      } else {
+        logVerbose(`telegram command transcript skipped: ${result.reason}`);
+      }
+    },
   };
 }

@@ -28,6 +28,10 @@ const loginSessionMocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn(),
   resolveStorePath: vi.fn(),
   prepareSessionEntryPatch: vi.fn(),
+  recordDeliveredCommandExchange: vi.fn(async () => ({
+    ok: true,
+    target: { sessionId: "login-session" },
+  })),
 }));
 
 vi.mock("./bot-native-commands.runtime.js", () => ({
@@ -35,6 +39,7 @@ vi.mock("./bot-native-commands.runtime.js", () => ({
   finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
   getAgentScopedMediaLocalRoots: vi.fn(() => []),
   getSessionEntry: loginSessionMocks.getSessionEntry,
+  recordDeliveredCommandExchange: loginSessionMocks.recordDeliveredCommandExchange,
   resolveChunkMode: vi.fn(() => "length"),
   resolveThreadSessionKeys: vi.fn(
     ({
@@ -63,6 +68,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
 
 function resetLoginCommandMocks() {
   resetNativeCommandMenuMocks();
+  loginSessionMocks.recordDeliveredCommandExchange.mockClear();
   loginSessionMocks.loadSessionStore.mockReset().mockReturnValue({});
   loginSessionMocks.getSessionEntry
     .mockReset()
@@ -97,6 +103,12 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(deliverReplies).toHaveBeenLastCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: expect.stringContaining("Choose a provider") })],
+      }),
+    );
+    expect(loginSessionMocks.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandText: "/login",
+        replyText: expect.stringContaining("Choose a provider"),
       }),
     );
     expect(loginFlow).not.toHaveBeenCalled();

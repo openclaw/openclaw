@@ -18,6 +18,14 @@ For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
 
+Delivered command exchanges are conversation history too. OpenClaw appends the
+user's command and the reply they saw as ordinary user/assistant messages, including
+native menus, button selections, and setting acknowledgements. Later turns and
+chat history can read them. Login and pairing secrets are redacted before storage.
+`/new` and `/reset` put their confirmation exchange in the new session; they do not
+rewrite the old session. `/btw` and `/side` stay ephemeral, and message edits or
+deletions do not rewrite earlier transcript rows.
+
 ## How messages are routed
 
 | Source          | Behavior                      |

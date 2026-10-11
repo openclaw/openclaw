@@ -528,6 +528,40 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it.each(["telegram", "discord", "slack"] as const)(
+    "records a delivered %s command exchange, using the delivered text",
+    async (channel) => {
+      setNoAbort();
+      const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+      dispatcher.appendBeforeDeliver?.((payload) => ({
+        ...payload,
+        text: "Thinking level set to low.",
+      }));
+      transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Body: "/think low",
+          BodyForCommands: "/think low",
+          Provider: channel,
+          Surface: channel,
+          OriginatingChannel: channel,
+          SessionKey: `agent:main:${channel}:direct:command`,
+          MessageSid: "command-message",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => ({ text: "Before delivery transform" }),
+      });
+      await settleReplyDispatcher({ dispatcher });
+      expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Thinking level set to low.",
+          command: { text: "/think low", idempotencyKey: "command-input:command-message" },
+        }),
+      );
+    },
+  );
+
   it("mirrors reset acknowledgements into the canonically prepared Slack session", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockReturnValue(false);

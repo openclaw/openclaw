@@ -319,6 +319,11 @@ export async function executeTelegramBuiltinCommand(
           ...dispatch.threadParams,
         }),
     });
+    await dispatch.recordDeliveredReply(
+      prompt,
+      `${title}\n${menu.choices.map((choice) => choice.label).join(", ")}`,
+      "menu",
+    );
     return "handled";
   }
   return "fall-through";

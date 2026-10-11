@@ -774,3 +774,5 @@ function projectVisibleMessageEntry(entry: {
     },
   ];
 }
+
+export { recordDeliveredCommandExchange } from "../config/sessions/command-transcript.js";
