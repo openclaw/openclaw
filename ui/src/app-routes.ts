@@ -71,7 +71,7 @@ import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
 export type SolidRouteProps<Data = unknown> = {
-  data: Data;
+  data: Data | undefined;
   loaderPending: boolean;
   presented: boolean;
 };

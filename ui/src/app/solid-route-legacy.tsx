@@ -1,4 +1,5 @@
 import type { JSX } from "@solidjs/web";
+import { Show, untrack } from "solid-js";
 import type { SolidRouteProps } from "../app-routes.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { solidContent } from "../lit/solid-content.tsx";
@@ -14,13 +15,18 @@ type LegacyRouteProps = SolidRouteProps & {
 };
 
 function LegacyRoute(props: LegacyRouteProps) {
-  const owner = shellLayoutOwnerForHost(props.host);
+  const host = untrack(() => props.host);
+  const owner = shellLayoutOwnerForHost(host);
   return (
-    <ApplicationProvider value={props.context!}>
-      <ShellLayoutProvider value={owner ? { owner, host: props.host } : null}>
-        <SolidRouteContent {...props} />
-      </ShellLayoutProvider>
-    </ApplicationProvider>
+    <Show when={props.context} keyed>
+      {(context) => (
+        <ApplicationProvider value={context}>
+          <ShellLayoutProvider value={owner ? { owner, host } : null}>
+            <SolidRouteContent {...props} />
+          </ShellLayoutProvider>
+        </ApplicationProvider>
+      )}
+    </Show>
   );
 }
 

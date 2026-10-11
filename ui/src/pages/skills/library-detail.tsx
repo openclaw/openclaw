@@ -72,7 +72,7 @@ export function LibraryPinRead(props: LibraryPinReadProps) {
               <textarea
                 class="settings-input"
                 readonly
-                spellcheck={false}
+                spellcheck="false"
                 rows={16}
                 value={text() ?? ""}
                 style={{

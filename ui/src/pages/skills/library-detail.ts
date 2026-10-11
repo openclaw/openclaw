@@ -1,3 +1,4 @@
+import { html } from "lit";
 import { solidContent } from "../../lit/solid-content.tsx";
 import { LibraryPinRead, type LibraryPinReadProps } from "./library-detail.tsx";
 
@@ -5,4 +6,3 @@ import { LibraryPinRead, type LibraryPinReadProps } from "./library-detail.tsx";
 export function renderLibraryPinRead(props: LibraryPinReadProps) {
   return html`${solidContent(LibraryPinRead, props)}`;
 }
-import { html } from "lit";
