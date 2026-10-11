@@ -120,6 +120,10 @@ class SecurePrefs(
     private const val chatModelFavoritesKey = "chat.modelFavorites"
     private const val chatModelRecentsKey = "chat.modelRecents"
     private const val sessionCustomGroupsKey = "sessions.customGroups"
+    private const val sessionGroupCatalogMigratedKey = "sessions.customGroups.migratedGateways"
+    private const val sessionGroupLegacyConsumedKey = "sessions.customGroups.legacyConsumed"
+    private const val sessionGroupCatalogCacheKey = "sessions.groupCatalog.byGateway"
+    private const val sessionGroupSectionOrderKey = "sessions.groupCatalog.sectionOrder"
     private const val sidebarPageOrderKey = "sidebar.pageOrder"
     private const val sidebarVisiblePagesKey = "sidebar.visiblePages"
     private val appearanceSyncKeys = setOf("ui.theme", "ui.themeMode", "ui.accent")
@@ -294,8 +298,8 @@ class SecurePrefs(
   private val _modelRecents = MutableStateFlow(loadStringList(chatModelRecentsKey))
   val modelRecents: StateFlow<List<String>> = _modelRecents
 
-  // Custom session group names the user created locally; assigned groups also
-  // persist server-side via the session category field (mirrors web localStorage).
+  // Pre-catalog device folders. Live gateway catalogs are stored per gateway and must
+  // not be written back here, or the next empty gateway would import another gateway's names.
   private val _sessionCustomGroups = MutableStateFlow(loadStringList(sessionCustomGroupsKey))
   val sessionCustomGroups: StateFlow<List<String>> = _sessionCustomGroups
 
@@ -1016,6 +1020,73 @@ class SecurePrefs(
 
   fun setSessionCustomGroups(groups: List<String>) = _sessionCustomGroups.persistStringList(sessionCustomGroupsKey, groups.map(String::trim).filter { it.isNotEmpty() }.distinct())
 
+  fun isSessionGroupLegacyConsumed(): Boolean = plainPrefs.getBoolean(sessionGroupLegacyConsumedKey, false)
+
+  fun legacySessionCustomGroups(): List<String> = if (isSessionGroupLegacyConsumed()) emptyList() else _sessionCustomGroups.value
+
+  fun consumeLegacySessionCustomGroups() {
+    if (isSessionGroupLegacyConsumed()) return
+    plainPrefs.edit {
+      putBoolean(sessionGroupLegacyConsumedKey, true)
+      remove(sessionCustomGroupsKey)
+    }
+    _sessionCustomGroups.value = emptyList()
+  }
+
+  /** Null when this gateway has never had a catalog read stored. Empty is a stored empty catalog. */
+  fun storedSessionGroupCatalog(gatewayId: String): List<String>? {
+    val id = gatewayId.trim()
+    if (id.isEmpty()) return null
+    val map = loadSessionGroupCatalogMap()
+    if (id !in map) return null
+    return map[id].orEmpty()
+  }
+
+  fun setStoredSessionGroupCatalog(
+    gatewayId: String,
+    names: List<String>,
+  ) {
+    val id = gatewayId.trim()
+    if (id.isEmpty()) return
+    val cleaned = names.map(String::trim).filter { it.isNotEmpty() }.distinct()
+    val updated = loadSessionGroupCatalogMap().toMutableMap()
+    updated[id] = cleaned
+    plainPrefs.edit { putString(sessionGroupCatalogCacheKey, json.encodeToString(updated)) }
+  }
+
+  /** Gateway `sectionOrder` for this catalog. Empty means the default builder order. */
+  fun storedSessionGroupSectionOrder(gatewayId: String): List<String> {
+    val id = gatewayId.trim()
+    if (id.isEmpty()) return emptyList()
+    return loadSessionGroupSectionOrderMap()[id].orEmpty()
+  }
+
+  fun setStoredSessionGroupSectionOrder(
+    gatewayId: String,
+    sectionOrder: List<String>,
+  ) {
+    val id = gatewayId.trim()
+    if (id.isEmpty()) return
+    val cleaned = sectionOrder.map(String::trim).filter { it.isNotEmpty() }.distinct()
+    val updated = loadSessionGroupSectionOrderMap().toMutableMap()
+    updated[id] = cleaned
+    plainPrefs.edit { putString(sessionGroupSectionOrderKey, json.encodeToString(updated)) }
+  }
+
+  fun isSessionGroupCatalogMigrated(gatewayId: String): Boolean = gatewayId in loadStringList(sessionGroupCatalogMigratedKey)
+
+  fun markSessionGroupCatalogMigrated(gatewayId: String) {
+    val trimmed = gatewayId.trim()
+    if (trimmed.isEmpty() || isSessionGroupCatalogMigrated(trimmed)) return
+    persistStringList(sessionGroupCatalogMigratedKey, loadStringList(sessionGroupCatalogMigratedKey) + trimmed)
+  }
+
+  fun clearSessionGroupCatalogMigrated(gatewayId: String) {
+    val current = loadStringList(sessionGroupCatalogMigratedKey)
+    if (gatewayId !in current) return
+    persistStringList(sessionGroupCatalogMigratedKey, current.filterNot { it == gatewayId })
+  }
+
   fun setSidebarPageOrder(pageIds: List<String>) = _sidebarPageOrder.persistStringList(sidebarPageOrderKey, sanitizeSidebarPageOrder(pageIds))
 
   fun setSidebarVisiblePages(pageIds: List<String>) = _sidebarVisiblePages.persistStringList(sidebarVisiblePagesKey, sanitizeSidebarVisiblePages(pageIds))
@@ -1077,6 +1148,25 @@ class SecurePrefs(
     }
     plainPrefs.edit { putBoolean(cameraEnabledKey, hadPlainPrefsBeforeInit) }
     return hadPlainPrefsBeforeInit
+  }
+
+  private fun loadSidebarPageOrder(): List<String> = sanitizeSidebarPageOrder(loadStringList(sidebarPageOrderKey))
+
+  private fun loadSidebarVisiblePages(): List<String> =
+    if (!plainPrefs.contains(sidebarVisiblePagesKey)) {
+      defaultSidebarVisiblePages
+    } else {
+      sanitizeSidebarVisiblePages(loadStringList(sidebarVisiblePagesKey))
+    }
+
+  private fun loadSessionGroupCatalogMap(): Map<String, List<String>> {
+    val raw = plainPrefs.getString(sessionGroupCatalogCacheKey, null)?.takeIf { it.isNotEmpty() } ?: return emptyMap()
+    return runCatching { json.decodeFromString<Map<String, List<String>>>(raw) }.getOrDefault(emptyMap())
+  }
+
+  private fun loadSessionGroupSectionOrderMap(): Map<String, List<String>> {
+    val raw = plainPrefs.getString(sessionGroupSectionOrderKey, null)?.takeIf { it.isNotEmpty() } ?: return emptyMap()
+    return runCatching { json.decodeFromString<Map<String, List<String>>>(raw) }.getOrDefault(emptyMap())
   }
 
   private fun loadStringList(key: String): List<String> {

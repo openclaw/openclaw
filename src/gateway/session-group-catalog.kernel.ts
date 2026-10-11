@@ -99,7 +99,9 @@ export function mutateSessionGroupCatalogInDatabase(
       ).rows.map((row) => row.name);
       const selected =
         input.kind === "put"
-          ? names.filter((name) => !input.names.includes(name))
+          ? input.appendOnly
+            ? []
+            : names.filter((name) => !input.names.includes(name))
           : input.kind === "defaults" || input.kind === "retire"
             ? [input.name]
             : [];
@@ -140,22 +142,39 @@ export function mutateSessionGroupCatalogInDatabase(
         }
         const now = Date.now();
         const existing = new Set(names);
-        executeSqliteQuerySync(
-          db,
-          input.names.length === 0
-            ? kysely.deleteFrom("session_groups")
-            : kysely.deleteFrom("session_groups").where("name", "not in", input.names),
-        );
-        input.names.forEach((name, position) =>
+        if (!input.appendOnly) {
+          executeSqliteQuerySync(
+            db,
+            input.names.length === 0
+              ? kysely.deleteFrom("session_groups")
+              : kysely.deleteFrom("session_groups").where("name", "not in", input.names),
+          );
+        }
+        const additions = input.appendOnly
+          ? input.names.filter((name) => !existing.has(name))
+          : input.names;
+        additions.forEach((name, index) =>
           executeSqliteQuerySync(
             db,
             existing.has(name)
-              ? kysely.updateTable("session_groups").set({ position }).where("name", "=", name)
-              : kysely.insertInto("session_groups").values({ name, position, created_at: now }),
+              ? kysely
+                  .updateTable("session_groups")
+                  .set({ position: index })
+                  .where("name", "=", name)
+              : kysely.insertInto("session_groups").values({
+                  name,
+                  position: input.appendOnly ? names.length + index : index,
+                  created_at: now,
+                }),
           ),
         );
-        if (input.sectionOrder) {
-          updateSidebarOrder(db, () => input.sectionOrder);
+        const requestedOrder = input.sectionOrder;
+        if (requestedOrder) {
+          updateSidebarOrder(db, (current) =>
+            input.appendOnly
+              ? [...requestedOrder, ...(current ?? []).filter((id) => !requestedOrder.includes(id))]
+              : requestedOrder,
+          );
         }
         changed = true;
       } else if (input.kind === "defaults") {

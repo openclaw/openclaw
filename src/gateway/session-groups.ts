@@ -69,7 +69,8 @@ function normalizeSidebarSectionOrder(
 }
 
 /**
- * Replaces the ordered catalog. Dropping a name whose group still has member
+ * Replaces the ordered catalog, or atomically appends without dropping existing names.
+ * Dropping a name whose group still has member
  * sessions is rejected: member sweeps stay owned by sessions.groups.delete,
  * so a put can never leave dangling categories that resurrect the group.
  */
@@ -77,6 +78,7 @@ export async function putSessionGroups(params: {
   cfg: OpenClawConfig;
   names: readonly string[];
   sectionOrder?: readonly string[];
+  appendOnly?: boolean;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
   assertTargetCurrent?: (target: { agentId?: string; sessionKey: string }) => void;
@@ -91,6 +93,7 @@ export async function putSessionGroups(params: {
       kind: "put",
       names: normalized,
       sectionOrder: normalizedSectionOrder,
+      appendOnly: params.appendOnly,
       cfg: { agents: cfg.agents, session: cfg.session },
     },
     env,

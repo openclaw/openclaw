@@ -535,6 +535,115 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun membershipUsesTheCatalogConnectionLeaseAndRejectsPhysicalReconnectBeforeEnqueue() =
+    runTest {
+      var connection = 1
+      var retireBeforeEnqueue = false
+      val enqueued = mutableListOf<String>()
+      val controller =
+        createChatController(
+          cacheScope = { ChatCacheScope("gateway-a", connection.toLong()) },
+          captureRequestLease = {
+            val capturedConnection = connection
+            GatewaySession.RequestLease(
+              endpointStableId = "gateway-a",
+              isCurrentImpl = { connection == capturedConnection },
+            ) { method, _, _, withEnqueue ->
+              if (retireBeforeEnqueue) connection++
+              if (connection != capturedConnection) throw GatewayRequestNotEnqueued("gateway request lease changed")
+              withEnqueue { enqueued += method }
+              if (method.startsWith("sessions.groups.")) """{"groups":[{"name":"Folder"}]}""" else "{}"
+            }
+          },
+          requestGateway = { method, _ ->
+            check(method != "sessions.patch") { "Membership must use the catalog connection" }
+            emptyChatGatewayResponse(method)
+          },
+        )
+      val lease = requireNotNull(controller.captureSessionCatalogLease("gateway-a"))
+      assertEquals(
+        "Folder",
+        controller
+          .listSessionGroups(lease)
+          ?.groups
+          ?.single()
+          ?.name,
+      )
+      assertEquals(
+        "Folder",
+        controller
+          .putSessionGroups(listOf("Folder"), lease)
+          ?.groups
+          ?.single()
+          ?.name,
+      )
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "agent:main:side", category = "Folder", requestLease = lease)))
+      assertEquals(listOf("sessions.groups.list", "sessions.groups.put", "sessions.patch"), enqueued)
+
+      retireBeforeEnqueue = true
+      assertFalse(controller.patchSession(ChatSessionPatch(key = "agent:main:side", category = "Folder", requestLease = lease)))
+      assertEquals(1, enqueued.count { it == "sessions.patch" })
+      assertFalse(controller.patchSession(ChatSessionPatch(key = "agent:main:side", category = "Folder", requestLease = lease)))
+      assertNull(controller.errorText.value)
+    }
+
+  @Test
+  fun membershipCatalogAndOrdinaryRefreshRetainLoadedRosterPagesAndOriginalPageSize() =
+    runTest {
+      val listParams = mutableListOf<kotlinx.serialization.json.JsonObject>()
+      val controller =
+        createChatController(
+          requestGateway = { method, paramsJson ->
+            when (method) {
+              "sessions.list" -> {
+                val params = json.parseToJsonElement(requireNotNull(paramsJson)).jsonObject
+                listParams += params
+                val limit = params["limit"]?.jsonPrimitive?.content?.toInt() ?: 2
+                val offset = params["offset"]?.jsonPrimitive?.content?.toInt() ?: 0
+                val keys = (offset until minOf(offset + limit, 6)).map { "agent:main:row-$it" }
+                val rows = keys.joinToString(",") { """{"key":"$it","category":"Folder"}""" }
+                """{"sessions":[$rows],"totalCount":6,"hasMore":${offset + keys.size < 6},"nextOffset":${offset + keys.size}}"""
+              }
+
+              "sessions.groups.rename" -> {
+                """{"groups":[{"name":"Renamed"}]}"""
+              }
+
+              else -> {
+                emptyChatGatewayResponse(method)
+              }
+            }
+          },
+        )
+      controller.refreshSessions(limit = 2)
+      advanceUntilIdle()
+      assertTrue(controller.loadMoreSessions())
+      assertEquals(4, controller.sessions.value.size)
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "agent:main:row-3", category = "Renamed")))
+      assertEquals(4, controller.sessions.value.size)
+      val lease = requireNotNull(controller.captureSessionCatalogLease("gateway-test"))
+      assertEquals(
+        "Renamed",
+        controller
+          .renameSessionGroupCatalog("Folder", "Renamed", lease)
+          ?.groups
+          ?.single()
+          ?.name,
+      )
+      assertEquals(4, controller.sessions.value.size)
+      controller.refresh()
+      advanceUntilIdle()
+      assertEquals("Health refresh must retain the loaded window", 4, controller.sessions.value.size)
+      controller.refreshSessions(limit = 2)
+      advanceUntilIdle()
+      assertEquals("Explicit refresh must retain the loaded window", 4, controller.sessions.value.size)
+      assertTrue(controller.loadMoreSessions())
+      assertEquals(6, controller.sessions.value.size)
+      assertEquals(listOf(2, 2, 4, 4, 4, 4, 2), listParams.map { it["limit"]?.jsonPrimitive?.content?.toInt() })
+      assertEquals(listOf(null, 2, null, null, null, null, 4), listParams.map { it["offset"]?.jsonPrimitive?.content?.toInt() })
+    }
+
+  @Test
   fun renameSessionGroupPatchesEveryMemberIncludingArchivedOnlyOnes() =
     runTest {
       val (controller, requests) =

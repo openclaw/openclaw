@@ -78,6 +78,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         cfg: context.getRuntimeConfig(),
         names: params.names,
         sectionOrder: params.sectionOrder,
+        appendOnly: params.appendOnly,
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });

@@ -89,6 +89,56 @@ describe("session groups catalog", () => {
     ]);
   });
 
+  it("atomically appends stale clients' groups without dropping either empty folder", async () => {
+    const staleClientNames = ["First"];
+    await putSessionGroups({ cfg, names: staleClientNames, appendOnly: true, env });
+    const groups = await putSessionGroups({
+      cfg,
+      names: ["Second"],
+      appendOnly: true,
+      env,
+    });
+    expect(groups).toEqual([
+      { name: "First", position: 0 },
+      { name: "Second", position: 1 },
+    ]);
+    expect(await putSessionGroups({ cfg, names: staleClientNames, appendOnly: true, env })).toEqual(
+      groups,
+    );
+  });
+
+  it("preserves concurrently added sections when a stale client reorders", async () => {
+    await putSessionGroups({
+      cfg,
+      names: ["First"],
+      sectionOrder: ["category:First"],
+      env,
+    });
+    await putSessionGroups({
+      cfg,
+      names: ["Second"],
+      sectionOrder: ["category:First", "category:Second"],
+      appendOnly: true,
+      env,
+    });
+    await putSessionGroups({
+      cfg,
+      names: ["First"],
+      sectionOrder: ["ungrouped", "category:First"],
+      appendOnly: true,
+      env,
+    });
+    expect(readSessionGroupCatalog(env).groups.map((group) => group.name)).toEqual([
+      "First",
+      "Second",
+    ]);
+    expect(readSessionGroupCatalog(env).sectionOrder).toEqual([
+      "ungrouped",
+      "category:First",
+      "category:Second",
+    ]);
+  });
+
   it("rejects dropping a group that still has member sessions", async () => {
     const groups = await putSessionGroups({ cfg, names: ["Keep", "Gone"], env });
     const sessionKey = "agent:main:dashboard:a";

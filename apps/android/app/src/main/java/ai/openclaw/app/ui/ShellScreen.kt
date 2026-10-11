@@ -11,6 +11,7 @@ import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.SIDEBAR_SESSION_ROSTER_LIMIT
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.firstGraphemeOrNull
 import ai.openclaw.app.gatewayConnectionStatusForDisplay
@@ -477,7 +478,7 @@ private fun OverviewScreen(
   }
 
   SettingsRefreshOnConnect(isConnected) {
-    viewModel.refreshChatSessions(limit = 20)
+    viewModel.refreshChatSessions(limit = SIDEBAR_SESSION_ROSTER_LIMIT)
     viewModel.refreshAgents()
     viewModel.refreshModelCatalog()
     viewModel.refreshProviderModels()

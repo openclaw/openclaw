@@ -2,7 +2,10 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.SessionCatalogEntry
+import ai.openclaw.app.SessionCatalogHost
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.normalizeSidebarSectionOrder
 import ai.openclaw.app.ui.design.clawColorsForTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -193,11 +196,12 @@ class SidebarShellLogicTest {
 
     val recentKeys = presentation.recentSections.flatMap { it.entries }.map(ChatSessionEntry::key)
     assertEquals(listOf("pinned"), presentation.pinned.map(ChatSessionEntry::key))
-    assertEquals(8, recentKeys.size)
-    assertEquals(setOf("session-10", "session-9", "session-8", "session-7", "session-6", "session-5", "session-4", "session-3"), recentKeys.toSet())
-    assertEquals(listOf("Work", "Ungrouped"), presentation.recentSections.map { it.title })
-    assertTrue(presentation.recentSections.all { it.entries.isNotEmpty() })
-    assertTrue(presentation.canExpandRecent)
+    assertEquals(listOf("Personal", "Work"), presentation.groups.map { it.name })
+    assertEquals(emptyList<String>(), presentation.groups[0].entries.map { it.key })
+    assertEquals(listOf("session-10", "session-8", "session-6", "session-4", "session-2"), presentation.groups[1].entries.map { it.key })
+    assertEquals(listOf("session-9", "session-7", "session-5", "session-3", "session-1"), recentKeys)
+    assertEquals(listOf<String?>(null), presentation.recentSections.map { it.title })
+    assertFalse(presentation.canExpandRecent)
   }
 
   @Test
@@ -350,6 +354,196 @@ class SidebarShellLogicTest {
     assertEquals(SidebarSessionActivity.Unread, sidebarSessionActivity("queued", null, false, true))
   }
 
+  @Test
+  fun sidebarGroupsKeepEmptyCatalogFoldersAheadOfRecent() {
+    val presentation =
+      sidebarSessionPresentation(
+        sessions =
+          listOf(
+            session("loose", activity = 5),
+            session("coded", activity = 9, category = "CODEX"),
+            session("pinned-coded", activity = 8, pinned = true, category = "CODEX"),
+          ),
+        knownGroups = listOf("dankar", "CODEX"),
+        expanded = true,
+      )
+
+    assertEquals(listOf("pinned-coded"), presentation.pinned.map { it.key })
+    assertEquals(listOf("dankar", "CODEX"), presentation.groups.map { it.name })
+    assertEquals(emptyList<String>(), presentation.groups[0].entries.map { it.key })
+    assertEquals(listOf("coded"), presentation.groups[1].entries.map { it.key })
+    assertEquals(listOf("loose"), presentation.recentSections.flatMap { it.entries }.map { it.key })
+  }
+
+  @Test
+  fun sidebarGroupsStayVisibleWhenNoSessionsExist() {
+    val presentation =
+      sidebarSessionPresentation(
+        sessions = emptyList(),
+        knownGroups = listOf(" CODE ", "CODE", "dankar"),
+        expanded = false,
+      )
+
+    assertEquals(listOf("CODE", "dankar"), presentation.groups.map { it.name })
+    assertTrue(presentation.groups.all { it.entries.isEmpty() })
+    assertTrue(presentation.recentSections.isEmpty())
+  }
+
+  @Test
+  fun unknownCategoriesFollowCatalogOrder() {
+    val presentation =
+      sidebarSessionPresentation(
+        sessions =
+          listOf(
+            session("z", activity = 2, category = "zeta"),
+            session("a", activity = 1, category = "alpha"),
+          ),
+        knownGroups = listOf("mid"),
+        expanded = true,
+      )
+
+    assertEquals(listOf("mid", "alpha", "zeta"), presentation.groups.map { it.name })
+  }
+
+  @Test
+  fun recentCapIgnoresSessionsThatLiveInGroups() {
+    val sessions = (1L..9L).map { session("loose-$it", activity = it) } + session("grouped", activity = 100, category = "Work")
+    val collapsed = sidebarSessionPresentation(sessions, knownGroups = listOf("Work"), expanded = false)
+    val expanded = sidebarSessionPresentation(sessions, knownGroups = listOf("Work"), expanded = true)
+
+    assertEquals(8, collapsed.recentSections.flatMap { it.entries }.size)
+    assertFalse(collapsed.recentSections.flatMap { it.entries }.any { it.key == "grouped" })
+    assertEquals(
+      listOf("grouped"),
+      collapsed.groups
+        .single()
+        .entries
+        .map { it.key },
+    )
+    assertTrue(collapsed.canExpandRecent)
+    assertEquals(9, expanded.recentSections.flatMap { it.entries }.size)
+  }
+
+  @Test
+  fun categoryFoldersStayOutOfTheKindGroupZone() {
+    val presentation =
+      sidebarSessionPresentation(
+        sessions =
+          listOf(
+            session("dev", activity = 4, category = "Alpha"),
+            session("objects", activity = 3, category = "Beta"),
+            session("sync", activity = 2, category = "Gamma"),
+            session("other", activity = 6, kind = "direct"),
+            session("telegram", activity = 5, kind = "group"),
+            session("filed-group", activity = 1, category = "Alpha", kind = "group"),
+          ),
+        knownGroups = listOf("Alpha", "Beta", "Gamma"),
+        expanded = true,
+      )
+
+    assertEquals(listOf("Alpha", "Beta", "Gamma"), presentation.groups.map { it.name })
+    assertEquals(listOf("dev", "filed-group"), presentation.groups[0].entries.map { it.key })
+    assertEquals(listOf("other"), presentation.recentSections.flatMap { it.entries }.map { it.key })
+    assertEquals(listOf("telegram"), presentation.chatGroups.map { it.key })
+  }
+
+  @Test
+  fun sectionOrderUsesGatewayTokensThenDefaultBuiltIns() {
+    assertEquals(
+      listOf("category:Alpha", "category:Beta", "ungrouped", "groups", "work", "catalog:codex", "catalog:extra"),
+      normalizeSidebarSectionOrder(
+        stored = emptyList(),
+        knownGroups = listOf("Alpha", "Beta"),
+        catalogIds = listOf("codex", "extra"),
+      ),
+    )
+    assertEquals(
+      listOf(
+        "catalog:codex",
+        "category:Beta",
+        "category:Gamma",
+        "ungrouped",
+        "groups",
+        "category:Alpha",
+        "work",
+        "catalog:extra",
+      ),
+      normalizeSidebarSectionOrder(
+        stored = listOf("catalog:codex", "category:Beta", "ungrouped", "groups", "category:Alpha", "work", "catalog:missing"),
+        knownGroups = listOf("Alpha", "Beta", "Gamma"),
+        catalogIds = listOf("codex", "extra"),
+      ),
+    )
+  }
+
+  @Test
+  fun sectionWindowCountsLoadedMembersNotTheVisiblePage() {
+    val entries = (1L..14L).map { session("s-$it", activity = it) }
+    val window = sidebarSectionWindow(entries, visibleLimit = 10, activeSessionKey = "s-14")
+
+    assertEquals(14, window.totalCount)
+    assertEquals(11, window.rows.size)
+    assertEquals("s-14", window.rows.last().key)
+    assertTrue(window.canShowMore)
+    assertEquals(14, sidebarCollapsedCount(window.totalCount))
+    assertEquals(null, sidebarCollapsedCount(0))
+  }
+
+  @Test
+  fun reorderStepsSkipHiddenWorkAndUnrenderedCatalogs() {
+    val tokens =
+      listOf(
+        "category:Alpha",
+        "ungrouped",
+        "groups",
+        "work",
+        "catalog:codex",
+        "catalog:extra",
+      )
+
+    assertEquals(
+      listOf("category:Alpha", "ungrouped", "catalog:codex"),
+      sidebarReorderVisibleTokens(
+        sectionTokens = tokens,
+        categoryNames = setOf("Alpha"),
+        showGroupsZone = false,
+        catalogIds = setOf("codex"),
+      ),
+    )
+  }
+
+  @Test
+  fun collapsedCatalogCountShowsLoadedRowsWhileAnotherPageExists() {
+    val host =
+      SessionCatalogHost(
+        hostId = "desktop",
+        label = "Desktop",
+        connected = true,
+        nextCursor = "page-2",
+        sessions =
+          listOf(
+            catalogEntry("live"),
+            catalogEntry("archived", archived = true),
+          ),
+      )
+
+    assertEquals(1, sidebarCatalogLoadedCount(listOf(host)))
+    assertEquals(null, sidebarCatalogLoadedCount(emptyList()))
+  }
+
+  private fun catalogEntry(
+    threadId: String,
+    archived: Boolean = false,
+  ): SessionCatalogEntry =
+    SessionCatalogEntry(
+      catalogId = "codex",
+      hostId = "desktop",
+      threadId = threadId,
+      status = "idle",
+      archived = archived,
+      canContinue = true,
+    )
+
   private fun agent(
     id: String,
     kind: String? = null,
@@ -370,6 +564,7 @@ class SidebarShellLogicTest {
     label: String? = null,
     owner: String? = null,
     category: String? = null,
+    kind: String? = null,
   ): ChatSessionEntry =
     ChatSessionEntry(
       key = key,
@@ -381,5 +576,6 @@ class SidebarShellLogicTest {
       label = label,
       ownerAgentId = owner,
       category = category,
+      kind = kind,
     )
 }

@@ -563,10 +563,11 @@ export const SessionsGroupsDefaultsResultSchema = closedObject({
   defaults: Type.Array(SessionGroupDefaultsSchema),
 });
 
-/** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
+/** Replaces the ordered group catalog, or atomically appends names when appendOnly is true. */
 export const SessionsGroupsPutParamsSchema = closedObject({
   names: Type.Array(SessionLabelString),
   sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
+  appendOnly: Type.Optional(Type.Boolean()),
 });
 
 /** Renames a group and repoints every member session's category. */

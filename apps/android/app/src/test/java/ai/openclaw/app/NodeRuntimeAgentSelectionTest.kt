@@ -958,9 +958,14 @@ class NodeRuntimeAgentSelectionTest {
       drainWithMainLooper {
         ReflectionHelpers.getField<AndroidClientDatabases>(runtime, "clientDatabases").clientStateDatabase()
       }
-      val requestGateway: suspend (String, String?) -> String = { method, params ->
+
+      suspend fun respondRequest(
+        method: String,
+        params: String?,
+        selectionLookup: Boolean,
+      ): String {
         val request = Json.parseToJsonElement(params ?: "{}").jsonObject
-        when (method) {
+        return when (method) {
           "sessions.list" -> {
             val limit = request["limit"]?.jsonPrimitive?.content?.toInt() ?: 50
             val rows =
@@ -974,8 +979,8 @@ class NodeRuntimeAgentSelectionTest {
                 emptyList()
               }
             val page = rows.take(limit)
-            // Bootstrap also lists sessions; only the 200-row selection lookup owns this rendezvous.
-            if (limit == SESSION_LIST_FETCH_LIMIT) lookupStarted.get()?.complete(currentCoroutineContext().job)
+            // Bootstrap uses the same page size; only the gateway-bound selector owns this rendezvous.
+            if (selectionLookup && limit == SESSION_LIST_FETCH_LIMIT) lookupStarted.get()?.complete(currentCoroutineContext().job)
             page.joinToString(
               prefix = """{"sessions":[""",
               postfix = """],"totalCount":${rows.size},"hasMore":${page.size < rows.size}}""",
@@ -1059,7 +1064,12 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
       }
-      installChatGateway(runtime, requestGateway, requestLeaseGeneration = leaseGeneration::get)
+      installChatGateway(
+        runtime,
+        requestGateway = { method, params -> respondRequest(method, params, false) },
+        requestLeaseGeneration = leaseGeneration::get,
+        requestGatewayForGatewayOverride = { _, method, params -> respondRequest(method, params, true) },
+      )
 
       suspend fun selectAgentAndWait(
         agentId: String,
@@ -1416,9 +1426,13 @@ class NodeRuntimeAgentSelectionTest {
         listOf(ChatSessionEntry(key = previousKey, updatedAtMs = 10, ownerAgentId = "scout")),
       )
     try {
-      val requestGateway: suspend (String, String?) -> String = { method, params ->
+      suspend fun respondRequest(
+        method: String,
+        params: String?,
+        selectionLookup: Boolean,
+      ): String {
         val request = Json.parseToJsonElement(params ?: "{}").jsonObject
-        when (method) {
+        return when (method) {
           "sessions.describe" -> {
             """{"session":{"label":"App"}}"""
           }
@@ -1441,7 +1455,7 @@ class NodeRuntimeAgentSelectionTest {
           }
 
           "sessions.list" -> {
-            if (request["limit"] == JsonPrimitive(SESSION_LIST_FETCH_LIMIT)) lookupJobs.send(currentCoroutineContext().job)
+            if (selectionLookup && request["limit"] == JsonPrimitive(SESSION_LIST_FETCH_LIMIT)) lookupJobs.send(currentCoroutineContext().job)
             val rows = if (request["agentId"]?.jsonPrimitive?.content == "scout") sessions.get() else emptyList()
             rows.joinToString(prefix = """{"sessions":[""", postfix = "]}") { row ->
               """{"key":"${row.key}","sessionId":"session-${row.key}","agentId":"scout","updatedAt":${row.updatedAtMs},"archived":false}"""
@@ -1465,7 +1479,11 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
       }
-      installChatGateway(runtime, requestGateway)
+      installChatGateway(
+        runtime,
+        requestGateway = { method, params -> respondRequest(method, params, false) },
+        requestGatewayForGatewayOverride = { _, method, params -> respondRequest(method, params, true) },
+      )
 
       runtime.selectChatAgent("scout")
       withTimeout(5_000) { lookupJobs.receive().join() }
@@ -1513,10 +1531,10 @@ class NodeRuntimeAgentSelectionTest {
     runtime: NodeRuntime,
     requestGateway: suspend (String, String?) -> String,
     requestLeaseGeneration: () -> Int = { 0 },
+    requestGatewayForGatewayOverride: (suspend (String, String, String?) -> String)? = null,
   ) {
-    val requestGatewayForGateway: suspend (String, String, String?) -> String = { _, method, params ->
-      requestGateway(method, params)
-    }
+    val requestGatewayForGateway: suspend (String, String, String?) -> String =
+      requestGatewayForGatewayOverride ?: { _, method, params -> requestGateway(method, params) }
     val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
     ReflectionHelpers.setField(chat, "requestGateway", requestGateway)
     ReflectionHelpers.setField(chat, "requestGatewayForGateway", requestGatewayForGateway)
