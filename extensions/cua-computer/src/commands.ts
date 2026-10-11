@@ -478,7 +478,14 @@ export function createCuaComputerProvider(
       const queue = new KeyedAsyncQueue();
       const frameState: CuaFrameState = { generation: executionDriver.generation };
       const prepareExecution = async (signal?: AbortSignal) => {
-        await executionDriver.prepareExecution?.(signal);
+        const assertAuthority = () => {
+          signal?.throwIfAborted();
+          assertOpen();
+        };
+        assertAuthority();
+        await executionDriver.prepareExecution?.(signal, assertAuthority);
+        // Close/cancellation can arrive while the native health call is pending.
+        assertAuthority();
         // The old native runtime stopped its owned recording. Keep its files
         // execution-owned, but never advertise or resume it in a new session.
         if (frameState.generation !== executionDriver.generation) {

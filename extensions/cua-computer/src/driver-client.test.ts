@@ -483,4 +483,44 @@ describe("CUA Driver direct session", () => {
     expect(mocks.createConfigured).toHaveBeenCalledTimes(2);
     await driver.dispose();
   });
+  it("does not admit native authority for an already-revoked owner", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    await expect(
+      driver.prepareExecution?.(undefined, () => {
+        throw new Error("owning execution revoked");
+      }),
+    ).rejects.toThrow("owning execution revoked");
+    expect(mocks.createConfigured).not.toHaveBeenCalled();
+    expect(mocks.startSession).not.toHaveBeenCalled();
+    await driver.dispose();
+  });
+
+  it("does not restore authority revoked while an expired runtime is being released", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    let admitted = true;
+    const assertAuthority = () => {
+      if (!admitted) {
+        throw new Error("owning execution revoked");
+      }
+    };
+    await driver.prepareExecution?.(undefined, assertAuthority);
+    mocks.isToolError.mockReturnValue(true);
+    mocks.getSessionState.mockRejectedValueOnce(expired());
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    mocks.endSession.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      throw expired();
+    });
+    const preparing = driver.prepareExecution?.(undefined, assertAuthority);
+    const rejected = expect(preparing).rejects.toThrow("owning execution revoked");
+    await entered.promise;
+    admitted = false;
+    release.resolve();
+    await rejected;
+    expect(mocks.createConfigured).toHaveBeenCalledTimes(1);
+    expect(mocks.click).not.toHaveBeenCalled();
+    await driver.dispose();
+  });
 });

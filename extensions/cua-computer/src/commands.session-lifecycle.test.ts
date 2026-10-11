@@ -108,4 +108,25 @@ describe("execution authority preflight", () => {
     await computer.act('{"action":"stop_recording"}');
     await computer.close("completion");
   });
+  it("rejects input when close revokes ownership during preparation", async () => {
+    const { session, typeText } = driver();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    session.prepareExecution = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const computer = await createCuaComputerProvider({
+      platform: "linux",
+      driver: session,
+    }).openExecution({ executionId: "123e4567-e89b-42d3-a456-426614174000" });
+    const acting = computer.act('{"action":"type","text":"MUST_NOT_TYPE"}');
+    const rejected = expect(acting).rejects.toThrow(/closing|closed/);
+    await entered.promise;
+    const closing = computer.close("cancelled");
+    release.resolve();
+    await rejected;
+    await closing;
+    expect(typeText).not.toHaveBeenCalled();
+  });
 });

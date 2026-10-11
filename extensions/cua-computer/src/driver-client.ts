@@ -41,7 +41,7 @@ export type ScrollDirection = (typeof ScrollDirection)[keyof typeof ScrollDirect
 export type CuaDriverSession = Pick<DirectCuaDriverSession, keyof DirectCuaDriverSession> & {
   readonly generation: string;
   prepareAvailability?(): Promise<void>;
-  prepareExecution?(signal?: AbortSignal): Promise<void>;
+  prepareExecution?(signal?: AbortSignal, assertAuthority?: () => void): Promise<void>;
   resetAvailabilityCache(): void;
 };
 
@@ -387,8 +387,9 @@ class LazyCuaDriverSession implements CuaDriverSession {
     }
   }
 
-  async prepareExecution(signal?: AbortSignal): Promise<void> {
+  async prepareExecution(signal?: AbortSignal, assertAuthority?: () => void): Promise<void> {
     signal?.throwIfAborted();
+    assertAuthority?.();
     if (!this.preparePromise) {
       const prepare = (async () => {
         const runtime = await this.requireRuntime();
@@ -403,10 +404,15 @@ class LazyCuaDriverSession implements CuaDriverSession {
           if (!sdk || !isExpiredSessionError(sdk, error)) {
             throw sdk ? driverToolError(sdk, error) : error;
           }
+          // Expiry alone is not authority: the owning execution must still
+          // admit this operation before releasing or replacing its grant.
+          signal?.throwIfAborted();
+          assertAuthority?.();
           await runtime.dispose();
           this.runtime = undefined;
           this.currentGeneration = randomUUID();
           signal?.throwIfAborted();
+          assertAuthority?.();
           if (this.disposed) {
             throw unavailableError(new Error("cua-computer is stopping"));
           }
@@ -430,6 +436,7 @@ class LazyCuaDriverSession implements CuaDriverSession {
     }
     await this.preparePromise;
     signal?.throwIfAborted();
+    assertAuthority?.();
   }
 
   private readonly bindRuntime = createLazyRuntimeMethodBinder(() => this.requireRuntime());
