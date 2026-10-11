@@ -400,7 +400,9 @@ describe("Gateway chat RPCs", () => {
           expectedAssistant: turn.reply,
         });
         const userMessages = (history.messages ?? []).filter((message) => message.role === "user");
-        expect(userMessages).toHaveLength(index + 1);
+        expect(userMessages, JSON.stringify({ runId: started.runId, userMessages })).toHaveLength(
+          index + 1,
+        );
         for (const [turnIndex, expected] of turns.slice(0, index + 1).entries()) {
           const modelText = expectDefined(userTexts[turnIndex], "model user turn");
           expectWhitespaceInterior(inputTexts, modelText, expected.marker, expected.interior);

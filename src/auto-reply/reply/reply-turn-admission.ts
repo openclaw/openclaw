@@ -561,18 +561,26 @@ export async function admitReplyTurn(
             }
             releasingForRestart = true;
             const runId = getAttachedBackend(admittedOperation)?.runId ?? "unbound";
-            // Release rejects later phases and joins requests already accepted by this borrow.
-            void releaseWorkerDatabaseClaim().then(
-              () =>
-                log.info(
-                  `lease released: reason=restart-abort runId=${runId} kind=reply-admission`,
-                  { sessionId },
-                ),
-              (error: unknown) =>
-                log.warn(
-                  `failed to release restart-aborted reply database owner: ${formatErrorMessage(error)}`,
-                ),
-            );
+            try {
+              admittedOperation.abortForRestart();
+            } catch (error) {
+              log.warn(
+                `failed to cancel restart-aborted reply owner: ${formatErrorMessage(error)}`,
+              );
+            } finally {
+              // Release rejects later phases and joins requests already accepted by this borrow.
+              void releaseWorkerDatabaseClaim().then(
+                () =>
+                  log.info(
+                    `lease released: reason=restart-abort runId=${runId} kind=reply-admission`,
+                    { sessionId },
+                  ),
+                (error: unknown) =>
+                  log.warn(
+                    `failed to release restart-aborted reply database owner: ${formatErrorMessage(error)}`,
+                  ),
+              );
+            }
           };
           // Shutdown can cancel the owning work after terminal settlement freezes reply abort.
           const restartReleases = [...new Set([operation.abortSignal, workSignal])].flatMap(

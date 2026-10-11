@@ -216,7 +216,9 @@ describe("heartbeat scratch task cron migration", () => {
         cron.update(job.id, {
           payload: { kind: "systemEvent", text: "Check priority inbox items" },
         }),
-      ).rejects.toThrow("isolated cron jobs require");
+      ).rejects.toThrow(
+        'cron sessionTarget "session:agent:research:main" cannot run systemEvent: systemEvent only runs in the main session',
+      );
       expect(
         (await loadCronJobsStore(fixture.storePath)).jobs.find((entry) => entry.id === job.id),
       ).toEqual(persisted);

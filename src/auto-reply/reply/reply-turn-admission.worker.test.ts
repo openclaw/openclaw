@@ -370,7 +370,14 @@ it("cancels a contended persistent admission without claiming the reply or poiso
   });
 });
 
-it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
+it.each([
+  "complete",
+  "user-abort",
+  "restart-abort",
+  "work-restart",
+  "work-restart-cancel-error",
+  "frozen-restart",
+] as const)(
   "keeps successors behind physical claim release after %s during executor drain with a full idle cache",
   async (ending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -446,9 +453,23 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
             active.operation.attachBackend({
               kind: "embedded",
               runId: "completion-run",
-              cancel() {},
+              cancel() {
+                if (ending === "work-restart-cancel-error") {
+                  throw new Error("Synthetic cancellation failed");
+                }
+              },
             });
-            if (ending === "frozen-restart") {
+            if (ending === "work-restart" || ending === "work-restart-cancel-error") {
+              const operation = active.operation;
+              work.beginClose(createAgentRunRestartAbortError());
+              expect(operation.result).toMatchObject({
+                kind: "aborted",
+                code: "aborted_for_restart",
+              });
+              expect(() => acquireReplyOperationSessionActor(operation)).toThrow(
+                "agent run aborted for restart",
+              );
+            } else if (ending === "frozen-restart") {
               const operation = active.operation;
               operation.freezeAbort();
               const restartReason = createAgentRunRestartAbortError();

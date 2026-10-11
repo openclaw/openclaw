@@ -4,7 +4,6 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-
 import { i18n } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import "./debug-overlay.ts";
