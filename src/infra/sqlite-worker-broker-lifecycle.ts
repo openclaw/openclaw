@@ -5,6 +5,7 @@ import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
+import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -323,6 +324,7 @@ export function createSqliteWorkerLifecycle({
       }),
       exited: createDeferredCore(),
     }));
+    trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
       ...(options.target ? { ephemeral: true as const } : {}),
       runtimeGeneration: options.runtimeGeneration,

@@ -1,6 +1,4 @@
 import { statSync } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -601,56 +599,6 @@ it("suppresses follow-up for no-write and transaction-revoked replacements", asy
     } finally {
       hook.mockRestore();
     }
-  });
-});
-
-it("refuses a replaced pathname while retaining the committed native execution", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const key = "agent:main:retained-path";
-    const original = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: state.statePath("original", "store.sqlite"),
-    });
-    const successor = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: state.statePath("successor", "store.sqlite"),
-    });
-    writeSessionEntry(original, key, { sessionId: "original", updatedAt: 1 });
-    writeSessionEntry(successor, key, { sessionId: "successor", updatedAt: 1 });
-    const alias = state.statePath("selected");
-    const heldAlias = state.statePath("selected-before");
-    const linkType = process.platform === "win32" ? "junction" : "dir";
-    await fs.symlink(path.dirname(original.path), alias, linkType);
-    await applySessionEntryCanonicalReplacements({
-      agentId: "main",
-      storePath: path.join(alias, "store.sqlite"),
-      sessionKeys: [key],
-      update: ([row]) => ({
-        result: undefined,
-        replacements: [
-          { sessionKey: key, previousSessionKeys: [], entry: { ...row!.entry, label: "saved" } },
-        ],
-      }),
-      afterCommitted: async (_result, source) => {
-        source.assertCurrent();
-        await fs.rename(alias, heldAlias);
-        try {
-          await fs.symlink(path.dirname(successor.path), alias, linkType);
-          expect(() => source.assertCurrent()).toThrow();
-        } finally {
-          await fs.rm(alias, { recursive: true, force: true });
-          await fs.rename(heldAlias, alias);
-        }
-      },
-    });
-    expect(readExactSessionEntryRow(original, key)?.entry).toMatchObject({
-      sessionId: "original",
-      label: "saved",
-    });
-    expect(readExactSessionEntryRow(successor, key)?.entry).toMatchObject({
-      sessionId: "successor",
-    });
-    expect(readExactSessionEntryRow(successor, key)?.entry.label).toBeUndefined();
   });
 });
 

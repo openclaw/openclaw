@@ -13,13 +13,13 @@ import {
   maintainStandingIntentLifecycle,
   matchStandingIntentsInDatabase,
 } from "./standing-intents-kernel.js";
-import type { StandingIntentOperations } from "./standing-intents-model.js";
+import type { StandingIntentWorkerOperations } from "./standing-intents-model.js";
 
 /** The canonical agent executor retains and closes this connection. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
   context: { database: DatabaseSync; admit(stage: "transaction" | "commit"): void },
-): SqliteWorkerBackend<StandingIntentOperations> {
+): SqliteWorkerBackend<StandingIntentWorkerOperations> {
   const db = context.database;
   const transact = <T>(run: () => T): T =>
     runSqliteImmediateTransactionSync(
@@ -35,9 +35,14 @@ export function bindSqliteWorkerBackend(
         },
       },
     );
-  // Preserve schema completion independently of the following business transaction.
+  let schemaPrepared = false;
+  // First-use installation commits independently and consumes this request's grant pair.
   withSqlitePostCommitPublications(db, () =>
-    transact(() => ensureOpenClawAgentStandingIntentsSchema(db)),
+    ensureOpenClawAgentStandingIntentsSchema(db, (run) => {
+      const result = transact(run);
+      schemaPrepared = true;
+      return result;
+    }),
   );
   let closed = false;
   return {
@@ -45,19 +50,28 @@ export function bindSqliteWorkerBackend(
       if (closed) {
         throw new Error("Standing-intent worker binding is closed");
       }
-      return transact(() => {
+      if (schemaPrepared) {
+        return { kind: "schema-prepared" };
+      }
+      return transact<
+        StandingIntentWorkerOperations[keyof StandingIntentWorkerOperations]["output"]
+      >(() => {
         switch (command.type) {
           case "create":
-            return createStandingIntentInDatabase(db, command.input);
+            return { kind: "result", value: createStandingIntentInDatabase(db, command.input) };
           case "list":
-            return listStandingIntentsInDatabase(db, command.input);
+            return { kind: "result", value: listStandingIntentsInDatabase(db, command.input) };
           case "sweep":
-            return maintainStandingIntentLifecycle(db, command.input.nowMs ?? Date.now());
+            return {
+              kind: "result",
+              value: maintainStandingIntentLifecycle(db, command.input.nowMs ?? Date.now()),
+            };
           case "cancel":
-            return cancelStandingIntentInDatabase(db, command.input);
+            return { kind: "result", value: cancelStandingIntentInDatabase(db, command.input) };
           case "match":
-            return matchStandingIntentsInDatabase(db, command.input);
+            return { kind: "result", value: matchStandingIntentsInDatabase(db, command.input) };
         }
+        throw new Error("Unknown standing-intent command");
       });
     },
     assertSettled() {

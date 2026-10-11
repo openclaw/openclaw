@@ -5,10 +5,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../activation-context.js";
 import {
   resolveChannelPluginIds,
-  resolveConfiguredChannelPluginIds,
+  resolveConfiguredChannelPluginIdsAsync,
 } from "../channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../config-state.js";
-import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
+import { resolveEffectivePluginIdsAsync } from "../effective-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-plugin-ids.js";
 import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index-scope-lookup.js";
 import { loadAndActivateRootPluginRegistry } from "../loader.js";
@@ -92,7 +92,7 @@ export async function ensurePluginRegistryLoaded(options?: {
   let pluginIds: string[];
   switch (scope) {
     case "configured-channels":
-      pluginIds = resolveConfiguredChannelPluginIds({
+      pluginIds = await resolveConfiguredChannelPluginIdsAsync({
         config: context.config,
         activationSourceConfig: context.activationSourceConfig,
         workspaceDir: context.workspaceDir,
@@ -115,7 +115,7 @@ export async function ensurePluginRegistryLoaded(options?: {
       pluginIds = resolveSandboxBackendPluginIds(context, options?.persistedSandboxBackendIds);
       break;
     default:
-      pluginIds = resolveEffectivePluginIds({
+      pluginIds = await resolveEffectivePluginIdsAsync({
         config: context.rawConfig,
         workspaceDir: context.workspaceDir,
         env: context.env,

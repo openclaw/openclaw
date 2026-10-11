@@ -9,6 +9,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { resolveUserPath } from "../utils.js";
 import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
+import { readCachedWorkspaceStateSnapshot } from "./workspace-state-cache.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import {
   resolveCanonicalWorkspacePath,
@@ -158,10 +159,29 @@ export async function readWorkspaceStateSnapshot(
       }
     );
   }
-  return runWorkspaceStateOperation(
-    { type: "workspace.snapshotAndRegister", input: { workspaceDir: capturedWorkspaceDir } },
-    options,
+  const read = () =>
+    runWorkspaceStateOperation(
+      { type: "workspace.snapshotAndRegister", input: { workspaceDir: capturedWorkspaceDir } },
+      options,
+    );
+  // Recovery predicates require the worker's current journal check. Ordinary
+  // preparation reuses state until its owning writer publishes a change.
+  if (options.recoveryHoldPredicate || options.beforeLegacyApply) {
+    return read();
+  }
+  const context = captureOpenClawStateWorkerContext({
+    ...options,
+    path: options.database?.path ?? options.path,
+  });
+  const assertFilesystem = captureWorkspaceStateFilesystemGuard(capturedWorkspaceDir, false);
+  const snapshot = await readCachedWorkspaceStateSnapshot(
+    context,
+    JSON.stringify(resolveWorkspaceStateAliases(capturedWorkspaceDir)),
+    read,
   );
+  options.assertCurrent?.();
+  assertFilesystem();
+  return snapshot;
 }
 
 export async function mergeWorkspaceSetupState(

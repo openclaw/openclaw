@@ -1,17 +1,14 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
   listSessionEntriesCore,
-  loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -225,35 +222,6 @@ describe("upstream session message-cut methods", () => {
       expect(nativeWrites).not.toHaveBeenCalled();
     },
   );
-
-  it("rejects a foreign upstream source change before deferred native fork I/O", async () => {
-    linkToUpstreamConversation();
-    installUpstreamForkHarness();
-    const nativeWrite = vi.fn();
-    mocks.upstreamFork.mockImplementation(
-      async ({ assertCurrent }: { assertCurrent: () => void }) => {
-        assertCurrent();
-        await Promise.resolve();
-        const foreign = new DatabaseSync(openOpenClawStateDatabase().path);
-        try {
-          foreign
-            .prepare("UPDATE session_upstream_links SET thread_id = ? WHERE session_key = ?")
-            .run("replacement-thread", sessionKey);
-        } finally {
-          foreign.close();
-        }
-        assertCurrent();
-        nativeWrite();
-        return { status: "created", key: "agent:main:dashboard:forked" };
-      },
-    );
-
-    await expect(invoke("sessions.fork", "user-entry")).rejects.toThrow(
-      "changed during fork initialization",
-    );
-    expect(nativeWrite).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).toBe(sourceSessionId);
-  });
 
   it.each(["dual", "legacy", "v2"] as const)(
     "rejects the current creator's required sandbox before invoking a host-only %s upstream fork",

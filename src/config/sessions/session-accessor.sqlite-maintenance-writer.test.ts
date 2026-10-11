@@ -22,7 +22,6 @@ import {
   loadTranscriptEventsSync,
   patchSessionEntryCore,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
@@ -32,6 +31,7 @@ import {
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { finalizeSessionMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-transaction.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   prepareSessionMaintenancePreservation,
@@ -257,7 +257,15 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
     ["tie-\uE000", { updatedAt: old + 2, lastInteractionAt: old + 10 }],
     ["tie-\u{10000}", { updatedAt: old + 3, lastActivityAt: old + 10 }],
     ["started", { sessionStartedAt: now }],
-    ["pinned", { pinnedAt: old }],
+    [
+      "pinned",
+      {
+        pinnedAt: old,
+        sidebarRoot: true,
+        spawnedBy: key("parent"),
+        parentSessionKey: key("parent"),
+      },
+    ],
     ["locked", { modelSelectionLocked: true }],
     ["group", { chatType: "group" }],
     ["recent", { lastActivityAt: now }],

@@ -145,7 +145,9 @@ overflow summary.
 - `chat.abort` with a specific `runId` cancels that turn while it is still
   queued, if the requester is authorized (same ownership rules as active runs).
 - `chat.abort` for a session without `runId` cancels **authorized queued turns
-  first**, then aborts authorized active runs. That order prevents queue drain
+  first**, then aborts authorized active runs, including controller-less runs
+  admitted or queued before their runner starts (such as OpenAI-compatible HTTP
+  requests), as well as active channel replies. That order prevents queue drain
   from promoting work into a half-stopped session.
 - Clearing the entire session queue without per-requester checks is not the
   stop path for multi-owner sessions.

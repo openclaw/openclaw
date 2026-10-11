@@ -207,6 +207,14 @@ export function peekDiagnosticSessionState(ref: SessionRef): SessionState | unde
   );
 }
 
+/** Renews this observation and invalidates recovery captured before the progress. */
+export function touchDiagnosticSessionState(state: SessionState): void {
+  state.lastActivity = Date.now();
+  state.generation = (state.generation ?? 0) + 1;
+  state.lastStuckWarnAgeMs = undefined;
+  state.lastLongRunningWarnAgeMs = undefined;
+}
+
 /** Retires collector observations without resetting independent tool-loop or poll policy. */
 export function retireDiagnosticSessionObservations(): void {
   for (const state of diagnosticSessionStates.values()) {

@@ -13,7 +13,7 @@ const ingressMockState = vi.hoisted(() => ({
     accept: Mock<(activity: unknown, context?: unknown) => Promise<void>>;
     start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
-    options: { dispatch: IngressDispatch };
+    options: { accountId: string; dispatch: IngressDispatch };
   }>,
 }));
 
@@ -21,8 +21,9 @@ export function getMSTeamsIngressMockState() {
   return ingressMockState;
 }
 
+// mock-isolation: Monitor transport tests control append/drain ordering without opening the runtime SQLite queue.
 vi.mock("./msteams-ingress.js", () => ({
-  createMSTeamsIngress: (options: { dispatch: IngressDispatch }) => {
+  createMSTeamsIngress: (options: { accountId: string; dispatch: IngressDispatch }) => {
     const lifecycle = {
       abortSignal: new AbortController().signal,
       onAdopted: vi.fn(),

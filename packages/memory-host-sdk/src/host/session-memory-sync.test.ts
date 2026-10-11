@@ -6,7 +6,7 @@ import {
   loadTranscriptEventsSync,
   readTranscriptStatsSync,
 } from "../../../../src/config/sessions/session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "../../../../src/config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../../../../src/config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../../../../src/config/sessions/session-cold-storage.js";
@@ -222,7 +222,15 @@ describe("memory synchronization of canonical SQLite transcripts", () => {
         await fs.writeFile(archivePath, archive);
       }
 
-      await sync(damaged ? undefined : { force: true });
+      // Automatic rebuilds retry after the documented 30-second failure cooldown.
+      const retryClock = damaged
+        ? vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000)
+        : undefined;
+      try {
+        await sync(damaged ? undefined : { force: true });
+      } finally {
+        retryClock?.mockRestore();
+      }
       expect(matches("violet")).toEqual([
         { text: "User: My violet preference is documented here." },
       ]);
