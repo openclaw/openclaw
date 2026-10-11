@@ -127,17 +127,28 @@ function extractPathFromToolTitle(
   return toolName === "read" ? tail : undefined;
 }
 
+const TOOL_PATH_KEYS = ["path", "file_path", "filePath"];
+
+function readDeclaredLocationPaths(locations: unknown): string[] {
+  if (!Array.isArray(locations)) {
+    return [];
+  }
+  return locations
+    .map((location) => readFirstStringValue(asRecord(location), TOOL_PATH_KEYS))
+    .filter((value): value is string => value !== undefined);
+}
+
 function resolveToolPathCandidates(
   toolCall: AcpApprovalToolCall | undefined,
   toolName: string,
 ): string[] {
-  const locations =
-    toolName !== "read" && Array.isArray(toolCall?.locations) ? toolCall.locations : [];
-  const pathKeys = ["path", "file_path", "filePath"];
+  // Read locations are a deny signal only. They must not become a grant path,
+  // or a locations-only request would auto-approve.
+  const locationPaths = toolName === "read" ? [] : readDeclaredLocationPaths(toolCall?.locations);
   return [
-    readFirstStringValue(asRecord(toolCall?.rawInput), pathKeys),
+    readFirstStringValue(asRecord(toolCall?.rawInput), TOOL_PATH_KEYS),
     extractPathFromToolTitle(toolCall?.title ?? undefined, toolName),
-    ...locations.map((location) => readFirstStringValue(asRecord(location), pathKeys)),
+    ...locationPaths,
   ].filter((value): value is string => value !== undefined);
 }
 
@@ -182,9 +193,15 @@ export function classifyAcpToolApproval(params: {
   const isTrustedToolId = isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName);
   if (isTrustedToolId && (toolName === "read" || SAFE_SEARCH_TOOL_IDS.has(toolName))) {
     const rawPaths = resolveToolPathCandidates(params.toolCall, toolName);
+    // Locations alone never grant a read, but a declared location outside cwd
+    // still denies, the same way search treats them.
+    const scopedPaths =
+      toolName === "read"
+        ? [...rawPaths, ...readDeclaredLocationPaths(params.toolCall?.locations)]
+        : rawPaths;
     const autoApprove =
       (toolName !== "read" || rawPaths.length > 0) &&
-      rawPaths.every((rawPath) => isToolPathScopedToCwd(rawPath, params.cwd));
+      scopedPaths.every((rawPath) => isToolPathScopedToCwd(rawPath, params.cwd));
     return {
       toolName,
       approvalClass: autoApprove
