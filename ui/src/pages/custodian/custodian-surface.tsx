@@ -4,9 +4,9 @@ import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import { MarkdownBlocks } from "../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { handleMarkdownTableInteraction } from "../../components/markdown-tables.ts";
+import { OptionCard } from "../../components/option-card.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
-import "../../components/option-card.tsx";
 import "../../components/openclaw-mascot.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
@@ -107,8 +107,8 @@ function TranscriptEntry(props: {
       </Show>
       <Show when={question() && !props.store().dismissedQuestions.has(questionKey())}>
         <div class="custodian__option-card">
-          <openclaw-option-card
-            prop:props={{
+          <OptionCard
+            props={{
               header: question()!.header,
               question: question()!.question,
               options: question()!.options.map((option) => ({
@@ -172,6 +172,11 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
     equality: "revision",
   });
   const store = () => projection.read();
+  const currentAlert = createMemo(() => {
+    // Alert admission derives from the session's current authority as well as the alert store.
+    projection.revision();
+    return alerts.read();
+  });
   createEffect(
     () => [props.store, props.onboarding, props.newAgentIntent] as const,
     ([source, onboarding, newAgentIntent]) => {
@@ -271,7 +276,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
     void store().send();
   };
   const alertCard = () => (
-    <Show when={alerts.read()}>
+    <Show when={currentAlert()}>
       {(alert) => (
         <CustodianAlertCard
           alert={alert()}
