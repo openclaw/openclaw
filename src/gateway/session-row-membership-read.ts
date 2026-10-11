@@ -1,8 +1,10 @@
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { prepareCombinedSessionStoreForGatewayAsync } from "../config/sessions/combined-store-gateway-read.js";
 import { mergeCombinedSessionStore } from "../config/sessions/combined-store-gateway.js";
-import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
-import type { CombinedSessionStoreScopeTargets } from "../config/sessions/combined-store-topology.worker.js";
+import type {
+  CombinedSessionStoreScopeTargets,
+  GatewaySessionStoreDiscovery,
+} from "../config/sessions/combined-store.types.js";
 import type { SessionEntrySummary } from "../config/sessions/session-accessor.types.js";
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";

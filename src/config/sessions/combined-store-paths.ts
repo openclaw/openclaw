@@ -3,13 +3,12 @@ import {
   createRetainedAgentDatabaseMatcher,
   createRetainedAgentDatabaseMatcherFromSnapshot,
 } from "../../state/agent-deletion-discovery.js";
-import type { AgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.types.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { GatewaySessionStoreDiscovery } from "./combined-store.types.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { resolvePersistedSessionStoreOwner } from "./session-store-owner.js";
-import type { SessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { resolveConfiguredAgentDatabaseTargets, type SessionStoreTarget } from "./targets.js";
 
 export function storeTargetKey(target: SessionStoreTarget): string {
@@ -43,12 +42,6 @@ export function resolveCombinedDatabasePath(
   ];
   return paths.length === 1 ? expectDefined(paths[0], "database path at 0") : "(multiple)";
 }
-
-export type GatewaySessionStoreDiscovery = {
-  env: NodeJS.ProcessEnv;
-  snapshot: AgentDatabaseDeletionSnapshot | undefined;
-  readCandidates?: readonly SessionStoreReadCandidate[];
-};
 
 export function discoveryReadOptions(discovery?: GatewaySessionStoreDiscovery) {
   return discovery

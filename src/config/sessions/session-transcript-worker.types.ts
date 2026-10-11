@@ -33,7 +33,7 @@ import type {
 import type {
   CombinedSessionStoreTopologyRequest,
   CombinedSessionStoreTopologyResult,
-} from "./combined-store-topology.worker.js";
+} from "./combined-store.types.js";
 import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
   ConversationRowsWorkerInput,

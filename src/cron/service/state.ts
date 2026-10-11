@@ -174,7 +174,7 @@ export type CronServiceDeps = {
   resolveOriginDeliveryContext?: (params: {
     sessionKey?: string;
     agentId?: string;
-  }) => DeliveryContext | undefined;
+  }) => DeliveryContext | undefined | Promise<DeliveryContext | undefined>;
   /** Binds the Gateway for complete scheduled operations, including admission and settlement. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;

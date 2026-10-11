@@ -1,32 +1,14 @@
-import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   prepareCombinedSessionStore,
   resolveGatewaySessionStoreTargets,
-  type GatewaySessionStoreOptions,
-  type ResolvedGatewaySessionStoreTargets,
 } from "./combined-store-gateway.js";
-import type { SessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import type {
+  CombinedSessionStoreTopologyRequest,
+  CombinedSessionStoreTopologyResult,
+  GatewaySessionStoreOptions,
+  ResolvedGatewaySessionStoreTargets,
+} from "./combined-store.types.js";
 import { listKnownSessionStoreAgentIds } from "./targets.js";
-
-export type CombinedSessionStoreTopologyRequest = {
-  config: OpenClawConfig;
-  options: Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded"> & {
-    discovery: NonNullable<GatewaySessionStoreOptions["discovery"]>;
-  };
-  candidates: readonly SessionStoreReadCandidate[];
-  scopeAgentIds?: readonly string[];
-};
-
-export type CombinedSessionStoreScopeTargets = ReadonlyMap<
-  string,
-  ResolvedGatewaySessionStoreTargets | Error
->;
-
-export type CombinedSessionStoreTopologyResult = {
-  kind: "combined-store-topology";
-  prepared: ReturnType<typeof prepareCombinedSessionStore>;
-  scopes?: CombinedSessionStoreScopeTargets;
-};
 
 /** Resolve durable federation in the existing discovery worker; the host owns incognito rows. */
 export function readCombinedSessionStoreTopology(
@@ -44,7 +26,6 @@ export function readCombinedSessionStoreTopology(
           ...listKnownSessionStoreAgentIds(request.config, {
             env: options.discovery.env,
             registeredDatabases: options.discovery.snapshot?.registeredAgentDatabases ?? [],
-            readCandidates: request.candidates,
           }),
         ]),
       ]

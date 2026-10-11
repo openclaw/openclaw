@@ -26,7 +26,8 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOrig
   ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntrySummariesInWorker: (...args: unknown[]) => readSessionEntrySummariesMock(...args),
 }));
-vi.mock("../../config/sessions/targets-runtime.js", () => ({
+vi.mock("../../config/sessions/targets-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/targets-runtime.js")>()),
   resolveExistingAgentSessionStoreTargetsAsync: (...args: unknown[]) =>
     resolveExistingAgentSessionStoreTargetsAsyncMock(...args),
 }));

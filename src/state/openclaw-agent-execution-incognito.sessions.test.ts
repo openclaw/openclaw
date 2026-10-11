@@ -656,7 +656,7 @@ it("rechecks a cross-agent completion lineage using committed actor facts inside
 
 it("composes entry reads, currency, candidates and admission without caller-thread SQL", async () => {
   expect(
-    resolveSessionEntryCandidateTargetForRuntime({
+    await resolveSessionEntryCandidateTargetForRuntime({
       cfg: {},
       agentId: "main",
       candidateKeys: [],

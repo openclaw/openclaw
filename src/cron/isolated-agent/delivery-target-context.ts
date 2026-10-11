@@ -2,6 +2,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { extractDeliveryInfoBatch } from "../../config/sessions/delivery-info.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type { SessionEntrySummary } from "../../config/sessions/session-accessor.types.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { foldedSessionKeyAliasCandidates } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -61,22 +62,26 @@ export async function readCronDeliveryTargetContexts(
     }
   }
   const rows = await Promise.all(
-    targets.map(async ({ plan: { agentId, storePath, threadSessionKey, mainSessionKey } }) => {
-      try {
-        const result = await readSessionEntriesFromStoreInWorker({
-          agentId,
-          storePath,
-          projection: "list",
-          snapshotFields: [],
-          sessionKeys: [threadSessionKey, mainSessionKey].flatMap((key) =>
-            key ? [key].concat(foldedSessionKeyAliasCandidates(key)) : [],
-          ),
-        });
-        return ok(result.entries);
-      } catch (error) {
-        return err(error);
-      }
-    }),
+    targets.map(
+      async ({
+        plan: { agentId, storePath, threadSessionKey, mainSessionKey },
+      }): Promise<Result<SessionEntrySummary[], unknown>> => {
+        try {
+          const result = await readSessionEntriesFromStoreInWorker({
+            agentId,
+            storePath,
+            projection: "list",
+            snapshotFields: [],
+            sessionKeys: [threadSessionKey, mainSessionKey].flatMap((key) =>
+              key ? [key].concat(foldedSessionKeyAliasCandidates(key)) : [],
+            ),
+          });
+          return ok(result.entries);
+        } catch (error) {
+          return err(error);
+        }
+      },
+    ),
   );
   const entries = new Map(targets.map(({ index }, offset) => [index, rows[offset]!]));
   return planned.map((item, index) => {

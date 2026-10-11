@@ -224,10 +224,10 @@ async function onAdmittedTimer(state: CronServiceState, scheduler: GatewaySchedu
       try {
         await recoverCronRunProposals(state, proposals, {
           isCurrent: () => !state.startupCatchup && state.lifecycleGeneration === generation,
-          onRecovery(_proposal, result) {
+          async onRecovery(_proposal, result) {
             if (result.kind === "repaired") {
               repaired = true;
-              runPostPersistCronNotifications(state, result.notifications);
+              await runPostPersistCronNotifications(state, result.notifications);
               if (result.interrupted) {
                 interruptedRuns.push(result.interrupted);
               }

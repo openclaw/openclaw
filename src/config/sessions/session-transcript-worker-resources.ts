@@ -25,7 +25,7 @@ import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw
 import type {
   CombinedSessionStoreTopologyRequest,
   CombinedSessionStoreTopologyResult,
-} from "./combined-store-topology.worker.js";
+} from "./combined-store.types.js";
 import {
   decodeSessionTranscriptWorkerReadError,
   unwrapSessionTranscriptWorkerReply,

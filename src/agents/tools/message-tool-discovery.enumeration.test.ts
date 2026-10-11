@@ -15,7 +15,8 @@ const store = vi.hoisted(() => {
 
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntryReadOnlyInWorker: async (scope: { sessionKey: string }) =>
     store.loadExactSessionEntryReadOnly(scope)?.entry,
 }));

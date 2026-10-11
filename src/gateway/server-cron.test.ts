@@ -2752,7 +2752,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("threads cron wake sessionKey through the CronService adapter", () => {
+  it("threads cron wake sessionKey through the CronService adapter", async () => {
     const cfg = {
       session: { mainKey: "main" },
       cron: {
@@ -2769,7 +2769,7 @@ describe("buildGatewayCronService", () => {
     try {
       const sessionKey = "agent:ops:cron:nightly:run:abc-123";
       expect(
-        state.cron.wake({
+        await state.cron.wake({
           mode: "now",
           text: "hello",
           sessionKey,
@@ -2801,7 +2801,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("routes a targetless cron wake through the configured system agent", () => {
+  it("routes a targetless cron wake through the configured system agent", async () => {
     const cfg = {
       ...createCronConfig("server-cron-system-owner-wake"),
       agents: {
@@ -2811,7 +2811,7 @@ describe("buildGatewayCronService", () => {
     } as OpenClawConfig;
     const state = loadCronService(cfg);
     try {
-      expect(state.cron.wake({ mode: "now", text: "system wake" })).toEqual({ ok: true });
+      expect(await state.cron.wake({ mode: "now", text: "system wake" })).toEqual({ ok: true });
 
       const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
       const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");

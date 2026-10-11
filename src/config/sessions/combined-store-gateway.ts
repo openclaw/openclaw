@@ -35,15 +35,21 @@ import {
   discoveryReadOptions,
   isStorePathTemplate,
   resolveSharedStoreRowOwner,
-  type GatewaySessionStoreDiscovery,
   resolveCombinedDatabasePath,
   resolveCombinedStorePath,
   storeTargetKey,
 } from "./combined-store-paths.js";
+import type {
+  GatewaySessionEntryProjection,
+  GatewaySessionStoreDiscovery,
+  GatewaySessionStoreOptions,
+  PreparedCombinedSessionStore,
+  ResolvedGatewaySessionStoreTargets,
+} from "./combined-store.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { listSessionEntriesCore, listSessionEntriesReadOnly } from "./session-accessor.js";
-import type { SessionEntryListScope, SessionEntrySummary } from "./session-accessor.types.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
@@ -56,12 +62,14 @@ import {
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
-type GatewaySessionEntryProjection = NonNullable<SessionEntryListScope["projection"]>;
-
 export type {
   GatewayStoredSessionTarget,
   GatewayStoredSessionTargets,
 } from "./combined-store-model-sources.js";
+export type {
+  GatewaySessionStoreOptions,
+  ResolvedGatewaySessionStoreTargets,
+} from "./combined-store.types.js";
 
 function capturePhysicalStoreTargets() {
   const physicalTargets = new Map<string, SessionStoreTarget>();
@@ -72,41 +80,6 @@ function capturePhysicalStoreTargets() {
     },
   };
 }
-
-export type GatewaySessionStoreOptions = {
-  discovery?: GatewaySessionStoreDiscovery;
-  agentId?: string;
-  configuredAgentsOnly?: boolean;
-  includeIncognito?: boolean;
-  projection?: SessionEntryListScope["projection"];
-  /** Keep per-agent sentinel rows distinct internally; public reads restore their raw key. */
-  preserveSentinelOwners?: boolean | "physical";
-  /** Durable stores may use resident entries; incognito retains its existing lifetime. */
-  loadEntries?: (
-    target: SessionStoreTarget,
-    projection: GatewaySessionEntryProjection,
-  ) => ReturnType<typeof loadGatewayStoreEntries>;
-  onStoreLoaded?: (
-    target: SessionStoreTarget,
-    rowAgentId: string,
-    discovery: { agentId: string; order: number } | null,
-  ) => void;
-};
-
-export type ResolvedGatewaySessionStoreTargets = {
-  groupDiscovery?: ReadonlyMap<string, { agentId: string; order: number }>;
-  configuredAgentIds?: ReadonlySet<string>;
-  defaultAgentId: string;
-  diagnostics: readonly string[];
-  durableStorePath?: string;
-  durableTargets: ReadonlyArray<{ agentId: string; storePath: string }>;
-  incognitoTargets: ReadonlyArray<{ agentId: string; storePath: string }>;
-  physicalTargets: ReadonlyMap<string, SessionStoreTarget>;
-  requestedAgentId?: string;
-  preparedAgentIds?: Set<string>;
-  sharedStoreRowOwner?: { agentId: string; target: SessionStoreTarget };
-  storeConfig?: string;
-};
 
 type PreparedConfiguredSessionStoreTargets = {
   cfg: OpenClawConfig;
@@ -558,7 +531,10 @@ export type GatewayCombinedSessionStore = {
   targetsBySessionKey: GatewayStoredSessionTargets;
 };
 
-export function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySessionStoreOptions) {
+export function prepareCombinedSessionStore(
+  cfg: OpenClawConfig,
+  opts: GatewaySessionStoreOptions,
+): PreparedCombinedSessionStore {
   const targets = resolveGatewaySessionStoreTargets(cfg, opts);
   return {
     projection: opts.projection ?? "list",
@@ -576,7 +552,7 @@ export function prepareCombinedSessionStore(cfg: OpenClawConfig, opts: GatewaySe
 export function mergeCombinedSessionStore(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions,
-  prepared: ReturnType<typeof prepareCombinedSessionStore>,
+  prepared: PreparedCombinedSessionStore,
   readEntries: (target: SessionStoreTarget) => SessionEntrySummary[],
   incognitoEntries?: (target: SessionStoreTarget) => SessionEntrySummary[],
 ): GatewayCombinedSessionStore {

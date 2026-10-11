@@ -10,7 +10,7 @@ import {
   type GatewaySessionStoreOptions,
 } from "./combined-store-gateway.js";
 import { storeTargetKey } from "./combined-store-paths.js";
-import type { CombinedSessionStoreTopologyResult } from "./combined-store-topology.worker.js";
+import type { CombinedSessionStoreTopologyResult } from "./combined-store.types.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import {
   captureIncognitoSessionTopology,

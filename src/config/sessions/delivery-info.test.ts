@@ -56,12 +56,14 @@ vi.mock("./paths.js", () => ({
     opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 
-vi.mock("./session-entry-read-runtime.js", () => ({
+vi.mock("./session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-entry-read-runtime.js")>()),
   readSessionEntriesFromStoreInWorker: storeState.readSessionEntriesFromStoreInWorker,
   readSessionEntrySummariesInWorker: storeState.readSessionEntrySummariesInWorker,
 }));
 
-vi.mock("./targets-runtime.js", () => ({
+vi.mock("./targets-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./targets-runtime.js")>()),
   resolveAllAgentSessionStoreTargetsAsync: async () => [
     { agentId: "main", storePath: "/tmp/sessions.json" },
     { agentId: "shadow", storePath: "/tmp/shadow-sessions.json" },

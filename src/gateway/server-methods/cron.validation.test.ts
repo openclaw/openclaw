@@ -42,7 +42,6 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
-import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
@@ -52,6 +51,7 @@ import {
 } from "./cron-creator-session.test-support.js";
 import {
   createCronTestContext,
+  callerClientWithCronCreatorAuthority,
   expectCronSuccess,
   expectResponseError,
   requireCronAddPayload,
@@ -171,13 +171,6 @@ async function invokeCronUpdateDelivery(
 
 async function invokeWake(params: Record<string, unknown>, client?: GatewayClient) {
   return await invokeCron("wake", params, { client });
-}
-
-function callerClientWithCronCreatorAuthority(grant: CronCreatorAuthorityGrant): GatewayClient {
-  const client = callerClient("ops");
-  client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
-  client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
-  return client;
 }
 
 function setRuntimeConfig(config: OpenClawConfig): void {
@@ -935,6 +928,7 @@ describe("cron method validation", () => {
     loadGatewaySessionEntry.mockReturnValueOnce({ canonicalKey: sessionKey, entry });
     const { context, respond } = await invokeWake({ mode: "now", text: "ping", sessionKey });
     expect(context.cron.wake).toHaveBeenCalledWith({
+      commitGuard: expect.any(Function),
       agentId: "main",
       mode: "now",
       text: "ping",
@@ -963,7 +957,7 @@ describe("cron method validation", () => {
     releasePreparation?.();
     const { respond } = await invocation;
 
-    expect(context.cron.wake).not.toHaveBeenCalled();
+    expect(context.cron.wake).toHaveBeenCalledOnce();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "agent runtime authority is no longer active",
@@ -2582,7 +2576,10 @@ describe("cron method validation", () => {
         params,
         caller ? callerClient(caller) : undefined,
       );
-      expect(context.cron.wake).toHaveBeenCalledWith(expected);
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        ...expected,
+        commitGuard: expect.any(Function),
+      });
       expect(context.cron.prepareWake).toHaveBeenCalledOnce();
       expect(context.cron.prepareWake.mock.invocationCallOrder[0]).toBeLessThan(
         context.cron.wake.mock.invocationCallOrder[0]!,
