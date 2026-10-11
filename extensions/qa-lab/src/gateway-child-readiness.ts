@@ -1,5 +1,4 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { QaSuiteInfraError } from "./errors.js";
@@ -9,54 +8,17 @@ import {
   throwQaGatewayChildFailure,
 } from "./gateway-child-process.js";
 
-export const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
 const QA_GATEWAY_MIGRATION_CONVERGENCE_RESTART_PREFIX =
   "OpenClaw plugin migration inputs changed during startup convergence;";
-
-type QaGatewayStartupRetryKind = "bind-collision" | "migration-convergence-restart";
 
 type QaGatewayHealthChild = {
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
 };
 
-function classifyQaGatewayStartupRetry(details: string): QaGatewayStartupRetryKind | null {
-  if (details.includes(QA_GATEWAY_MIGRATION_CONVERGENCE_RESTART_PREFIX)) {
-    return "migration-convergence-restart";
-  }
-  if (
-    details.includes("another gateway instance is already listening on ws://") ||
-    details.includes("failed to bind gateway socket on ws://") ||
-    details.includes("EADDRINUSE") ||
-    details.includes("address already in use")
-  ) {
-    return "bind-collision";
-  }
-  return null;
-}
-
-export function resolveQaGatewayStartupRetry(params: {
-  attempt: number;
-  details: string;
-  migrationConvergenceRestartUsed: boolean;
-}) {
-  if (params.attempt >= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS) {
-    return null;
-  }
-  const kind = classifyQaGatewayStartupRetry(params.details);
-  if (
-    !kind ||
-    (kind === "migration-convergence-restart" && params.migrationConvergenceRestartUsed)
-  ) {
-    return null;
-  }
-  return {
-    kind,
-    reuseLaunchState: kind === "migration-convergence-restart",
-    migrationConvergenceRestartUsed:
-      params.migrationConvergenceRestartUsed || kind === "migration-convergence-restart",
-  };
+export function needsQaGatewayMigrationRestart(details: string) {
+  return details.includes(QA_GATEWAY_MIGRATION_CONVERGENCE_RESTART_PREFIX);
 }
 
 async function fetchLocalGatewayProbe(params: {
@@ -151,19 +113,4 @@ export function waitForGatewayReady(params: QaGatewayProbeParams) {
 
 export function waitForGatewayListening(params: QaGatewayProbeParams) {
   return waitForGatewayProbe(params, "listening");
-}
-
-export function isRetryableRpcStartupError(error: unknown) {
-  // Startup errors cross the same low-level client/log boundary; timeout and
-  // token-mismatch retry facts exist only in the formatted diagnostic.
-  const details = formatErrorMessage(error);
-  return (
-    details.includes("gateway timeout after") ||
-    details.includes("handshake timeout") ||
-    details.includes("gateway token mismatch") ||
-    details.includes("token mismatch") ||
-    details.includes("gateway closed (1000") ||
-    details.includes("gateway closed (1006") ||
-    details.includes("gateway closed (1012)")
-  );
 }

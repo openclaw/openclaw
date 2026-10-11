@@ -337,7 +337,7 @@ function rewriteProviderCatalogModelIds(
         merged = getRecord(result.value) ?? merged;
         changes.push(
           result.conflicts.length > 0
-            ? `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}; kept canonical values for conflicting fields: ${result.conflicts.toSorted().join(", ")}.`
+            ? `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}; kept existing values for conflicting fields: ${result.conflicts.toSorted().join(", ")}.`
             : `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}.`,
         );
       }

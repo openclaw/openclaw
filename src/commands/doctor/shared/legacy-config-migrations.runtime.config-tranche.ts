@@ -48,7 +48,7 @@ function stripRetiredAgentConfig(raw: Record<string, unknown>, changes: string[]
   }
   if (removedContextLimits) {
     changes.push(
-      "Removed contextLimits.memoryGetDefaultLines/toolResultMaxChars overrides; canonical memory and context-window caps now apply.",
+      "Removed contextLimits.memoryGetDefaultLines/toolResultMaxChars overrides; built-in memory and context-window caps now apply.",
     );
   }
 }

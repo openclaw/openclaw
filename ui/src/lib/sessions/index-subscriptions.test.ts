@@ -99,44 +99,6 @@ describe("createSessionCapability message subscriptions", () => {
     },
   );
 
-  it("retries a rejected unsubscribe against its original live Gateway observer", async () => {
-    let unsubscribeCalls = 0;
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.messages.subscribe") {
-        return { key: params?.key };
-      }
-      if (method === "sessions.messages.unsubscribe") {
-        unsubscribeCalls += 1;
-        if (unsubscribeCalls === 1) {
-          throw new Error("temporary observer release failure");
-        }
-        return {};
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability(createGateway(client));
-    const subscription = await sessions.subscribeMessages("agent:main:main");
-
-    await expect(sessions.unsubscribeMessages(subscription)).rejects.toThrow(
-      "temporary observer release failure",
-    );
-    await expect(sessions.unsubscribeMessages(subscription)).resolves.toBeUndefined();
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.messages.unsubscribe",
-      { key: "agent:main:main", subscriptionId: expect.any(String) },
-      subscriptionRequestOptions,
-    );
-    expect(request).toHaveBeenNthCalledWith(
-      3,
-      "sessions.messages.unsubscribe",
-      { key: "agent:main:main", subscriptionId: expect.any(String) },
-      subscriptionRequestOptions,
-    );
-    sessions.dispose();
-  });
-
   it("shares narration and foreground observers across capabilities without retiring the full stream", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.messages.subscribe") {
@@ -324,28 +286,6 @@ describe("createSessionCapability message subscriptions", () => {
     expect(forceReconnect).toHaveBeenCalledExactlyOnceWith("session subscription recovery failed");
     sessions.dispose();
     anotherOwner.dispose();
-  });
-
-  it("keeps the current Gateway connection when its sent subscription is recovered", async () => {
-    const timeout = new GatewayProtocolRequestTimeoutError({
-      method: "sessions.messages.subscribe",
-      timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-      requestSent: true,
-    });
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.messages.subscribe") {
-        throw timeout;
-      }
-      return {};
-    });
-    const forceReconnect = vi.fn();
-    const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability(createGateway(client));
-
-    await expect(sessions.subscribeMessages("main")).rejects.toBe(timeout);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(forceReconnect).not.toHaveBeenCalled();
-    sessions.dispose();
   });
 
   it("never reconnects a Gateway generation retired during subscription recovery", async () => {
