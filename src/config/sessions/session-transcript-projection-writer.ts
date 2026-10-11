@@ -108,16 +108,7 @@ export async function runProjectionWrite<T>(
         // can materialize a successor database for a late worker result.
         memorySource?.assertCurrentOwner();
         databaseOptions.assertCurrent?.();
-        return runOpenClawAgentWriteTransaction(
-          (database) => {
-            databaseOptions.assertCurrent?.();
-            const result = operation(database);
-            databaseOptions.assertCurrent?.();
-            return result;
-          },
-          databaseOptions,
-          { operationLabel },
-        );
+        return runOpenClawAgentWriteTransaction(operation, databaseOptions, { operationLabel });
       };
       return !isIncognitoOpenClawAgentSqlitePath(databaseOptions.path, databaseOptions) &&
         !getOpenClawAgentDatabaseIfOpen(databaseOptions)

@@ -9,7 +9,7 @@ import type {
   refreshMemorySessionSourceState,
 } from "./manager-source-state.js";
 
-export type MemoryPublicationConnection = MemoryShadowConnection;
+export type MemoryPublicationConnection = MemoryShadowConnection | { kind: "agent" };
 export type MemoryPublicationState = {
   vector: { enabled: boolean; available: boolean | null };
   fts: { enabled: boolean; available: boolean };
@@ -34,6 +34,15 @@ export type MemoryPublicationResult<T> =
   | { ok: true; value: T; facts?: MemoryDatabaseFacts; writeToken?: string }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "connection.inspect": { input: undefined; output: MemoryShadowConnection };
+  "vector.ensure": {
+    input: { dimensions: number; currentDimensions?: number; state: MemoryPublicationState };
+    output: MemoryPublicationResult<void>;
+  };
+  "vector.retireLegacy": {
+    input: { state: MemoryPublicationState };
+    output: MemoryPublicationResult<boolean>;
+  };
   "index.facts": { input: undefined; output: MemoryDatabaseFacts };
   "index.writeMetadata": { input: MemoryIndexMeta; output: MemoryPublicationResult<void> };
   "schema.admit": {

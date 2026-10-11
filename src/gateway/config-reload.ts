@@ -567,7 +567,6 @@ export function startGatewayConfigReloader(
               throw new Error(`Plugin ${id} captured source changed after installation`);
             }
           }
-          source.assertSourceCurrent();
           assertCurrent();
           application?.settle("applied");
           return completeApplication(completed.runtime);

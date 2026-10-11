@@ -25,7 +25,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
 import { createGitHubPublicationExecutionEffects } from "./github-publication-execution-effects.js";
-import { assertReadableSharedGitHubPublication } from "./github-publication-store.js";
+import { assertReadableSharedGitHubPublication } from "./github-publication-receipt.js";
 import {
   checkRepositoryGitHubPublication as checked,
   listRepositoryGitHubPublicationsInDatabase,

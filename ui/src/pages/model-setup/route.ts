@@ -25,7 +25,7 @@ export const page = definePage({
         });
   },
   component: () =>
-    import("./model-setup-page.ts").then(() => ({
+    import("./model-setup-page.tsx").then(() => ({
       header: true,
       render: (data: ModelSetupRouteData | undefined) =>
         html`<openclaw-model-setup-page .routeData=${data}></openclaw-model-setup-page>`,

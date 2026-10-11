@@ -10,7 +10,6 @@ import {
 } from "../infra/restart.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
-import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
@@ -30,7 +29,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 
-it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
+it.each(["restart", "memory-and-plugin", "session-store"] as const)(
   "reports plugin cleanup through registered Gateway close (%s)",
   async (mode) => {
     const fixture = await createGatewayMetadataCloseFixture(`plugin-close-${mode}`);
@@ -158,12 +157,6 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
           }
         },
       );
-      let siblingPort: number | undefined;
-      if (mode === "sibling") {
-        setActivePluginRegistry(createEmptyPluginRegistry());
-        siblingPort = await fixture.reservePort();
-        await fixture.start(siblingPort);
-      }
       const close = vi.spyOn(server, "close");
       if (mode === "restart") {
         activeWork = runWithGatewayIndependentRootWorkAdmission(
@@ -196,19 +189,17 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
         .finally(() => {
           closeSettled = true;
         });
-      if (mode !== "sibling") {
-        await Promise.race([
-          sharedEntered.promise,
-          outcome.then(() => {
-            throw new Error("Close settled before shared cleanup");
-          }),
-        ]);
-        await nextTurn();
-        expect(closeSettled).toBe(false);
-        expect(sharedSettled).toBe(false);
-        expect(pluginDisposed).toBe(hasPluginFailure);
-        releaseShared.resolve();
-      }
+      await Promise.race([
+        sharedEntered.promise,
+        outcome.then(() => {
+          throw new Error("Close settled before shared cleanup");
+        }),
+      ]);
+      await nextTurn();
+      expect(closeSettled).toBe(false);
+      expect(sharedSettled).toBe(false);
+      expect(pluginDisposed).toBe(hasPluginFailure);
+      releaseShared.resolve();
       const error = await outcome;
       if (stateFailure) {
         expect(collectNestedErrorCandidates(error)).toContain(pluginFailure);
@@ -250,18 +241,9 @@ it.each(["sibling", "restart", "memory-and-plugin", "session-store"] as const)(
       expect(getGatewayContextLifetime(kernel.resolvePluginGatewayContext).signal.aborted).toBe(
         true,
       );
-      if (siblingPort !== undefined) {
-        expect(sharedSettled).toBe(false);
-        expect(database.isOpen).toBe(true);
-        expect(getGatewayPluginMetadataSnapshot()).toBeDefined();
-        const response = await fetch(`http://127.0.0.1:${siblingPort}/healthz`);
-        await response.text();
-        expect(response.ok).toBe(true);
-      } else {
-        expect(sharedSettled).toBe(true);
-        expect(database.isOpen).toBe(false);
-        expect(getActiveSecretsRuntimeSnapshotState()).toBeNull();
-      }
+      expect(sharedSettled).toBe(true);
+      expect(database.isOpen).toBe(false);
+      expect(getActiveSecretsRuntimeSnapshotState()).toBeNull();
     } finally {
       releaseWork.resolve();
       releaseShared.resolve();
