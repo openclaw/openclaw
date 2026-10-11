@@ -19,7 +19,6 @@ import {
   initialTranscriptRect,
   measureConnectedTranscriptRows,
   measureTranscriptRow,
-  resolveTranscriptScrollMargin,
   PositionRailGutterController,
 } from "./chat-transcript-geometry.ts";
 import { reconcileTranscriptHeaderMargin } from "./chat-transcript-header.ts";
@@ -503,7 +502,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
         } else {
           this.appliedHeaderHeight = reconcileTranscriptHeaderMargin(
             virtualizer,
-            this.scrollElement,
             this.headerHeight,
             this.appliedHeaderHeight,
           );
@@ -727,6 +725,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     // The header margin must land in the same setOptions as the key change:
     // the edge-key re-anchor uses absolute offsets, so a prepend that also
     // removes the header (exhausted history) compensates in one adjustment.
+    const scrollMargin =
+      virtualizer.options.scrollMargin + this.headerHeight - this.appliedHeaderHeight;
     this.appliedHeaderHeight = this.headerHeight;
     virtualizer.setOptions({
       ...virtualizer.options,
@@ -734,7 +734,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       getItemKey: (index) => nextKeys[index] ?? `missing:${index}`,
       rangeExtractor: (range) =>
         this.prependAnchor.extractRange(range, rowIndexesByKey, this.focusedRowKey),
-      scrollMargin: resolveTranscriptScrollMargin(this.scrollElement, this.headerHeight),
+      scrollMargin,
     });
   }
 
