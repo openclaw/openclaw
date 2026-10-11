@@ -367,6 +367,20 @@
     },
     {
       "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
+      "text": "Open in editor"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
+      "text": "Open in editor"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/mcp.ts",
