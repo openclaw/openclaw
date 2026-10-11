@@ -24,6 +24,59 @@
   gap: 6px;
   min-width: 0;
 }
+
+.agent-chat__composer-run-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-chat__composer-run-spinner {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.agent-chat__composer-run-spinner svg {
+  width: 14px;
+  height: 14px;
+  animation: btn-spinner-spin 1.2s linear infinite;
+}
+
+.agent-chat__composer-wait-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-chat__composer-wait-elapsed {
+  white-space: nowrap;
+}
+
+.agent-chat__composer-run-status button {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agent-chat__composer-run-status button:hover {
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__composer-run-spinner svg {
+    animation: none;
+  }
+}
 .agent-chat__composer-notices:not(
   :has(> :not(openclaw-chat-child-attention), > openclaw-chat-child-attention > *)
 ) {

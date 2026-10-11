@@ -2195,13 +2195,15 @@ html[dir="rtl"] .chat-attachment-loading > span {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  gap: 6px;
   height: 24px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
+  font: inherit;
+  font-size: 12px;
 }
 
 .chat-controls__model-search {

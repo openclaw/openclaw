@@ -1,5 +1,6 @@
 import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { buildCompanionQuestionPrefill } from "../../lib/chat/companion-question.ts";
@@ -13,8 +14,10 @@ import {
   type ChatSessionCompanionTurn,
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
+import type { SubagentRoster } from "./chat-spawned-subagent.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
 import type { SidebarLayout, SidebarSlotId } from "./sidebar-layout-types.ts";
@@ -30,6 +33,7 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneSidePanels extends ChatPaneBase {
+  private subagentBatch: { session: string; active: boolean } | undefined;
   protected sessionCompanionHydrationKey = "";
   protected sessionCompanionFocusGeneration = 0;
   private sessionCompanionPresented = false;
@@ -93,8 +97,41 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.requestBackgroundPanel("subagents", intent);
   }
 
+  protected syncSubagentsPanelPresence(
+    session: GatewaySessionRow | undefined,
+    roster: SubagentRoster,
+  ): void {
+    const state = this.state;
+    if (!state || !session || session.archived) {
+      return;
+    }
+    const identity = JSON.stringify([resolveChatAgentId(state), session.key, session.sessionId]);
+    if (this.subagentBatch?.session !== identity) {
+      this.subagentBatch = { session: identity, active: false };
+    }
+    const batch = this.subagentBatch;
+    const active =
+      projectSubagentStatus(
+        { ...roster, selectedSession: session, messages: state.chatMessages },
+        false,
+      ).running > 0;
+    if (active && !batch.active) {
+      // Open once per batch. A later close remains the user's choice until all
+      // children settle; the automatic reveal is not a saved session preference.
+      batch.active = true;
+      this.commitSidebarLayout(openSlot(state.sidebarLayout, "subagents"), { persist: false });
+    } else if (
+      !active &&
+      session.hasActiveSubagentRun !== true &&
+      roster.subagentSessionsHydrated &&
+      !roster.subagentSessionsPending
+    ) {
+      batch.active = false;
+    }
+  }
+
   /** Opens the Subagents panel on one subagent, or on its list. */
-  protected showSubagents(subagentKey: string | null): void {
+  protected showSubagents(subagentKey: string | null, focus = false): void {
     const sessionKey = this.state?.sessionKey;
     // The pane owns the intent across the panel's lazy mount; the panel takes
     // it once, and only for the session that asked.
@@ -108,6 +145,32 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     this.subagentsShowRequest = take;
     this.requestUpdate();
     this.requestBackgroundPanel("subagents", "open");
+    if (focus) {
+      void this.focusSubagentsPanel();
+    }
+  }
+
+  private async focusSubagentsPanel(): Promise<void> {
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
+    await customElements.whenDefined("openclaw-chat-sidebar-region");
+    this.requestUpdate();
+    await this.updateComplete;
+    const region = this.renderRoot.querySelector("openclaw-chat-sidebar-region");
+    await region?.updateComplete;
+    const tab = region?.parentElement?.querySelector<HTMLElementTagNameMap["wa-tab"]>(
+      '[data-region-header="side"] wa-tab[active]',
+    );
+    await tab?.updateComplete;
+    if (
+      this.isConnected &&
+      state &&
+      this.state === state &&
+      state.sessionKey === sessionKey &&
+      this.isSlotShown(state.sidebarLayout, "subagents")
+    ) {
+      tab?.focus({ preventScroll: true });
+    }
   }
 
   /** The layout as this pane shows it, which a narrow pane decides for the background panels. */

@@ -321,6 +321,7 @@ export function renderContextNotice(
               stroke-dashoffset=${dashOffset.toFixed(2)}
             />
           </svg>
+          <span>${t("chat.composer.contextUsage.label")}</span>
         </summary>
         <wa-popup data-anchored-overlay>
           <section

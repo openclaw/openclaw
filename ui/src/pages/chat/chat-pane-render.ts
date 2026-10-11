@@ -91,6 +91,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     const selectedSession = selectedChatSessionRow(state);
     const providerPaused = Boolean(selectedSession?.providerReview);
     const readTarget = this.resolveChatReadTarget();
+    this.syncSubagentsPanelPresence(selectedSession, this.projectChildRoster(readTarget));
     const progressPresentation = this.progressCardPresentation;
     const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const mutationAccess = readChatPaneMutationAccess(

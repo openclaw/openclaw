@@ -361,7 +361,6 @@ describe("chat sidebar region", () => {
       subagentsInputRegion: "page",
       subagentsPresented: false,
       subagentsAvailable: false,
-      onRefreshSubagents: vi.fn(),
       onSubagentSessionSelect: vi.fn(),
       themeMode: "dark",
       agentId: "main",
@@ -566,10 +565,11 @@ describe("chat sidebar region", () => {
 
   it("keeps side tab dismissal separate from task toolbar actions", async () => {
     const region = await createRegion();
-    root(region)
-      .querySelector<HTMLButtonElement>('[data-region-header="side"] .side-panel__minimize')
-      ?.click();
-    expect(region.callbacks?.setOpen).toHaveBeenCalledWith(false);
+    expect(
+      root(region).querySelector('[data-region-header="side"] .rail-header__actions'),
+    ).toBeNull();
+    root(region).querySelector<HTMLButtonElement>('button[aria-label="Close Review"]')!.click();
+    expect(region.callbacks?.closeSlot).toHaveBeenCalledWith("detail");
     region.layout = setSidebarExpanded(promoteSidebarPanel(region.layout, "detail"), true);
     await region.updateComplete;
     expect(root(region).querySelector('[data-region-header="main"]')).toBeNull();

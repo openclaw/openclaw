@@ -88,6 +88,8 @@ const FIXTURES = [
   "code-fences",
   "dashboards",
   "goal",
+  "header-idle",
+  "header-waiting",
   "plugins-dense",
   "reactions",
   "sidebar-roster",
@@ -3320,6 +3322,98 @@ async function createChatPickerScenario(
       "users.background.upload",
       "users.background.remove",
     ];
+  }
+  if (fixture === "header-idle" || fixture === "header-waiting") {
+    const now = Date.UTC(2026, 9, 10, 12);
+    const waiting = fixture === "header-waiting";
+    const parent = sessionRow("agent:main:main", "Review the release checklist", now, {
+      sessionId: "header-parent",
+      status: "done",
+      hasActiveRun: false,
+      hasActiveSubagentRun: waiting,
+      activeRunIds: [],
+      startedAt: now - 180_000,
+      endedAt: now - 120_000,
+      sharingRole: "owner",
+      visibility: "shared",
+      childSessions: waiting ? ["agent:main:subagent:header-review"] : [],
+    });
+    const child = sessionRow("agent:main:subagent:header-review", "Review documentation", now, {
+      sessionId: "header-child",
+      classification: "subagent",
+      spawnedBy: parent.key,
+      parentSessionKey: parent.key,
+      status: "running",
+      hasActiveRun: true,
+      activeRunIds: ["header-child-run"],
+      startedAt: now - 120_000,
+      observerDigest: {
+        runId: "header-child-run",
+        headline: "Checking examples and migration notes",
+        health: "on-track",
+        revision: 1,
+        updatedAt: now,
+      },
+    });
+    const messages = [
+      {
+        role: "user",
+        content: "Review the release checklist and ask a subagent to check the documentation.",
+        timestamp: now - 180_000,
+      },
+      {
+        role: "assistant",
+        content: waiting
+          ? "The documentation review is underway. I will combine the findings when it finishes."
+          : "The release checklist is ready for review.",
+        timestamp: now - 150_000,
+        __openclaw: { id: "header-answer", seq: 2, runId: "header-parent-run" },
+      },
+      ...(waiting
+        ? [
+            {
+              role: "assistant",
+              content: [
+                { type: "toolCall", id: "header-yield", name: "sessions_yield", arguments: {} },
+              ],
+              timestamp: now - 120_000,
+              __openclaw: { id: "header-yield-call", seq: 3, runId: "header-parent-run" },
+            },
+            {
+              role: "toolResult",
+              toolCallId: "header-yield",
+              toolName: "sessions_yield",
+              content: [{ type: "text", text: '{"status":"yielded"}' }],
+              timestamp: now - 120_000,
+              __openclaw: { id: "header-yield-result", seq: 4, runId: "header-parent-run" },
+            },
+          ]
+        : []),
+    ];
+    scenario.featureMethods = [
+      ...(scenario.featureMethods ?? []),
+      "session.visibility.set",
+      "session.members.listEvidence",
+    ];
+    scenario.sessionKey = parent.key;
+    scenario.sessions = waiting ? [parent, child] : [parent];
+    scenario.historyMessages = messages;
+    scenario.sessionTranscripts = {
+      [parent.key]: { messages, inFlightRun: null },
+      [child.key]: {
+        messages: [
+          {
+            role: "assistant",
+            content: "Checking examples and migration notes",
+            timestamp: now - 1_000,
+          },
+        ],
+        inFlightRun: { runId: "header-child-run", startedAt: now - 120_000 },
+      },
+    };
+    scenario.repeatingSessionEvents = { events: [] };
+    scenario.sessionGroups = [];
+    delete scenario.methodResponses?.["sessions.list"];
   }
   return scenario;
 }

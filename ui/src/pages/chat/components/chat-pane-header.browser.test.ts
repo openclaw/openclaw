@@ -1,8 +1,10 @@
 import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
-import { render } from "lit";
+import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n } from "../../../i18n/index.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
+import { openSlot } from "../sidebar-layout.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/split-view.css";
@@ -27,6 +29,109 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       dispose();
       containers.splice(0).forEach((container) => container.remove());
     });
+
+    it("opens the labelled Layout menu and dispatches focus, swap, docking, and panel choices", async () => {
+      const onLayoutChange = vi.fn();
+      const onBrowser = vi.fn();
+      const layout = openSlot({ columns: [] }, "subagents");
+      const { container } = mountChatPaneHeader(containers, {
+        sidebarLayout: layout,
+        onLayoutChange,
+        onToggleSidePanel: vi.fn(),
+        panelDefinitions: [
+          {
+            slot: "conversation",
+            label: "Chat",
+            icon: html``,
+            available: true,
+            content: null,
+            loading: html``,
+            empty: { description: "" },
+          },
+          {
+            slot: "subagents",
+            label: "Subagents",
+            icon: html``,
+            available: true,
+            content: null,
+            loading: html``,
+            empty: { description: "" },
+          },
+        ],
+        panelMenuActions: [
+          {
+            id: "browser",
+            label: "Toggle browser panel",
+            icon: html``,
+            shortcut: KEYBOARD_SHORTCUT_COMBOS.browserPanel,
+            onActivate: onBrowser,
+          },
+        ],
+      });
+      const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!;
+      for (const label of [
+        "Focus",
+        "Swap Chat and Subagents",
+        "Move side panel below",
+        "Toggle browser panel",
+      ]) {
+        await page.elementLocator(trigger).click();
+        const item = page.elementLocator(
+          container.querySelector<HTMLElement>(`wa-dropdown-item[aria-label="${label}"]`)!,
+        );
+        await expect.element(item).toBeVisible();
+        if (label === "Toggle browser panel") {
+          expect(container.querySelector('[value="browser"] kbd')?.textContent).toContain("U");
+        }
+        await item.click();
+      }
+      expect(onLayoutChange.mock.calls[0]?.[0].expanded).toBe(true);
+      expect(onLayoutChange.mock.calls[1]?.[0].mainPanelId).toBe("subagents");
+      expect(onLayoutChange.mock.calls[2]?.[0].dock).toBe("bottom");
+      expect(onBrowser).toHaveBeenCalledOnce();
+    });
+
+    it.each([320, 693])(
+      "keeps a running batch and all controls inside a %ipx header",
+      async (width) => {
+        const { container } = mountChatPaneHeader(containers, {
+          narrow: true,
+          runningSubagentCount: 12,
+          sidebarLayout: { columns: [] },
+          onLayoutChange: vi.fn(),
+          onToggleSidePanel: vi.fn(),
+          sharingControl: html`<button
+            class="btn btn--ghost chat-pane__sharing-trigger"
+            aria-label="Share"
+          >
+            Share
+          </button>`,
+          sessionMenuAction: html`<button
+            class="btn btn--ghost chat-icon-btn"
+            aria-label="Session actions"
+          >
+            …
+          </button>`,
+        });
+        container.style.width = `${width}px`;
+        const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
+        await expect.element(page.elementLocator(header)).toBeVisible();
+        expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
+        const bounds = header.getBoundingClientRect();
+        for (const selector of [
+          '[aria-label="Share"]',
+          ".chat-pane__layout-trigger",
+          '[aria-label="Session actions"]',
+        ]) {
+          const button = container.querySelector<HTMLElement>(selector)!;
+          expect(button.checkVisibility()).toBe(true);
+          expect(button.getBoundingClientRect().right).toBeLessThanOrEqual(bounds.right);
+        }
+        expect(container.querySelector(".chat-pane__subagents-running")?.textContent).toContain(
+          "Subagents · 12 running",
+        );
+      },
+    );
 
     it.each(["idle", "busy", "editor"] as const)(
       "anchors the %s hint to its menu button",
@@ -97,13 +202,13 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
 
         if (state === "idle") {
           const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
-          const close = container.querySelector<HTMLButtonElement>(".chat-pane__close-pane")!;
+          const layout = container.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!;
           for (const width of [320, 693]) {
             container.style.width = `${width}px`;
             expect(trigger.checkVisibility()).toBe(true);
             const bounds = header.getBoundingClientRect();
             const branchBounds = trigger.getBoundingClientRect();
-            const closeBounds = close.getBoundingClientRect();
+            const closeBounds = layout.getBoundingClientRect();
             expect(branchBounds.left).toBeGreaterThanOrEqual(bounds.left);
             expect(branchBounds.right).toBeLessThanOrEqual(closeBounds.left);
             expect(closeBounds.right).toBeLessThanOrEqual(bounds.right);
@@ -113,7 +218,8 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             await page.getByRole("menuitem", { name: /Earlier idea/ }).click();
             expect(props.onBranchSelect).toHaveBeenCalledExactlyOnceWith("other");
           }
-          await page.elementLocator(close).click();
+          await page.elementLocator(layout).click();
+          await page.getByRole("menuitem", { name: "Close pane", exact: true }).click();
           expect(props.onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
         }
       },

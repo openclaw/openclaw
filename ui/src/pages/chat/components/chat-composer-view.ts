@@ -49,8 +49,8 @@ import {
   resetSlashMenuState,
   type SlashMenuHost,
 } from "./chat-composer-slash-menu.ts";
-import { commitComposerDraft } from "./chat-composer-state.ts";
-import { renderFallbackIndicator } from "./chat-composer-status.ts";
+import { commitComposerDraft, isChatRunWorking } from "./chat-composer-state.ts";
+import { renderComposerRunStatus, renderFallbackIndicator } from "./chat-composer-status.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderChatPermissionPicker } from "./chat-permission-picker.ts";
@@ -363,6 +363,15 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ${props.footerContent ?? nothing}
         <div class="agent-chat__composer-notices">
           ${props.notices ?? nothing} ${composerStatus} ${composerAlerts} ${fallbackStatus}
+          ${
+            showComposerInput
+              ? renderComposerRunStatus({
+                  waitingSubagents: props.waitingSubagents,
+                  working: isChatRunWorking(props) && !props.waitingApproval,
+                  onOpenSubagents: props.onOpenSubagents,
+                })
+              : nothing
+          }
         </div>
         ${renderComposerQuestionDock(questionPanelProps)}
         ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing}

@@ -24,9 +24,9 @@ export function renderChatModelCatalogRefresh(state: ChatModelCatalogState | und
       <openclaw-tooltip .content=${label} .describe=${false} open-on-click>
         <button class="chat-controls__model-refresh-details" type="button" aria-label=${label}>
           <span class="btn__spinner" aria-hidden="true"></span>
+          <span>${label}</span>
         </button>
       </openclaw-tooltip>
-      <span class="sr-only">${label}</span>
     </span>
   `;
 }

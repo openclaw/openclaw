@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { nothing, render } from "lit";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { createComposerProps } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderChat } from "./chat-view.ts";
-import { resetChatComposerState } from "./components/chat-composer.ts";
+import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
 function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
   return {
@@ -92,5 +93,115 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
     expect(container.querySelector(".chat-working-indicator--subagents") !== null).toBe(
       expectWaiting && pane.chatProps?.loading !== true,
     );
+  });
+});
+
+describe("composer run status", () => {
+  afterEach(() => {
+    resetChatComposerState();
+    vi.restoreAllMocks();
+  });
+
+  it("shows the yielded parent's child count, name and run time, opens Subagents and clears after settlement", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(66_000);
+    const parent: GatewaySessionRow = {
+      key: "agent:main:parent",
+      kind: "direct",
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+      startedAt: 1_000,
+    };
+    const child: GatewaySessionRow = {
+      key: "agent:main:subagent:backend",
+      kind: "direct",
+      spawnedBy: parent.key,
+      label: "Backend implementation",
+      hasActiveRun: true,
+      startedAt: 5_000,
+    };
+    const { pane, state } = createRefreshChatPane();
+    state.sessionKey = parent.key;
+    state.sessionsResult = sessionsResult([parent]);
+    pane.render();
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenSubagents = vi.fn();
+    onTestFinished(() => {
+      render(nothing, container);
+      container.remove();
+      pane.chatProps?.transcript.hostDisconnected();
+    });
+    const draw = (children: GatewaySessionRow[]) =>
+      render(
+        renderChat({
+          ...pane.chatProps!,
+          selectedSession: parent,
+          messages: [
+            {
+              role: "assistant",
+              runId: "parent-run",
+              timestamp: 2_000,
+              content: [{ type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} }],
+            },
+            {
+              role: "toolResult",
+              runId: "parent-run",
+              toolCallId: "yield",
+              toolName: "sessions_yield",
+              timestamp: 2_001,
+              content: [{ type: "text", text: '{"status":"yielded"}' }],
+            },
+          ],
+          subagentSessions: children,
+          subagentSessionsHydrated: true,
+          onOpenSubagents,
+        }),
+        container,
+      );
+    draw([child]);
+    const line = container.querySelector(".agent-chat__composer-run-status--waiting");
+    expect(line).not.toBeNull();
+    const elapsed = line?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-elapsed-time",
+    );
+    await elapsed?.updateComplete;
+    expect(line?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Waiting on 1 subagent · Backend implementation · running 1m 1s View",
+    );
+    expect(elapsed).toHaveProperty("startMs", 5_000);
+    line?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onOpenSubagents).toHaveBeenCalledExactlyOnceWith(true);
+
+    draw([
+      child,
+      { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
+    ]);
+    expect(
+      container.querySelector(".agent-chat__composer-run-status--waiting")?.textContent,
+    ).toContain("Waiting on 2 subagents");
+    expect(container.querySelector(".agent-chat__composer-wait-child")).toBeNull();
+
+    draw([{ ...child, hasActiveRun: false }]);
+    expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+  });
+
+  it("shows Working only during the current run and leaves idle and approval states empty", () => {
+    const container = document.createElement("div");
+    onTestFinished(() => render(nothing, container));
+    const props = createComposerProps();
+    const draw = () => render(renderChatComposer(props), container);
+    draw();
+    expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+    props.runActive = true;
+    draw();
+    expect(container.querySelector(".agent-chat__composer-run-status")?.textContent).toContain(
+      "Working…",
+    );
+    props.waitingApproval = true;
+    draw();
+    expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+    props.waitingApproval = false;
+    props.runStatus = { phase: "done" };
+    draw();
+    expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
   });
 });
