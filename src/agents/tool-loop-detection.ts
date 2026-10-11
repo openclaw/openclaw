@@ -258,7 +258,7 @@ const VOLATILE_MEMORY_SEARCH_DEBUG_KEYS = new Set([
   "outsideSearchMs",
 ]);
 
-function getMemorySearchToolOutcome(details: Record<string, unknown>): unknown | undefined {
+function getMemorySearchToolOutcome(details: Record<string, unknown>): unknown {
   if (!Array.isArray(details.results)) {
     return undefined;
   }
