@@ -2,20 +2,9 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
-import type { HealthCheck } from "./health-checks.js";
+import { bootstrapSizeCheck } from "./doctor-core-bootstrap-size-check.js";
 
 const runtime = { log() {}, error() {}, exit() {} };
-
-function getBootstrapSizeCheck(): HealthCheck {
-  const check = CORE_HEALTH_CHECKS.find(
-    (candidate) => candidate.id === "core/doctor/bootstrap-size",
-  );
-  if (!check || !("detect" in check)) {
-    throw new Error("missing bootstrap-size health check");
-  }
-  return check;
-}
 
 describe("core/doctor/bootstrap-size", () => {
   let tmp: string | undefined;
@@ -35,7 +24,7 @@ describe("core/doctor/bootstrap-size", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
     await expect(
-      getBootstrapSizeCheck().detect({
+      bootstrapSizeCheck.detect({
         mode: "lint",
         runtime,
         cfg: { agents: { defaults: { workspace: tmp } } },
@@ -53,7 +42,7 @@ describe("core/doctor/bootstrap-size", () => {
     await fs.mkdir(join(tmp, "packages", "core"), { recursive: true });
     await fs.writeFile(join(tmp, "packages", "core", "SOUL.md"), "a".repeat(15_000), "utf-8");
 
-    const findings = await getBootstrapSizeCheck().detect({
+    const findings = await bootstrapSizeCheck.detect({
       mode: "lint",
       runtime,
       cfg: {
@@ -72,6 +61,8 @@ describe("core/doctor/bootstrap-size", () => {
     expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/bootstrap-size",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/concepts/agent-workspace",
         severity: "warning",
         message: expect.stringContaining("SOUL.md"),
         path: join(tmp, "packages", "core", "SOUL.md"),
@@ -87,7 +78,7 @@ describe("core/doctor/bootstrap-size", () => {
     await fs.mkdir(join(tmp, "packages", "core"), { recursive: true });
     await fs.writeFile(join(tmp, "packages", "core", "AGENTS.md"), "b".repeat(500), "utf-8");
 
-    const findings = await getBootstrapSizeCheck().detect({
+    const findings = await bootstrapSizeCheck.detect({
       mode: "lint",
       runtime,
       cfg: {
@@ -106,6 +97,8 @@ describe("core/doctor/bootstrap-size", () => {
     expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/bootstrap-size",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/concepts/agent-workspace",
         severity: "warning",
         message: expect.stringContaining("AGENTS.md"),
         path: join(tmp, "packages", "core", "AGENTS.md"),
@@ -117,7 +110,7 @@ describe("core/doctor/bootstrap-size", () => {
     tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-"));
     await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(15_000), "utf-8");
 
-    const check = getBootstrapSizeCheck();
+    const check = bootstrapSizeCheck;
     const findings = await check.detect({
       mode: "lint",
       runtime,
@@ -133,6 +126,8 @@ describe("core/doctor/bootstrap-size", () => {
     expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/bootstrap-size",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/concepts/agent-workspace",
         severity: "warning",
         message: expect.stringContaining("AGENTS.md"),
         fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
@@ -159,7 +154,7 @@ describe("core/doctor/bootstrap-size", () => {
     tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-user-cap-"));
     await fs.writeFile(join(tmp, "USER.md"), "u".repeat(5_000), "utf-8");
 
-    const findings = await getBootstrapSizeCheck().detect({
+    const findings = await bootstrapSizeCheck.detect({
       mode: "lint",
       runtime,
       cfg: { agents: { defaults: { workspace: tmp } } },
@@ -170,6 +165,8 @@ describe("core/doctor/bootstrap-size", () => {
     expect(userFinding).toEqual(
       expect.objectContaining({
         checkId: "core/doctor/bootstrap-size",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/concepts/agent-workspace",
         severity: "warning",
         fixHint: expect.stringContaining("fixed 4,000-character bootstrap cap"),
       }),
@@ -182,7 +179,7 @@ describe("core/doctor/bootstrap-size", () => {
     await fs.writeFile(join(tmp, "USER.md"), "u".repeat(3_900), "utf-8");
     await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(18_000), "utf-8");
 
-    const findings = await getBootstrapSizeCheck().detect({
+    const findings = await bootstrapSizeCheck.detect({
       mode: "lint",
       runtime,
       cfg: { agents: { defaults: { workspace: tmp } } },
@@ -193,6 +190,8 @@ describe("core/doctor/bootstrap-size", () => {
     expect(userFinding).toEqual(
       expect.objectContaining({
         checkId: "core/doctor/bootstrap-size",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/concepts/agent-workspace",
         severity: "info",
         fixHint: expect.stringContaining("fixed 4,000-character bootstrap cap"),
       }),
@@ -201,6 +200,8 @@ describe("core/doctor/bootstrap-size", () => {
     expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/bootstrap-size",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/concepts/agent-workspace",
         message: expect.stringContaining("AGENTS.md"),
         fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
       }),
@@ -211,7 +212,7 @@ describe("core/doctor/bootstrap-size", () => {
     tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-user-total-"));
     await fs.writeFile(join(tmp, "USER.md"), "u".repeat(5_000), "utf-8");
 
-    const findings = await getBootstrapSizeCheck().detect({
+    const findings = await bootstrapSizeCheck.detect({
       mode: "lint",
       runtime,
       cfg: { agents: { defaults: { workspace: tmp, bootstrapTotalMaxChars: 256 } } },

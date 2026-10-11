@@ -88,6 +88,8 @@ export function collectWhatsappResponsivenessHealthFindings(params: {
     {
       checkId: WHATSAPP_RESPONSIVENESS_CHECK_ID,
       severity: "warning",
+      category: "recommended",
+      docsUrl: "https://docs.openclaw.ai/gateway/diagnostics",
       message:
         "Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.",
       path: "channels.whatsapp",

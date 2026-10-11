@@ -19,6 +19,28 @@ postures and maintenance modes documented on the other pages.
 - `--lint` is stricter than `--non-interactive`: always read-only, never prompts, never applies safe migrations. Use `doctor --fix` or `doctor --repair` when you want doctor to make changes.
 - Doctor does not execute `exec` SecretRefs while checking secrets by default. Use `--allow-exec` (with or without `--lint`) only when you intentionally want doctor to run those configured secret resolvers.
 
+## Choosing which findings to address
+
+The final Doctor summary separates current problems from optional improvements.
+The category describes what needs attention; the diagnostic severity remains
+available to lint and automation.
+
+| Finding                                                    | Priority and next step                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gateway mode or authentication is incomplete               | **Fix now.** Set the mode and credentials described in [Gateway configuration](/gateway/configuration), then rerun Doctor.                                                                                                                                      |
+| A workspace alias points to a different folder             | **Fix now.** Restore the original link, or run `openclaw doctor --fix` and confirm only if the same workspace moved. Do not transfer records between unrelated workspaces.                                                                                      |
+| Device auth or an existing pairing record is inconsistent  | **Fix now.** Inspect `openclaw devices list`, reconnect the device to request its intended access, and approve the exact request only after reviewing it. See [Devices](/cli/devices).                                                                          |
+| A new device or access upgrade is awaiting approval        | **Recommended improvement.** Approve it if you want to grant the requested access; reject an unrecognized request. A pending request alone does not mean existing Gateway access is broken.                                                                     |
+| A managed project clone is shallow or partial              | **Recommended improvement.** A full clone makes managed worktrees more reliable offline. Follow the printed repair commands, which preserve the clone's files; stop if any command fails. A missing or unreadable registered clone instead needs attention now. |
+| Bootstrap files exceed the context budget                  | **Recommended improvement.** Shorten them to include more of their instructions in each turn, or adjust the supported agent budgets. See [Agent workspace](/concepts/agent-workspace). The Gateway can keep running with the configured truncation.             |
+| Old plugin installation generations remain                 | **Recommended improvement.** Run `openclaw doctor --fix` to retire unused generations for safe pruning after restart. The current plugin installation remains authoritative.                                                                                    |
+| WhatsApp pressure and local terminal clients were observed | **Recommended improvement.** Export [Gateway diagnostics](/gateway/diagnostics) before choosing an action. This observation does not prove those clients caused the pressure.                                                                                   |
+| A Gmail hook model cannot be resolved                      | **Fix now.** Run `openclaw models list`, choose a configured provider/model for `hooks.gmail.model`, or remove the override to use the agent default. Check [Gmail automation](/automation/cron-jobs/gmail).                                                    |
+
+Successful repair removes the resolved finding from the final summary. A repair
+that was skipped or failed keeps its next step visible. Recommended improvements
+do not require stopping a healthy Gateway simply to clear the summary.
+
 ## Config writes and backups
 
 Update-history inspection and reconciliation are best-effort maintenance. A failure

@@ -135,6 +135,8 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     const finding = {
       checkId: DEVICE_PAIRING_CHECK_ID,
       severity: "warning" as const,
+      category: "fix-now" as const,
+      docsUrl: "https://docs.openclaw.ai/cli/devices",
       path: "devices.pending",
       target: `${pending.deviceId}:${pending.requestId}`,
       fixHint,
@@ -142,6 +144,7 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     if (!paired) {
       return {
         ...finding,
+        category: "recommended",
         requirement: "first-time",
         message: `Pending device pairing request ${pending.requestId} for ${deviceLabel}. ${fixHint}`,
       };
@@ -163,6 +166,7 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     if (requestedRoles.some((role) => !approvedRoles.includes(role))) {
       return {
         ...finding,
+        category: "recommended",
         requirement: "role-upgrade",
         message: `Pending role upgrade ${pending.requestId} for ${deviceLabel}: approved roles [${formatValues(approvedRoles)}], requested roles [${formatValues(requestedRoles)}]. ${fixHint}`,
       };
@@ -183,6 +187,7 @@ function collectPendingPairingFindings(snapshot: DoctorPairingSnapshot): HealthF
     ) {
       return {
         ...finding,
+        category: "recommended",
         requirement: "scope-upgrade",
         message: `Pending scope upgrade ${pending.requestId} for ${deviceLabel}: approved scopes [${formatValues(approvedScopes)}], requested scopes [${formatValues(requestedScopes)}]. ${fixHint}`,
       };
@@ -202,6 +207,8 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
     const finding = {
       checkId: DEVICE_PAIRING_CHECK_ID,
       severity: "warning" as const,
+      category: "fix-now" as const,
+      docsUrl: "https://docs.openclaw.ai/cli/devices",
       path: "devices.paired",
       target: device.deviceId,
     };
@@ -212,6 +219,7 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
         ...finding,
         requirement: "missing-operator-scope-baseline",
         message: `Paired device ${deviceLabel} is missing its approved operator scope baseline. Scope upgrades can get stuck in pairing-required until the device repairs or is re-approved.`,
+        fixHint: `Run ${formatCliArgs(["openclaw", "devices", "list"])} to inspect the device, reconnect it to request the intended scopes, then approve only the scopes you recognize.`,
       });
     }
     for (const role of approvedRoles) {
@@ -280,6 +288,8 @@ async function collectLocalDeviceAuthFindings(
     const finding = {
       checkId: DEVICE_PAIRING_CHECK_ID,
       severity: "warning" as const,
+      category: "fix-now" as const,
+      docsUrl: "https://docs.openclaw.ai/cli/devices",
       path: "identity.device-auth",
       target: `${paired.deviceId}:${role}`,
     };
@@ -330,6 +340,8 @@ async function collectLegacyPairingStoreFindings(cfg: OpenClawConfig): Promise<H
   return (await listLegacyPairingStoreFiles()).map((filePath): HealthFinding => ({
     checkId: DEVICE_PAIRING_CHECK_ID,
     severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/cli/devices",
     message: `Legacy pairing store ${filePath} has not been imported into SQLite. Stop the Gateway and run openclaw doctor --fix. Unreadable sources remain in place for repair.`,
     path: "devices.legacy-store",
     requirement: "pairing-store-legacy-file",
@@ -354,6 +366,8 @@ export async function collectDevicePairingHealthFindings(params: {
     legacyStoreFindings.push({
       checkId: DEVICE_PAIRING_CHECK_ID,
       severity: "warning",
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/cli/devices",
       message: `Legacy device auth store ${sanitizeTerminalText(deviceAuth.sourcePath)} is still present, so doctor cannot inspect locally cached device tokens. ${fixHint}`,
       path: "identity.device-auth",
       requirement: "device-auth-store-legacy-file",
