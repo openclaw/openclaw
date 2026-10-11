@@ -7,7 +7,6 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { valid as validSemver } from "semver";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { pathExists } from "../utils.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
@@ -36,7 +35,6 @@ import {
 import type { UpdateRecovery } from "./update-recovery.js";
 import {
   createSystemPackageOwnershipInspection,
-  SystemPackageOwnershipError,
   PKG_INSPECTION_TIMEOUT_MS,
   type SystemPackageOwnershipInspection,
 } from "./update-system-package-ownership.js";
@@ -62,7 +60,6 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
   };
 };
 
-const log = createSubsystemLogger("update");
 const PRIMARY_PACKAGE_NAME = "openclaw";
 /** npm-compatible spec used when the user asks to install the moving main branch. */
 const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
@@ -1261,14 +1258,8 @@ export async function cleanupGlobalRenameDirs(params: {
       if (remainingMs <= 0) {
         break;
       }
-      let warning: string | undefined;
-      await createSystemPackageOwnershipInspection(remainingMs, {
-        onWarning: (message) => {
-          warning = message;
-        },
-      }).assertUnowned(target);
-      if (warning) {
-        log.warn(warning);
+      await createSystemPackageOwnershipInspection(remainingMs).assertUnowned(target);
+      if (Date.now() >= inspectionDeadline) {
         break;
       }
       const current = await fs.lstat(target);
@@ -1277,10 +1268,7 @@ export async function cleanupGlobalRenameDirs(params: {
       }
       await fs.rm(target, { recursive: true, force: true });
       removed.push(entry);
-    } catch (error) {
-      if (error instanceof SystemPackageOwnershipError && !error.owned) {
-        break;
-      }
+    } catch {
       // ignore cleanup failures
     }
   }

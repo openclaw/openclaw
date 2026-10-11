@@ -18,7 +18,6 @@ import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 import {
   createSystemPackageOwnershipInspection,
-  SystemPackageOwnershipError,
   PKG_INSPECTION_TIMEOUT_MS,
 } from "./update-system-package-ownership.js";
 
@@ -80,20 +79,11 @@ export async function captureLegacyPackageBackupRetirement(
           );
           break;
         }
-        let warning: string | undefined;
-        const inspection = createSystemPackageOwnershipInspection(remainingMs, {
-          onWarning: (message) => {
-            warning = message;
-          },
-        });
+        const inspection = createSystemPackageOwnershipInspection(remainingMs);
         if (entry.identity.isSymbolicLink()) {
           await inspection.assertEntryUnowned(entry.path);
         } else {
           await inspection.assertUnowned(entry.path);
-        }
-        if (warning) {
-          messages.push(`Historical package backups retained in ${root}: ${warning}`);
-          break;
         }
         const message = await discardPackageUpdateBackup(
           entry.path,
@@ -120,9 +110,6 @@ export async function captureLegacyPackageBackupRetirement(
         messages.push(
           `Historical package backup retained at ${entry.path}: ${formatErrorMessage(error)}`,
         );
-        if (error instanceof SystemPackageOwnershipError && !error.owned) {
-          break;
-        }
       }
     }
     assertOwner();

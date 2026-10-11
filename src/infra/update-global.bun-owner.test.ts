@@ -591,11 +591,12 @@ describe("custom Bun global installation ownership", () => {
 describe("FreeBSD package-manager admission", () => {
   afterEach(() => vi.restoreAllMocks());
   it.each(["unknown database", "exhausted budget"])(
-    "ends optional cleanup after %s without another pkg probe",
+    "keeps inconclusive ownership best effort within the cleanup budget: %s",
     async (failure) => {
       await withTestDir({ prefix: "openclaw-pkg-cleanup-budget-" }, async (base) => {
         await fs.mkdir(path.join(base, ".openclaw-first"));
         await fs.mkdir(path.join(base, ".openclaw-second"));
+        const entries = await fs.readdir(base);
         const now = Date.now();
         const clock = vi.spyOn(Date, "now").mockReturnValue(now);
         const query = vi.spyOn(exec, "runCommandBuffered").mockImplementation(async () => {
@@ -607,10 +608,10 @@ describe("FreeBSD package-manager admission", () => {
         await withMockedPlatform("freebsd", async () => {
           await expect(
             cleanupGlobalRenameDirs({ globalRoot: base, packageName: "openclaw" }),
-          ).resolves.toEqual({ removed: [] });
+          ).resolves.toEqual({ removed: failure === "unknown database" ? entries : [] });
         });
-        expect(query).toHaveBeenCalledTimes(1);
-        expect(await fs.readdir(base)).toHaveLength(2);
+        expect(query).toHaveBeenCalledTimes(failure === "unknown database" ? 2 : 1);
+        expect(await fs.readdir(base)).toHaveLength(failure === "unknown database" ? 0 : 2);
       });
     },
   );
