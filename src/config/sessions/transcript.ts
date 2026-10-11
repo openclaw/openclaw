@@ -654,11 +654,11 @@ async function appendExactAssistantMessageWithSource(
     };
   }
   const appendedResult = turn.messages.find(
-    ({ message }) =>
-      typeof message === "object" &&
-      message !== null &&
-      "role" in message &&
-      message.role === "assistant",
+    ({ message: persistedMessage }) =>
+      typeof persistedMessage === "object" &&
+      persistedMessage !== null &&
+      "role" in persistedMessage &&
+      persistedMessage.role === "assistant",
   );
   if (!appendedResult) {
     return {
