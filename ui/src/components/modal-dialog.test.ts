@@ -71,9 +71,9 @@ describe("openclaw-modal-dialog", () => {
   afterEach(() => {
     render(nothing, container);
     container.remove();
+    vi.restoreAllMocks();
     restoreDialogPolyfill();
     vi.unstubAllGlobals();
-    vi.restoreAllMocks();
   });
 
   it("opens a labelled modal dialog with an optional description", async () => {

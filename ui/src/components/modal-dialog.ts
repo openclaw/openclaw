@@ -188,10 +188,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
           finishInitialFocus();
         }
       },
-      hide: () => {
-        dialog.close();
-        restoreReturnFocus();
-      },
+      hide: () => dialog.close(),
     },
     dismissOutsidePointer: false,
     dismissOutsideFocus: false,
@@ -364,6 +361,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       setModalLayer(host, open && host.isConnected);
       if (!open) {
         initialFocusPending = false;
+        restoreReturnFocus();
       }
       publishOpen(open);
     });
