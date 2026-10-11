@@ -13,6 +13,8 @@ import {
 } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatQuestionResource } from "./chat-question-resource.tsx";
+// Load before the timed interaction: this regression covers context, not cold module transforms.
+import "../../../components/mcp-app-view-registration.ts";
 
 it("keeps the Solid application context when opening a resource preview", async () => {
   const request = createGatewayRequestMock(async (method) => {
