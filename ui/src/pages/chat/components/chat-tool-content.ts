@@ -3,7 +3,7 @@ import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts"
 import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
 import "./chat-tool-content.solid.tsx";
 
-export { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
+export type { ToolRenderOptions } from "./chat-tool-render-model.ts";
 
 // Temporary adapters for the remaining Lit transcript and sidebar callers.
 export function renderRawOutputToggle(text: string) {

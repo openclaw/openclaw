@@ -56,20 +56,17 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
       windows.delete(id);
     }
   }
-  function startWindow(id: string, generation: Row["generation"]) {
+  function startWindow(id: string) {
     const timer = setTimeout(() => {
       const window = windows.get(id);
-      if (window?.timer !== timer) {
-        return;
-      }
       windows.delete(id);
       const row = params.read(id);
-      if (disposed || !row || row.generation !== generation) {
+      if (!row) {
         return;
       }
-      if (window.pending) {
+      if (window?.pending) {
         // The trailing edge starts the next window, bounding sustained streams too.
-        startWindow(id, generation);
+        startWindow(id);
         params.refresh(id, retainedTranscriptFacts(row));
       }
     }, TRANSCRIPT_REFRESH_WINDOW_MS);
@@ -119,7 +116,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
         window.pending = true;
         continue;
       }
-      startWindow(id, row.generation);
+      startWindow(id);
       // Transcript watermarks and previews are row-local. Relationships, inherited model
       // settings, and subagent activity change through their own sessionChanges publications.
       if (!cold && !pending) {
