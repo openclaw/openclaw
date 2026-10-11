@@ -5,17 +5,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "./icon.tsx";
 import { LoadingState } from "./loading-state.tsx";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
-        label: string;
-        "onModal-cancel"?: (event: Event) => void;
-      };
-    }
-  }
-}
-
 export function AgentStartupState() {
   return (
     <section class="agent-startup-state" role="status" aria-live="polite">

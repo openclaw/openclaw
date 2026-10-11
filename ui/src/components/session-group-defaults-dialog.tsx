@@ -261,7 +261,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                 }
                 aria-label={t("newSession.folder")}
                 placeholder={t("newSession.gateway")}
-                prop:value={current().draft}
+                value={current().draft}
                 onInput={(event) => browser.setDraft(event.currentTarget.value)}
                 ref={nativeListener("keydown", (event) => {
                   switch (event.key) {
@@ -390,7 +390,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
             value={option().value}
             type="checkbox"
             prop:checked={option().value === state().selectedEnvironment.value}
-            disabled={state().submitting}
+            prop:disabled={state().submitting}
             autofocus={option().value === state().selectedEnvironment.value && !state().submitting}
             ref={setElement}
           >
@@ -469,7 +469,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                         class="session-menu__item"
                         data-value="agent-workspace"
                         data-popover="close"
-                        aria-pressed={String(!state().trimmedCwd)}
+                        aria-pressed={!state().trimmedCwd ? "true" : "false"}
                         disabled={state().submitting}
                         onClick={() => applyFolder("")}
                       >

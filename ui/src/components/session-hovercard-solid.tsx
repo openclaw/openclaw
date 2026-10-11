@@ -242,7 +242,7 @@ function AttributionContent(props: {
                     <openclaw-viewer-avatar
                       class="session-hovercard__creator-avatar"
                       prop:user={{
-                        id: current().id,
+                        id: current().id ?? current().identity?.id ?? "",
                         name: current().label,
                         avatarUrl: current().avatarUrl,
                         watchedSessions: [],

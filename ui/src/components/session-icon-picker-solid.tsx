@@ -54,7 +54,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
       type="button"
       class={["session-menu__icon-choice", { "session-menu__icon-choice--glyph": glyph }]}
       aria-label={glyph ? (icon ?? t("sessionsView.noIcon")) : undefined}
-      aria-pressed={String(props.currentIcon === icon)}
+      aria-pressed={props.currentIcon === icon ? "true" : "false"}
       tabindex={icon === tabStop() ? 0 : -1}
       disabled={props.disabled}
       title={props.disabledReason ?? (icon === null ? t("sessionsView.noIcon") : undefined)}
@@ -79,7 +79,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
                 type="button"
                 class="session-menu__color-choice"
                 aria-label={label()}
-                aria-pressed={String(selected())}
+                aria-pressed={selected() ? "true" : "false"}
                 disabled={props.colorDisabled}
                 title={props.colorDisabledReason ?? label()}
                 ref={nativeListener("click", (event) => props.onSelectColor(event, color))}
@@ -162,7 +162,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
               aria-label={t(
                 props.allowSvg ? "sessionsView.customIconTitle" : "sessionsView.customEmojiTitle",
               )}
-              prop:value={props.customIconValue}
+              value={props.customIconValue}
               onInput={(event) => props.onInput(event)}
               ref={nativeListener("keydown", (event) => {
                 if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) {

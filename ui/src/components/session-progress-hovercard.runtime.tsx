@@ -551,7 +551,7 @@ class SessionProgressHovercardController {
         );
         createEffect(
           () => snapshot(),
-          (value) => value.afterCommit(),
+          (value) => onSettled(value.afterCommit),
         );
         return <SessionHovercard {...snapshot().input} />;
       }, card),
