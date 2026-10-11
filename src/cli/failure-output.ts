@@ -233,7 +233,9 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   const argv = options.argv ?? process.argv;
   const showDebugDetails = shouldShowDebugDetails(options.argv, env);
   // Admission and argument failures can precede the updater marker.
-  const isUpdateCommand = getRootOptionAwareCommandPath(argv, 1)[0] === "update";
+  const commandPath = getRootOptionAwareCommandPath(argv, 2);
+  const isUpdateCommand = commandPath[0] === "update";
+  const isPluginUpdateCommand = commandPath[0] === "plugins" && commandPath[1] === "update";
   // Update subprocesses use both marker values and retain captured reasons for recovery.
   const showUpdateDiagnostics = ["0", "1"].includes(env.OPENCLAW_UPDATE_IN_PROGRESS ?? "");
   if (
@@ -281,7 +283,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
       ? !options.error.diagnosticEmitted
-      : isUpdateCommand;
+      : isUpdateCommand || isPluginUpdateCommand;
     return [
       `[openclaw] ${options.title}`,
       ...(showReason

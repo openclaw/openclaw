@@ -352,7 +352,7 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
       when={props.mode === "buttons"}
       fallback={
         <div
-          class={["settings-segmented", props.className]}
+          class={["settings-segmented", props.class]}
           role="radiogroup"
           aria-label={props.ariaLabel}
           aria-describedby={props.descriptionId}
@@ -398,7 +398,7 @@ function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProp
     <div
       class={[
         "settings-segmented",
-        props.className,
+        props.class,
         { [`settings-segmented--${variant()}`]: Boolean(variant()) },
       ]}
       role={props.ariaLabel ? "group" : undefined}

@@ -309,15 +309,11 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           if (request.method === "mcpServerStatus/list" && blockedMethod === "turn/start") {
             current = false;
           }
+          if (request.method === "configRequirements/read" && blockedMethod === "thread/start") {
+            current = false;
+          }
           send({ id: request.id, result: results[request.method] });
         },
-      });
-      const releaseFence = vi.fn();
-      harness.client.setThreadSessionRequestGuard(async () => {
-        if (blockedMethod === "thread/start") {
-          current = false;
-        }
-        return releaseFence;
       });
       try {
         await expect(
@@ -333,7 +329,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           }),
         ).rejects.toBe(expired);
         expect(harness.writes.map((line) => JSON.parse(line).method)).not.toContain(blockedMethod);
-        expect(releaseFence).toHaveBeenCalledOnce();
       } finally {
         harness.client.close();
       }

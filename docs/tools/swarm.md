@@ -348,8 +348,11 @@ prompt. A tool action that would require approval is denied, and the child can
 report that denial in its result so the script can decide what to do next.
 
 For structured output, OpenClaw adds a synthetic `structured_output` tool to
-the child and validates its payload against the supplied JSON Schema. An
-invalid payload gets one corrective nudge. If no payload is submitted, or the
+the child and validates its payload against the supplied JSON Schema. If a
+string-valued `result` fails validation, OpenClaw decodes it once as JSON and accepts
+the decoded value only if it matches the schema. Valid string results stay unchanged;
+integer literals outside JavaScript's safe range are preserved as strings.
+An invalid payload gets one corrective nudge. If no payload is submitted, or the
 retry still does not validate, the collector completion keeps the child's raw
 text, leaves `structured` unset, and includes `schemaError`. The low-level `agents_wait`
 result exposes those fields for explicit recovery logic.

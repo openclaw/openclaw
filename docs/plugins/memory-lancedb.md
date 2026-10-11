@@ -301,7 +301,17 @@ Agents get three tools from the active memory plugin:
 
 ## Storage
 
-LanceDB data defaults to `~/.openclaw/memory/lancedb`. Override with `dbPath`:
+LanceDB data defaults to `memory/lancedb` under the active OpenClaw state
+directory: `~/.openclaw/memory/lancedb` for the default profile.
+`OPENCLAW_STATE_DIR` or `--profile <name>` (`~/.openclaw-<name>`) move it with
+the state directory. See [Paths and instances](/help/environment#paths-and-instances).
+
+Earlier releases ignored the state directory, so named profiles and custom
+state directories shared `~/.openclaw/memory/lancedb`. Those setups now start
+with their own store. Set `dbPath: "~/.openclaw/memory/lancedb"` to keep using
+the old shared store.
+
+Override the path with `dbPath`:
 
 ```json5
 {
@@ -310,7 +320,7 @@ LanceDB data defaults to `~/.openclaw/memory/lancedb`. Override with `dbPath`:
       "memory-lancedb": {
         enabled: true,
         config: {
-          dbPath: "~/.openclaw/memory/lancedb",
+          dbPath: "/srv/openclaw/memory/lancedb",
           embedding: {
             apiKey: "${OPENAI_API_KEY}",
             model: "text-embedding-3-small",

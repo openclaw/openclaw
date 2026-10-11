@@ -28,7 +28,7 @@ export type IncognitoTranscriptLockOperations = {
       | RefusedTranscriptOwnerSource;
   };
   "session.lock.facts": {
-    input: Target & { idempotencyKeys: readonly string[] };
+    input: Target & { idempotencyKeys: readonly string[]; sourceRunId?: string };
     output:
       | {
           version: SessionTranscriptContextVersion;
