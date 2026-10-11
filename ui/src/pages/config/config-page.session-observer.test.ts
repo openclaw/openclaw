@@ -21,7 +21,8 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement, settleLitElements } from "../../test-helpers/lit-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { meetingStatus } from "../../test-helpers/transcripts.test-support.ts";
-import { ConfigPage, configSelectionFromSearch, type ConfigPageId } from "./config-page.ts";
+import { ConfigPage, type ConfigPageId } from "./config-page.ts";
+import { configSelectionFromSearch } from "./config-sections.ts";
 import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 import { pages } from "./route.ts";
 

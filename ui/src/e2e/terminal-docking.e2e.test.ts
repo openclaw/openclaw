@@ -348,7 +348,7 @@ suite.define(() => {
           await expect.poll(() => embedded.isVisible()).toBe(false);
           await selectChat(destination);
           await embedded.locator(".tp-host canvas:visible").waitFor();
-          await page.locator(".sidebar-brand__new-thread").click();
+          await page.locator(".sidebar-session-toolbar .sidebar-new-session").click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
           await expect.poll(() => bottom.locator(".tp").count()).toBe(0);
         },

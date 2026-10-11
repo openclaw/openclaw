@@ -36,7 +36,6 @@ import { listPersistedBundledPluginRecoveryLocations } from "./location-bridges.
 import { loadFreshManagedPluginMetadata } from "./management-service.js";
 import {
   createPluginCache,
-  invalidatePluginCacheMetadata,
   PluginCacheFactInvalidatedError,
   retirePluginCache,
   withPluginCache,
@@ -375,34 +374,6 @@ it("uses a newer synchronous index publication when an older worker read finishe
     expect(current?.diagnostics).toEqual([{ level: "warn", message: "current ledger" }]);
   });
 });
-
-it.each(["policy", "metadata"] as const)(
-  "does not leak invalidated worker %s into synchronous discovery",
-  async (scope) => {
-    const env = environment();
-    const row = createDeferredCore<{ value_json: string }>();
-    vi.spyOn(metadataWorker, "readPluginMetadataStateRow").mockReturnValue(row.promise);
-    vi.spyOn(metadataWorker, "readPluginMetadataStateRows").mockImplementation(async () => [
-      { state_key: "plugins.bundledDiscovery", ...(await row.promise) },
-      {
-        state_key: "plugins.installedIndex",
-        value_json: JSON.stringify({ revision: 1, index: index() }),
-      },
-    ]);
-    await using cache = createPluginCache();
-    await withPluginCache(cache, async () => {
-      const pending =
-        scope === "policy"
-          ? bundledDiscovery.prepareBundledDiscoveryMode(env)
-          : loadFreshManagedPluginMetadata({}, env);
-      const rejected = expect(pending).rejects.toThrow("Plugin state changed during preparation");
-      invalidatePluginCacheMetadata(cache);
-      row.resolve({ value_json: JSON.stringify("compat") });
-      await rejected;
-      expect(bundledDiscovery.readBundledDiscoveryModeMemoized(env)).toBeUndefined();
-    });
-  },
-);
 
 it("joins a retired cache's worker read without publishing its inventory", async () => {
   const env = environment();

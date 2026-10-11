@@ -620,7 +620,7 @@ merge_run() {
   local recovery_artifact_head="$replacement_head"
   local body_path="${5:-}" captured_body="" merge_body_snapshot=""
   local legacy_directory="${6:-}" legacy_refusal="" legacy_captures=()
-  local cancel_auto="${7:-false}"
+  local cancel_auto="${7:-false}" merged_head="${11:-}"
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
   local provider_rejection="" stale_head_retirement="" async_failure="" qualified_pending_recovery=false
   local retired_auto_admin=false stale_admin_head=false
@@ -644,12 +644,22 @@ merge_run() {
     echo "Replacement head requires an exact recovery outcome and full lowercase 40-character SHA." >&2
     return 2
   fi
+  if [ -n "$merged_head" ] && ! [[ "$merged_head" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Merged head requires a full lowercase 40-character SHA." >&2
+    return 2
+  fi
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
   if [ "$cancel_auto" = true ]; then
     [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] && [ "$auto_merge_requested" = false ] || return 2
     merge_outcome_cancel_auto "$pr" "$recovery_oid"
+    return
+  fi
+  if [ -n "$merged_head" ]; then
+    [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory$MERGE_ADMIN_EVIDENCE" ] &&
+      [ "$auto_merge_requested" = false ] && [ "$cancel_auto" = false ] && [ "$confirmed_admin" = false ] || return 2
+    merge_outcome_accept_head_drift "$pr" "$recovery_oid" "$merged_head"
     return
   fi
   if [ -n "$legacy_directory" ]; then

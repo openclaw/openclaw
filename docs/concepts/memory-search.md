@@ -11,6 +11,21 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
+When indexing Markdown, the builtin engine attaches a heading-only chunk to the
+following content chunk. This keeps short headings from taking search result slots
+on their own while preserving section context and source line references. A final
+heading with no following content stays searchable. Oversized headings already
+split across chunks keep their fragments, and provider input limits still apply
+to merged chunks.
+Headings with their own recall annotations remain independent, preserving their
+project scope, triggers, and importance. Heading-like fragments inside a curated
+entry stay with that entry's annotation scope.
+
+After upgrading, existing builtin indexes rebuild once on the next normal search
+or sync to apply this chunking change. No configuration change or manual
+`memory index --force` is needed. Memory files and database schemas are unchanged;
+keyword search remains available if the rebuild cannot finish immediately.
+
 ## Quick start
 
 OpenClaw uses OpenAI embeddings by default. To use another provider, set it

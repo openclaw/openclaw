@@ -389,16 +389,12 @@ async function runArchiveSession(
   port: NonNullable<typeof parentPort>,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  let operationId = 0;
   for await (const [message] of on(port, "message")) {
     cancelWorkerIdleGc();
     // SAFETY: only the paired scoped archive owner sends this private port's requests.
     const request = message as SqliteArchiveSessionRequest | { type: "close" };
     if (request.type === "close") {
       break;
-    }
-    if (request.type !== "archive-operation" || request.operationId !== ++operationId) {
-      throw new Error("SQLite archive Worker received an invalid operation identity");
     }
     let response: SqliteArchiveSessionResponse;
     if (request.operation === "materialize") {
@@ -414,12 +410,10 @@ async function runArchiveSession(
         }
         results.push(result);
       }
-      response = { type: "done", operationId, settled: true, results };
+      response = { type: "done", results };
     } else if (request.operation === "publish") {
       response = {
         type: "published",
-        operationId,
-        settled: true,
         results: request.plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
       };
     } else if (request.operation === "read-page") {
@@ -429,17 +423,15 @@ async function runArchiveSession(
       for (const plan of request.plans) {
         results.push(await readTranscriptArchivePageInWorker(plan, env));
       }
-      response = { type: "page-read", operationId, settled: true, results };
-    } else if (request.operation === "read-final") {
+      response = { type: "page-read", results };
+    } else {
       const { readTranscriptArchiveFinalInWorker } =
         await import("./session-accessor.sqlite-archive-read.js");
       const results: TranscriptArchiveReadResult[] = [];
       for (const plan of request.plans) {
         results.push(await readTranscriptArchiveFinalInWorker(plan, env));
       }
-      response = { type: "final-read", operationId, settled: true, results };
-    } else {
-      throw new Error("SQLite archive Worker received an unsupported operation");
+      response = { type: "final-read", results };
     }
     // Each callee has closed its fresh database, streams, file descriptors and staging files.
     // Failed publication still requires native exit in case its error came from native close.

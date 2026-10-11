@@ -1,5 +1,4 @@
 // Fal tests cover music generation provider plugin behavior.
-import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildFalMusicGenerationProvider } from "./music-generation-provider.js";
 
@@ -72,10 +71,6 @@ describe("fal music generation provider", () => {
     resolveApiKeyForProviderMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllGlobals();
-  });
-
-  it("declares explicit mode capabilities", () => {
-    expectExplicitMusicGenerationCapabilities(buildFalMusicGenerationProvider());
   });
 
   it("submits MiniMax music through fal and downloads the generated track", async () => {

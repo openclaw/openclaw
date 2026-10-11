@@ -133,12 +133,14 @@ function setRuntime(bun: boolean, platform: string) {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   previousSelection = Object.getOwnPropertyDescriptor(globalThis, selectionKey);
   previousVersions = Object.getOwnPropertyDescriptor(process, "versions");
   previousPlatform = Object.getOwnPropertyDescriptor(process, "platform");
   Reflect.deleteProperty(globalThis, selectionKey);
   vi.resetModules();
+  // File identity must keep the physical host policy while library selection simulates macOS.
+  await import("./sqlite-worker-identity.js");
   runtime.mainThread = true;
   runtime.environment.clear();
   runtime.selectedPath = undefined;
@@ -458,7 +460,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
         active.push(store);
         await store.execute({ type: "append", input: { value: `database ${index}` } });
       }
-      expect(runtime.launches).toBe(capable ? 4 : 5);
+      expect(runtime.launches).toBe(capable ? 2 : 5);
       for (const [index, store] of active.entries()) {
         expect(await store.execute({ type: "read", input: undefined })).toEqual([
           `database ${index}`,
@@ -468,7 +470,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
       await fs.link(paths[0]!, aliasPath);
       const alias = await open(aliasPath);
       await alias.execute({ type: "append", input: { value: "shared alias" } });
-      expect(runtime.launches).toBe(capable ? 4 : 5);
+      expect(runtime.launches).toBe(capable ? 2 : 5);
       await active[0]!.close();
       expect(await alias.execute({ type: "read", input: undefined })).toEqual([
         "database 0",
@@ -482,7 +484,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
           "database 0",
           "shared alias",
         ]);
-        expect(runtime.launches).toBe(4);
+        expect(runtime.launches).toBe(2);
         expect(
           await active[4]!.execute({ type: "append", input: { value: "sibling still open" } }),
         ).toMatchObject({ writes: 2 });

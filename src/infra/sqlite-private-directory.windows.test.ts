@@ -1,7 +1,10 @@
 import * as childProcess from "node:child_process";
+import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
@@ -24,17 +27,40 @@ import { createPrivateWindowsFile } from "./windows-private-directory.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe.runIf(process.platform === "win32")("private SQLite directory creation on Windows", () => {
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
 
   it("creates protected directories without spawning PowerShell or a compiler", async () => {
     const root = tempDirs.make("openclaw-sqlite-private-directory-");
     const asyncPath = path.join(root, "private 测试");
     await createPrivateSqliteDirectory(asyncPath);
     const syncPath = createPrivateSqliteTempDirectorySync(root, "sync-");
+    const workerPath = path.join(root, "worker");
+    const worker = new Worker(
+      `
+      const { workerData } = require("node:worker_threads");
+      const { createDirectorySync, createFileSync } = require(workerData.entry);
+      createDirectorySync(workerData.directory, { private: true });
+      const file = createFileSync(workerData.directory + "/worker.sqlite", { private: true });
+      try { require("node:fs").writeSync(file.fd, "worker"); }
+      finally { file.close(); }
+    `,
+      {
+        eval: true,
+        workerData: {
+          entry: fileURLToPath(import.meta.resolve("@openclaw/fs-safe/advanced")),
+          directory: workerPath,
+        },
+      },
+    );
+    expect((await once(worker, "exit"))[0]).toBe(0);
+    expect(await fs.readFile(path.join(workerPath, "worker.sqlite"), "utf8")).toBe("worker");
     expect(childProcess.execFile).not.toHaveBeenCalled();
     expect(childProcess.execFileSync).not.toHaveBeenCalled();
 
-    for (const directory of [asyncPath, syncPath]) {
+    for (const directory of [asyncPath, syncPath, workerPath]) {
       const script = [
         `$acl = [IO.Directory]::GetAccessControl('${directory.replaceAll("'", "''")}')`,
         "$user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
@@ -65,7 +91,24 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
     }
   });
 
-  it("protects a new file before its Node descriptor opens and preserves an existing winner", () => {
+  it.each([220, 280])("creates private paths with a %i-character parent", (parentLength) => {
+    const root = tempDirs.make("openclaw-sqlite-private-long-");
+    const parent = path.join(root, "p".repeat(parentLength - root.length - 1));
+    fsSync.mkdirSync(parent, { recursive: true });
+    const directory = createPrivateSqliteTempDirectorySync(parent, "long-");
+    expect(fsSync.statSync(directory).isDirectory()).toBe(true);
+    const filename = path.join(parent, "private.sqlite");
+    expect(filename.length).toBe(parentLength + 15);
+    const file = createPrivateWindowsFile(filename);
+    try {
+      fsSync.writeSync(file.fd, "long");
+    } finally {
+      file.close();
+    }
+    expect(fsSync.readFileSync(filename, "utf8")).toBe("long");
+  });
+
+  it("protects a new file before its published-name descriptor opens and preserves an existing winner", () => {
     const directory = tempDirs.make("openclaw-private-file-");
     const file = path.join(directory, "private.sqlite");
     const open = fsSync.openSync;
@@ -96,28 +139,47 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
         for (const rule of acl.rules) {
           expect(rule).toMatchObject({ rights: 2032127, inherited: false, allow: 0 });
         }
-        expect(() => fsSync.renameSync(file, file + ".replaced")).toThrow();
         inspected = true;
       }
       return open(pathname, flags, mode);
     });
-    let descriptor: number | undefined;
+    let created: ReturnType<typeof createPrivateWindowsFile> | undefined;
     try {
-      descriptor = createPrivateWindowsFile(file);
+      created = createPrivateWindowsFile(file);
       expect(inspected).toBe(true);
-      fsSync.writeSync(descriptor, "winner");
-      fsSync.fsyncSync(descriptor);
+      fsSync.writeSync(created.fd, "winner");
+      fsSync.fsyncSync(created.fd);
     } finally {
       spy.mockRestore();
-      if (descriptor !== undefined) {
-        fsSync.closeSync(descriptor);
-      }
+      created?.close();
     }
     expect(() => createPrivateWindowsFile(file)).toThrow(
-      expect.objectContaining({ code: "EEXIST" }),
+      expect.objectContaining({ code: "already-exists" }),
     );
     expect(fsSync.readFileSync(file, "utf8")).toBe("winner");
     expect(fsSync.statSync(file).nlink).toBe(1);
+  });
+
+  it("rejects a replacement published name without returning or removing the successor", () => {
+    const root = tempDirs.make("openclaw-private-file-replaced-");
+    const file = path.join(root, "private.sqlite");
+    const retained = path.join(root, "retained.sqlite");
+    const open = fsSync.openSync;
+    let replaced = false;
+    vi.spyOn(fsSync, "openSync").mockImplementation((pathname, flags, mode) => {
+      if (!replaced && String(pathname) === path.toNamespacedPath(file)) {
+        replaced = true;
+        fsSync.renameSync(file, retained);
+        fsSync.writeFileSync(file, "successor");
+      }
+      return open(pathname, flags, mode);
+    });
+    expect(() => createPrivateWindowsFile(file)).toThrow(
+      expect.objectContaining({ code: "helper-failed" }),
+    );
+    expect(replaced).toBe(true);
+    expect(fsSync.readFileSync(file, "utf8")).toBe("successor");
+    expect(fsSync.readFileSync(retained, "utf8")).toBe("");
   });
 
   it("rejects concurrent creation, existing files, and junctions without modifying them", async () => {
@@ -129,7 +191,7 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
     ]);
     expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
     expect(attempts.find((attempt) => attempt.status === "rejected")).toMatchObject({
-      reason: { code: "EEXIST" },
+      reason: { code: "already-exists" },
     });
     const file = path.join(root, "file");
     await fs.writeFile(file, "keep");
@@ -137,7 +199,7 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
     await fs.symlink(directory, junction, "junction");
     for (const existing of [file, junction]) {
       await expect(createPrivateSqliteDirectory(existing)).rejects.toMatchObject({
-        code: "EEXIST",
+        code: "already-exists",
       });
     }
     expect(await fs.readFile(file, "utf8")).toBe("keep");
@@ -152,9 +214,7 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
       (error: unknown) => error,
     );
     expect(failure).toMatchObject({
-      message: expect.stringMatching(/CreateDirectoryW.*Win32 error/u),
-      code: "EIO",
-      errno: expect.any(Number),
+      code: "not-file",
     });
     expect(isPrivateDirectoryCreationRefused(failure)).toBe(true);
   });

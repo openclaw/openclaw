@@ -140,7 +140,7 @@ New user-defined `override` rules are inserted ahead of server-default suppress 
   <Accordion title="Synapse">
     No special `homeserver.yaml` change is required. If normal Matrix notifications already reach this user, the recipient token + `pushrules` call above is the main setup step.
 
-    If you run Synapse behind a reverse proxy or workers, make sure `/_matrix/client/.../pushrules/` reaches Synapse correctly. Push delivery is handled by the main process or `synapse.app.pusher` / configured pusher workers — ensure those are healthy.
+    If you run Synapse behind a reverse proxy or workers, make sure `/_matrix/client/.../pushrules/` reaches Synapse correctly. Push delivery is handled by the main process or `synapse.app.pusher` / configured pusher workers — check that those are healthy.
 
     The rule uses the `event_property_is` push-rule condition (MSC3758, push rule v1.10), which was added to Synapse in 2023. Older Synapse releases accept the `PUT pushrules/...` call but silently never match the condition — upgrade Synapse if no notification arrives on a finalized preview edit.
 

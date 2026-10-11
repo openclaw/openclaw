@@ -22,6 +22,7 @@ const dependencies = [
   ...(manifest
     ? [
         "@openclaw/fs-safe",
+        "@openclaw/proc-safe",
         "@openclaw/proxyline",
         "acorn",
         "chalk",
@@ -33,7 +34,6 @@ const dependencies = [
         "ipaddr.js",
         "jiti",
         "json5",
-        "koffi",
         "kysely",
         "p-map",
         "semver",

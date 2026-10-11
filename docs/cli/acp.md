@@ -141,7 +141,7 @@ Avoid using `openclaw gateway call sessions.list` as the only ACP proof. That CL
 
 Use ACP when an IDE (or other client) speaks Agent Client Protocol and you want it to drive an OpenClaw Gateway session.
 
-1. Ensure the Gateway is running (local or remote).
+1. Check that the Gateway is running (local or remote).
 2. Configure the Gateway target (config or flags).
 3. Point your IDE to run `openclaw acp` over stdio.
 
@@ -307,7 +307,7 @@ Security note:
 
 - `--token` and `--password` can be visible in local process listings on some systems. Prefer `--token-file`/`--password-file` or environment variables (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_PASSWORD`).
 - Gateway auth resolution follows the shared contract used by other Gateway clients:
-  - local mode: `gateway.auth.*` then env (`OPENCLAW_GATEWAY_*`), falling back to `gateway.remote.*` only when `gateway.auth.*` is unset (a configured-but-unresolved local SecretRef fails closed instead of silently falling back)
+  - local mode: `gateway.auth.*` then env (`OPENCLAW_GATEWAY_*`), falling back to `gateway.remote.*` only when `gateway.auth.*` is unset (a configured-but-unresolved local SecretRef stops authentication instead of silently falling back)
   - remote mode: `gateway.remote.*` with env/config fallback per remote precedence rules
   - `--url` is override-safe and does not reuse implicit config/env credentials; pass explicit `--token`/`--password` (or file variants)
 

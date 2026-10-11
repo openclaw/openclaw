@@ -1,5 +1,6 @@
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { advanceMessageActionPrompt } from "../gateway/message-action-turn-capability.js";
 import { prepareModelVisibleToolTextBlock } from "../logging/redact.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -19,6 +20,7 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
+import { readPersistedImageBlockFactIndexes } from "./embedded-agent-runner/run/prompt-image-metadata.js";
 import {
   resolveLiveToolResultMaxChars,
   truncateToolResultMessage,
@@ -50,7 +52,7 @@ type GuardedSessionManager = SessionManager &
       | "flushPendingToolResults"
       | "flushPendingToolResultsAsync"
       | "clearPendingToolResults"
-      | "clearNextUserMessagePersistenceSuppression"
+      | "setNextUserMessagePersistence"
     >
   > & {
     /** Refresh the exact owning run when a caller reuses this guarded manager. */
@@ -68,6 +70,30 @@ type GuardedSessionManager = SessionManager &
       },
     ) => void;
   };
+
+function publishPersistedUserEnvelope(
+  runtime: PersistedUserTurnMessage | undefined,
+  persisted: PersistedUserTurnMessage,
+): void {
+  // Admission can freeze an unchanged input when it is already storage-canonical.
+  if (!runtime || runtime === persisted || Object.isFrozen(runtime)) {
+    return;
+  }
+  // Publish once, before model transforms. Replay must use the same envelope;
+  // runtime content and non-enumerable media/steering facts remain prepared.
+  const content = runtime.content;
+  const imageFactIndexes = readPersistedImageBlockFactIndexes(runtime);
+  for (const key of Object.keys(runtime)) {
+    Reflect.deleteProperty(runtime, key);
+  }
+  Object.assign(runtime, persisted, { content });
+  if (imageFactIndexes) {
+    runtime["__openclaw"] = {
+      ...runtime["__openclaw"],
+      mediaImageBlockFactIndexes: imageFactIndexes,
+    };
+  }
+}
 
 /**
  * Apply the tool-result guard to a SessionManager exactly once and expose
@@ -114,6 +140,7 @@ export function guardSessionManager(
   },
 ): GuardedSessionManager {
   const guardedSessionManager: GuardedSessionManager = sessionManager;
+  let transcriptRunId = opts?.runId;
   let prepareAssistantTranscriptMessage =
     opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
   let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
@@ -279,7 +306,7 @@ export function guardSessionManager(
         Reflect.get(runtimeContext?.message ?? message, "idempotencyKey") !== preparedUserReplayKey
       ) {
         pendingPreparedUserTurnMessage = undefined;
-        guard.clearNextUserMessagePersistenceSuppression();
+        guard.setNextUserMessagePersistence("normal");
       }
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
       const recorder =
@@ -325,15 +352,30 @@ export function guardSessionManager(
     onUserMessagePersisted: async (message, persistence) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
+      publishPersistedUserEnvelope(runtimeMessage, persistence.persistedMessage);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
       recorder?.markRuntimePersisted(persistence.persistedMessage, persistence.anchor, {
         appended: persistence.appended,
+      });
+      advanceMessageActionPrompt({
+        runId: transcriptRunId,
+        agentId: opts?.agentId,
+        sessionKey: opts?.sessionKey,
+        sessionId: sessionManager.getSessionId(),
+        recorder,
       });
       await opts?.onUserMessagePersisted?.(persistence.persistedMessage, runtimeMessage);
     },
     onUserMessagePersistenceSuppressed: async (message) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
+      const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
+      publishPersistedUserEnvelope(
+        runtimeMessage,
+        recorder?.getPersistedMessage?.() ??
+          preparedUserTurnTranscriptRecorder?.getPersistedMessage?.() ??
+          message,
+      );
       await opts?.onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
     },
     onUserMessageBlocked: opts?.onUserMessageBlocked,
@@ -347,8 +389,7 @@ export function guardSessionManager(
   guardedSessionManager.flushPendingToolResults = guard.flushPendingToolResults;
   guardedSessionManager.flushPendingToolResultsAsync = guard.flushPendingToolResultsAsync;
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
-  guardedSessionManager.clearNextUserMessagePersistenceSuppression =
-    guard.clearNextUserMessagePersistenceSuppression;
+  guardedSessionManager.setNextUserMessagePersistence = guard.setNextUserMessagePersistence;
   guardedSessionManager.setTranscriptRunContext = (
     runId,
     prepare,
@@ -358,8 +399,9 @@ export function guardSessionManager(
     suppressUserPersistence,
     preparedUserTurn,
   ) => {
+    transcriptRunId = runId;
     guard.setTranscriptRunId(runId, errors);
-    guard.setNextUserMessagePersistenceSuppression(suppressUserPersistence === true);
+    guard.setNextUserMessagePersistence(suppressUserPersistence ? "suppress" : "normal");
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
     inputProvenance = provenance;

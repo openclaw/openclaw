@@ -154,7 +154,7 @@ runtime cannot prove the authority, it skips the handler.
 
 Treat `toolAuthority` as an ephemeral capability:
 
-- `allows(toolName)` checks a canonical tool id against the finalized surface
+- `allows(toolName)` checks a standard tool id against the finalized surface
   and also verifies that the capability is still active.
 - `assertActive()` rejects after abort, cancellation, run replacement,
   lifecycle rotation, or hook dispatch completion. Call it after awaited work
@@ -165,7 +165,7 @@ Treat `toolAuthority` as an ephemeral capability:
   replace the system prompt or change `toolsAllow` after policy has settled.
 
 The host revalidates authority after each awaited handler and discards stale
-enrichment. A retained `toolAuthority` object fails closed after dispatch.
+enrichment. A retained `toolAuthority` object rejects use after dispatch.
 
 This option requires a host that implements the post-policy phase. Published
 plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning
@@ -182,7 +182,7 @@ the current user input as `prompt`, plus loaded session history in `messages`
 and the active system prompt. Return `{ outcome: "block", reason, message? }`
 to stop the run before the model reads the prompt. `reason` is internal;
 `message` is the user-facing replacement. Only `pass` and `block` outcomes are
-supported; unsupported decision shapes fail closed.
+supported; unsupported decision shapes are rejected.
 
 When a run is blocked, OpenClaw stores only the replacement text in
 `message.content` plus non-sensitive block metadata such as the blocking
@@ -351,7 +351,7 @@ whose plugin is inactive or has prompt injection disabled. `idempotencyKey`
 deduplicates unexpired pending entries for the same plugin and session; the
 key can be reused after consumption. Drained entries are reused across retries
 within the active run, but consuming an entry is not a receipt that the model
-saw it: a later failure can prevent submission. This is the right seam for
+saw it: a later failure can prevent submission. This is the right hook for
 approval resumes, policy summaries, background monitor
 deltas, and command continuations that should be visible to the model on the
 next turn but should not become permanent system prompt text.

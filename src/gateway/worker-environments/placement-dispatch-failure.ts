@@ -4,7 +4,7 @@ import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import { DevicePlacementUnavailableError } from "./device-placement-eligibility.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
-  placementTurnOwner,
+  projectPlacementTurnClaim,
   type WorkerPlacementExecutionMode,
 } from "./placement-record.js";
 import type {
@@ -50,13 +50,11 @@ export type WorkerDispatchPlacementStore = Pick<
   | "completePlacementMoveSourceToLocal"
   | "completeAbandonedPlacementMoveSourceToLocal"
   | "completePlacementMoveToWorker"
-  | "getPlacementMove"
   | "recordPlacementMoveError"
   | "fail"
   | "get"
   | "getAsync"
   | "getWithMoveAsync"
-  | "readCurrentMoveAuthority"
   | "getPlacementMoveAsync"
   | "readProjection"
   | "readRecoveryCandidates"
@@ -347,14 +345,9 @@ export function createPlacementFailureActions(deps: {
     if (current?.state !== "draining") {
       return;
     }
-    if (current.turnClaim) {
-      await placements.closeWorkerTurnToolState({
-        sessionId: current.sessionId,
-        claimId: current.turnClaim.claimId,
-        runId: current.turnClaim.runId,
-        placementGeneration: current.turnClaim.generation,
-        owner: placementTurnOwner(current),
-      });
+    const claim = projectPlacementTurnClaim(current);
+    if (claim) {
+      await placements.closeWorkerTurnToolState(claim);
     }
     const reconciling = await startReconcile(current);
     const teardownErrors = await cleanupEnvironment({
