@@ -1519,7 +1519,7 @@ describe("CLI attempt execution", () => {
         sessionStore,
       });
     if (error) {
-      expect(run).toThrow(error);
+      await expect(run()).rejects.toThrow(error);
       expect(runCliAgentMock).not.toHaveBeenCalled();
     } else {
       await run();

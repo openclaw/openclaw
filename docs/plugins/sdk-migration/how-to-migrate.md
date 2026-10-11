@@ -1365,3 +1365,112 @@ The released synchronous preparation and before-commit callbacks retain their
 durable-target behavior through the next Plugin SDK major, with a one-time
 warning per plugin. They are refused for incognito and actor-bound targets.
 No stored data migration or update step is required.
+
+## Await auth-profile and provider-availability operations
+
+Use the awaited auth APIs before publishing model choices, registering provider
+availability, or starting work that depends on a stored credential. Their
+database reads and writes run through the existing auth owner and workers.
+Keep the same arguments and await the replacement's result:
+
+| SDK subpath                              | Synchronous API                               | Awaited replacement                                |
+| ---------------------------------------- | --------------------------------------------- | -------------------------------------------------- |
+| `provider-auth`                          | `ensureAuthProfileStore`                      | `ensureAuthProfileStoreAsync`                      |
+| `provider-auth`                          | `ensureAuthProfileStoreForLocalUpdate`        | `ensureAuthProfileStoreForLocalUpdateAsync`        |
+| `provider-auth`                          | `upsertAuthProfile`                           | `upsertAuthProfileAsync`                           |
+| `provider-auth`, `provider-auth-api-key` | `upsertApiKeyProfile`                         | `upsertApiKeyProfileAsync`                         |
+| `provider-auth`                          | `isProviderApiKeyConfigured`                  | `isProviderApiKeyConfiguredAsync`                  |
+| `provider-auth`                          | `isProviderAuthProfileConfigured`             | `isProviderAuthProfileConfiguredAsync`             |
+| `provider-auth`                          | `listUsableProviderAuthProfileIds`            | `listUsableProviderAuthProfileIdsAsync`            |
+| `provider-auth-runtime`                  | `resolveProviderAuthProfileMetadata`          | `resolveProviderAuthProfileMetadataAsync`          |
+| `agent-runtime`                          | `loadAuthProfileStoreWithoutExternalProfiles` | `loadAuthProfileStoreWithoutExternalProfilesAsync` |
+| `agent-runtime`                          | `findPersistedAuthProfileCredential`          | `findPersistedAuthProfileCredentialAsync`          |
+| `agent-runtime`                          | `resolvePersistedAuthProfileOwnerAgentDir`    | `resolvePersistedAuthProfileOwnerAgentDirAsync`    |
+| `agent-harness-runtime`                  | `resolveModelAuthMode`                        | `resolveModelAuthModeAsync`                        |
+| `models-provider-runtime`                | `formatModelsAvailableHeader`                 | `formatModelsAvailableHeaderAsync`                 |
+| `image-generation-core`                  | `resolveCapabilityModelCandidates`            | `resolveCapabilityModelCandidatesAsync`            |
+| `provider-selection-runtime`             | `resolveConfiguredCapabilityProvider`         | `resolveConfiguredCapabilityProviderAsync`         |
+| `realtime-voice`                         | `resolveConfiguredRealtimeVoiceProvider`      | `resolveConfiguredRealtimeVoiceProviderAsync`      |
+| `tts-runtime`, `agent-runtime`           | `getTtsProvider`                              | `getTtsProviderAsync`                              |
+| `tts-runtime`                            | `isTtsProviderConfigured`                     | `isTtsProviderConfiguredAsync`                     |
+| `tts-runtime`                            | `resolveExplicitTtsOverrides`                 | `resolveExplicitTtsOverridesAsync`                 |
+
+The deprecated broad `agent-runtime` subpath also exposes
+`ensureAuthProfileStoreAsync`; use the focused `provider-auth` subpath for new imports.
+
+Use `loadAuthProfileStoreWithoutExternalProfilesAsync` when an existing
+`agent-runtime` integration needs persisted credential or usage facts without
+runtime external-profile overlays. It preserves inherited profiles and the
+selected personal profile while reading through the worker; it does not use
+the runtime snapshot-first selection of `ensureAuthProfileStoreAsync`.
+
+`resolveProviderAuthProfileMetadataAsync` preserves the existing optional
+`profileId` and OAuth `accountId` result fields and returns an empty object when
+no profile matches. Use it to prepare provider discovery metadata without
+reading the auth database on the Gateway thread.
+
+Existing `agent-runtime` integrations can also await
+`findPersistedAuthProfileCredentialAsync({ agentDir, profileId })` when preparing
+credential facts. It resolves to the stored credential or `undefined`. Its
+synchronous counterpart remains available for a current credential-authority
+check at an actual effect boundary; earlier prepared facts do not replace that
+check.
+
+For preparatory owner selection, await
+`resolvePersistedAuthProfileOwnerAgentDirAsync({ agentDir, profileId })`. It
+preserves inherited OAuth ownership: `undefined` selects the shared/default
+owner, while an independently owned local profile resolves to its agent
+directory. The synchronous resolver remains available for effect-time callers
+through the compatibility window. A prepared owner directory does not authorize
+later credential use.
+
+Injected runtimes provide the same migration through
+`api.runtime.modelAuth.ensureAuthProfileStoreAsync` and
+`api.runtime.modelAuth.isProviderApiKeyConfiguredAsync`. For subscription CLI
+dispatch selection, await
+`api.runtime.agent.resolveCliBackendDispatchEligibilityAsync` in place of
+`resolveCliBackendDispatchEligibility`.
+
+Await each upsert before using its result or starting a dependent read.
+`upsertAuthProfileAsync` resolves after the canonical writer updates the selected
+profile; it preserves neighboring profiles. `upsertApiKeyProfileAsync` resolves
+to the profile ID after the write completes. A store returned for local update
+is a snapshot, not permission to replace newer owner state; use the owner-backed
+mutation API for the write.
+
+Image, music, video, speech, realtime voice, and realtime transcription provider
+plugins should implement
+`isConfiguredAsync(context): Promise<boolean>` instead of `isConfigured` when
+checking stored credentials. Capability selection awaits this hook and prefers
+it when both hooks exist. The legacy synchronous hook remains supported;
+an async failure is not retried through it. Availability and model-auth labels
+describe configured choices, not live service health or authorization to use a
+credential.
+
+Realtime voice providers can also implement `resolveConfigAsync(context)` when
+configuration needs stored credentials. The awaited realtime selector prefers
+it over `resolveConfig`. The generic
+`resolveConfiguredCapabilityProviderAsync` accepts awaited
+`resolveProviderConfig` and `isProviderConfigured` callbacks while preserving
+explicit selection, automatic ordering, and existing result envelopes.
+
+For speech selection, await `getTtsProviderAsync` before using the selected
+provider and `isTtsProviderConfiguredAsync` before presenting configured-state
+results. Await `resolveExplicitTtsOverridesAsync` when model or voice overrides
+depend on selecting a provider. These preserve the synchronous methods'
+selection and override semantics while allowing stored-credential checks to
+run in the worker. Existing external speech providers that only implement
+`isConfigured` remain supported.
+
+The synchronous APIs shipped in 2026.10.1 retain their signatures, immediate
+results, and completion timing through the next Plugin SDK major and explicit
+breaking-release approval. They are deprecated; synchronous auth storage
+entrypoints warn once per plugin and capability family per process.
+Bundled callers use the awaited APIs. This migration changes no schema,
+stored format, retention, or update behavior.
+
+Native web-search selection no longer repeats a credential-presence lookup
+already owned by the model request. A stale availability hint may therefore
+select native search for a request that subsequently fails credential admission.
+The model request still resolves and validates current credentials before its
+external effect; prepared availability never replaces that authority check.

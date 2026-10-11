@@ -42,6 +42,7 @@ backup and its matching build, not just reinstalling the older package.
 | 23      | Selective transcript compression, binary memory embeddings, and stable memory full-text index identities                                                                                                                                               | `v2026.9.6`  |
 | 24      | Canonical session hot facts separated from keyed diff, skills, and system-prompt snapshots                                                                                                                                                             | `v2026.9.7`  |
 | 25      | Canonical writers validate their own rows; offline import and repair explicitly queue admission work instead of per-write invalidation triggers                                                                                                        | `Unreleased` |
+| 26      | Portable query columns for session maintenance, transcript navigation discriminators, and context-engine outbox state                                                                                                                                  | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -61,6 +62,38 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### JSON predicate columns
+
+Agent schema **26** promotes query fields from canonical JSON into `TEXT` and
+`INTEGER` columns. Session nodes record the session start time and whether optional
+history references are present. Transcript events record navigation type, custom
+type, display visibility, message role, and the last type/custom-type member used
+by legacy navigation; a validity flag preserves the existing malformed-input path.
+The context-engine turn outbox records its payload state. Shared TypeScript
+derivations populate these fields in the same statement as each JSON write.
+The session actor uses the same session derivation.
+
+The migration classifies every existing row once in its owning agent database's
+transaction, preserving canonical JSON and compressed transcript bytes. SQLite
+classification retains first-member JSON lookup and last-member legacy navigation
+semantics. Optional outbox tables remain absent until first use. Fresh and
+incognito databases start at schema 26. Later opens reuse admitted schema facts;
+runtime predicates do not fall back to JSON or re-run the backfill.
+
+The [accepted design](https://github.com/openclaw/openclaw/issues/169254) keeps
+predicate types portable and uses the same derivations for future engine adapters.
+PostgreSQL bootstrap DDL is generated from the canonical schema; an engine that
+supports this database must provide each forward migration under the same version.
+Size-limiting JSON projections and current writer-authority checks keep their
+existing owners and semantics.
+
+Schema 25 and older builds refuse schema 26. Rollback requires restoring the
+verified pre-migration backup with its matching build; never lower either version
+marker. Update-time Doctor retains its private rehearsal and verified backup
+requirements for older update drivers. First-upgrade cost scales with retained
+rows in each agent database and the number of databases on a host; implementation
+proof records both measurements.
 
 ### Canonical writer validation
 

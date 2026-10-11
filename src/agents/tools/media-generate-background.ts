@@ -32,7 +32,7 @@ import {
   applyAgentDefaultModelConfig,
   coerceToolModelConfig,
   hasToolModelConfig,
-  prepareToolAuthProfileStoreSource,
+  prepareToolAuthProfileStore,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
 
@@ -66,6 +66,7 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
   providerKey: K,
   options: MediaGenerateToolOptions | undefined,
   logger: Pick<SubsystemLogger, "warn" | "error">,
+  preparedAvailability?: boolean,
 ) {
   const cfg = options?.config ?? getRuntimeConfig();
   const knownProviders:
@@ -74,16 +75,19 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
   const known = knownProviders?.[providerKey];
   const preparedProviders = known ? [...known] : undefined;
   if (
-    !hasGenerationToolAvailability({
-      cfg,
-      agentDir: options?.agentDir,
-      workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      authProfileStoreSource: options?.authProfileStoreSource,
-      modelConfig: cfg.agents?.defaults?.mediaModels?.[GENERATION_LABELS[providerKey]],
-      providerKey,
-      providers: preparedProviders,
-    })
+    !(
+      preparedAvailability ??
+      hasGenerationToolAvailability({
+        cfg,
+        agentDir: options?.agentDir,
+        workspaceDir: options?.workspaceDir,
+        authStore: options?.authProfileStore,
+        authProfileStoreSource: options?.authProfileStoreSource,
+        modelConfig: cfg.agents?.defaults?.mediaModels?.[GENERATION_LABELS[providerKey]],
+        providerKey,
+        providers: preparedProviders,
+      })
+    )
   ) {
     return null;
   }
@@ -156,7 +160,7 @@ export async function prepareMediaGenerationTask<
   );
   const configuredModel =
     model || explicitModelConfig
-      ? resolveCapabilityModelConfigForTool({
+      ? await resolveCapabilityModelConfigForTool({
           cfg,
           modelConfig: cfg.agents?.defaults?.mediaModels?.[generationLabel],
           modelOverride: model,
@@ -184,23 +188,22 @@ export async function prepareMediaGenerationTask<
       : cfg,
   );
   const prepare = async () => {
-    const authProfileStoreSource = configuredModel
-      ? options?.authProfileStoreSource
-      : await prepareToolAuthProfileStoreSource(options);
+    const authStore = configuredModel
+      ? options?.authProfileStore
+      : await prepareToolAuthProfileStore(options);
     signal?.throwIfAborted();
     resources?.assertOpen();
     const modelConfig =
       configuredModel ??
-      resolveCapabilityModelConfigForTool({
+      (await resolveCapabilityModelConfigForTool({
         cfg,
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
-        authStore: options?.authProfileStore,
-        authProfileStoreSource,
+        authStore,
         modelConfig: cfg.agents?.defaults?.mediaModels?.[generationLabel],
         modelOverride: model,
         providers: params.resolveProviders(resources),
-      });
+      }));
     if (!modelConfig) {
       throw new ToolInputError(`No ${generationLabel}-generation model configured.`);
     }

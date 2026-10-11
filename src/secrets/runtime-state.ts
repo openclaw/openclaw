@@ -75,7 +75,7 @@ export type SecretsRuntimeRefreshContext = {
   explicitAgentDirs: string[] | null;
   includeConfigRefs?: boolean;
   includeAuthStoreRefs: boolean;
-  loadAuthStore?: (agentDir?: string) => AuthProfileStore;
+  loadAuthStore?: (agentDir?: string) => AuthProfileStore | Promise<AuthProfileStore>;
   loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 };
