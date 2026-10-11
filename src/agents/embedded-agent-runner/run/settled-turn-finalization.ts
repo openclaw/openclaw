@@ -28,6 +28,7 @@ import type {
 } from "../../harness/types.js";
 import { observeReplyDelivery } from "../../reply-completion.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
+import { withSessionManagerWriteAssertion } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -98,16 +99,6 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   };
 }) {
   const initial = input.initial;
-  const { preparedAttempt, sessionTarget, sessionWriterFence } = input.finalization;
-  const committedSessionTarget =
-    preparedAttempt.sessionTarget || sessionTarget || sessionWriterFence
-      ? { ...preparedAttempt.sessionTarget, ...sessionTarget, ...sessionWriterFence }
-      : undefined;
-  const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
-    attempt: preparedAttempt,
-    sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
-    sessionTarget: committedSessionTarget,
-  });
   let attempt = initial.attempt;
   let lastRunPromptUsage = input.lastRunPromptUsage;
   const minimumAssistantMessageIndex = (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1;
@@ -160,6 +151,30 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   if (!assertFinalizationActive) {
     throw new Error("admitted run authority is no longer active");
   }
+  const { preparedAttempt, sessionTarget, sessionWriterFence } = input.finalization;
+  // Transcript custody belongs to the host-owned session manager whenever dispatch
+  // handed one over, and that attempt therefore owns no store target of its own.
+  // Carry only its writer fence into the finalizer: minting a store target here
+  // would run the tool-free finalizer as a direct transcript writer under a claim
+  // this run never held, and its first commit refuses as a rebound writer.
+  const transcriptCustodyIsManagerOwned =
+    Boolean(preparedAttempt.sessionManager) && !preparedAttempt.sessionTarget;
+  const committedSessionTarget = transcriptCustodyIsManagerOwned
+    ? sessionWriterFence && { ...sessionWriterFence }
+    : preparedAttempt.sessionTarget || sessionTarget || sessionWriterFence
+      ? { ...preparedAttempt.sessionTarget, ...sessionTarget, ...sessionWriterFence }
+      : undefined;
+  // A borrowed manager reports the forked parent's transcript id; this run keeps its own.
+  const committedSessionId =
+    committedSessionTarget?.sessionId ??
+    (transcriptCustodyIsManagerOwned ? preparedAttempt.sessionId : undefined) ??
+    initial.sessionIdUsed;
+  const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
+    attempt: preparedAttempt,
+    sessionId: committedSessionId,
+    sessionTarget: committedSessionTarget,
+  });
+
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
   const describeRun = () =>
@@ -185,21 +200,29 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     for (;;) {
       finalizationAttempt += 1;
       assertFinalizationActive();
-      finalization = await runPreparedSettledTurnFinalization({
-        attempt: {
-          ...input.finalization.preparedAttempt,
-          // The first transcript append may have committed the writer after
-          // dispatch preparation. The summary must retain that original fence.
-          ...(committedSessionTarget ? { sessionTarget: committedSessionTarget } : {}),
-          sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
-          sessionFile: initial.sessionFileUsed ?? input.finalization.preparedAttempt.sessionFile,
-        },
-        settledAttempt: initial.attempt,
-        harness: input.finalization.harness,
-        prompt,
-        createAttemptControls: input.finalization.createAttemptControls,
-        abortSignal: input.finalization.abortSignal,
-      });
+      const runFinalizationAttempt = () =>
+        runPreparedSettledTurnFinalization({
+          attempt: {
+            ...input.finalization.preparedAttempt,
+            // The first transcript append may have committed the writer after
+            // dispatch preparation. The summary must retain that original fence.
+            ...(committedSessionTarget ? { sessionTarget: committedSessionTarget } : {}),
+            sessionId: committedSessionId,
+            sessionFile: initial.sessionFileUsed ?? input.finalization.preparedAttempt.sessionFile,
+          },
+          settledAttempt: initial.attempt,
+          harness: input.finalization.harness,
+          prompt,
+          createAttemptControls: input.finalization.createAttemptControls,
+          abortSignal: input.finalization.abortSignal,
+        });
+      finalization = input.finalization.preparedAttempt.sessionManager
+        ? await withSessionManagerWriteAssertion(
+            input.finalization.preparedAttempt.sessionManager,
+            assertFinalizationActive,
+            runFinalizationAttempt,
+          )
+        : await runFinalizationAttempt();
       assertFinalizationActive();
       attempt = finalization.attempt;
       // The harness retains authored silence as an empty result; only the host
@@ -275,7 +298,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       attempt: input.finalization.preparedAttempt,
       abortSignal: input.finalization.abortSignal,
       assertActive: assertFinalizationActive,
-      sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+      sessionId: committedSessionId,
       sessionTarget: committedSessionTarget,
     });
     if (input.finalization.abortSignal.aborted) {
