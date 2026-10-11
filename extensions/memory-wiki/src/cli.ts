@@ -306,7 +306,7 @@ function parseWikiSearchEnumOption<T extends string>(
   if ((allowed as readonly string[]).includes(value)) {
     return value as T;
   }
-  throw new Error(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
+  throw invalidCliArgument(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
 }
 
 async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }): Promise<string> {

@@ -13,14 +13,16 @@ import * as cleanupReads from "./cleanup-service-read.js";
 import { setCleanupDeleteFault } from "./cleanup-service.delete-fault.test-support.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
 import {
-  appendTranscriptEventSync,
   appendTranscriptMessageSync,
   inspectTranscriptEventsSync,
   loadSessionEntry,
   replaceSessionEntry,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { prunePublishedSessionArchivesByRetention } from "./session-accessor.sqlite-archive-store.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEventsSync,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as entryReaders from "./session-entry-read-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 

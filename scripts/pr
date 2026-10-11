@@ -516,7 +516,7 @@ usage() {
 Usage:
   scripts/pr [--dev-wrapper] <subcommand> ...
   scripts/pr ls
-  scripts/pr gc [--dry-run]
+  scripts/pr gc [--pr <number>] [--dry-run]
   scripts/pr lock-recover <PR> <OWNER_OID> --confirmed-no-running-tools
   scripts/pr review-init <PR>
   scripts/pr review-checkout-main <PR>
@@ -549,7 +549,7 @@ Usage:
     Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
     This requires --confirmed-operator-admin and immediate squash without auto-merge.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> --auto-merge] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> --auto-merge] [--merged-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
     Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
@@ -564,6 +564,8 @@ Usage:
     --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
     Cancels a matching active request once, or records an already absent request without sending cancellation.
     Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
+    --merged-head <SHA> records the receipt of an accepted auto request that GitHub merged on a pushed descendant
+    head after inspecting the PR timeline. It requires the exact authoritative merged head and never dispatches.
   scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
     Finish a verified merge receipt after cleanup; never dispatches a merge or deletes resources.
     Posts a first completion comment only from merged; uncertain comment attempts are lookup-only.
@@ -650,10 +652,22 @@ main() {
   case "$cmd" in
     ls) ;;
     gc)
-      [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = "--dry-run" ]; } || {
-        usage
-        exit 2
-      }
+      local gc_dry_run=false gc_pr=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --dry-run)
+            [ "$gc_dry_run" = false ] || { usage; exit 2; }
+            gc_dry_run=true
+            shift
+            ;;
+          --pr)
+            [ -z "$gc_pr" ] && [ "$#" -ge 2 ] && is_canonical_pr_number "$2" || { usage; exit 2; }
+            gc_pr="$2"
+            shift 2
+            ;;
+          *) usage; exit 2 ;;
+        esac
+      done
       ;;
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
@@ -663,7 +677,7 @@ main() {
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
-      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory="" admin_evidence="" confirmed_admin=false
+      local merge_pr="${1-}" auto_merge=false recovery_oid="" merged_head="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory="" admin_evidence="" confirmed_admin=false
       [ -n "$merge_pr" ] || { usage; exit 2; }
       shift
       if [ "$cmd" = merge-recover ]; then
@@ -709,6 +723,12 @@ main() {
             legacy_directory="$2"
             shift 2
             ;;
+          --merged-head)
+            [ "$cmd" = merge-recover ] && [ "$#" -ge 2 ] &&
+              [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ -z "$merged_head" ] || { usage; exit 2; }
+            merged_head="$2"
+            shift 2
+            ;;
           --replacement-head)
             [ "$cmd" = merge-recover ] && [ "$#" -ge 2 ] &&
               [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ -z "$replacement_head" ] || { usage; exit 2; }
@@ -729,6 +749,10 @@ main() {
       if [ "$cmd" = merge-recover ] && [ "$auto_merge" = true ]; then
         [ -n "$replacement_head" ] && [ -z "$body_path$legacy_directory$refusal_directory$admin_evidence" ] &&
           [ "$confirmed_admin" = false ] && [ "$cancel_auto" = false ] || { usage; exit 2; }
+      fi
+      if [ -n "$merged_head" ]; then
+        [ -z "$replacement_head$body_path$legacy_directory$refusal_directory$admin_evidence" ] &&
+          [ "$cancel_auto" = false ] && [ "$auto_merge" = false ] && [ "$confirmed_admin" = false ] || { usage; exit 2; }
       fi
       [ -z "$legacy_directory" ] || [ -n "$replacement_head" ] || { usage; exit 2; }
       [ -z "$refusal_directory" ] || [ -z "$legacy_directory" ] || { usage; exit 2; }
@@ -792,11 +816,7 @@ main() {
       list_pr_worktrees
       ;;
     gc)
-      local dry_run=false
-      if [ "$#" -eq 1 ]; then
-        dry_run=true
-      fi
-      gc_pr_worktrees "$dry_run"
+      gc_pr_worktrees "$gc_dry_run" "$gc_pr"
       ;;
     review-init)
       local pr="${1-}"
@@ -892,7 +912,7 @@ main() {
       merge_verify "$pr" '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
       ;;
     merge-run | merge-recover)
-      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin"
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin" "$merged_head"
       ;;
     merge-complete)
       merge_complete "$1" "$2"

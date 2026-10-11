@@ -306,6 +306,8 @@ const runtimePartitions = new Map<
       files: (_cwd, includePatterns) => unitFastFiles(includePatterns),
       nodeRequired: new Set([
         "src/cli/cli-process-diagnostics.test.ts",
+        // This contract requires Node's async_hooks Promise callback boundaries.
+        "src/infra/main-thread-stall.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",

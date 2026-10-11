@@ -7,7 +7,7 @@ import { patchConfigHealthEntryToStore } from "../config/io.health-state.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/io.js";
 import { createConfigHealthFingerprint } from "../config/io.observe-state.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -655,7 +655,7 @@ describe("runDoctorConfigPreflight", () => {
 
             expect(readEventJson()).toBe(originalJson);
             // Preserve the same process: readiness must not suppress plain Doctor.
-            const doctor = await prepareDoctorContext(configPath, {
+            await using doctor = await prepareDoctorContext(configPath, {
               options: { nonInteractive: true },
             });
 

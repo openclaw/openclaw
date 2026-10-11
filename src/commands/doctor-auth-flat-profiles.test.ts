@@ -812,7 +812,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
 
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toEqual([
-      expect.stringContaining("canonical auth profile store changed during legacy migration"),
+      expect.stringContaining("current auth profile store changed during legacy migration"),
     ]);
     expect(fs.existsSync(authPath)).toBe(true);
     expectNoMigratedArchive(authPath);
@@ -1217,7 +1217,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
     };
 
     expect(result.changes).toStrictEqual([
-      "Migrated legacy auth profile config to canonical providers.",
+      "Migrated legacy auth profile config to current providers.",
     ]);
     expect(result.config.auth?.order).toEqual({
       openai: ["openai:work"],
@@ -1254,7 +1254,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
     };
 
     expect(result.changes).toStrictEqual([
-      "Migrated legacy auth profile config to canonical providers.",
+      "Migrated legacy auth profile config to current providers.",
     ]);
     expect(migrated.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime?.authProfileId).toBe(
       "openai:chatgpt-default",

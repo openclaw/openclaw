@@ -405,7 +405,7 @@ async function initSessionStateAttemptLocked(
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
     normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
-  const { resetAuthorized, resetCommand } = resolveAuthorizedSessionResetCommand({
+  const { resetAuthorized, resetCommand } = await resolveAuthorizedSessionResetCommand({
     ctx,
     cfg,
     agentId,
@@ -741,7 +741,7 @@ async function initSessionStateAttemptLocked(
     snoozedUntil: isSystemEvent ? entry?.snoozedUntil : undefined,
     snoozedAt: isSystemEvent ? entry?.snoozedAt : undefined,
     systemSent,
-    abortedLastRun: recoveredTerminalEntry ? undefined : abortedLastRun,
+    abortedLastRun: recoveredTerminalEntry ? recoveredTerminalEntry.abortedLastRun : abortedLastRun,
     usageFamilyKey,
     usageFamilySessionIds,
     delivery,

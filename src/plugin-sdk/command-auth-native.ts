@@ -35,6 +35,7 @@ export {
 export { resolveNativeCommandSessionTargets } from "../channels/native-command-session-targets.js";
 export {
   resolveCommandAuthorization,
+  resolveCommandAuthorizationAsync,
   type CommandAuthorization,
 } from "../auto-reply/command-auth.js";
 export { resolveStoredModelOverride } from "../sessions/stored-model-overrides.js";

@@ -446,6 +446,7 @@ export async function readCurrentStoredChatHistory(
       }
       const receipt = readChatInputReceipt(history, sibling);
       if (receipt === "pending") {
+        confirmQueuedMessageCustody(host, sibling, historySessionId);
         continue;
       }
       const canonical = findChatSubmissionMessage(history.messages, sibling.sendRunId, true);

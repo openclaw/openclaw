@@ -472,6 +472,7 @@ describe("gateway connect pairing exemptions", () => {
       expect(personalStatus).toHaveBeenCalledExactlyOnceWith({
         owner: "gateway-owner",
         assertCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
       });
       expect(personalAuthorize).not.toHaveBeenCalled();
       const afterRepair = await rpcReq<UsersListResult>(reconnect, "users.list", {});
@@ -978,6 +979,12 @@ describe("gateway connect pairing exemptions", () => {
       expect((await getPairedDevice(paired.identity.deviceId))?.approvedScopes).toEqual([
         "operator.read",
       ]);
+      expect((await listDevicePairing()).pending).toContainEqual(
+        expect.objectContaining({
+          deviceId: paired.identity.deviceId,
+          scopes: ["operator.write"],
+        }),
+      );
     } finally {
       ws?.close();
       await started.server.close();

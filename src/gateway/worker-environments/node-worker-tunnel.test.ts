@@ -31,6 +31,7 @@ import {
   workspaceTransfer,
   workspaceSnapshot,
 } from "./node-worker-tunnel.test-support.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 import type { WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
@@ -275,31 +276,60 @@ describe("node worker tunnel manager", () => {
     }
   });
 
-  it("releases live tunnels and transfer state when shutdown cannot read the inventory", async () => {
-    const inventoryClosed = new Error("Worker environment inventory has closed");
-    let inventoryOpen = true;
-    const readInventory = <T>(value: T) => {
-      if (!inventoryOpen) {
-        throw inventoryClosed;
-      }
-      return value;
-    };
-    const record = environment();
-    const close = vi.fn(async () => {});
-    const closeAll = vi.fn(async () => {});
-    const manager = createManager(record, {
-      getEnvironment: () => readInventory(record),
-      listEnvironments: () => readInventory([record]),
-      workspaceTransfer: { ...workspaceTransfer(), close, closeAll },
-    });
-    await manager.start(startRequest());
-    // A terminal state-database failure revokes the inventory before Gateway shutdown.
-    inventoryOpen = false;
+  it.each([false, true])(
+    "releases live tunnels when shutdown cannot read the inventory (closed=%s)",
+    async (closed) => {
+      const inventoryClosed = closed
+        ? new WorkerEnvironmentInventoryClosedError()
+        : new Error("Worker environment inventory read failed");
+      let inventoryOpen = true;
+      const readInventory = <T>(value: T) => {
+        if (!inventoryOpen) {
+          throw inventoryClosed;
+        }
+        return value;
+      };
+      const record = environment();
+      const close = vi.fn(async () => {});
+      const closeAll = vi.fn(async () => {});
+      const manager = createManager(record, {
+        getEnvironment: () => readInventory(record),
+        listEnvironments: () => readInventory([record]),
+        workspaceTransfer: { ...workspaceTransfer(), close, closeAll },
+      });
+      await manager.start(startRequest());
+      // A terminal state-database failure revokes the inventory before Gateway shutdown.
+      inventoryOpen = false;
 
-    await expect(manager.stopAll()).rejects.toBe(inventoryClosed);
-    expect(manager.status(record.environmentId)).toBe("stopped");
-    expect(close).toHaveBeenCalledWith(record.environmentId);
-    expect(closeAll).toHaveBeenCalledOnce();
+      if (closed) {
+        await expect(manager.stopAll()).resolves.toBeUndefined();
+      } else {
+        await expect(manager.stopAll()).rejects.toBe(inventoryClosed);
+      }
+      expect(manager.status(record.environmentId)).toBe("stopped");
+      expect(close).toHaveBeenCalledWith(record.environmentId);
+      expect(closeAll).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps sibling cleanup failures visible beside a disconnected node", async () => {
+    const nodeTransport = transport();
+    nodeTransport.getCurrentNode = async () => undefined;
+    const cleanupError = new Error("transfer cleanup failed");
+    const manager = createManager(environment(), {
+      getTransport: () => nodeTransport,
+      workspaceTransfer: {
+        ...workspaceTransfer(),
+        close: vi.fn(async () => {}),
+        closeAll: vi.fn(async () => {
+          throw cleanupError;
+        }),
+      },
+    });
+
+    const failure = await manager.stopAll().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toContain(cleanupError);
   });
 
   it.each(["current", "retiring"] as const)(
@@ -477,7 +507,7 @@ describe("node worker tunnel manager", () => {
     expect(prepareSync).toHaveBeenCalledWith(
       expect.objectContaining({
         environmentId: "environment-1",
-        generation: record.ownerEpoch,
+        ownerEpoch: record.ownerEpoch,
         localPath: "/gateway/workspace",
       }),
     );

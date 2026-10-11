@@ -237,6 +237,13 @@ export function supportsClaude1MContext(ref: ClaudeModelRef): boolean {
   return supportsClaudeAdaptiveThinkingById(ref);
 }
 
+/** Return whether Anthropic documents threshold compaction (`compact_20260112`) for a Claude model. */
+export function supportsClaudeServerCompaction(ref: ClaudeModelRef): boolean {
+  // The documented compaction list currently coincides with these id families;
+  // listed thinking capabilities say nothing about compaction.
+  return supportsClaudeAdaptiveThinkingById(ref);
+}
+
 /** Return whether a Claude model supports Anthropic's native fast mode. */
 export function supportsClaudeFastMode(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);

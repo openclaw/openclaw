@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -43,6 +42,7 @@ import {
   listDevicePairingReadOnly,
   removePairedDevice,
 } from "./device-pairing.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
@@ -84,7 +84,13 @@ beforeEach(() => {
 
 test("keeps committed node bindings across bootstrap writes and caller-owned row edits", async () => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
+  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  try {
+    expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
+    expect(read).not.toHaveBeenCalled();
+  } finally {
+    read.mockRestore();
+  }
   expect(Object.isFrozen(snapshot)).toBe(true);
   expect(Object.isFrozen(snapshot.paired)).toBe(true);
   expect(Object.isFrozen(snapshot.paired[0]!.tokens!.node)).toBe(true);
@@ -512,7 +518,7 @@ test("retains pairing admission through final publication preparation and synchr
   expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
 });
 
-test.each(["worker commit", "external commit"] as const)(
+test.each(["worker commit", "sibling owner commit"] as const)(
   "does not restore revoked node authority from a read delayed past a newer %s",
   async (commit) => {
     await listDevicePairing(baseDir);
@@ -563,7 +569,7 @@ test.each(["worker commit", "external commit"] as const)(
             releaseMutation.resolve();
             await mutation;
           } else {
-            const other = new DatabaseSync(database.path);
+            const other = openNodeSqliteDatabase(database.path);
             try {
               other.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
             } finally {
@@ -592,14 +598,9 @@ test.each(["worker commit", "external commit"] as const)(
   },
 );
 
-test("retires prepared nodes after a foreign commit and database close", async () => {
+test("retires prepared nodes after a native owner commit and database close", async () => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  const other = new DatabaseSync(database.path);
-  try {
-    other.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
-  } finally {
-    other.close();
-  }
+  persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "paired");
   const deleted = await readDevicePairingNodeSnapshot(baseDir);
   expect(deleted).not.toBe(snapshot);
   expect(deleted.paired).toEqual([]);

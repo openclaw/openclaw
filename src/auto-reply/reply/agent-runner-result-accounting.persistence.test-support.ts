@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ReplyPayload } from "../types.js";
+import { withAgentTurnCompletion } from "./agent-runner-completion.js";
+import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
 import type {
   AgentTurnCompaction,
   AgentTurnExecutionResult,
@@ -190,9 +192,31 @@ export async function createAgentAccountingPersistenceFixture({
     sendPolicy: "allow",
     preflightCompactionApplied: false,
   };
-  const accountQueued = (outcome: AgentTurnExecutionResult["outcome"]) =>
+  const withCompletion = <T>(
+    consume: (completion: AgentTurnCompletion | undefined) => Promise<T>,
+  ) =>
+    withAgentTurnCompletion(
+      {
+        agentId: "main",
+        storePath,
+        sessionKey,
+        entry: context.activeSessionEntry,
+        operation: replyOperation,
+        publish(next) {
+          context.activeSessionEntry = next;
+          sessionStore[sessionKey] = next;
+          turn.session.publish(next);
+        },
+      },
+      consume,
+    );
+  const accountQueued = (
+    outcome: AgentTurnExecutionResult["outcome"],
+    completion?: AgentTurnCompletion,
+  ) =>
     accountFollowupTurn({
       turn,
+      completion,
       defaults: {
         defaultModel: diagnostic.model,
         typing: createMockTypingController(),
@@ -230,6 +254,7 @@ export async function createAgentAccountingPersistenceFixture({
     sessionId,
     context,
     turn,
+    withCompletion,
     deliverQueued: async () => {
       const registry = createEmptyPluginRegistry();
       registry.providers.push({
@@ -243,12 +268,16 @@ export async function createAgentAccountingPersistenceFixture({
       });
       return withPluginRuntimeRegistryScope(registry, async () => {
         const delivered: ReplyPayload[] = [];
-        const accounting = await accountQueued(context.execution);
-        const decision = await resolveFollowupDeliveryDecision({
-          turn,
-          execution: { runId: context.runId, outcome: context.execution },
-          accounting,
-          opts: { onBlockReply: async () => {} },
+        const decision = await withCompletion(async (completion) => {
+          const accounting = await accountQueued(context.execution, completion);
+          const resolved = await resolveFollowupDeliveryDecision({
+            turn,
+            execution: { runId: context.runId, outcome: context.execution },
+            accounting,
+            opts: { onBlockReply: async () => {} },
+          });
+          await completion?.complete();
+          return resolved;
         });
         await deliverFollowupDecision({
           decision,
@@ -281,7 +310,7 @@ export async function createAgentAccountingPersistenceFixture({
       return accountQueued({ kind: "aborted", reason, compaction });
     },
     read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
-    replace: (next: SessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
+    replace: (next: InternalSessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
     account: async (lane: "ordinary" | "followup", meta: Partial<EmbeddedAgentMeta>) => {
       context.execution.result.meta.agentMeta = {
         sessionId: entry.sessionId,
@@ -292,23 +321,26 @@ export async function createAgentAccountingPersistenceFixture({
         ...meta,
       };
       if (lane === "ordinary") {
-        const accounting = await accountAgentTurn(context);
-        await completeReplyAgentRun({
-          context,
-          accounting,
-          prepared: {
-            kind: "continue",
-            activeSessionEntry: accounting.activeSessionEntry,
-            // The reply was already delivered; exercise completion bookkeeping
-            // without creating another pending delivery intent.
-            completedSourceReplyDelivery: true,
-            guardedReplyPayloads: [],
-            responseUsageLine: undefined,
-          },
+        await withCompletion(async (completion) => {
+          const current = { ...context, completion };
+          const accounting = await accountAgentTurn(current);
+          await completeReplyAgentRun({
+            context: current,
+            accounting,
+            prepared: {
+              kind: "continue",
+              activeSessionEntry: accounting.activeSessionEntry,
+              // The reply was already delivered; exercise completion bookkeeping
+              // without creating another pending delivery intent.
+              completedSourceReplyDelivery: true,
+              guardedReplyPayloads: [],
+              responseUsageLine: undefined,
+            },
+          });
         });
       } else {
         turn.preflightCompactionApplied = context.preflightCompactionApplied === true;
-        await accountQueued(context.execution);
+        await withCompletion((completion) => accountQueued(context.execution, completion));
       }
     },
   };

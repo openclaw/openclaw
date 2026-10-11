@@ -1,6 +1,6 @@
 // Install synthetic OAuth and subprocess transport before RPC modules load.
 // oxfmt-ignore
-import { expireAuthorization, expireAccessToken, network, resetPersonalGitHubNetwork, tokens } from "./users-github.test-support.js";
+import { network, resetPersonalGitHubNetwork, tokens } from "./users-github.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
@@ -39,7 +39,11 @@ import {
   readUserGitHubConnection,
   resolvePersonalGitHubOwner,
 } from "../../state/user-github-connections.js";
-import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
+import {
+  expireUserGitHubAccessToken,
+  expireUserGitHubAuthorization,
+  updateUserGitHubConnection,
+} from "../../state/user-github-connections.test-support.js";
 import type { UserGitHubConnectionCommit } from "../../state/user-github-connections.types.js";
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.js";
@@ -635,7 +639,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         invalidateOperatorRolePolicy(owner());
       }
       if (race === "expiry") {
-        expireAuthorization(owner());
+        expireUserGitHubAuthorization(owner());
       }
       waiting.resolve({ status: "authorized", tokens });
       const response = await pending;
@@ -681,7 +685,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
             await rpc(alice, "users.github.disconnect");
           }
           if (race === "expiry") {
-            expireAuthorization(owner());
+            expireUserGitHubAuthorization(owner());
           }
         }
         return result;
@@ -857,7 +861,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     "rechecks %s credentials after acquiring the refresh lease",
     async (kind) => {
       const connected = await connect();
-      expireAccessToken(owner());
+      expireUserGitHubAccessToken(owner());
       const current =
         kind === "fresh"
           ? connected
@@ -894,7 +898,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     if (connection.selection.kind !== "connected") {
       throw new Error("Expected connection");
     }
-    expireAccessToken(owner());
+    expireUserGitHubAccessToken(owner());
     const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
     network.refresh.mockReturnValueOnce(refresh.promise);
     const pending = lifecycle.personal.refresh(owner());
@@ -925,7 +929,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     if (connection.selection.kind !== "connected") {
       throw new Error("Expected connection");
     }
-    expireAccessToken(owner());
+    expireUserGitHubAccessToken(owner());
     const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
     network.refresh.mockReturnValueOnce(refresh.promise);
     const pending = lifecycle.personal.refresh(owner());
@@ -948,7 +952,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       if (connection.selection.kind !== "connected") {
         throw new Error("Expected connection");
       }
-      expireAccessToken(owner());
+      expireUserGitHubAccessToken(owner());
       const db = openOpenClawStateDatabase().db;
       db.exec(
         "CREATE TRIGGER reject_rotation BEFORE UPDATE ON secret_store_entries WHEN NEW.value LIKE '%synthetic-rotated-refresh%' BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END",
@@ -973,7 +977,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     if (connection.selection.kind !== "connected") {
       throw new Error("Expected connection");
     }
-    expireAccessToken(owner());
+    expireUserGitHubAccessToken(owner());
     const refreshed = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
     network.refresh.mockReturnValueOnce(refreshed.promise);
     const pending = lifecycle.personal.refresh(owner());
