@@ -13,7 +13,7 @@ import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import type { JSX } from "../types/misc-shared-elements.d.ts";
+import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
   type LoginFailureFeedback,
   type LoginFailureFeedbackParams,
@@ -399,7 +399,10 @@ function FormBody(props: ViewProps & { feedback: LoginFailureFeedback | null }) 
   );
 }
 
-function LoginGateContent(props: { model: LoginGateProps; host: LoginGateElement }): JSX.Element {
+function LoginGateContent(props: {
+  model: LoginGateProps;
+  host: LoginGateElement;
+}): SolidJSX.Element {
   const host = untrack(() => props.host);
   host.style.display = "contents";
   const [refreshState, setRefreshState] = createSignal<RefreshState>("idle");
@@ -592,5 +595,17 @@ export const LoginGate = defineSolidBridge<BridgeProps>(
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-login-gate": LoginGateElement;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-toast-host": HTMLAttributes<HTMLElementTagNameMap["openclaw-toast-host"]> &
+        Properties<HTMLElementTagNameMap["openclaw-toast-host"]>;
+      "openclaw-theme-brand-icon": HTMLAttributes<HTMLElement> & {
+        "prop:branding": ReturnType<typeof currentThemeBranding>;
+      };
+    }
   }
 }

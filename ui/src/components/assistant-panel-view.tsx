@@ -2,7 +2,7 @@ import { Show, For, type Accessor } from "solid-js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
-import type { JSX } from "../types/misc-shared-elements.d.ts";
+import type { JSX } from "../types/solid-elements.d.ts";
 import type { AssistantPanelController } from "./assistant-panel-controller.ts";
 import { AssistantPanelLoading } from "./assistant-panel-loading.ts";
 import { Icon } from "./solid/icon.tsx";

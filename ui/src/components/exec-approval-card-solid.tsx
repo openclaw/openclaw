@@ -17,8 +17,17 @@ import { formatCountdown } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
-import type { JSX } from "../types/misc-shared-elements.d.ts";
+import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import { Icon } from "./solid/icon.tsx";
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-approval-countdown": HTMLAttributes<HTMLElement> &
+        Properties<{ expiresAtMs: number; compact: boolean }>;
+    }
+  }
+}
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -126,7 +135,7 @@ function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
   return <div class="exec-approval-command mono">{parts}</div>;
 }
 
-function renderDetails(content: JSX.Element) {
+function renderDetails(content: SolidJSX.Element) {
   return (
     <details class="exec-approval-details">
       <summary>{t("execApproval.details")}</summary>
