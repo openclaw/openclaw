@@ -400,6 +400,7 @@ export async function withLocalSessionPlacementTurnSettlement(
         return result;
       },
       {
+        abortSignal: options.abortSignal,
         sessionTarget: claim,
         priority: resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance)
           .priority,
