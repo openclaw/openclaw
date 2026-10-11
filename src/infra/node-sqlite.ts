@@ -282,11 +282,15 @@ export function openNodeSqliteDatabase(
     }
   };
   // Schema tracking must precede the statement-cache authorizer wrapper.
-  trackSqliteSchema(database, {
-    DatabaseSync: sqlite.DatabaseSync,
-    StatementSync: sqlite.StatementSync,
-    iteratorBehavior: assertSafeSqliteRuntime(sqlite),
-  });
+  trackSqliteSchema(
+    database,
+    {
+      DatabaseSync: sqlite.DatabaseSync,
+      StatementSync: sqlite.StatementSync,
+      iteratorBehavior: assertSafeSqliteRuntime(sqlite),
+    },
+    options?.readOnly !== true,
+  );
   if (!getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources) {
     registerNodeSqliteDisposeCallback(database, () => {
       bunSqliteNativeCleanupPending = true;

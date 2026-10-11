@@ -124,6 +124,7 @@ function trackSchemaChanges(
   database: DatabaseSync,
   owner: SchemaOwner,
   native: NativeSqlite,
+  writable: boolean,
 ): void {
   const settle = (boundary = false, rolledBack = false) => {
     if (rolledBack) {
@@ -195,6 +196,14 @@ function trackSchemaChanges(
       settle();
     }
     const wasTransaction = database.isTransaction;
+    if (
+      writable &&
+      !wasTransaction &&
+      (control?.kind === "BEGIN" || control?.kind === "SAVEPOINT")
+    ) {
+      // Discover the physical admission before SQLite holds a transaction lock.
+      getSqliteDatabaseSchemaRevision(database);
+    }
     const openingMutationRevision =
       !wasTransaction && control?.kind === "BEGIN" && control.single
         ? owner.mutationRevision
@@ -533,7 +542,11 @@ export function readSqliteDataVersion(database: DatabaseSync): number {
 }
 
 /** Install at native open, before callers can retain statements or install an authorizer. */
-export function trackSqliteSchema(database: DatabaseSync, native: NativeSqlite): void {
+export function trackSqliteSchema(
+  database: DatabaseSync,
+  native: NativeSqlite,
+  writable = true,
+): void {
   if (!owners.has(database)) {
     const owner: SchemaOwner = {
       admitted: false,
@@ -559,7 +572,7 @@ export function trackSqliteSchema(database: DatabaseSync, native: NativeSqlite):
       iteratorFacts: false,
     };
     owners.set(database, owner);
-    trackSchemaChanges(database, owner, native);
+    trackSchemaChanges(database, owner, native, writable);
     const retained = getSqliteDatabaseAdmission(database, schemaAdmission, { existingOnly: true });
     if (retained) {
       owner.admitted = true;
