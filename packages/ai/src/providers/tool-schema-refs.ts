@@ -174,6 +174,9 @@ function inlineLocalSchemaRefsWithDefs(
     if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
       const entries = Object.entries(value);
       for (const entry of entries) {
+        if (key === "dependencies" && Array.isArray(entry[1])) {
+          continue;
+        }
         entry[1] = inlineLocalSchemaRefsWithDefs(
           entry[1],
           nextDefs,

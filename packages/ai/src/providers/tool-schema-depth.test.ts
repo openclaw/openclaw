@@ -157,7 +157,7 @@ describe("shared tool schema depth budget", () => {
         parameters: { toJSON: () => materialized },
       },
     ];
-    const freshSchema: unknown = JSON.parse(JSON.stringify(parameters));
+    const freshSchema: unknown = structuredClone(parameters);
     for (const [next, strict] of [
       [parameters, false],
       [freshSchema, true],
@@ -270,5 +270,19 @@ describe("shared tool schema depth budget", () => {
     schema.properties.self = schema;
     expect(() => cleanSchemaForGemini(schema)).toThrow(TypeError);
     expect(() => stripUnsupportedSchemaKeywords(schema, new Set())).toThrow(TypeError);
+  });
+
+  it("preserves property dependency names at the schema depth cutoff", () => {
+    let schema: Record<string, unknown> = {
+      type: "object",
+      dependencies: { billing: ["creditCard"] },
+    };
+    for (let depth = 0; depth < MAX_TOOL_SCHEMA_DEPTH; depth++) {
+      schema = { type: "object", properties: { next: schema } };
+    }
+    expect(nestedLeaf(normalizeToolParameterSchema(schema))).toEqual({
+      depth: MAX_TOOL_SCHEMA_DEPTH,
+      leaf: { type: "object", dependencies: { billing: ["creditCard"] } },
+    });
   });
 });
