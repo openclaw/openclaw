@@ -11,11 +11,11 @@ class CounterPanel extends SolidPanelController {
   connections = 0;
   connectedInDocument = false;
   disconnections = 0;
-  connectedCallback() {
+  override connectedCallback() {
     this.connections += 1;
     this.connectedInDocument = this.element.isConnected;
   }
-  disconnectedCallback() {
+  override disconnectedCallback() {
     this.disconnections += 1;
   }
   increment() {
