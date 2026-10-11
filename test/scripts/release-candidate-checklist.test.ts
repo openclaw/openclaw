@@ -1333,18 +1333,19 @@ describe("release candidate checklist", () => {
     const options = parseArgs(["--tag", "v2026.9.1"]);
     const [oldTooling, newTooling] = ["a".repeat(40), "b".repeat(40)];
     // A version-2 state file written before rebinds were recorded.
+    const current = buildReleaseCandidateState(options, {
+      targetSha: "c".repeat(40),
+      toolingSha: oldTooling,
+    });
     const saved = {
-      ...omitToolingRebinds(
-        buildReleaseCandidateState(options, { targetSha: "c".repeat(40), toolingSha: oldTooling }),
-      ),
+      ...omitToolingRebinds(current),
       phase: "completed",
       publishWorkflowRef: "release-publish/aaaaaaaaaaaa-100",
       fullReleaseRunId: "111",
       npmPreflightRunId: "222",
     };
     const expected = {
-      ...saved,
-      phase: "validated",
+      ...current,
       toolingSha: newTooling,
       publishWorkflowRef: "release-publish/bbbbbbbbbbbb-200",
       fullReleaseRunId: "",
@@ -1370,7 +1371,7 @@ describe("release candidate checklist", () => {
     });
     // A restart on the rebound state resumes without recording another move.
     expect(
-      reconcileReleaseCandidateState(JSON.parse(JSON.stringify(rebound)), expected, true, () => {
+      reconcileReleaseCandidateState(structuredClone(rebound), expected, true, () => {
         throw new Error("unexpected ancestry probe");
       }),
     ).toEqual(rebound);
