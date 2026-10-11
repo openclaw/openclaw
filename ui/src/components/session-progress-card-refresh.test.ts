@@ -7,7 +7,7 @@ import {
   type SessionProgressCardRefreshAction,
 } from "./session-progress-card.ts";
 
-const containers: HTMLDivElement[] = [];
+const containers: HTMLElement[] = [];
 function createContainer() {
   const container = document.createElement("div");
   document.body.append(container);
@@ -45,9 +45,9 @@ describe("progress card refresh control", () => {
   it.each([false, true])(
     "refreshes from the header without toggling or dragging (collapsed: %s)",
     async (collapsed) => {
-      const container = createContainer();
       const onRefresh = vi.fn();
       const onManipulate = vi.fn();
+      const container = createContainer();
       const show = (state?: SessionProgressCardRefreshAction["state"]) =>
         render(
           renderSessionProgressCard(
@@ -154,5 +154,62 @@ describe("progress card refresh control", () => {
       container,
     );
     expect(container.querySelector(".session-progress-card__refresh")).toBeNull();
+  });
+
+  it("retains manual disclosure across card updates and retires absent cards", () => {
+    const container = createContainer();
+    const show = (card: ProgressCard | null) =>
+      render(renderSessionProgressCard(card, "composer"), container);
+    show(null);
+    expect(container.querySelector("details")).toBeNull();
+    show(progressCard);
+    const details = container.querySelector("details")!;
+    details.querySelector("summary")!.click();
+    expect(details.open).toBe(false);
+    show({ ...progressCard, revision: 3, markdown: "**Updated progress**" });
+    expect(container.querySelector("details")).toBe(details);
+    expect(details.open).toBe(false);
+    expect(details.querySelector("strong")?.textContent).toBe("Updated progress");
+    show(null);
+    expect(container.querySelector("details")).toBeNull();
+    // Deliver jsdom's queued details toggle without advancing the 30s activity interval.
+    vi.advanceTimersByTime(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retires disclosure listeners when changing to a board card", () => {
+    const container = createContainer();
+    const show = (placement: Parameters<typeof renderSessionProgressCard>[1]) =>
+      render(renderSessionProgressCard(progressCard, placement), container);
+    show("composer");
+    const details = container.querySelector("details")!;
+    const summary = details.querySelector("summary")!;
+    show("board");
+    expect(container.querySelector("details")).toBeNull();
+    expect(container.querySelector("section")?.dataset.progressCardPlacement).toBe("board");
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    summary.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(false);
+    // Native details toggle delivery is a task, separate from the owned activity timer.
+    vi.advanceTimersByTime(0);
+    expect(vi.getTimerCount()).toBe(1);
+    show("details");
+    expect(container.querySelector("details")?.open).toBe(true);
+    vi.advanceTimersByTime(0);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it("refreshes relative activity while mounted and clears its timer on unmount", () => {
+    const container = createContainer();
+    render(
+      renderSessionProgressCard({ ...progressCard, updatedAt: NOW_MS - 10_000 }, "composer"),
+      container,
+    );
+    const time = container.querySelector("time")!;
+    expect(time.textContent).toBe("Updated just now");
+    vi.advanceTimersByTime(60_000);
+    expect(time.textContent).toBe("Updated 1m ago");
+    render(nothing, container);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

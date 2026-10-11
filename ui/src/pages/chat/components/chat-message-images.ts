@@ -608,11 +608,7 @@ class MessageImagesDirective extends Directive {
   private canonicalMessageKey: string | undefined;
   private localSubmission = false;
 
-  override render(
-    images: ImageBlock[],
-    opts?: ImageRenderOptions,
-    previews: TemplateResult[] = [],
-  ) {
+  override render(images: ImageBlock[], opts?: ImageRenderOptions, previews: unknown[] = []) {
     const scope = JSON.stringify([
       opts?.connectionEpoch,
       opts?.authToken?.trim(),

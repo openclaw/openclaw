@@ -463,9 +463,16 @@ export function installModelPromptProjection(params: {
                 }));
         if (text !== undefined && (frozen !== undefined || text !== firstText)) {
           const captureProjection = params.recorder?.captureModelPromptProjection;
+          // A prompt that drops the stored inter-session envelope stays request-local: history
+          // must replay that source-provenance safety text once its transient carrier is gone.
+          // Compare whole stored text, not the body prefix: a forwarded body may carry its own.
+          const requestLocal =
+            frozen === undefined &&
+            firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE) === true &&
+            !text.includes(firstText);
           if (frozen === undefined && captureProjection) {
             const pendingText = text;
-            const capture = () => captureProjection(pendingText, assertCurrent);
+            const capture = () => captureProjection(pendingText, assertCurrent, { requestLocal });
             const captured = await (params.withTranscriptWrite
               ? params.withTranscriptWrite(capture)
               : capture());
@@ -488,7 +495,7 @@ export function installModelPromptProjection(params: {
             promptMessages = messages.map((message) =>
               message === target ? projectedTarget : message,
             );
-            if (agent.state) {
+            if (agent.state && !requestLocal) {
               agent.state.messages = agent.state.messages.map((message) =>
                 message === target ? projectedTarget : message,
               );

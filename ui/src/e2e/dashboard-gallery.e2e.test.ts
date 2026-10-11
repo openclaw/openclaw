@@ -5,6 +5,7 @@ import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI dashboard gallery",
@@ -140,6 +141,7 @@ suite.define(() => {
         });
 
         await page.goto(suite.server.baseUrl);
+        await openSidebarPages(page);
         await page.getByRole("link", { name: "Dashboards", exact: true }).click();
         await page.waitForURL(`${suite.server.baseUrl}dashboards`);
         const gallery = page.locator("openclaw-dashboards-page");
@@ -194,6 +196,7 @@ suite.define(() => {
         await clickBoardWidgetControl(page, widget.getByRole("button", { name: "Reverse rows" }));
         expect(await widget.locator("li").allTextContents()).toEqual(["🦞", "雪", "café"]);
         const documentStartedAt = await page.evaluate(() => performance.timeOrigin);
+        await openSidebarPages(page);
         await page.getByRole("link", { name: "Dashboards", exact: true }).click();
         await gallery.getByRole("searchbox").fill("Release health");
         await releaseCard.locator("a").click();

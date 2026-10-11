@@ -378,11 +378,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
       identities: [sessionKey, backingSessionId],
       storeWriterIdentities: [sessionKey, session.sessionTarget.storeKey],
-      assertAllowed: () =>
-        consumeChatSendCurrent(params, () => {
-          assertSessionTargetCurrent();
-          assertChatSendExclusiveAdmission(request, session);
-        }),
+      assertAllowed: assertSessionTargetCurrent,
       revalidateAllowed: async () => {
         if (!restartSafeRequest) {
           return commitChatWorkAdmission(null);

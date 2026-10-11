@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent-run-control-shared.js";
 import { createClientVoiceTranscriptReadiness } from "../../../talk/client-voice-transcript-readiness.js";
@@ -78,10 +77,7 @@ export function createTalkRealtimeRelaySession(
   const { publicModel, publicError, voice, ...voiceSelection } =
     resolveTalkRealtimeRelayPresentation(params);
   const relaySessionId = randomUUID();
-  const expiresAtMs = resolveExpiresAtMsFromDurationMs(RELAY_SESSION_TTL_MS);
-  if (expiresAtMs === undefined) {
-    throw new Error("Realtime relay session expiry is outside the supported Date range");
-  }
+  const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
   const harness = createRealtimeVoiceSessionHarness({
     talk: {
       sessionId: relaySessionId,

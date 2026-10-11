@@ -1,9 +1,11 @@
 import { serialize } from "node:v8";
 import {
-  applySessionDirectMessageInTransaction,
-  applySessionMetadataAppendInTransaction,
   decodeMetadataAppendEvent,
   sessionMetadataAppendNeedsReload,
+} from "../../agents/sessions/session-manager-append-codec.js";
+import {
+  applySessionDirectMessageInTransaction,
+  applySessionMetadataAppendInTransaction,
 } from "../../agents/sessions/session-manager-append.kernel.js";
 import {
   runWithMetadataMessageAdmission,
@@ -137,7 +139,6 @@ export function applySessionActorAppend(
         : undefined,
       () =>
         runWithMetadataMessageAdmission(messageContext, input.message, (authorize, beforeFresh) => {
-          authorize("transaction");
           const value = applySessionMetadataAppendInTransaction(database, scoped, beforeFresh);
           authorize("commit");
           value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
@@ -193,7 +194,6 @@ export function applySessionActorAppend(
       : undefined,
     () =>
       runWithMetadataMessageAdmission(messageContext, input, (authorize, beforeFresh) => {
-        authorize("transaction");
         const value = applySessionDirectMessageInTransaction(database, input, beforeFresh);
         authorize("commit");
         value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);

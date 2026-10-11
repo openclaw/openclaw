@@ -2158,20 +2158,21 @@ openclaw-chat-video-player {
   color: var(--ok);
 }
 
-.chat-pr[data-state="draft"] .chat-pr__icon {
+.chat-pr[data-state="draft"] .chat-pr__icon,
+.chat-pr[data-state="branch"] .chat-pr__icon {
   color: var(--muted);
 }
 
-.chat-pr[data-state="closed"] .chat-pr__icon {
+.chat-pr[data-state="closed"] .chat-pr__icon,
+.chat-pr__deletions,
+.chat-pr__checks[data-checks="failing"],
+.chat-ci__status[data-state="failed"] {
   color: var(--danger);
 }
 
-.chat-pr[data-state="merged"] .chat-pr__icon {
+.chat-pr[data-state="merged"] .chat-pr__icon,
+.chat-pr[data-state="merged"] .chat-pr__state {
   color: var(--pr-merged);
-}
-
-.chat-pr[data-state="branch"] .chat-pr__icon {
-  color: var(--muted);
 }
 
 .chat-pr__number {
@@ -2229,28 +2230,20 @@ button.chat-pr__diff {
   cursor: var(--cursor-action);
 }
 
-.chat-pr__additions {
+.chat-pr__additions,
+.chat-pr__checks[data-checks="passing"],
+.chat-ci__status[data-state="passed"] {
   color: var(--ok);
-}
-
-.chat-pr__deletions {
-  color: var(--danger);
 }
 
 .chat-pr__checks {
   color: var(--muted);
 }
 
-.chat-pr__checks[data-checks="passing"] {
-  color: var(--ok);
-}
-
-.chat-pr__checks[data-checks="pending"] {
+.chat-pr__checks[data-checks="pending"],
+.chat-ci__status[data-state="running"],
+.chat-ci__status[data-state="queued"] {
   color: var(--warn);
-}
-
-.chat-pr__checks[data-checks="failing"] {
-  color: var(--danger);
 }
 
 .chat-pr__checks-pill {
@@ -2556,19 +2549,6 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-ci__status[data-state="passed"] {
-  color: var(--ok);
-}
-
-.chat-ci__status[data-state="failed"] {
-  color: var(--danger);
-}
-
-.chat-ci__status[data-state="running"],
-.chat-ci__status[data-state="queued"] {
-  color: var(--warn);
-}
-
 .chat-ci__job[open] > summary .chat-ci__chevron,
 .chat-ci__skipped[open] > summary .chat-ci__chevron {
   transform: rotate(180deg);
@@ -2653,10 +2633,6 @@ openclaw-chat-ci-details {
 .chat-pr__state {
   color: var(--muted);
   font-weight: 600;
-}
-
-.chat-pr[data-state="merged"] .chat-pr__state {
-  color: var(--pr-merged);
 }
 
 .chat-pr__warning {

@@ -907,7 +907,8 @@ suite.define(() => {
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
       await expect.poll(() => label.textContent()).toBe(readableTitle);
       expect(await link.getAttribute("aria-current")).toBe("page");
-      expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
+      expect(await link.ariaSnapshot()).toContain(`link "Unread ${readableTitle}"`);
+      expect(await link.getByRole("img", { name: "Unread", exact: true }).count()).toBe(1);
       await captureSessionAccessibilityProof(suite, page, "after-patch-refresh");
     } finally {
       await suite.closeBrowserContext(context);

@@ -19,6 +19,7 @@ import {
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import {
   getChatHistoryLoadState,
@@ -132,18 +133,6 @@ export function reconnectSafeQueuedSendState(
   host: Pick<ChatHost, "client" | "connected">,
 ): "waiting-idle" | "waiting-reconnect" {
   return host.connected && host.client ? "waiting-idle" : "waiting-reconnect";
-}
-
-export function captureChatConnectionOwner(
-  host: Pick<ChatHost, "client" | "connected" | "connectionEpoch">,
-  requireConnected = true,
-): () => boolean {
-  const client = host.client;
-  const connectionEpoch = host.connectionEpoch;
-  return () =>
-    (!requireConnected || host.connected) &&
-    host.client === client &&
-    host.connectionEpoch === connectionEpoch;
 }
 
 export function resolveQueuedChatLeaf(

@@ -158,7 +158,7 @@ async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<vo
       .filter((button) => button.bottom > button.top && button.right > button.left);
     const shells = [
       ...document.querySelectorAll(
-        ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-brand, .sidebar-rail__bottom) button:not([hidden])",
+        ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-rail, .sidebar-session-toolbar) button:not([hidden])",
       ),
     ]
       .map(rect)
@@ -419,7 +419,7 @@ suite.define(() => {
         await expect.poll(rowCenter).toBe(24);
         await capturePanel(page, "page-toolbar-expanded");
 
-        await page.locator(".sidebar-brand__collapse").click();
+        await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
         await expect.poll(rowCenter).toBe(24);
         const controls = page.locator(".shell-chrome-controls button:visible");
@@ -511,7 +511,7 @@ suite.define(() => {
           document.documentElement.dir = direction;
         }, testCase.direction);
         if (testCase.navCollapsed) {
-          await page.locator(".sidebar-brand__collapse").click();
+          await page.locator('[data-navigation-view][aria-pressed="true"]').click();
           await expect
             .poll(() => page.locator(".shell").getAttribute("class"))
             .toContain("shell--nav-collapsed");

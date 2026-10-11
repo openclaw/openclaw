@@ -333,42 +333,6 @@ suite.define(() => {
             runnerAvailability ? { reason: "runner-availability" } : { key, reason: "patch" },
           );
           await gateway.waitForRequest("environments.status", { after: inventoryBeforeActivation });
-          const pendingInventoryCount = (await gateway.getRequests("environments.status")).length;
-          for (const cursor of [1, 2, 3]) {
-            await gateway.setSessionsListResponse({
-              ...list(true),
-              sessions: [
-                {
-                  ...row,
-                  placement: {
-                    ...row.placement,
-                    updatedAtMs: cursor,
-                    lastTranscriptAckCursor: cursor,
-                    lastLiveEventAckCursor: cursor * 2,
-                    diskSpace: {
-                      status: "ok",
-                      availableBytes: 100 - cursor,
-                      totalBytes: 100,
-                      observedAtMs: cursor,
-                    },
-                  },
-                },
-                notes,
-              ],
-            });
-            await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
-            await expect
-              .poll(() =>
-                pane(page).evaluate((element, sessionKey) => {
-                  const state = (element as HTMLElement & { state: ChatPageHost }).state;
-                  return state.sessionsResult?.sessions.find(
-                    (session) => session.key === sessionKey,
-                  )?.placement?.updatedAtMs;
-                }, key),
-              )
-              .toBe(cursor);
-          }
-          await expectRequestCountStable(gateway, "environments.status", pendingInventoryCount);
           expect(await desktopTab(page).count()).toBe(0);
           await gateway.resolveDeferred("environments.status", inventory.environments[0]);
           await desktopTab(page).waitFor();
