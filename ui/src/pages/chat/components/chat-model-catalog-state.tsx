@@ -1,10 +1,11 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, onCleanup, Show } from "solid-js";
 import { providerDisplayLabel } from "../../../components/provider-icon.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
+import { syncChatModelSearch } from "./chat-model-picker-search.ts";
 import type { ChatModelCatalogStateProps } from "./chat-model-types.ts";
 
 registerModelControlsEnglish();
@@ -25,16 +26,36 @@ export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | unde
   });
   return (
     <Show when={label()}>
-      {(text) => (
-        <span class="chat-controls__model-refresh" data-chat-model-refresh role="status">
-          <openclaw-tooltip prop:content={text()} prop:describe={false} open-on-click>
-            <button class="chat-controls__model-refresh-details" type="button" aria-label={text()}>
-              <span class="btn__spinner" aria-hidden="true" />
-            </button>
-          </openclaw-tooltip>
-          <span class="sr-only">{text()}</span>
-        </span>
-      )}
+      {(text) => {
+        let indicator: HTMLSpanElement | undefined;
+        onCleanup(() => {
+          // Capture focus before this disappearing control is removed from the DOM.
+          if (indicator?.contains(indicator.ownerDocument.activeElement)) {
+            syncChatModelSearch(indicator.closest(".chat-controls__model-picker") ?? undefined);
+          }
+        });
+        return (
+          <span
+            ref={(element) => {
+              indicator = element;
+            }}
+            class="chat-controls__model-refresh"
+            data-chat-model-refresh
+            role="status"
+          >
+            <openclaw-tooltip prop:content={text()} prop:describe={false} open-on-click>
+              <button
+                class="chat-controls__model-refresh-details"
+                type="button"
+                aria-label={text()}
+              >
+                <span class="btn__spinner" aria-hidden="true" />
+              </button>
+            </openclaw-tooltip>
+            <span class="sr-only">{text()}</span>
+          </span>
+        );
+      }}
     </Show>
   );
 }

@@ -200,6 +200,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
   let details: HTMLDetailsElement | undefined;
   createEffect(
     () => [
+      params.modelCatalogState,
       params.modelOptions,
       params.targetGroups,
       params.accountSection,

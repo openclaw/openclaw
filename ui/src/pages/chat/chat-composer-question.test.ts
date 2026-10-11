@@ -73,7 +73,7 @@ describe("composer question takeover", () => {
       )!;
       progress.querySelector("summary")!.click();
       expect(progress.open).toBe(progressOpen);
-      const progressWrapper = progress.parentElement!;
+      const progressWrapper = progress.closest<HTMLElement>(".agent-chat__progress-float")!;
       expect(progressWrapper.hidden).toBe(false);
       const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
       initialTextarea.focus();

@@ -161,12 +161,14 @@ function QuotaRow(props: {
   return (
     <div class="context-usage__limit">
       <div class="context-usage__limit-head">
-        <span class="context-usage__limit-label">{props.label}</span>
+        <span class="context-usage__limit-label">{props.label}</span>{" "}
         <span class="context-usage__limit-meta">
           {props.reset ? (
-            <span class="context-usage__limit-reset">
-              {t("chat.composer.contextUsage.resets", { time: props.reset })}
-            </span>
+            <>
+              <span class="context-usage__limit-reset">
+                {t("chat.composer.contextUsage.resets", { time: props.reset })}
+              </span>{" "}
+            </>
           ) : null}
           <strong>{props.value}</strong>
         </span>
@@ -238,8 +240,7 @@ function QuotaGroup(props: { group: ProviderQuotaGroup; usageHref: string }) {
         </For>
       </div>
       <div class="context-usage__provenance" data-chat-usage-provider="true">
-        <span>{t("sessionsView.provider")}:</span>
-        <strong>{props.group.displayName}</strong>
+        <span>{t("sessionsView.provider")}:</span> <strong>{props.group.displayName}</strong>
       </div>
     </>
   );

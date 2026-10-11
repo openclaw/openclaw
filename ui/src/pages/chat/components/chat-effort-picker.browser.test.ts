@@ -215,7 +215,7 @@ describe("effort bar colour and flow", () => {
     const maximumStyle = appearance(input);
     for (const resetEvent of ["pointercancel", "blur"]) {
       input.value = "2";
-      input.dispatchEvent(new Event("input"));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       expect(input.getAttribute("aria-valuetext")).toBe("Ultra");
       expect(appearance(input)).not.toEqual(maximumStyle);
       expect(onThinkingSelect).not.toHaveBeenCalled();
@@ -225,7 +225,7 @@ describe("effort bar colour and flow", () => {
       expect(appearance(input)).toEqual(maximumStyle);
     }
     input.value = "0";
-    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
     input.dispatchEvent(new Event("change"));
     expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("low", "effort-preview");

@@ -233,7 +233,14 @@ export class ComposerEmojiMenu {
   }
 
   render(paneId: string, textarea: HTMLTextAreaElement | null, requestUpdate: () => void) {
-    return solidTemplate(EmojiMenuView, { menu: this, paneId, textarea, requestUpdate });
+    return solidTemplate(EmojiMenuView, {
+      menu: this,
+      paneId,
+      textarea,
+      requestUpdate,
+      items: this.items,
+      index: this.index,
+    });
   }
 
   renderSolid(paneId: string, textarea: HTMLTextAreaElement | null, requestUpdate: () => void) {
@@ -285,6 +292,14 @@ function EmojiMenuView(props: {
   paneId: string;
   textarea: HTMLTextAreaElement | null;
   requestUpdate: () => void;
+  items: readonly string[];
+  index: number;
 }) {
-  return <>{props.menu.renderSolid(props.paneId, props.textarea, props.requestUpdate)}</>;
+  const renderMenu = () => {
+    // Lit refreshes publish the mutable menu owner's presentation dependencies.
+    void props.items;
+    void props.index;
+    return props.menu.renderSolid(props.paneId, props.textarea, props.requestUpdate);
+  };
+  return <>{renderMenu()}</>;
 }

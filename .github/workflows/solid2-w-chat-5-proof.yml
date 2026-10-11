@@ -186,6 +186,22 @@ jobs:
             ui/src/pages/chat/chat-composer-ime.test.ts \
             ui/src/pages/chat/chat-composer-undo-redo.browser.test.ts \
             --maxWorkers=1
+          composer_regressions() {
+            (cd "$1" && pnpm test \
+            ui/src/components/web-awesome-migration.node.test.ts \
+            ui/src/pages/chat/chat-composer-suggestions.test.ts \
+            ui/src/pages/chat/chat-view.test.ts \
+            ui/src/pages/chat/chat-composer-context.test.ts \
+            ui/src/pages/chat/chat-composer-question.test.ts \
+            ui/src/pages/chat/chat-composer-video.test.ts \
+            ui/src/pages/chat/chat-pasted-text-sidebar.test.ts \
+            ui/src/pages/chat/chat-composer-emoji.test.ts \
+            ui/src/pages/chat/components/chat-model-catalog-state.test.ts \
+            ui/src/pages/chat/components/chat-effort-picker.browser.test.ts \
+            --maxWorkers=1)
+          }
+          run_phase composer-regressions composer_regressions "$GITHUB_WORKSPACE"
+          run_phase base-composer-regressions composer_regressions "$BASE_WORKTREE"
           run_phase chat-transcript-gates node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner \
             ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts \

@@ -427,7 +427,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                           mirrorCameraPreview() ? "agent-chat__video-preview-mirrored" : undefined
                         }
                         autoplay
-                        muted={true}
+                        prop:muted={true}
                         playsinline
                         aria-label={t("chat.composer.cameraPreview")}
                         prop:srcObject={props.realtimeTalkVideoStream}
