@@ -400,13 +400,14 @@ export async function createFullModelCatalogAccess(
       const ready =
         !refresh &&
         !profileScopedSelection &&
-        isPreparedNativeModelCatalogReady({
-          input,
-          pluginGeneration: params.pluginGeneration,
-          snapshot,
-          selection,
-          catalogAcquired: published.nativeCatalogAcquired,
-        });
+        ((!selection && snapshot.refreshFailed) ||
+          isPreparedNativeModelCatalogReady({
+            input,
+            pluginGeneration: params.pluginGeneration,
+            snapshot,
+            selection,
+            catalogAcquired: published.nativeCatalogAcquired,
+          }));
       // Readiness invokes plugin code, which may close the captured authority.
       assertObservationCurrent();
       return ready ? snapshot : undefined;
@@ -658,10 +659,9 @@ export async function createFullModelCatalogAccess(
         // Optional native failure cannot discard accepted provider facts.
         attempt.published(providerIds, "provider", () => publishCatalog(candidate, "provider"));
       }
-      if (includeNative) {
-        return await acquireNativeCatalog(nativeScope, undefined, undefined, options.refresh);
-      }
-      return published.catalog ?? staticCatalog;
+      return includeNative
+        ? acquireNativeCatalog(nativeScope, undefined, undefined, options.refresh)
+        : (published.catalog ?? staticCatalog);
     })().finally(() => {
       pending = undefined;
       retryFailedDiscovery();
@@ -674,7 +674,7 @@ export async function createFullModelCatalogAccess(
     () => (pending ? undefined : published.inventory),
     (options) => acquireCatalog(options, "expiry"),
   );
-  const loadNativeModelCatalog = (
+  const loadNativeModelCatalog = async (
     selection?: PreparedNativeModelSelection,
     options?: PreparedNativeModelCatalogLoadOptions,
   ) =>

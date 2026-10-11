@@ -374,7 +374,6 @@
 ["extensions/codex/src/app-server/model-catalog.test.ts","./auth-profile.js","365e2eb419bf1e019efdbadb14a05d7ff8815f5857d43eb2902e885a95d0e016",1]
 ["extensions/codex/src/app-server/model-catalog.test.ts","./native-auth.js","8ff7ecfd6c05d32b0913819084d8ecf14f5bd7ec3774ebf544d2e0d321a01ac7",1]
 ["extensions/codex/src/app-server/model-catalog.test.ts","./request.js","b2bf608af550c8973cc89cd508c9274c7758a7b14d83fcc694c15b23db6c1c63",1]
-["extensions/codex/src/app-server/model-catalog.timeout.test.ts","./shared-client.js","58c7ff7071d60bc61e435c658f942cf7229c36c3d5999cf71aa7a019c285c70e",1]
 ["extensions/codex/src/app-server/models.test.ts","./auth-bridge.js","09376843128f67116b4ae19d5077ef493be2d489f2d9b73de114f6f1ff4088db",1]
 ["extensions/codex/src/app-server/models.test.ts","./auth-cache-key.js","c5582cf4affcb4969f55bd35c0c2e1cbf1b8a1d085f572850de0b418c6e5cafc",1]
 ["extensions/codex/src/app-server/models.test.ts","./auth-profile.js","370ee52a4348bbad743b46729b70312c6a39bc8a07965abe70b6d841fb8d328e",1]
