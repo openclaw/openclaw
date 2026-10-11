@@ -366,6 +366,9 @@ async function createHostedChildFixture(
       invocationCurrent = false;
     },
     revokeSource: () => {
+      // Container replacement does not revoke captured authority; its live source still must.
+      expectDefined(originalHandler, "original request handler").context =
+        createDirectChatContext();
       sourceCurrent = false;
     },
     closeHost: () => {
@@ -375,10 +378,6 @@ async function createHostedChildFixture(
       gatewayCurrent = false;
     },
     abortSignal: () => signal.abort(new Error("explicit request signal closed")),
-    replaceHandler: () => {
-      expectDefined(originalHandler, "original request handler").context =
-        createDirectChatContext();
-    },
     finish,
     [Symbol.asyncDispose]: async () => {
       try {
@@ -593,7 +592,6 @@ describe("hosted creation transfers accepted child input", () => {
     "host",
     "signal",
     "gateway",
-    "handler",
     "ACL",
     "lifecycle",
     "replacement",
@@ -616,8 +614,6 @@ describe("hosted creation transfers accepted child input", () => {
         fixture.abortSignal();
       } else if (change === "gateway") {
         fixture.closeGateway();
-      } else if (change === "handler") {
-        fixture.replaceHandler();
       } else if (change === "ACL") {
         await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
       } else if (change === "lifecycle") {
