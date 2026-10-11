@@ -15,7 +15,6 @@ import {
   type Mock,
   type MockInstance,
 } from "vitest";
-import { maintainOpenClawCompileCache } from "../node-compile-cache.mjs";
 import { awaitGateBeforeSettlement } from "../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { createDeferredCore } from "./shared/deferred.js";
@@ -197,7 +196,7 @@ describe("entry compile cache", () => {
     expect(env.NODE_COMPILE_CACHE).toBe(directory);
   });
 
-  it("isolates replaced installation metadata while retaining recent compile caches", async () => {
+  it("isolates replaced installation metadata without build information", async () => {
     const packageJsonPath = path.join(root, "package.json");
     const env = { NODE_COMPILE_CACHE: path.join(root, ".node-cache") };
     await fs.writeFile(packageJsonPath, '{"version":"2026.4.29"}\n', "utf8");
@@ -206,11 +205,6 @@ describe("entry compile cache", () => {
     expect(originalDirectory).toContain(path.join(".node-cache", "openclaw"));
     expect(originalDirectory).toContain("2026.4.29");
     expect(path.basename(originalDirectory)).toMatch(/^\d+-\d+$/);
-    await fs.mkdir(originalDirectory, { recursive: true });
-    const originalCacheEntry = path.join(originalDirectory, "keep.txt");
-    await fs.writeFile(originalCacheEntry, "previous cached installation\n", "utf8");
-    const sharedCacheEntry = path.join(env.NODE_COMPILE_CACHE, "another-application");
-    await fs.writeFile(sharedCacheEntry, "keep\n");
     await fs.writeFile(
       packageJsonPath,
       '{"version":"2026.4.29","installation":"replacement"}\n',
@@ -220,11 +214,6 @@ describe("entry compile cache", () => {
     const replacementDirectory = enabledDirectory(1);
     expect(replacementDirectory).toContain(path.join("openclaw", "2026.4.29"));
     expect(replacementDirectory).not.toBe(originalDirectory);
-    await maintainOpenClawCompileCache(replacementDirectory);
-    await expect(fs.readFile(originalCacheEntry, "utf8")).resolves.toBe(
-      "previous cached installation\n",
-    );
-    await expect(fs.readFile(sharedCacheEntry, "utf8")).resolves.toBe("keep\n");
   });
 
   it.each(["inherited", "active"])(

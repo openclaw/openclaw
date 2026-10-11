@@ -4,7 +4,10 @@ import { existsSync } from "node:fs";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import process from "node:process";
-import { enableOpenClawCompileCache as enableInstallCompileCache } from "../node-compile-cache.mjs";
+import {
+  enableOpenClawCompileCache as enableInstallCompileCache,
+  resolveOpenClawCompileCacheDirectory,
+} from "../node-compile-cache.mjs";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
   isForegroundGmailRunArgv,
@@ -120,6 +123,9 @@ export function enableOpenClawCompileCache(params: {
   installRoot: string;
 }): void {
   if (!isSourceCheckoutInstallRoot(params.installRoot)) {
-    enableInstallCompileCache(params);
+    enableInstallCompileCache({
+      directory: resolveOpenClawCompileCacheDirectory(params),
+      env: params.env,
+    });
   }
 }

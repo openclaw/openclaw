@@ -6,6 +6,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
   enableOpenClawCompileCache,
+  resolveOpenClawCompileCacheDirectory,
   resolveOpenClawCompileCacheRespawnEnv,
 } from "../node-compile-cache.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
@@ -127,11 +128,14 @@ if (!isMain) {
 }
 
 const shouldRunCli = isMain && !handledRootVersion && !handledAdmission;
+const compileCacheDirectory = shouldRunCli
+  ? resolveOpenClawCompileCacheDirectory({ installRoot: fileURLToPath(packageRootUrl) })
+  : undefined;
 const compileCacheRespawnEnv =
   shouldRunCli &&
   !isForegroundGmailRunArgv(process.argv) &&
   !shouldKeepNativeHookRelayInProcess(process.argv, process.platform)
-    ? resolveOpenClawCompileCacheRespawnEnv({ installRoot: fileURLToPath(packageRootUrl) })
+    ? resolveOpenClawCompileCacheRespawnEnv({ directory: compileCacheDirectory })
     : undefined;
 if (compileCacheRespawnEnv) {
   const args = [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)];
@@ -143,7 +147,7 @@ if (compileCacheRespawnEnv) {
   await runRespawnedChild(process.execPath, args, compileCacheRespawnEnv);
 }
 if (shouldRunCli && !compileCacheRespawnEnv) {
-  enableOpenClawCompileCache({ installRoot: fileURLToPath(packageRootUrl) });
+  enableOpenClawCompileCache({ directory: compileCacheDirectory });
   const [
     { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
     { isJsonOutputModeActive },

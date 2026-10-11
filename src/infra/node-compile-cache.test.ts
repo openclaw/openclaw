@@ -1,15 +1,24 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
-import {
-  maintainOpenClawCompileCache,
-  resolveOpenClawCompileCacheDirectory,
-} from "../../node-compile-cache.mjs";
+import { resolveOpenClawCompileCacheDirectory } from "../../node-compile-cache.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MiB = 1024 * 1024;
+
+async function maintainCompileCache(directory: string) {
+  const worker = new Worker(new URL("../../node-compile-cache.mjs", import.meta.url), {
+    workerData: { openclawCompileCacheDirectory: directory },
+    execArgv: [],
+    env: {},
+  });
+  const [code] = await once(worker, "exit");
+  expect(code).toBe(0);
+}
 
 it.each([
   ["another-app", "1000-100"],
@@ -20,7 +29,7 @@ it.each([
   const sibling = path.join(version, "2000-100");
   await fs.mkdir(sibling, { recursive: true });
   await fs.writeFile(path.join(sibling, "bytecode"), "keep");
-  await maintainOpenClawCompileCache(path.join(version, marker));
+  await maintainCompileCache(path.join(version, marker));
   expect(await fs.readdir(version)).toEqual(["2000-100"]);
   expect(await fs.readFile(path.join(sibling, "bytecode"), "utf8")).toBe("keep");
 });
@@ -61,9 +70,9 @@ it("keeps inherited cache namespaces flat and retains recently prepared builds",
     }
     await fs.mkdir(directory, { recursive: true });
     await sparseFile(path.join(directory, "bytecode"), 32 * MiB);
-    await maintainOpenClawCompileCache(directory);
-    expect((await fs.readdir(path.dirname(directory))).sort()).toEqual(
-      [...directories.values()].map((value) => path.basename(value)).sort(),
+    await maintainCompileCache(directory);
+    expect((await fs.readdir(path.dirname(directory))).toSorted()).toEqual(
+      [...directories.values()].map((value) => path.basename(value)).toSorted(),
     );
     inherited = directory;
   }
@@ -85,7 +94,7 @@ it("prunes old bytecode and caps 600 MiB across releases without touching neighb
   const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
   await fs.utimes(old, expired, expired);
   await fs.utimes(cache, expired, expired);
-  await maintainOpenClawCompileCache(directory);
+  await maintainCompileCache(directory);
   const files = (await fs.readdir(cache, { recursive: true, withFileTypes: true }))
     .filter((entry) => entry.isFile())
     .map((entry) => path.join(entry.parentPath, entry.name));
@@ -111,7 +120,7 @@ it.each(["root", "version", "build"] as const)(
     const target = boundary === "root" ? cache : boundary === "version" ? version : directory;
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.symlink(outside, target, process.platform === "win32" ? "junction" : "dir");
-    await maintainOpenClawCompileCache(directory);
+    await maintainCompileCache(directory);
     expect(await fs.readdir(outside)).toEqual(["keep"]);
   },
 );

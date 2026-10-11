@@ -85,6 +85,8 @@ under the operating system's temporary directory by default. Set
 host reboots. OpenClaw namespaces that root by package version and build identity;
 each new build starts with its own cache. `NODE_DISABLE_COMPILE_CACHE=1` disables
 it. An unavailable cache produces one diagnostic and startup continues.
+With Node's permission model enabled, an already-active cache remains caller-owned
+so cache scoping never requires launching a process that permissions may forbid.
 
 The first boot populates the cache; later boots reuse it. Deployment systems can
 warm a candidate before cutover by booting and cleanly stopping it with isolated

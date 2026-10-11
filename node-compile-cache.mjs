@@ -27,16 +27,18 @@ function isCurrentCompileCache(directory, env) {
   );
 }
 
-export function resolveOpenClawCompileCacheRespawnEnv({ installRoot, env = process.env }) {
+export function resolveOpenClawCompileCacheRespawnEnv({ directory, env = process.env }) {
+  // Keep a caller-owned cache when Node permissions can forbid process replacement.
   if (
+    process.permission ||
     env.NODE_DISABLE_COMPILE_CACHE !== undefined ||
     env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1" ||
+    !directory ||
     !module.getCompileCacheDir?.()
   ) {
     return undefined;
   }
-  const directory = resolveOpenClawCompileCacheDirectory({ installRoot, env });
-  if (!directory || isCurrentCompileCache(directory, env)) {
+  if (isCurrentCompileCache(directory, env)) {
     return undefined;
   }
   return {
@@ -46,16 +48,12 @@ export function resolveOpenClawCompileCacheRespawnEnv({ installRoot, env = proce
   };
 }
 
-export function enableOpenClawCompileCache({ installRoot, env = process.env }) {
-  if (env.NODE_DISABLE_COMPILE_CACHE !== undefined) {
+export function enableOpenClawCompileCache({ directory, env = process.env }) {
+  if (!directory || env.NODE_DISABLE_COMPILE_CACHE !== undefined) {
     return;
   }
   const owner = (globalThis[Symbol.for("openclaw.nodeCompileCacheBase")] ??= {});
   try {
-    const directory = resolveOpenClawCompileCacheDirectory({ installRoot, env });
-    if (!directory) {
-      return;
-    }
     const result = module.enableCompileCache(directory);
     if (
       result.status === module.constants.compileCacheStatus.ENABLED ||
@@ -79,6 +77,9 @@ export function enableOpenClawCompileCache({ installRoot, env = process.env }) {
 }
 
 export function resolveOpenClawCompileCacheDirectory({ installRoot, env = process.env }) {
+  if (env.NODE_DISABLE_COMPILE_CACHE !== undefined) {
+    return undefined;
+  }
   const packagePath = path.join(installRoot, "package.json");
   let version = "unknown";
   let marker = "no-package-json";
@@ -124,7 +125,7 @@ export function resolveSafeNodeCompileCacheDirectory(directory) {
   return directory;
 }
 
-export async function maintainOpenClawCompileCache(directory) {
+async function maintainOpenClawCompileCache(directory) {
   // Node permission grants and later revocations do not extend to workers.
   if (process.permission) {
     return undefined;

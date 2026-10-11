@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   enableOpenClawCompileCache,
+  resolveOpenClawCompileCacheDirectory,
   resolveOpenClawCompileCacheRespawnEnv,
 } from "./node-compile-cache.mjs";
 import { isNodeHostLauncherChild, runNodeHostLauncher } from "./node-host-launcher.mjs";
@@ -134,13 +135,8 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   );
 };
 
-const respawnWithPackagedCompileCacheIfNeeded = () => {
-  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
-    return false;
-  }
-  const env = resolveOpenClawCompileCacheRespawnEnv({
-    installRoot: fileURLToPath(new URL(".", import.meta.url)),
-  });
+const respawnWithPackagedCompileCacheIfNeeded = (directory) => {
+  const env = resolveOpenClawCompileCacheRespawnEnv({ directory });
   if (!env) {
     return false;
   }
@@ -679,6 +675,13 @@ async function runLauncher() {
     }
   }
 
+  const compileCacheDirectory =
+    !waitingForNodeUpdateRespawn && !isSourceCheckoutLauncher()
+      ? resolveOpenClawCompileCacheDirectory({
+          installRoot: fileURLToPath(new URL(".", import.meta.url)),
+        })
+      : undefined;
+
   // Codex owns the relay timeout by PID. Keep the launcher as that exact process
   // so a timeout cannot strand a compile-cache respawn child.
   const waitingForCompileCacheRespawn =
@@ -687,16 +690,11 @@ async function runLauncher() {
       !isForegroundGmailRunInvocation(process.argv) &&
       !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
       ((await respawnWithoutCompileCacheIfNeeded()) ||
-        (await respawnWithPackagedCompileCacheIfNeeded())));
+        (await respawnWithPackagedCompileCacheIfNeeded(compileCacheDirectory))));
 
   // https://nodejs.org/api/module.html#module-compile-cache
-  if (
-    !waitingForCompileCacheRespawn &&
-    module.enableCompileCache &&
-    !isNodeCompileCacheDisabled() &&
-    !isSourceCheckoutLauncher()
-  ) {
-    enableOpenClawCompileCache({ installRoot: fileURLToPath(new URL(".", import.meta.url)) });
+  if (!waitingForCompileCacheRespawn && module.enableCompileCache) {
+    enableOpenClawCompileCache({ directory: compileCacheDirectory });
   }
 
   if (!waitingForCompileCacheRespawn) {
