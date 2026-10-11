@@ -34,6 +34,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "sessionFile",
   "transcriptPath",
   "spawnedBy",
+  "spawnedByAgentId",
   "spawnedBySenderIsOwner",
   "spawnedBySessionId",
   "completionOwnerSessionKey",

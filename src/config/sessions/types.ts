@@ -335,6 +335,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     lastActivityAt?: number;
     /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
     spawnedBy?: string;
+    /** Host-recorded parent agent namespace when a spawn key alone is ambiguous. */
+    spawnedByAgentId?: string;
     /** Host-captured owner status of the spawning invocation; never inferred from child launch authority. */
     spawnedBySenderIsOwner?: boolean;
     /** Parent session id captured with the spawn authority receipt; navigation uses parentSessionId. */

@@ -117,6 +117,22 @@ export function inheritSpawnSessionOwner(
 
 export type SessionCreatedVia = NonNullable<SessionRow["createdVia"]>;
 
+/** Creation attribution is independent of the assignee and execution authority. */
+export function resolveDelegatedSessionCreator(
+  source: { createdVia?: SessionCreatedVia; createdActor?: SessionCreatedActor } | undefined,
+  fallback: SessionCreatedActor | undefined,
+  requesterProfileId?: string,
+): SessionCreatedActor | undefined {
+  if (requesterProfileId) {
+    return { type: "human", source: "profile", id: requesterProfileId };
+  }
+  // A delegated task or scheduled run retains its write-once causal creator.
+  // An ordinary human-created conversation is not evidence for autonomous work.
+  return (source?.createdVia === "spawn" || source?.createdVia === "cron") && source.createdActor
+    ? source.createdActor
+    : fallback;
+}
+
 // Return shape mirrors the SessionEntry creation fields as a leaf contract;
 // types.ts imports from here, never the reverse (madge cycle guard).
 export function buildSessionCreationStamp(params: {

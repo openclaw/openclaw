@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   buildSessionCreationStamp,
   inheritSessionGitContributorProfileIds,
+  resolveDelegatedSessionCreator,
 } from "../../../config/sessions/session-entry-provenance.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import {
@@ -49,6 +50,8 @@ import {
 export async function createInitialSubagentSession(input: {
   cfg: OpenClawConfig;
   requesterAgentId: string;
+  /** Selected host-admitted requester, never a model argument or assigned owner. */
+  requesterProfileId?: string;
   targetAgentId: string;
   childSessionKey: string;
   label?: string;
@@ -417,6 +420,15 @@ export async function createInitialSubagentSession(input: {
                   ...buildSessionCreationStamp({
                     via: "spawn",
                     ...params.creationPolicy,
+                    ...(params.creationPolicy.sandbox !== "required"
+                      ? {
+                          actor: resolveDelegatedSessionCreator(
+                            parentEntry,
+                            params.creationPolicy.actor,
+                            params.requesterProfileId,
+                          ),
+                        }
+                      : {}),
                     ...(!params.incognito
                       ? {
                           inheritedGitContributorProfileIds:

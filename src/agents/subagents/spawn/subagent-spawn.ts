@@ -72,6 +72,7 @@ export async function spawnSubagentDirect(
   const assertActive = () => {
     ctx.assertActive?.();
     assertDelegationCurrent?.();
+    operatorAuthority?.assertCurrent();
   };
   const promptedAt = Date.now();
   const task = params.task;
@@ -184,6 +185,7 @@ export async function spawnSubagentDirect(
       assertActive,
       cfg,
       requesterAgentId,
+      requesterProfileId: operatorAuthority?.profileId,
       targetAgentId,
       childSessionKey,
       label: label || undefined,

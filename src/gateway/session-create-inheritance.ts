@@ -9,6 +9,7 @@ import {
   inheritSessionCreationPolicy,
   inheritSessionGitContributorProfileIds,
   inheritSpawnSessionOwner,
+  resolveDelegatedSessionCreator,
   type SessionOwnerAssignment,
 } from "../config/sessions/session-entry-provenance.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
@@ -129,7 +130,14 @@ export function resolveSessionCreateInheritance(params: {
   return {
     creation: {
       ...params.creation,
-      ...inheritSessionCreationPolicy(params.parent, params.creation.actor),
+      ...inheritSessionCreationPolicy(
+        params.parent,
+        resolveDelegatedSessionCreator(
+          params.parent,
+          params.creation.actor,
+          params.creation.requesterProfileId,
+        ),
+      ),
       inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parent),
     },
     ...(ownerAssignment ? { ownerAssignment } : {}),

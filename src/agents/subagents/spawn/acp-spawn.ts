@@ -15,10 +15,12 @@ import { upsertSessionEntryCore } from "../../../config/sessions/session-accesso
 import {
   buildSessionCreationStamp,
   inheritSessionGitContributorProfileIds,
+  resolveDelegatedSessionCreator,
 } from "../../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
   sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -58,6 +60,7 @@ import {
 } from "../../spawn-plan.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
+import { resolveGatewayToolOperatorSelection } from "../../tools/gateway-caller-context.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
@@ -168,6 +171,10 @@ export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
+  const requester = resolveGatewayToolOperatorSelection();
+  const assertSourceActive = requester.operatorAuthority
+    ? composeSessionSourceAssertion([ctx.assertActive, requester.assertCurrent])
+    : ctx.assertActive;
   const cfg = getRuntimeConfig();
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
@@ -280,9 +287,9 @@ export async function spawnAcpDirect(
     requesterAgentId,
     ownerAgentId,
     ctx,
-    assertActive: ctx.assertActive,
+    assertActive: assertSourceActive,
   });
-  ctx.assertActive?.();
+  assertSourceActive?.();
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
     agentSessionKey: ctx.agentSessionKey,
@@ -292,9 +299,9 @@ export async function spawnAcpDirect(
     cfg,
     key: ownership.completionRequesterSessionKey,
     agentId: ctx.requesterAgentIdOverride,
-    assertActive: ctx.assertActive,
+    assertActive: assertSourceActive,
   });
-  ctx.assertActive?.();
+  assertSourceActive?.();
   const requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
   const completionRequesterSessionId = requesterEntry?.sessionId;
   const completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
@@ -303,7 +310,7 @@ export async function spawnAcpDirect(
     store: subagentStore,
   });
   await prepareSubagentSessionListReadCache();
-  ctx.assertActive?.();
+  assertSourceActive?.();
   const resolveAdmission = (pendingChildren = 0, pendingChildSessionKeys?: ReadonlySet<string>) =>
     resolveSpawnAdmission({
       cfg,
@@ -330,10 +337,10 @@ export async function spawnAcpDirect(
     backendId,
     requesterSessionKey: requesterInternalKey,
     resumeSessionId: params.resumeSessionId,
-    assertCurrent: ctx.assertActive,
+    assertCurrent: assertSourceActive,
   };
   const resumeAuthorization = await validateAcpResumeSessionOwnership(resumeOwnership);
-  ctx.assertActive?.();
+  assertSourceActive?.();
   if (!resumeAuthorization.ok) {
     return buildAcpSpawnError("resume_forbidden", resumeAuthorization.error, "forbidden");
   }
@@ -388,7 +395,7 @@ export async function spawnAcpDirect(
       threadId: requesterState.origin?.threadId,
       groupId: ctx.agentGroupId,
     });
-    ctx.assertActive?.();
+    assertSourceActive?.();
     if (!prepared.ok) {
       return buildAcpSpawnError("thread_binding_invalid", prepared.error);
     }
@@ -405,10 +412,10 @@ export async function spawnAcpDirect(
       ? await readAcpSpawnParentDeliveryContext({
           parentSessionKey,
           requesterAgentId,
-          assertActive: ctx.assertActive,
+          assertActive: assertSourceActive,
         })
       : undefined;
-  ctx.assertActive?.();
+  assertSourceActive?.();
 
   const parentRelayStateEnv = { ...process.env };
   const parentEventRouting = parentSessionKey
@@ -421,7 +428,7 @@ export async function spawnAcpDirect(
           resolveEventSessionKeyForPolicy(parentSessionKey, parentEventRouting),
         )
       : undefined;
-  ctx.assertActive?.();
+  assertSourceActive?.();
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
   const requesterOrigin = requesterState.origin;
   const progressOrigin = {
@@ -444,7 +451,7 @@ export async function spawnAcpDirect(
         cfg,
         key: requesterInternalKey,
         agentId: requesterAgentId,
-        assertActive: ctx.assertActive,
+        assertActive: assertSourceActive,
       });
       const parentStorePath = parentTarget.readSource?.path ?? parentTarget.storePath;
       await waitForSessionParticipantRecording({
@@ -452,7 +459,7 @@ export async function spawnAcpDirect(
         sessionKey: parentTarget.canonicalKey,
         storePath: parentStorePath,
       });
-      ctx.assertActive?.();
+      assertSourceActive?.();
       const readParentEntry = () =>
         readSessionEntryReadOnlyInWorker(
           {
@@ -460,7 +467,7 @@ export async function spawnAcpDirect(
             sessionKey: parentTarget.canonicalKey,
             storePath: parentStorePath,
           },
-          () => ctx.assertActive?.(),
+          () => assertSourceActive?.(),
         );
       const parentEntry = isIncognitoSessionKey(requesterInternalKey)
         ? undefined
@@ -474,7 +481,11 @@ export async function spawnAcpDirect(
       });
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
-        actor: { type: "agent", id: requesterAgentId },
+        actor: resolveDelegatedSessionCreator(
+          parentEntry,
+          { type: "agent", id: requesterAgentId },
+          requester.operatorAuthority?.profileId,
+        ),
         inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(parentEntry),
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: ownerAgentId });
@@ -488,13 +499,14 @@ export async function spawnAcpDirect(
           }
         : {};
       await parentLineage.assertParentUnchanged();
-      ctx.assertActive?.();
+      assertSourceActive?.();
       childCreationEntry =
         (await upsertSessionEntryCore(
           { storePath, sessionKey, agentId: ownerAgentId },
           {
             ...creationStamp,
             spawnedBy: requesterInternalKey,
+            spawnedByAgentId: requesterAgentId,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
             // Navigation parent is stamped at creation so the durable tree edge
             // does not depend on the control-lineage field.
@@ -518,13 +530,13 @@ export async function spawnAcpDirect(
             // Same trust rules as native spawn: stamped last, from trusted host facts only.
             ...parentLineage.receipt,
           },
-          sessionEntryCommitGuardOptions(ctx.assertActive),
+          sessionEntryCommitGuardOptions(assertSourceActive),
         )) ?? undefined;
       const initializedSession = await withAcpResumeSessionAuthorization(
         resumeOwnership,
         (revalidateResume) =>
           initializeAcpSpawnRuntime({
-            assertActive: ctx.assertActive,
+            assertActive: assertSourceActive,
             revalidateResume,
             cfg,
             sessionKey,
@@ -540,10 +552,10 @@ export async function spawnAcpDirect(
           }),
       );
       closeRuntimeOnFailure = initializedSession.initialized.closeRuntimeOnFailure;
-      ctx.assertActive?.();
+      assertSourceActive?.();
       const binding = preparedBinding
         ? await bindPreparedAcpThread({
-            assertActive: ctx.assertActive,
+            assertActive: assertSourceActive,
             cfg,
             sessionKey,
             targetAgentId: ownerAgentId,
@@ -595,7 +607,7 @@ export async function spawnAcpDirect(
           : undefined;
       state.parentRelay = startParentRelay(childIdem);
       const response = await launchAcpChildThroughGateway({
-        assertDispatchCurrent: ctx.assertActive,
+        assertDispatchCurrent: assertSourceActive,
         task: params.task,
         sessionKey,
         deliveryPlan: state.deliveryPlan,
@@ -643,7 +655,7 @@ export async function spawnAcpDirect(
     },
   };
   const { controllerSessionKey } = ownership;
-  ctx.assertActive?.();
+  assertSourceActive?.();
   const admissionReservation = hasSubagentEnvelope
     ? reserveChildAdmissionSlot({
         controllerSessionKey,
@@ -659,7 +671,7 @@ export async function spawnAcpDirect(
   let expectsCompletionMessage = false;
   const pipelineResult = await runSpawnPipeline({
     adapter,
-    assertActive: ctx.assertActive,
+    assertActive: assertSourceActive,
     admissionReservation,
     hookRunner: getGlobalHookRunner(),
     progressOrigin,

@@ -4,6 +4,11 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  inheritSessionCreationPolicy,
+  resolveDelegatedSessionCreator,
+  sessionCreatorProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -225,10 +230,19 @@ export function captureCronCreatorSession(
           lifecycleRevision: creatorSession.lifecycleRevision,
         }
       : undefined;
-  // Operator-supplied sessions bind delivery only; agent callers inherit creator facts.
+  // The admitted requester wins over conversation attribution; neither the job
+  // owner nor an operator-supplied delivery session identifies that requester.
+  const requester = resolveOperatorSessionCreation(client).actor;
   const actor = callerScope
-    ? creatorSession?.createdActor
-    : resolveOperatorSessionCreation(client).actor;
+    ? inheritSessionCreationPolicy(
+        creatorSession,
+        resolveDelegatedSessionCreator(
+          creatorSession,
+          { type: "agent", id: callerScope.agentId },
+          sessionCreatorProfileId(requester),
+        ),
+      ).actor
+    : requester;
   const actorId = normalizeOptionalString(actor?.id);
   const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
   const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
