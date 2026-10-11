@@ -347,7 +347,7 @@ async function routeReplyOperation(
           }
         : {}),
       onDeliveredPayload: deliveredPayloads
-        ? (payload: NormalizedOutboundPayload) => deliveredPayloads.push(payload)
+        ? (delivered: NormalizedOutboundPayload) => deliveredPayloads.push(delivered)
         : undefined,
     } satisfies Omit<Parameters<typeof sendDurableMessageBatchCore>[0], "payloads">;
     const send =
@@ -366,10 +366,12 @@ async function routeReplyOperation(
           agentId: resolvedAgentId,
           ...writerFence,
           text: deliveredPayloads
-            .map((payload) => payload.hookContent ?? resolveOutboundPayloadMirrorText(payload))
-            .filter((text) => text.trim())
+            .map(
+              (delivered) => delivered.hookContent ?? resolveOutboundPayloadMirrorText(delivered),
+            )
+            .filter((deliveredText) => deliveredText.trim())
             .join("\n"),
-          mediaUrls: deliveredPayloads.flatMap((payload) => payload.mediaUrls),
+          mediaUrls: deliveredPayloads.flatMap((delivered) => delivered.mediaUrls),
         },
       });
     }
