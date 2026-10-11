@@ -1,12 +1,12 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
+import { For } from "solid-js";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatMs } from "../../lib/format.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { parseToolSummary } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
-import { renderInsightList } from "./view-overview.ts";
+import { renderInsightList } from "./view-overview.tsx";
 
 export function renderSessionSummary(
   session: UsageSessionEntry,
@@ -15,7 +15,7 @@ export function renderSessionSummary(
 ) {
   const usage = filteredUsage || session.usage;
   if (!usage) {
-    return html` <div class="usage-empty-block">${t("usage.details.noUsageData")}</div> `;
+    return <div class="usage-empty-block">{t("usage.details.noUsageData")}</div>;
   }
 
   const formatTs = (ts?: number): string => (ts ? formatMs(ts) : t("usage.common.emptyValue"));
@@ -81,55 +81,94 @@ export function renderSessionSummary(
     {
       labelKey: "usage.overview.messages",
       value: messageCounts?.total ?? (hasInterval ? t("usage.common.emptyValue") : 0),
-      meta: html`${
-        hasInterval && !messageCounts
-          ? t("usage.common.emptyValue")
-          : html`${messageCounts?.user ?? 0}
-            ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} ·
-            ${messageCounts?.assistant ?? 0}
-            ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`
-      }${hasInterval ? html`<br />${t("usage.details.loadedIntervalMessages")}` : nothing}`,
+      meta: (
+        <>
+          {" "}
+          {hasInterval && !messageCounts
+            ? t("usage.common.emptyValue")
+            : `${messageCounts?.user ?? 0} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${messageCounts?.assistant ?? 0} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
+          {hasInterval ? (
+            <>
+              {" "}
+              <br />
+              {t("usage.details.loadedIntervalMessages")}{" "}
+            </>
+          ) : undefined}{" "}
+        </>
+      ),
     },
     {
       labelKey: "usage.overview.toolCalls",
       value: toolCallCount,
-      meta: html`${uniqueToolCount} ${t("usage.overview.toolsUsed")}`,
+      meta: (
+        <>
+          {" "}
+          {uniqueToolCount} {t("usage.overview.toolsUsed")}{" "}
+        </>
+      ),
     },
     {
       labelKey: "usage.overview.errors",
       value: hasInterval ? t("usage.common.emptyValue") : (usage.messageCounts?.errors ?? 0),
-      meta: html`${hasInterval ? t("usage.common.emptyValue") : (usage.messageCounts?.toolResults ?? 0)}
-      ${t("usage.overview.toolResults")}`,
+      meta: (
+        <>
+          {" "}
+          {hasInterval
+            ? t("usage.common.emptyValue")
+            : (usage.messageCounts?.toolResults ?? 0)}{" "}
+          {t("usage.overview.toolResults")}{" "}
+        </>
+      ),
     },
     {
       labelKey: "usage.details.duration",
       value: formatDurationCompact(usage.durationMs) ?? t("usage.common.emptyValue"),
-      meta: html`${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}`,
+      meta: (
+        <>
+          {" "}
+          {formatTs(usage.firstActivity)} → {formatTs(usage.lastActivity)}{" "}
+        </>
+      ),
     },
   ];
 
-  return html`
-    ${
-      badges.length > 0
-        ? html`<div class="usage-badges">
-            ${badges.map((b) => html`<span class="settings-row__value">${b}</span>`)}
-          </div>`
-        : nothing
-    }
-    <div class="session-summary-grid">
-      ${cards.map(
-        ({ labelKey, value, meta }) => html`
-          <div class="stat session-summary-card">
-            <div class="session-summary-title">${t(labelKey)}</div>
-            <div class="stat-value session-summary-value">${value}</div>
-            <div class="session-summary-meta">${meta}</div>
-          </div>
-        `,
-      )}
-    </div>
-    <div class="usage-insights-grid usage-insights-grid--tight">
-      ${renderInsightList(t("usage.overview.topTools"), toolItems, t("usage.overview.noToolCalls"))}
-      ${renderInsightList(t("usage.details.modelMix"), modelItems, t("usage.overview.noModelData"))}
-    </div>
-  `;
+  return (
+    <>
+      {badges.length > 0 ? (
+        <div class="usage-badges">
+          <For each={badges}>
+            {(b) => (
+              <>
+                {" "}
+                <span class="settings-row__value">{b}</span>{" "}
+              </>
+            )}
+          </For>
+        </div>
+      ) : undefined}
+      <div class="session-summary-grid">
+        <For each={cards}>
+          {({ labelKey, value, meta }) => (
+            <div class="stat session-summary-card">
+              <div class="session-summary-title">{t(labelKey)}</div>
+              <div class="stat-value session-summary-value">{value}</div>
+              <div class="session-summary-meta">{meta}</div>
+            </div>
+          )}
+        </For>
+      </div>
+      <div class="usage-insights-grid usage-insights-grid--tight">
+        {renderInsightList(
+          t("usage.overview.topTools"),
+          toolItems,
+          t("usage.overview.noToolCalls"),
+        )}
+        {renderInsightList(
+          t("usage.details.modelMix"),
+          modelItems,
+          t("usage.overview.noModelData"),
+        )}
+      </div>
+    </>
+  );
 }
