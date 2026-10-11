@@ -31,7 +31,6 @@ import {
   createPage as createUsagePage,
 } from "./usage/usage-page.test-support.ts";
 import type { UsageRouteData } from "./usage/usage-page.tsx";
-import "./cron/cron-page.ts";
 import "./debug/debug-page.ts";
 import "./logs/logs-page.ts";
 import "./model-providers/model-providers-page.ts";
@@ -809,29 +808,5 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.debugHeartbeat).toBeNull();
     expect(page.debugLanes).toEqual([]);
     expect(page.debugDiagnosticsError).toBeNull();
-  });
-
-  it("clears cron data loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-cron-page", contextWithClient(client)) as TestPage & {
-      cron: {
-        client: GatewayBrowserClient | null;
-        connected: boolean;
-        cronStatus: unknown;
-        cronJobs: unknown[];
-      };
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.cron = {
-      ...page.cron,
-      cronStatus: { enabled: true },
-      cronJobs: [{ id: "old" }],
-    };
-
-    await replaceContext(page, client);
-
-    expect(page.cron.cronStatus).toBeNull();
-    expect(page.cron.cronJobs).toEqual([]);
   });
 });

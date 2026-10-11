@@ -30,6 +30,7 @@ import {
   SessionReactionMessageMissingError,
   setSessionReactionAsync,
 } from "./session-reaction-store.js";
+import { setSessionReactionInDatabase } from "./session-reaction-store.kernel.js";
 
 let root: string;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -213,6 +214,37 @@ describe("session reaction store", () => {
       changed: false,
     });
     expect(listSessionReactions(scope, { sessionId: "session-b" })).toEqual({});
+  });
+
+  it("returns committed reaction rows in SQLite order when timestamps tie", () => {
+    vi.spyOn(Date, "now").mockReturnValue(400);
+    const set = (params: typeof reaction) =>
+      runOpenClawAgentWriteTransaction(
+        (database) => setSessionReactionInDatabase(database, scope.sessionKey, params),
+        scope,
+      );
+    set({ ...reaction, emoji: "😀", identityId: "😀" });
+    set({ ...reaction, emoji: "\uE000", identityId: "\uE000" });
+    const result = set({
+      ...reaction,
+      emoji: "😀",
+      identityId: "\uE000",
+    });
+    const expected = [
+      { emoji: "\uE000", count: 1, identities: [{ id: "\uE000", label: "Alice" }] },
+      {
+        emoji: "😀",
+        count: 2,
+        identities: [
+          { id: "\uE000", label: "Alice" },
+          { id: "😀", label: "Alice" },
+        ],
+      },
+    ];
+    expect(result).toEqual({ reactions: expected, newestRemainingEmoji: "😀", changed: true });
+    expect(listSessionReactions(scope, { sessionId: "session-a" })[reaction.messageId]).toEqual(
+      expected,
+    );
   });
 
   it.each([

@@ -320,28 +320,28 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-diary.tsx",
       "text": "memory-wiki"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-diary.tsx",
       "text": "plugins.entries.memory-wiki.enabled = true"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-scene.tsx",
       "text": "z"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view-scene.tsx",
       "text": "Z"
     },
     {
@@ -416,24 +416,24 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/cron/view.ts",
-      "text": "last"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
+      "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/pages/cron/view.ts",
+      "path": "ui/src/pages/cron/view-delivery.tsx",
       "text": "agent:main:main"
     },
     {
       "count": 1,
-      "kind": "object-property",
+      "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/pages/cron/view.ts",
+      "path": "ui/src/pages/cron/view-delivery.tsx",
       "text": "default"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/cron/view-delivery.tsx",
+      "text": "last"
     },
     {
       "count": 1,

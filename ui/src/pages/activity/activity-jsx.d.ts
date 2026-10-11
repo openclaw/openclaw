@@ -1,4 +1,3 @@
-import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import type { JSX } from "@solidjs/web";
 import "../../components/ip-location.ts";
 import type { LinkReaderHovercardProvider } from "../../components/link-reader-hovercard.ts";
@@ -23,13 +22,6 @@ declare module "@solidjs/web" {
         LinkReaderHovercardProvider,
         "client" | "readers" | "agentId" | "previewSeeds"
       >;
-      "wa-popover": HTMLAttributes<WaPopover> & {
-        for?: string;
-        placement?: WaPopover["placement"];
-        "without-arrow"?: boolean;
-        "onWa-show"?: (event: Event) => void;
-        "onWa-hide"?: (event: Event) => void;
-      };
     }
   }
 }

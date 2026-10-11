@@ -1,9 +1,12 @@
-// Importing the module keeps this file a module, so the block below augments it.
 import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
-import "@solidjs/web";
-import "../components/tooltip.ts";
+import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
+import type { JSX } from "@solidjs/web";
+import type { MascotMood } from "../components/mascot-pose.ts";
 export type { JSX } from "@solidjs/web";
+
+// Keep ambient tag contracts independent of renderer modules: SDK declarations include this file.
+type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Properties<T>;
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -14,6 +17,13 @@ declare module "@solidjs/web" {
         "open-on-click"?: boolean;
         "auto-size"?: boolean;
       };
+      "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
+        "prop:agentId"?: string;
+      };
+      "openclaw-mascot": LegacyAttributes<HTMLElement> & {
+        mood?: MascotMood;
+        "prop:size"?: number;
+      };
       "wa-dropdown": HTMLAttributes<WaDropdown> &
         Properties<WaDropdown> & {
           placement?: WaDropdown["placement"];
@@ -21,7 +31,14 @@ declare module "@solidjs/web" {
           "onWa-after-hide"?: (event: CustomEvent<void>) => void;
         };
       "wa-dropdown-item": HTMLAttributes<WaDropdownItem> &
-        Properties<WaDropdownItem> & { value?: WaDropdownItem["value"] };
+        Properties<WaDropdownItem> &
+        Partial<Pick<WaDropdownItem, "value" | "type" | "variant" | "disabled">>;
+      "wa-popover": LegacyAttributes<WaPopover> &
+        Partial<Pick<WaPopover, "for" | "placement">> & {
+          "without-arrow"?: boolean;
+          "onWa-show"?: (event: Event) => void;
+          "onWa-hide"?: (event: Event) => void;
+        };
     }
     interface SVGAttributes<T> {
       "xml:space"?: "default" | "preserve";
