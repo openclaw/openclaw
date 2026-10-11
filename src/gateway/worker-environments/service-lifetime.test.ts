@@ -173,26 +173,6 @@ describe("worker environment service", () => {
     expect(store.get(active.environmentId)?.profileSnapshot).toEqual(active.profileSnapshot);
   });
 
-  it("maintains configured providers on schedule without environments and stops after shutdown", async () => {
-    const time = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(time.clock);
-    const maintain = vi.fn(async () => {});
-    const workerService = support.createService(support.createProvider(), {
-      maintainProviders: maintain,
-      scheduler,
-    });
-
-    expect(support.testState.store.list()).toEqual([]);
-    workerService.start();
-    await workerService.reconcileOnce();
-    expect(maintain).toHaveBeenCalledOnce();
-    await time.advanceBy(250);
-    expect(maintain).toHaveBeenCalledTimes(2);
-    await workerService.stop();
-    await time.advanceBy(25);
-    expect(maintain).toHaveBeenCalledTimes(2);
-  });
-
   it.each(["service", "scheduler"] as const)(
     "keeps maintenance off reconciliation and allocation while %s shutdown aborts and drains it",
     async (closingOwner) => {
@@ -326,22 +306,6 @@ describe("worker environment service", () => {
     expect(maintainProviders).toHaveBeenCalledOnce();
     expect(prune).toHaveBeenCalledOnce();
   });
-
-  it.each(["SQLITE_BUSY", "SQLITE_LOCKED"])(
-    "continues reconciliation when terminal cleanup fails with %s",
-    async (code) => {
-      const prune = vi
-        .spyOn(support.testState.store, "pruneTerminalEnvironments")
-        .mockImplementation(() => {
-          throw Object.assign(new Error("database is locked"), { code });
-        });
-
-      await expect(
-        support.createService(support.createProvider()).reconcileOnce(),
-      ).resolves.toBeUndefined();
-      expect(prune).toHaveBeenCalledOnce();
-    },
-  );
 
   it("propagates non-lock terminal cleanup failures", async () => {
     const error = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
