@@ -249,6 +249,13 @@ export async function settlePreparedCliRun(params: {
     }
     outcome = completed ? { result: completed } : { error };
   }
+  // Release the per-turn send slot at the logical-run terminal so a reused runId starts
+  // the next turn with a fresh budget and a finished run leaves no slot behind. Only the
+  // final candidate of a directly-driven chain is terminal here; every
+  // other candidate hands its prepared canonical scope to the outer logical-run owner
+  // (cron's isolated-agent/run.ts finally, or the embedded run-entry.ts finally) so that
+  // owner deletes the exact loopback-written slot at the true terminal — never mid-chain,
+  // where a later candidate still needs the committed counts.
   try {
     let cleanupError: Error | undefined;
     const recordCleanupError = (error: unknown) => {
