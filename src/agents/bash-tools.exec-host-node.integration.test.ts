@@ -20,13 +20,13 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { applyAllowAlwaysDecision } from "../infra/exec-approvals-allow-always.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
-import { buildSystemRunApprovalBinding } from "../infra/system-run-approval-binding.js";
-import { applyAllowAlwaysDecision } from "../infra/exec-approvals-allow-always.js";
 import { buildCwdBoundHashedArgPattern } from "../infra/exec-command-resolution.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
+import { buildSystemRunApprovalBinding } from "../infra/system-run-approval-binding.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
 import { handleInvoke } from "../node-host/invoke.js";
 import {
