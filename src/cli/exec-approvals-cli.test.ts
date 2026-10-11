@@ -108,6 +108,78 @@ describe("exec approvals CLI", () => {
 
   beforeEach(resetExecApprovalsCliMocks);
 
+  it.each(["file", "stdin"] as const)(
+    "rejects malformed UTF-8 %s input before replacing approvals",
+    async (source) => {
+      const dir = tempDirs.make("openclaw-approvals-utf8-");
+      const file = path.join(dir, "approvals.json");
+      const bytes = Buffer.concat([
+        Buffer.from('{"version":1,"agents":{"main":{"allowlist":[{"pattern":"/synthetic/'),
+        Buffer.from([0xff]),
+        Buffer.from('"}]}}}'),
+      ]);
+      fs.writeFileSync(file, bytes);
+      const before = structuredClone(localSnapshot);
+      vi.mocked(execApprovals.updateExecApprovals).mockClear();
+      const stdinSpy =
+        source === "stdin"
+          ? vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
+              yield bytes;
+              return undefined;
+            })
+          : undefined;
+      try {
+        await expect(
+          runApprovalsCommand([
+            "approvals",
+            "set",
+            ...(source === "file" ? ["--file", file] : ["--stdin"]),
+          ]),
+        ).rejects.toThrow("__exit__:1");
+        expect(runtimeErrors.join("\n")).toContain("must be valid UTF-8");
+        expect(execApprovals.updateExecApprovals).not.toHaveBeenCalled();
+        expect(localSnapshot).toEqual(before);
+      } finally {
+        stdinSpy?.mockRestore();
+      }
+    },
+  );
+
+  it.each(["file", "stdin"] as const)(
+    "preserves valid UTF-8 %s approval patterns",
+    async (source) => {
+      const dir = tempDirs.make("openclaw-approvals-utf8-");
+      const file = path.join(dir, "approvals.json");
+      const pattern = "/synthetic/合法 � 😀";
+      const bytes = Buffer.from(
+        `\uFEFF${JSON.stringify({ version: 1, agents: { main: { allowlist: [{ pattern }] } } })}\r\n`,
+      );
+      fs.writeFileSync(file, bytes);
+      vi.mocked(execApprovals.updateExecApprovals).mockClear();
+      const stdinSpy =
+        source === "stdin"
+          ? vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
+              const split = bytes.indexOf(Buffer.from("合")) + 1;
+              yield bytes.subarray(0, split);
+              yield bytes.subarray(split);
+              return undefined;
+            })
+          : undefined;
+      try {
+        await runApprovalsCommand([
+          "approvals",
+          "set",
+          ...(source === "file" ? ["--file", file] : ["--stdin"]),
+        ]);
+        expect(execApprovals.updateExecApprovals).toHaveBeenCalledTimes(1);
+        expect(localSnapshot.file.agents?.main?.allowlist?.[0]?.pattern).toBe(pattern);
+        expect(runtimeErrors).toEqual([]);
+      } finally {
+        stdinSpy?.mockRestore();
+      }
+    },
+  );
+
   it.each([
     ["gateway", ["--gateway"], "exec.approvals.get"],
     ["node", ["--node", "macbook"], "exec.approvals.node.get"],
