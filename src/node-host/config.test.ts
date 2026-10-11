@@ -13,11 +13,9 @@ import {
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { logInfo } from "../logger.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import {
-  readConfigMachineState,
-  readConfigMachineStateWithMetadata,
-} from "../state/config-machine-state.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { nodeHostConfigRuntimeEntrypoint } from "./config-runtime.test-support.js";
 import {
   configureNodeHost,

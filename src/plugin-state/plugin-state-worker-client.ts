@@ -172,7 +172,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         assertStateDatabaseReadAllowed(databasePath);
         assertAdmission?.();
         // Quarantine revokes these admitted facts; the worker owns refusal and recovery.
-        if (hasSqliteDatabaseSchemaAdmissionForIdentity(identity)) {
+        if (hasSqliteDatabaseSchemaAdmissionForIdentity(context.admission.identity)) {
           if (typedCommand.type === "pluginState.observe") {
             const observation = observationFromCachedPluginState(
               identity,

@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import type { UsersGitHubAuthorizeStartResult } from "../../../packages/gateway-protocol/src/schema/users.js";
-import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   listGitHubDeviceAuthorizationRecords,
   listGitHubOAuthRecords,
@@ -54,8 +52,11 @@ import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { preparePersonalGitHubActionV2 } from "./github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import {
+  expectReceiptBackedPersonalGitHubAuthority,
+  preparePersonalGitHubPoll,
+} from "./users-github.test-support.js";
 
 const network = vi.hoisted(() => ({
   assertCli: vi.fn(),
@@ -137,16 +138,7 @@ async function start(client = alice): Promise<UsersGitHubAuthorizeStartResult> {
   return respond.mock.calls[0]![1] as UsersGitHubAuthorizeStartResult;
 }
 function preparePoll(client = alice) {
-  updateUserGitHubConnection(
-    owner(client),
-    (current) => {
-      if (current?.pending?.kind !== "device") {
-        throw new Error("Expected pending device authorization");
-      }
-      return { ...current, pending: { ...current.pending, nextPollAtMs: Date.now() } };
-    },
-    () => {},
-  );
+  preparePersonalGitHubPoll(owner(client));
 }
 async function connect(client = alice) {
   const started = await start(client);
@@ -237,23 +229,12 @@ afterEach(async () => {
 
 describe("personal GitHub through authenticated Gateway RPC", () => {
   it("uses committed profile authority at the effect without host reads", async () => {
-    const action = await preparePersonalGitHubActionV2({ client: alice, context });
-    const reads = observeSqliteReadSql(StatementSync.prototype);
-    try {
-      action.assertCurrent();
-      expect(reads.queries).toEqual([]);
-
-      linkEmail("alice@example.test", owner(bob));
-      reads.queries.length = 0;
-      expect(() => action.assertCurrent()).toThrow("My GitHub owner changed");
-      expect(reads.queries).toEqual([]);
-
-      clients.delete(alice);
-      expect(() => action.assertCurrent()).toThrow("current authenticated human");
-      expect(reads.queries).toEqual([]);
-    } finally {
-      reads.restore();
-    }
+    await expectReceiptBackedPersonalGitHubAuthority({
+      client: alice,
+      context,
+      merge: () => linkEmail("alice@example.test", owner(bob)),
+      disconnect: () => clients.delete(alice),
+    });
   });
 
   it.each(["users.github.status", "tools.github.status"])(

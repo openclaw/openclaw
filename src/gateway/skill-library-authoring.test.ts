@@ -86,7 +86,13 @@ describe("human personal namespace authority", () => {
     owner.context.getRuntimeConfig = () => ({
       gateway: {
         roles: {
+          default: "administrator",
           definitions: {
+            administrator: {
+              scopes: ["operator.admin"],
+              agents: "*",
+              sessions: { others: "view" },
+            },
             reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
           },
         },

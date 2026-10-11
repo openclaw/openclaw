@@ -7,11 +7,7 @@ import { z } from "zod";
 import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
 import { coerceProfileUsageStats } from "../agents/auth-profiles/profile-usage-stats.js";
 import type { AuthProfileCredential, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "../secrets/store/secret-store-validation-error.js";
 import {
@@ -28,13 +24,19 @@ import {
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
+import {
+  invalidUserModelAccounts as invalidAccounts,
+  readSelectedUserModelAccountRecords,
+  readUserModelAccountRecord as readRecord,
+  userModelAccountRecordValue as accountRecordValue,
+  type UserModelAccountRecordName as AccountRecordName,
+} from "./user-model-account-records.kernel.js";
 import { publishUserProfileModelAccountLinksChange } from "./user-profile-events.js";
 import {
   selectResolvedUserProfile,
   selectResolvedUserProfileMetadataById,
   userProfilesDb,
 } from "./user-profiles-internal.js";
-import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 const credentialSchema = inlineAuthProfileCredentialSchema.refine(
   (credential) => credential.copyToAgents !== true,
@@ -53,7 +55,6 @@ const profileSchema = z.strictObject({
   usageStats: z.unknown().transform(coerceProfileUsageStats).optional(),
 });
 type UserModelLinks = z.infer<typeof linksSchema>;
-type AccountRecordName = "model-accounts" | `model-account:${string}`;
 
 export type UserProfileAuthLink = { provider: string; authProfileId: string; updatedAt: number };
 export type PersonalCatalogSelection = { profileId: string } | { requesterProfileId: string };
@@ -64,10 +65,6 @@ export type PersonalCatalogProfiles = {
 export type UserModelAccount = ReturnType<typeof accountSummary>;
 
 const MODEL_ACCOUNTS_PAGE_SIZE = 50;
-
-function invalidAccounts(): Error {
-  return new Error("Personal model account state is invalid; restore a verified state backup.");
-}
 
 function parseRecord<T>(value: string, schema: z.ZodType<T>): T {
   if (Buffer.byteLength(value, "utf8") > SECRET_STORE_VALUE_MAX_BYTES) {
@@ -99,34 +96,6 @@ function requireOwner(db: DatabaseSync, profileId: string): string {
     throw new Error("Personal model account owner is unavailable; refresh Profile and try again.");
   }
   return owner;
-}
-
-function readRecord(db: DatabaseSync, owner: string, name: AccountRecordName): string | undefined {
-  if (!tableExists(db, "secret_store_entries")) {
-    return undefined;
-  }
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<Pick<DB, "secret_store_entries">>(db)
-      .selectFrom("secret_store_entries")
-      .select(["value", "kind", "allowed_hosts"])
-      .where("scope_kind", "=", "identity")
-      .where("scope_id", "=", owner)
-      .where("name", "=", name)
-      .where("deleted_at_ms", "is", null),
-  );
-  return row ? accountRecordValue(row) : undefined;
-}
-
-function accountRecordValue(row: {
-  value: string | null;
-  kind: string | null;
-  allowed_hosts: string | null;
-}): string {
-  if (row.kind !== "secret" || row.allowed_hosts !== null || row.value === null) {
-    throw invalidAccounts();
-  }
-  return row.value;
 }
 
 function writeRecord(
@@ -376,64 +345,8 @@ export function readPersonalCatalogProfilesInDatabase(
   const profileIds =
     "profileId" in selection ? [selection.profileId] : links.map((link) => link.authProfileId);
   const profiles: PersonalCatalogProfiles["profiles"] = {};
-  const selected = [...new Set(profileIds)].flatMap((id) => {
-    const locator = parseUserModelAuthProfileId(id);
-    return locator ? [{ id, owner: locator.ownerProfileId }] : [];
-  });
-  if (
-    selected.length === 0 ||
-    !tableExists(db, "user_profiles") ||
-    !tableExists(db, "secret_store_entries")
-  ) {
-    return { links, profiles };
-  }
-  const rows = executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<UserProfilesDatabase & Pick<DB, "secret_store_entries">>(db)
-      .selectFrom("user_profiles as source")
-      .leftJoin("user_profiles as target", "target.id", "source.merged_into")
-      .innerJoin("secret_store_entries", (join) =>
-        join.on((eb) =>
-          eb(
-            "secret_store_entries.scope_id",
-            "=",
-            eb
-              .case()
-              .when(
-                eb.or([eb("source.merged_into", "is", null), eb("source.merged_into", "=", "")]),
-              )
-              .then(eb.ref("source.id"))
-              .else(eb.ref("target.id"))
-              .end(),
-          ),
-        ),
-      )
-      .select(["name", "value", "kind", "allowed_hosts"])
-      .where("scope_kind", "=", "identity")
-      .where("deleted_at_ms", "is", null)
-      // The one-hop owner must be live; orphaned tombstones never yield secrets.
-      .where((eb) =>
-        eb.or([
-          eb("source.merged_into", "is", null),
-          eb("source.merged_into", "=", ""),
-          eb.and([
-            eb("target.id", "is not", null),
-            eb.or([eb("target.merged_into", "is", null), eb("target.merged_into", "=", "")]),
-          ]),
-        ]),
-      )
-      .where((eb) =>
-        eb.or(
-          selected.map(({ id, owner }) =>
-            eb.and([eb("source.id", "=", owner), eb("name", "=", `model-account:${id}`)]),
-          ),
-        ),
-      ),
-  ).rows;
-  const records = new Map(rows.map((row) => [row.name, row]));
-  for (const { id } of selected) {
-    const row = records.get(`model-account:${id}`);
-    const profile = row && parseProfileRecord(accountRecordValue(row));
+  for (const { id, ...record } of readSelectedUserModelAccountRecords(db, profileIds)) {
+    const profile = parseProfileRecord(accountRecordValue(record));
     if (profile) {
       profiles[id] = profile;
     }

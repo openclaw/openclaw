@@ -32,7 +32,10 @@ import {
   hasSqliteNativeAdmissionOperation,
 } from "./sqlite-native-admission.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
-import { isSoleDatabaseFileDescriptor } from "./sqlite-worker-identity.js";
+import {
+  isSoleDatabaseFileDescriptor,
+  type DatabaseFileIdentity,
+} from "./sqlite-worker-identity.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -712,16 +715,24 @@ export function suspendSqliteDatabaseAdmission(database: DatabaseSync, suspended
   }
 }
 
+function hasSchemaAdmission(record: Admission | undefined): boolean {
+  const fact = record?.facts.get("sqlite-schema");
+  return Boolean(record && fact && valid(record, fact));
+}
+
 export function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
-  const record = pathAdmission(location);
-  return record ? hasSqliteDatabaseSchemaAdmissionForIdentity(record.identity) : false;
+  return hasSchemaAdmission(pathAdmission(location));
 }
 
 /** Consume the already captured physical identity without another filesystem lookup. */
-export function hasSqliteDatabaseSchemaAdmissionForIdentity(identity: string): boolean {
-  const record = state.registry.records.get(identity);
-  const fact = record?.facts.get("sqlite-schema");
-  return Boolean(record && fact && valid(record, fact));
+export function hasSqliteDatabaseSchemaAdmissionForIdentity(
+  physicalIdentity: DatabaseFileIdentity,
+): boolean {
+  if (!physicalIdentity.key.startsWith("file:") || physicalIdentity.birthtime === undefined) {
+    return false;
+  }
+  const key = `${physicalIdentity.key.slice("file:".length)}:${physicalIdentity.birthtime}`;
+  return hasSchemaAdmission(state.registry.records.get(key));
 }
 
 export function captureSqliteDatabaseAdmissions(

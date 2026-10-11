@@ -35,11 +35,9 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
-import {
-  readConfigMachineState,
-  readConfigMachineStateWithMetadata,
-} from "./config-machine-state.js";
+import { readConfigMachineState } from "./config-machine-state.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
