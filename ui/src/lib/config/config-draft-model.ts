@@ -249,15 +249,13 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       schema.additionalProperties && typeof schema.additionalProperties === "object"
         ? schema.additionalProperties
         : null;
-    const result: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(value)) {
-      const propSchema = props[key] ?? additional;
-      const coerced = propSchema ? coerceFormValues(val, propSchema) : val;
-      if (coerced !== undefined) {
-        result[key] = coerced;
-      }
-    }
-    return result;
+    return Object.fromEntries(
+      Object.entries(value).flatMap(([key, val]) => {
+        const propSchema = Object.hasOwn(props, key) ? props[key] : additional;
+        const coerced = propSchema ? coerceFormValues(val, propSchema) : val;
+        return coerced === undefined ? [] : [[key, coerced]];
+      }),
+    );
   }
   if (type === "array" && Array.isArray(value)) {
     const items = schema.items;
