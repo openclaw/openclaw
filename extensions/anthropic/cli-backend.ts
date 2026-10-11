@@ -178,8 +178,6 @@ export function buildAnthropicCliBackend(
     nativeToolMode: "selectable",
     toolAvailabilityEnforcement: "execution-args",
     isolatesInstructionsWithExactTools: true,
-    // Claude Code sees bundled OpenClaw tools as `mcp__openclaw__<name>`; the
-    // shared prompt names them by short id, so spell out the mapping.
     transformSystemPrompt: ({ systemPrompt }) => appendClaudeCliToolNamingGuidance(systemPrompt),
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",

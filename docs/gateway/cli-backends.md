@@ -145,21 +145,17 @@ native session retains the context for resume. Imported visible history and
 cross-provider fallback preludes do not copy private hook attachments.
 
 Saved session notes also reach fresh and resumed turns as quoted reference data.
-
-Claude Code registers every bundled OpenClaw tool through the `openclaw` MCP
-server as `mcp__openclaw__<name>` and can defer those tools behind its ToolSearch
-catalog. The shared system prompt refers to tools by their short OpenClaw ids
-(`message(action=send)`), so the backend appends an "OpenClaw tool names in
-Claude Code" section that spells out the mapping (`message` is
-`mcp__openclaw__message`) and tells the model to load a missing tool with
-`select:mcp__openclaw__<name>` before replying. Without it a fresh Claude session
-can call a tool literally named `message`, get "No such tool available", and
-strand a message-tool-only reply.
 OpenClaw replays eligible notes from the active reset/compaction window, with a
 total limit of 2,000 weighted characters including framing. Newer notes take
 priority. Omitted or truncated notes are marked. Notes may repeat because CLI
 bindings do not track which OpenClaw notes the native session has consumed.
 Transient runtime context and notes excluded from model context are not replayed.
+
+Claude Code registers OpenClaw MCP tools as `mcp__openclaw__<name>` and can
+defer them behind ToolSearch. The Claude CLI backend explains this mapping in
+the system prompt: `message` uses `mcp__openclaw__message`, and a deferred tool
+can be loaded with `select:mcp__openclaw__<name>`. This helps fresh sessions
+discover the delivery tool when a conversation requires message-tool-only replies.
 
 Keep Claude Code updated, especially if OpenClaw reports an incompatible
 installed executable:
