@@ -75,6 +75,8 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) bubbleModeEnabled = false;
+  @property({ attribute: false }) mainKey = "main";
   @property({ attribute: false }) copyMarkdownAllowed = false;
   @property({ attribute: false }) splitAllowed = false;
   @property({
@@ -83,7 +85,8 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       next?.chatShowThinking !== previous?.chatShowThinking ||
       next?.chatShowToolCalls !== previous?.chatShowToolCalls ||
       next?.chatPersistCommentary !== previous?.chatPersistCommentary ||
-      next?.chatBubbleSessionKeys !== previous?.chatBubbleSessionKeys,
+      next?.chatBubbleSessionKeys !== previous?.chatBubbleSessionKeys ||
+      next?.chatBubbleDisabledSessionKeys !== previous?.chatBubbleDisabledSessionKeys,
   })
   settings: UiSettings = EMPTY_SETTINGS;
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
@@ -195,13 +198,17 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
         this.onSettingsChange({
           chatPersistCommentary: this.settings.chatPersistCommentary === false,
         });
-      } else if (setting === "speech-bubbles" && this.session.target?.key) {
+      } else if (
+        setting === "speech-bubbles" &&
+        this.bubbleModeEnabled &&
+        this.session.target?.key
+      ) {
         const sessionKey = this.session.target.key;
         this.onSettingsChange(
           setChatBubbleMode(
             this.settings,
             sessionKey,
-            !isChatBubbleMode(this.settings, sessionKey),
+            !isChatBubbleMode(this.settings, sessionKey, this.bubbleModeEnabled, this.mainKey),
           ),
         );
       }
@@ -324,11 +331,15 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       ${item("reasoning", t("chat.view.reasoning"), showThinking)}
       ${item("tool-calls", t("chat.view.toolCalls"), showToolCalls)}
       ${item("commentary", t("chat.view.commentary"), persistCommentary)}
-      ${item(
-        "speech-bubbles",
-        t("chat.view.speechBubbles"),
-        isChatBubbleMode(this.settings, this.session.target?.key ?? ""),
-      )}
+      ${
+        this.bubbleModeEnabled
+          ? item(
+              "speech-bubbles",
+              t("chat.view.speechBubbles"),
+              isChatBubbleMode(this.settings, this.session.target?.key ?? "", true, this.mainKey),
+            )
+          : nothing
+      }
       ${
         this.preferencesBrowserOnly
           ? html`<div slot=${inline ? nothing : "submenu"} class="session-menu__info" role="note">

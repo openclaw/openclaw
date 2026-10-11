@@ -446,7 +446,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/debug/view.ts",
+      "path": "ui/src/pages/debug/view.tsx",
       "text": "openclaw security audit --deep"
     },
     {

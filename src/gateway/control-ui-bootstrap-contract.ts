@@ -65,6 +65,8 @@ export type ControlUiBootstrapConfig = {
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   automaticallyFetchFavicons?: boolean;
+  /** Whether experimental speech-bubble presentation is available. */
+  chatBubblesEnabled?: boolean;
   seamColor?: string;
   environment?: ControlUiEnvironment;
   /** Whether this Gateway's served UI may show the Discord community invitation. */

@@ -25,8 +25,6 @@ import {
   projectAgentSelection,
   projectApplicationConfig,
   projectGateway,
-  projectNavigationPreferences,
-  projectOverlays,
 } from "../lib/reactive/application.ts";
 import { projectAgents, projectRuntimeConfig } from "../lib/reactive/domain-capabilities.ts";
 import { projectI18n, t } from "../lib/reactive/i18n.ts";
@@ -300,14 +298,26 @@ export class ShellOwner
         this.refreshStoredOutboxSummary();
       });
       watch(projectApplicationConfig(context.config));
-      watch(projectNavigationPreferences(context.navigation));
+      watch(
+        projectSource(context.navigation, {
+          read: (navigation) => navigation.snapshot,
+          subscribe: (navigation, notify) => navigation.subscribe(notify),
+          equality: "revision",
+        }),
+      );
       watch(projectAgentSelection(context.agentSelection));
       watch(projectAgentSelection(context.settingsAgentSelection));
       watch(projectAgents(context.agents), () => {
         this.refreshStoredOutboxSummary();
         this.ensureAgentsList(context.gateway.snapshot, context.agents);
       });
-      watch(projectOverlays(context.overlays));
+      watch(
+        projectSource(context.overlays, {
+          read: (overlays) => overlays.snapshot,
+          subscribe: (overlays, notify) => overlays.subscribe(notify),
+          equality: "revision",
+        }),
+      );
       watch(projectI18n(i18n));
       const theme = projectTheme(context.theme);
       watch(theme.preferences);

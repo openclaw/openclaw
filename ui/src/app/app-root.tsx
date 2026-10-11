@@ -28,7 +28,7 @@ import {
 } from "../lib/reactive/application.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { projectI18n } from "../lib/reactive/i18n.ts";
-import { projectRouter } from "../lib/reactive/router.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -79,7 +79,11 @@ export function OpenClawApp(props: {
   const gateway = projectGateway(context.gateway);
   const config = projectApplicationConfig(context.config);
   const selection = projectAgentSelection(context.agentSelection);
-  const router = projectRouter(context.router);
+  const router = projectSource(context.router, {
+    read: (source) => source.getState(),
+    subscribe: (source, notify) => source.subscribe(notify),
+    equality: "revision",
+  });
   const theme = projectTheme(context.theme);
   const snapshot = () => gateway.read().snapshot;
   const connected = () => snapshot().phase === "connected";
@@ -595,30 +599,6 @@ export function OpenClawApp(props: {
       </Show>
     );
   }
-  function Standalone(): SolidJSX.Element {
-    const mode = runtime.documentMode;
-    const element = mode?.kind === "approval" ? APPROVAL_PAGE_ELEMENT : QUESTION_PAGE_ELEMENT;
-    return (
-      <>
-        {mode && (
-          <Show when={!(mode.kind === "approval" && pendingGatewayUrl())}>
-            <Show
-              when={lazyState()?.element === element}
-              fallback={
-                mode.kind === "approval" ? (
-                  <openclaw-approval-page prop:approvalId={mode.approvalId ?? ""} />
-                ) : (
-                  <openclaw-question-page prop:questionId={mode.questionId ?? ""} />
-                )
-              }
-            >
-              <LazyDocument element={element} />
-            </Show>
-          </Show>
-        )}
-      </>
-    );
-  }
   function Shell(): SolidJSX.Element {
     return (
       <openclaw-link-reader-hovercard-provider
@@ -679,8 +659,28 @@ export function OpenClawApp(props: {
           <Match when={showLoginGate()}>
             <Login />
           </Match>
-          <Match when={runtime.documentMode !== null}>
-            <Standalone />
+          <Match when={runtime.documentMode}>
+            {(mode) => {
+              const documentMode = untrack(mode);
+              const element =
+                documentMode.kind === "approval" ? APPROVAL_PAGE_ELEMENT : QUESTION_PAGE_ELEMENT;
+              return (
+                <Show when={!(documentMode.kind === "approval" && pendingGatewayUrl())}>
+                  <Show
+                    when={lazyState()?.element === element}
+                    fallback={
+                      documentMode.kind === "approval" ? (
+                        <openclaw-approval-page prop:approvalId={documentMode.approvalId ?? ""} />
+                      ) : (
+                        <openclaw-question-page prop:questionId={documentMode.questionId ?? ""} />
+                      )
+                    }
+                  >
+                    <LazyDocument element={element} />
+                  </Show>
+                </Show>
+              );
+            }}
           </Match>
           <Match when={true}>
             <Shell />

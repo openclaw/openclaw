@@ -189,7 +189,7 @@ suite.define(() => {
 
         await expect
           .poll(() => catalogWarning.textContent(), { timeout: 5_000 })
-          .toContain("More models could not be discovered.");
+          .toContain("Model catalog temporarily unavailable");
         await catalogWarning.getByRole("button", { name: "Retry", exact: true }).waitFor();
         expect(await page.locator(".provider-usage-error").count()).toBe(0);
         expect(await page.locator('[data-model-readiness="model-required"]').count()).toBe(0);

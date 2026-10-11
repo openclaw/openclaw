@@ -6,7 +6,7 @@ import { createComponent, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import "../plugins/control-ui-view.runtime.ts";
+import "../plugins/control-ui-view.solid.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { ShellOwner } from "./app-host.tsx";

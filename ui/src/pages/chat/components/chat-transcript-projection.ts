@@ -158,6 +158,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     sessionKey: props.sessionKey,
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
+    bubbleMode: props.chatBubbleMode === true,
     session: props.transcriptMetadata ?? activeSession,
   });
   const { collapsedItems, transcriptItems, continuations } = transcriptChain;
@@ -679,6 +680,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
             sessionKey: props.sessionKey,
             runWorking: Boolean(props.runWorking),
             searchActive: false,
+            bubbleMode: props.chatBubbleMode === true,
             session: activeSession,
           },
         )
