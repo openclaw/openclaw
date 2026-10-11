@@ -27,20 +27,6 @@ import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-tab-group": HTMLAttributes<HTMLElement> & {
-        "prop:active": string;
-        activation: "auto";
-        "without-scroll-controls": boolean;
-      };
-      "wa-tab": HTMLAttributes<HTMLElement> & { panel: string; "prop:active": boolean };
-      "wa-tab-panel": HTMLAttributes<HTMLElement> & { name: string; "prop:active": boolean };
-    }
-  }
-}
-
 function handleRawDetailsToggle(event: Event) {
   // SAFETY: Only the raw-details HTML button installs this handler.
   const button = event.currentTarget as HTMLButtonElement;

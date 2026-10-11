@@ -11,7 +11,7 @@ export function useGatewayPage(options: {
   getGateway: () => ApplicationGateway;
   onIdentityChange?: (change: GatewayPageChange) => void;
   invalidateRequests?: (change: GatewayPageChange) => void;
-  ensureInitialData?: () => void;
+  ensureInitialData?: (change: GatewayPageChange) => void;
   onSnapshot?: (change: GatewayPageChange) => void;
   onPageActivation?: () => void;
 }) {
@@ -55,7 +55,7 @@ export function useGatewayPage(options: {
     }
     options.onSnapshot?.(change);
     if (nextConnected && (initial || change.identityChanged || connectionChanged)) {
-      options.ensureInitialData?.();
+      options.ensureInitialData?.(change);
     }
     setRevision((value) => value + 1);
   }
