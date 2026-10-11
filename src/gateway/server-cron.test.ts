@@ -103,30 +103,11 @@ const {
       sentAt: 0,
     },
   })),
-  resolveDeliveryTargetMock: vi.fn<typeof deliveryTarget.resolveDeliveryTarget>(
-    async (_cfg, agentId, target) => {
-      const channel = !target.channel || target.channel === "last" ? "telegram" : target.channel;
-      const to = target.to ?? "123";
-      const sessionKey = `agent:${agentId}:${channel}:direct:${to}`;
-      return {
-        ok: true,
-        channel,
-        to,
-        accountId: target.accountId,
-        threadId: target.threadId,
-        mode: "explicit",
-        sessionRoute: {
-          sessionKey,
-          baseSessionKey: sessionKey,
-          peer: { kind: "direct", id: to },
-          chatType: "direct",
-          from: `${channel}:${to}`,
-          to,
-          recipientSessionExact: false,
-        },
-      };
-    },
-  ),
+  resolveDeliveryTargetMock: vi.fn<typeof deliveryTarget.resolveDeliveryTarget>(async (...args) => {
+    const { resolveCronTestDeliveryTarget } =
+      await import("./server-cron.delivery.test-support.js");
+    return resolveCronTestDeliveryTarget(...args);
+  }),
   runCronIsolatedAgentTurnMock: vi.fn<RunCronIsolatedAgentTurnMock>(async () => ({
     status: "ok",
     summary: "ok",
