@@ -51,14 +51,16 @@ function toggleStates(container: HTMLElement): Record<string, boolean> {
     const title = row.querySelector(".settings-row__title")?.textContent?.trim() ?? "";
     const section = row.closest(".settings-section")?.querySelector(".settings-section__heading");
     const key = `${section?.textContent?.trim() ?? ""}/${title}`;
-    const toggle = row.querySelector<HTMLElement & { checked?: boolean }>('input[role="switch"]');
+    const toggle = row.querySelector<HTMLInputElement>(".settings-toggle__input");
     states[key] = toggle?.checked === true;
   }
   return states;
 }
 
 function selectedSegment(container: HTMLElement): string | null {
-  return container.querySelector('input[type="radio"]:checked')?.getAttribute("value") ?? null;
+  return (
+    container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value ?? null
+  );
 }
 
 describe("renderDreamingSettings", () => {
@@ -175,12 +177,12 @@ describe("renderDreamingSettings", () => {
       [...container.querySelectorAll<HTMLInputElement>("input")].every((input) => input.disabled),
     ).toBe(true);
     expect(
-      [
-        ...container.querySelectorAll<HTMLElement & { disabled?: boolean }>('input[role="switch"]'),
-      ].every((toggle) => toggle.disabled === true),
+      [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].every(
+        (toggle) => toggle.disabled,
+      ),
     ).toBe(true);
     expect(
-      [...container.querySelectorAll<HTMLInputElement>('input[type="radio"]')].every(
+      [...container.querySelectorAll<HTMLInputElement>(".settings-segmented__input")].every(
         (input) => input.disabled,
       ),
     ).toBe(true);

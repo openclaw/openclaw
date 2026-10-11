@@ -281,9 +281,9 @@ describe("renderUpdates", () => {
     mountUpdates(props);
     expect(container.textContent).toContain("This Mac");
     expect(row("App version").textContent).toContain("2026.9.3 (build 42)");
-    const automatic = row("Check for updates automatically").querySelector<
-      HTMLElement & { checked: boolean }
-    >('input[role="switch"]')!;
+    const automatic = row("Check for updates automatically").querySelector<HTMLInputElement>(
+      'input[role="switch"]',
+    )!;
     expect(automatic.hasAttribute("disabled")).toBe(false);
     automatic.checked = false;
     automatic.dispatchEvent(new Event("change"));

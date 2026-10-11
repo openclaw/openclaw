@@ -138,14 +138,14 @@ describe("renderMemory", () => {
 
     expect(
       container
-        .querySelector('label:has(input[value="retired-memory"])')
+        .querySelector('.settings-segmented__btn:has(input[value="retired-memory"])')
         ?.textContent?.replace(/\s+/g, " ")
         .trim(),
     ).toBe("retired-memory (Unavailable)");
     expect(
-      container
-        .querySelector('label:has(input[value="retired-memory"])')
-        ?.classList.contains("settings-segmented__btn--active"),
+      container.querySelector<HTMLInputElement>(
+        '.settings-segmented__input[value="retired-memory"]',
+      )?.checked,
     ).toBe(true);
   });
 
@@ -153,9 +153,7 @@ describe("renderMemory", () => {
     const { container, getByRole } = mountSolid(() => renderMemory(createProps()));
     flush();
 
-    const switches = [
-      ...container.querySelectorAll<HTMLElement & { checked: boolean }>('input[role="switch"]'),
-    ];
+    const switches = [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
     expect(switches).toHaveLength(2);
     expect(switches[0]?.checked).toBe(true);
     expect(switches[1]?.checked).toBe(false);

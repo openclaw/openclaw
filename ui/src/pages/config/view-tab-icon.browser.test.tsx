@@ -24,9 +24,9 @@ function renderTabIcon(props: TabIconViewProps, container: HTMLElement) {
   flush();
 }
 const radio = (container: HTMLElement, value: string) =>
-  container.querySelector<HTMLInputElement>(`input[type="radio"][value="${value}"]`);
+  container.querySelector<HTMLInputElement>(`.settings-segmented__input[value="${value}"]`);
 const selectedMode = (container: HTMLElement) =>
-  container.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value;
+  container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value;
 afterEach(() => {
   containers.splice(0).forEach((container) => container.remove());
 });
@@ -143,7 +143,7 @@ describe("browser tab icon settings", () => {
     props.tabIcon = "default";
     renderTabIcon(props, container);
     expect(container.textContent).toContain("No lobsters unlocked");
-    expect(radio(container, "lobster")?.hasAttribute("disabled")).toBe(true);
+    expect(radio(container, "lobster")?.disabled).toBe(true);
   });
 
   it("selects personal artwork while preserving its uncropped preview", async () => {

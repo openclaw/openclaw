@@ -396,7 +396,10 @@ describe("device.pair.setupCode", () => {
     await program.parseAsync(["devices", "join-code", "--json"], { from: "user" });
 
     const joinUrl = `https://pair.example${basePath}/j/${"a".repeat(22)}`;
-    expect(writeJson).toHaveBeenCalledWith({ joinUrl, command: `npx openclaw connect ${joinUrl}` });
+    expect(writeJson).toHaveBeenCalledWith({
+      joinUrl,
+      command: `npx -y openclaw connect ${joinUrl} --service --session-host`,
+    });
   });
 
   it.each(["limited", "voice-node"])(

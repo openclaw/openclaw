@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 // Control UI tests cover schema composition that changes field requiredness.
 import {
   renderAnalyzedFormFixture,
@@ -155,6 +155,8 @@ describe("config form composition integrity", () => {
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     renderAnalyzedFormFixture(container, analysis, {
       value: { retention: "30d", mode: "auto", plainMode: "auto" },
       onPatch,

@@ -155,7 +155,7 @@ describe("Appearance backgrounds", () => {
     expect(
       host.querySelector('[data-background-source="none"]')?.getAttribute("aria-pressed"),
     ).toBe("true");
-    const switches = [...host.querySelectorAll<HTMLInputElement>('input[role="switch"]')];
+    const switches = [...host.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
     expect(switches).toHaveLength(2);
     expect(switches.every((input) => input.disabled)).toBe(true);
     expect(host.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);

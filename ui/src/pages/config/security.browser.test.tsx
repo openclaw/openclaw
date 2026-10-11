@@ -35,22 +35,27 @@ it.each([
       { container },
     );
     try {
-      const radios = [...container.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+      const radios = [...container.querySelectorAll<HTMLInputElement>(".settings-segmented__input")];
       expect(radios).toHaveLength(4);
       expect(radios.filter((radio) => radio.checked)).toHaveLength(profile ? 1 : 0);
       expect(onToolProfileChange).not.toHaveBeenCalled();
-      const full = container.querySelector<HTMLInputElement>('input[type="radio"][value="full"]')!;
+      const full = container.querySelector<HTMLInputElement>(
+        '.settings-segmented__input[value="full"]',
+      )!;
       if (input === "mouse") {
         await page.elementLocator(full).click();
       } else {
-        full.focus();
+        (radios.find((radio) => radio.checked) ?? radios[0])!.focus();
+        if (!profile) {
+          await userEvent.keyboard("{ArrowLeft}");
+        }
         await userEvent.keyboard(" ");
       }
       flush();
       expect(onToolProfileChange).toHaveBeenCalledTimes(writes);
       if (writes) {
         expect(onToolProfileChange).toHaveBeenCalledWith("full");
-        expect(full.checked).toBe(true);
+        expect(radios.find((radio) => radio.checked)?.value).toBe("full");
       }
     } finally {
       unmount();

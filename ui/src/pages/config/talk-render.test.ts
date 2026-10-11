@@ -93,9 +93,7 @@ describe("renderTalk", () => {
     });
     await updatePickers(container);
 
-    const provider = container.querySelector<HTMLElement & { disabled?: boolean }>(
-      'input[type="radio"]',
-    );
+    const provider = container.querySelector<HTMLInputElement>(".settings-segmented__input");
     expect(provider?.disabled).toBe(true);
     const voice = [...container.querySelectorAll<HTMLSelectElement>("select")];
     expect(voice).toHaveLength(1);

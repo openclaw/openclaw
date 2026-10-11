@@ -30,8 +30,7 @@ describe("Control UI browser link preferences row", () => {
       throw new Error("missing Control UI browser link preference toggle");
     }
     expect(toggle.checked).toBe(false);
-    toggle.checked = true;
-    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    toggle.click();
     expect(onChange).toHaveBeenCalledWith(true);
   });
 });

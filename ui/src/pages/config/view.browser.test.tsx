@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConfigForm as renderConfigForm } from "../../components/config-form.render.tsx";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
@@ -86,22 +86,24 @@ describe("config view", () => {
       settingsLayout: "accordion",
       onFormPatch,
     });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const setup = required(container, "#config-section-wizard", HTMLDetailsElement);
     expect(setup.open).toBe(false);
     setup.open = true;
     expect(setup.textContent).toContain(wizard.lastRunVersion);
     expect(setup.textContent).not.toContain(wizard.securityAcknowledgedAt);
     expect(
-      setup.querySelectorAll('input:not([type="checkbox"]):not([type="radio"]), textarea, select'),
+      setup.querySelectorAll(
+        "input:not(.settings-toggle__input):not(.settings-segmented__input), textarea, select",
+      ),
     ).toHaveLength(0);
     expect(onFormPatch).not.toHaveBeenCalled();
-    const access = required(setup, 'input[type="radio"][value="1"]', HTMLInputElement);
-    access.click();
+    setup.querySelector<HTMLInputElement>('.settings-segmented__input[value="1"]')!.click();
     expect(onFormPatch).toHaveBeenCalledWith(["wizard", "accessMode"], "guarded");
-    const toggle = required(setup, 'input[type="checkbox"]', HTMLInputElement);
+    const toggle = setup.querySelector<HTMLInputElement>(".settings-toggle__input")!;
     expect(toggle.checked).toBe(true);
-    toggle.checked = false;
-    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    toggle.click();
     expect(onFormPatch).toHaveBeenLastCalledWith(["wizard", "appRecommendations"], false);
     expect(props.formValue).toEqual({ wizard });
 
@@ -116,10 +118,11 @@ describe("config view", () => {
       true,
     );
     expect(
-      defaults.container.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value,
+      defaults.container.querySelector<HTMLInputElement>(".settings-segmented__input:checked")
+        ?.value,
     ).toBe("0");
     expect(
-      defaults.container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked,
+      defaults.container.querySelector<HTMLInputElement>(".settings-toggle__input")?.checked,
     ).toBe(true);
     expect(defaults.props.onFormPatch).not.toHaveBeenCalled();
   });
@@ -1307,6 +1310,8 @@ describe("config view", () => {
       textScale: 110,
       textScaleOverridden: true,
     });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const row = (title: string) => settingsRow(container, title);
 
     expect(findButtonByText(container, "Knot").getAttribute("aria-pressed")).toBe("true");
@@ -1327,7 +1332,7 @@ describe("config view", () => {
 
     findButtonByText(container, "Claw").click();
     const colorMode = row("Color mode")?.querySelector<HTMLInputElement>(
-      'input[type="radio"][value="system"]',
+      '.settings-segmented__input[value="system"]',
     );
     expect(colorMode).toBeDefined();
     colorMode?.click();
@@ -1361,7 +1366,9 @@ describe("config view", () => {
     expect(normalizedText(themeSection)).toContain("Default: System");
     expect(shortcutRow?.textContent).toContain("Default: Enter");
     findButtonByText(themeSection, "Claw").click();
-    themeSection.querySelector<HTMLInputElement>('input[type="radio"][value="system"]')?.click();
+    themeSection
+      .querySelector<HTMLInputElement>('.settings-segmented__input[value="system"]')
+      ?.click();
 
     expect(props.setTheme).toHaveBeenCalledWith("claw");
     expect(props.setThemeMode).toHaveBeenCalledWith("system");
@@ -1444,8 +1451,10 @@ describe("config view", () => {
     },
   ] as const)("changes the browser-local $title toggle", ({ title, preference, checked }) => {
     const { container, props } = renderAppearance();
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const row = settingsRow(container, title);
-    expect(row.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(checked);
+    expect(row.querySelector<HTMLInputElement>(".settings-toggle__input")?.checked).toBe(checked);
     row.click();
     expect(props.onAppearanceChange).toHaveBeenCalledWith({ [preference]: !checked });
     expect(row.textContent).not.toContain("Using default:");
@@ -1574,15 +1583,9 @@ describe("config view", () => {
     });
     vi.stubGlobal("AudioContext", audioContextCtor);
 
-    const activateSwitch = (element: HTMLInputElement, nextChecked: boolean) => {
-      if (element.checked !== nextChecked) {
-        element.click();
-      }
-    };
-
     const soundSwitch = (container: HTMLElement) => {
       const control = settingsRow(container, "Lobster sounds").querySelector<HTMLInputElement>(
-        'input[type="checkbox"]',
+        ".settings-toggle__input",
       );
       expect(control).toBeDefined();
       if (!control) {
@@ -1592,10 +1595,12 @@ describe("config view", () => {
     };
 
     const { container, props } = renderAppearance();
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const disabledSwitch = soundSwitch(container);
 
     expect(audioContextCtor).not.toHaveBeenCalled();
-    activateSwitch(disabledSwitch, true);
+    disabledSwitch.click();
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
     expect(props.onAppearanceChange).toHaveBeenCalledWith({ lobsterPetSounds: true });
 
@@ -1608,13 +1613,10 @@ describe("config view", () => {
       bubbles: true,
       composed: true,
     });
-    Object.defineProperty(noOpKey, "composedPath", {
-      value: () => [document.createElement("input"), enabledSwitch],
-    });
     enabledSwitch.dispatchEvent(noOpKey);
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
 
-    activateSwitch(enabledSwitch, false);
+    enabledSwitch.click();
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
     expect(props.onAppearanceChange).toHaveBeenLastCalledWith({ lobsterPetSounds: false });
   });

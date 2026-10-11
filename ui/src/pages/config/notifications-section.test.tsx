@@ -107,8 +107,7 @@ describe("Web Push preference saves", () => {
       throw new Error("Expected the mention account preference switch");
     }
     expect(accountToggle.checked).toBe(false);
-    accountToggle.checked = true;
-    accountToggle.dispatchEvent(new Event("change"));
+    accountToggle.click();
     expect(onUserPreferences).toHaveBeenCalledWith({
       ...userPreferences,
       categories: { ...userPreferences.categories, humanMentioned: true },
@@ -213,22 +212,20 @@ describe("Web Push preference controls", () => {
     // Every boolean control keeps a nonempty accessible name and the shared presentation.
     expect(getAllByRole("switch", { name: /\S/ })).toHaveLength(7);
     expect(
-      container.querySelectorAll('input[type="checkbox"].settings-toggle__input'),
-    ).toHaveLength(7);
+      container.querySelectorAll('input[type="checkbox"]:not(.settings-toggle__input)'),
+    ).toHaveLength(0);
+    expect(container.querySelectorAll('.settings-toggle__input[role="switch"]')).toHaveLength(7);
     expect(container.textContent).not.toContain("Background task failed");
 
     const unstyled = Array.from(container.querySelectorAll<HTMLElement>("select, input"))
       .filter((control) => {
-        const expectedClass =
-          control.tagName === "SELECT"
-            ? "settings-select"
-            : control.getAttribute("type") === "checkbox"
-              ? "settings-toggle__input"
-              : "settings-input";
-        return (
-          !control.classList.contains(expectedClass) ||
-          (control.getAttribute("type") !== "checkbox" && !control.getAttribute("aria-label"))
-        );
+        if (control.classList.contains("settings-toggle__input")) {
+          return (
+            control.getAttribute("role") !== "switch" || !control.getAttribute("aria-labelledby")
+          );
+        }
+        const expectedClass = control.tagName === "SELECT" ? "settings-select" : "settings-input";
+        return !control.classList.contains(expectedClass) || !control.getAttribute("aria-label");
       })
       .map((control) => control.outerHTML.slice(0, 60));
     expect(container.querySelectorAll("select")).toHaveLength(10);
@@ -285,11 +282,10 @@ describe("Web Push preference controls", () => {
     );
 
     const toggle = expectDefined(
-      deviceGroup.querySelector<HTMLInputElement>('input[type="checkbox"]'),
+      deviceGroup.querySelector<HTMLInputElement>(".settings-toggle__input"),
       "deliver toggle",
     );
-    toggle.checked = false;
-    toggle.dispatchEvent(new Event("change"));
+    toggle.click();
     expect(onDevice).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: false, label: "phone", agentIds: ["main"] }),
     );

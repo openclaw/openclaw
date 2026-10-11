@@ -4,6 +4,7 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
+import { assertStateDatabaseReadAllowed } from "../infra/gateway-state-owner.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -12,6 +13,11 @@ import type {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import {
+  observationFromCachedPluginState,
+  preparePluginStateObservationCacheRead,
+  readPluginStateObservationCache,
+} from "./plugin-state-observation-cache.js";
 import type {
   PluginStateOperationCommit,
   PluginStateOperationResult,
@@ -20,7 +26,10 @@ import {
   beginPluginStateMutation,
   capturePluginStateMutationSettlement,
 } from "./plugin-state-operation-epochs.js";
-import { withPluginStatePublication } from "./plugin-state-publication.js";
+import {
+  recordPluginStateReadDependency,
+  withPluginStatePublication,
+} from "./plugin-state-publication.js";
 import { wrapPluginStateError } from "./plugin-state-store.database.js";
 import type { PluginStateStoreError } from "./plugin-state-store.types.js";
 import {
@@ -47,6 +56,7 @@ type Input<Key extends keyof PluginStateWorkerOperations> =
 type ObservationCheck<Key extends keyof PluginStateWorkerOperations> = (
   result: PluginStateWorkerRequests[Key]["output"],
 ) => boolean;
+type ReadDependency = { pluginId: string; namespace: string; keys: readonly string[] };
 
 type PluginStateCommandOrder = { ready: Promise<void> | undefined; finish?: () => void };
 
@@ -95,6 +105,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     assertCurrent?: () => void;
     isObservation?: ObservationCheck<Key>;
     existingOnly?: { missing: () => PluginStateWorkerRequests[Key]["output"] };
+    readDependency?: ReadDependency;
     onCommitted?: (facts: unknown) => void;
   } = {},
 ): Promise<PluginStateWorkerRequests[Key]["output"]> {
@@ -118,9 +129,18 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   const description = pluginStateWorkerOperations[command.type];
   let dispatched = false;
   let order: PluginStateCommandOrder | undefined;
+  let installObservation: ReturnType<typeof preparePluginStateObservationCacheRead> | undefined;
   try {
     const context =
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
+    if (checks.readDependency) {
+      const identity = context.admission.identity.key;
+      recordPluginStateReadDependency({
+        ...checks.readDependency,
+        identity: identity.startsWith("file:") ? identity : undefined,
+        assertCurrent: context.admission.assertCurrent,
+      });
+    }
     order = prepareCommandOrder(
       context.admission.coordinationKey,
       // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
@@ -129,6 +149,34 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     if (order?.ready) {
       await order.ready;
       assertAdmission?.();
+    }
+    if (
+      command.input &&
+      "key" in command.input &&
+      (command.type === "pluginState.observe" ||
+        command.type === "pluginState.compareUpdate" ||
+        command.type === "pluginState.compareDelete")
+    ) {
+      const identity = context.admission.identity.key;
+      const current = readPluginStateObservationCache(identity, command.input);
+      if (command.type === "pluginState.observe" && !currentEntries) {
+        context.admission.assertCurrent();
+        if (current) {
+          assertStateDatabaseReadAllowed(databasePath);
+          assertAdmission?.();
+          const observation = observationFromCachedPluginState(
+            identity,
+            databasePath,
+            command.input,
+            current,
+          );
+          // SAFETY: This branch handles only the observe command's observation output.
+          return observation as PluginStateWorkerRequests[Key]["output"];
+        }
+        installObservation = preparePluginStateObservationCacheRead(identity, command.input);
+      } else if (command.type !== "pluginState.observe" && current) {
+        Object.assign(command.input, { current });
+      }
     }
     // A write-only await here would let later reads overtake it before broker admission.
     const [
@@ -155,6 +203,12 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       );
       if (!result.ok) {
         throw restorePluginStateWorkerFailure(result.error);
+      }
+      if (command.type === "pluginState.observe") {
+        const observation =
+          // SAFETY: The command discriminant fixes this worker result's private row envelope.
+          result.value as PluginStateWorkerRequests["pluginState.observe"]["output"];
+        installObservation?.(observation.row);
       }
       return result.value;
     };
@@ -255,6 +309,7 @@ function createOperation<
   type: Key,
   missing?: () => PluginStateWorkerRequests[Key]["output"],
   isObservation?: ObservationCheck<Key>,
+  readDependency?: (params: Input<Key>) => ReadDependency,
 ) {
   return (params: Input<Key>): Promise<PluginStateWorkerRequests[Key]["output"]> => {
     // Host authority stays in the broker admission; only data crosses to the worker.
@@ -273,6 +328,7 @@ function createOperation<
       {
         assertCurrent,
         isObservation,
+        readDependency: readDependency?.(params),
       },
     );
   };
@@ -282,11 +338,16 @@ export const registerPluginStateInWorker = createOperation("pluginState.register
 export const replacePluginStateInWorker = createOperation("pluginState.replace");
 export const replacePluginStateEntryInWorker = createOperation("pluginState.replaceEntry");
 
-export const observePluginStateInWorker = createOperation(
+const observePluginState = createOperation(
   "pluginState.observe",
   undefined,
   () => true,
+  ({ pluginId, namespace, key }) => ({ pluginId, namespace, keys: [key] }),
 );
+export async function observePluginStateInWorker(params: Input<"pluginState.observe">) {
+  const { value, comparison } = await observePluginState(params);
+  return { value, comparison };
+}
 export const comparePluginStateUpdateInWorker = createOperation(
   "pluginState.compareUpdate",
   undefined,
@@ -299,7 +360,13 @@ export const comparePluginStateDeleteInWorker = createOperation(
 );
 export const registerPluginStateIfAbsentInWorker = createOperation("pluginState.registerIfAbsent");
 export const deletePluginStateIfEqualInWorker = createOperation("pluginState.deleteIfEqual");
-export const lookupPluginStateInWorker = createOperation("pluginState.lookup", () => undefined);
+export const lookupPluginStateInWorker = createOperation(
+  "pluginState.lookup",
+  () => undefined,
+  undefined,
+  ({ pluginId, namespace, key }) => ({ pluginId, namespace, keys: [key] }),
+);
+
 export async function lookupManyPluginStateInWorker(
   params: Input<"pluginState.lookupMany">,
 ): Promise<Array<Result<unknown, PluginStateStoreError>>> {
@@ -312,6 +379,7 @@ export async function lookupManyPluginStateInWorker(
     { env, assertActive, sessionEntryCurrent, context, signal },
     { type: "pluginState.lookupMany", input },
     () => input.keys.map(() => ok<unknown, PluginStateWorkerFailure>(undefined)),
+    { readDependency: { pluginId: input.pluginId, namespace: input.namespace, keys: input.keys } },
   );
   return results.map((result) =>
     result.ok ? result : err(restorePluginStateWorkerFailure(result.error)),

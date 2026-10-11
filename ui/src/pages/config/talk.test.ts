@@ -325,9 +325,7 @@ describe("Talk device and voice wake settings", () => {
         if (!row) {
           throw new Error(`Missing device voice control: ${key}`);
         }
-        const toggle = row.querySelector<HTMLElement & { checked: boolean }>(
-          'input[role="switch"]',
-        )!;
+        const toggle = row.querySelector<HTMLInputElement>(".settings-toggle__input")!;
         const next = !toggle.checked;
         row.click();
         expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(key, next);
@@ -615,9 +613,9 @@ describe("Talk device and voice wake settings", () => {
         (element) => element.querySelector(".settings-row__title")?.textContent?.trim() === title,
       )!;
     expect(page.textContent).toContain("This Mac");
-    expect(row("Voice Wake").querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(
-      true,
-    );
+    expect(
+      row("Voice Wake").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+    ).toBe(true);
     expect(row("Voice Wake").textContent).toContain("macOS 26");
     row("Hold Right Option to talk").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.pushToTalkEnabled", false);
@@ -637,21 +635,21 @@ describe("Talk device and voice wake settings", () => {
     expect(nativeDeviceSettings.openPanel).toHaveBeenCalledWith("microphone-test");
     snapshot.voice.wakeEnabled = true;
     publishSnapshot();
-    expect(row("Voice Wake").querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(
-      false,
-    );
+    expect(
+      row("Voice Wake").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+    ).toBe(false);
     row("Voice Wake").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.wakeEnabled", false);
     snapshot.voice.wakeEnabled = false;
     publishSnapshot();
-    expect(row("Voice Wake").querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(
-      true,
-    );
+    expect(
+      row("Voice Wake").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+    ).toBe(true);
     snapshot.voice.supported = true;
     publishSnapshot();
-    expect(row("Voice Wake").querySelector('input[role="switch"]')?.hasAttribute("disabled")).toBe(
-      false,
-    );
+    expect(
+      row("Voice Wake").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+    ).toBe(false);
   });
 
   it("preserves pending language additions across an older native acknowledgment and the next edit", () => {

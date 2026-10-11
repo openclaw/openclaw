@@ -56,7 +56,9 @@ export async function waitForControlUiGatewayReconnecting(page: Page): Promise<v
       { timeout: controlUiE2eWaitTimeoutMs },
     ),
     page
-      .locator(".gateway-status__label", { hasText: "Reconnecting…" })
+      .getByRole("button", { name: /Reconnecting…/ })
+      .or(page.locator(".gateway-status__label:visible", { hasText: "Reconnecting…" }))
+      .first()
       .waitFor({ state: "visible", timeout: controlUiE2eWaitTimeoutMs }),
   ]);
 }

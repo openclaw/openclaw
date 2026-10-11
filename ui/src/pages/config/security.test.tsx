@@ -6,7 +6,7 @@ import { renderSecurity } from "./security.tsx";
 
 type SecurityViewProps = Parameters<typeof renderSecurity>[0];
 
-type SecurityControl = HTMLElement & { checked?: boolean; disabled: boolean };
+type SecurityControl = HTMLButtonElement | HTMLLabelElement;
 
 function expectButtonByText(container: Element, text: string): SecurityControl {
   const button = Array.from(
@@ -19,11 +19,9 @@ function expectButtonByText(container: Element, text: string): SecurityControl {
 }
 
 function selectRadio(control: SecurityControl) {
-  const input = control.querySelector<HTMLInputElement>('input[type="radio"]');
+  const input = control.querySelector<HTMLInputElement>(".settings-segmented__input");
   expect(input).not.toBeNull();
-  if (input && !input.checked) {
-    input.click();
-  }
+  input?.click();
 }
 
 function expectRowByTitle(container: Element, text: string): HTMLElement {
@@ -60,9 +58,8 @@ describe("renderSecurity", () => {
   it("lets operators change browser and tool profile from the overview", () => {
     const onBrowserEnabledToggle = vi.fn();
     const onToolProfileChange = vi.fn();
-    const container = document.createElement("div");
 
-    mountSolid(
+    const { container } = mountSolid(
       () =>
         renderSecurity(
           createProps({
@@ -78,18 +75,16 @@ describe("renderSecurity", () => {
             onToolProfileChange,
           }),
         ),
-      { container },
     );
 
     const browserRow = expectRowByTitle(container, "Browser enabled");
-    const browserInput = browserRow.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    const browserInput = browserRow.querySelector<HTMLInputElement>(".settings-toggle__input");
     expect(browserInput).toBeInstanceOf(HTMLInputElement);
     expect(browserInput?.checked).toBe(false);
     if (!browserInput) {
       throw new Error("Expected browser switch");
     }
-    browserInput.checked = true;
-    browserInput.dispatchEvent(new Event("change"));
+    browserInput.click();
     expect(onBrowserEnabledToggle).toHaveBeenCalledWith(true);
 
     selectRadio(expectButtonByText(container, "Full"));
@@ -100,29 +95,26 @@ describe("renderSecurity", () => {
 
   it("locks config-backed controls while a config operation is pending", () => {
     const onToolProfileChange = vi.fn();
-    const container = document.createElement("div");
 
-    mountSolid(() => renderSecurity(createProps({ configBusy: true, onToolProfileChange })), {
-      container,
-    });
+    const { container } = mountSolid(() =>
+      renderSecurity(createProps({ configBusy: true, onToolProfileChange })),
+    );
 
     const profileButton = expectButtonByText(
       expectRowByTitle(container, "Available tools"),
       "Full",
     );
-    expect(profileButton.querySelector<HTMLInputElement>('input[type="radio"]')?.disabled).toBe(
+    expect(profileButton.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(
       true,
     );
     profileButton.click();
     expect(onToolProfileChange).not.toHaveBeenCalled();
     const browserRow = expectRowByTitle(container, "Browser enabled");
-    expect(browserRow.querySelector('input[type="checkbox"]')?.hasAttribute("disabled")).toBe(true);
+    expect(browserRow.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(true);
   });
 
   it("shows gateway auth as a dot status, not a pill", () => {
-    const container = document.createElement("div");
-
-    mountSolid(
+    const { container } = mountSolid(
       () =>
         renderSecurity(
           createProps({
@@ -136,7 +128,6 @@ describe("renderSecurity", () => {
             },
           }),
         ),
-      { container },
     );
 
     const authRow = expectRowByTitle(container, "Gateway auth");
@@ -147,23 +138,19 @@ describe("renderSecurity", () => {
 
   it("opens mobile pairing from the overview", () => {
     const onPairMobile = vi.fn();
-    const container = document.createElement("div");
 
-    mountSolid(() => renderSecurity(createProps({ onPairMobile })), { container });
+    const { container } = mountSolid(() => renderSecurity(createProps({ onPairMobile })));
 
     expectRowByTitle(container, "Pair a device");
     const button = expectButtonByText(container, "Pair device");
-    expect(button.disabled).toBe(false);
+    expect(button).toHaveProperty("disabled", false);
     button.click();
     expect(onPairMobile).toHaveBeenCalledOnce();
   });
 
   it("embeds the schema editor below the curated overview", () => {
-    const container = document.createElement("div");
-
-    mountSolid(
+    const { container } = mountSolid(
       () => renderSecurity(createProps({ editor: <div data-testid="security-editor" /> })),
-      { container },
     );
 
     const page = container.querySelector(".security-page");
@@ -172,9 +159,7 @@ describe("renderSecurity", () => {
   });
 
   it("shows inherited default descriptions", () => {
-    const container = document.createElement("div");
-
-    mountSolid(
+    const { container } = mountSolid(
       () =>
         renderSecurity(
           createProps({
@@ -188,7 +173,6 @@ describe("renderSecurity", () => {
             },
           }),
         ),
-      { container },
     );
 
     expect(expectRowByTitle(container, "Browser enabled").textContent).not.toContain(
@@ -208,8 +192,7 @@ describe("renderSecurity", () => {
     ({ profile, overridden, busy, writes }) => {
       const props = createProps();
       const onToolProfileChange = vi.fn();
-      const container = document.createElement("div");
-      mountSolid(
+      const { container } = mountSolid(
         () =>
           renderSecurity({
             ...props,
@@ -221,11 +204,10 @@ describe("renderSecurity", () => {
             configBusy: busy,
             onToolProfileChange,
           }),
-        { container },
       );
 
       expect(onToolProfileChange).not.toHaveBeenCalled();
-      expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(4);
+      expect(container.querySelectorAll(".settings-segmented__input")).toHaveLength(4);
       expect(container.querySelectorAll(".settings-segmented__btn--active")).toHaveLength(
         overridden ? 1 : 0,
       );

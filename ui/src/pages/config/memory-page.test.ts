@@ -328,10 +328,8 @@ describe("MemorySettingsPage catalog state", () => {
       expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
       expect(addonSwitch(element, "Active memory")).toBeNull();
       expect(addonSwitch(element, "Memory wiki")).toBeNull();
-      const engineGroup = element.querySelector<HTMLInputElement>(
-        '.settings-segmented input[type="radio"]',
-      );
-      expect(engineGroup?.disabled).toBe(true);
+      const engineInput = element.querySelector<HTMLInputElement>(".settings-segmented__input");
+      expect(engineInput?.disabled).toBe(true);
     } finally {
       element.remove();
     }

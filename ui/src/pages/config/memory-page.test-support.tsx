@@ -385,7 +385,7 @@ export function addonSwitch(element: HTMLElement, label: string) {
   const row = [...element.querySelectorAll(".settings-row--toggle")].find((entry) =>
     entry.textContent?.includes(label),
   );
-  return row?.querySelector<HTMLElement & { checked: boolean }>('input[role="switch"]') ?? null;
+  return row?.querySelector<HTMLInputElement>(".settings-toggle__input") ?? null;
 }
 
 export function toggleAddon(element: HTMLElement, label: string, checked: boolean) {
@@ -398,16 +398,17 @@ export function toggleAddon(element: HTMLElement, label: string, checked: boolea
 }
 
 export function activeEngine(element: HTMLElement): string | null {
-  return element.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value ?? null;
+  return (
+    element.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value ?? null
+  );
 }
 
 export function selectEngine(element: HTMLElement, value: string) {
-  const radio = [...element.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find(
-    (input) => input.value === value,
+  const input = [...element.querySelectorAll<HTMLInputElement>(".settings-segmented__input")].find(
+    (candidate) => candidate.value === value,
   );
-  if (!radio) {
-    throw new Error(`Missing engine: ${value}`);
+  if (!input) {
+    throw new Error(`Missing memory engine: ${value}`);
   }
-  radio.checked = true;
-  radio.dispatchEvent(new Event("change", { bubbles: true }));
+  input.click();
 }
