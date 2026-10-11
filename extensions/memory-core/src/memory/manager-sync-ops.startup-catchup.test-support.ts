@@ -18,6 +18,7 @@ import {
   resolveConfiguredScopeHash,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
+import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
 import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
@@ -322,10 +323,12 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected async sync(params?: MemorySyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
     this.pendingSyncWork = this.indexSessionUpdates
-      ? this.syncArchiveFiles({
-          needsFullReindex: false,
-          deferIndex: this.deferSessionIndex,
-        }).then(() => undefined)
+      ? hasTargetedSessionSyncParams(params)
+        ? this.runSync(params).then(() => undefined)
+        : this.syncArchiveFiles({
+            needsFullReindex: false,
+            deferIndex: this.deferSessionIndex,
+          }).then(() => undefined)
       : Promise.resolve();
     await this.pendingSyncWork;
   }

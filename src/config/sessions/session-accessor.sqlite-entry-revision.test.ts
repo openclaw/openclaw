@@ -228,7 +228,7 @@ it("observes a sibling writer receipt before the next authority check", () => {
   expect(guard).toThrow("Prepared session entry facts are no longer current");
 });
 
-it("does not stamp an overlapping sibling commit onto previously read predicate facts", () => {
+it("checks the next predicate after a sibling commit overlaps a read", () => {
   const filename = path.join(tempDirs.make("session-revision-overlap-"), "agent.sqlite");
   const { database } = guardFixture(filename);
   database.exec("PRAGMA journal_mode = WAL");
@@ -249,6 +249,6 @@ it("does not stamp an overlapping sibling commit onto previously read predicate 
       return matches;
     },
   );
-  expect(guard).toThrow("Session entry facts changed during their mutation check");
+  expect(guard).not.toThrow();
   expect(guard).toThrow("Prepared session entry facts are no longer current");
 });

@@ -89,6 +89,28 @@ async function mountModal(host = container, variant = "", autofocus = true) {
 }
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
+  it.each([false, true])(
+    "returns focus after background inertness clears without replacing new focus (moved=%s)",
+    async (moved) => {
+      const background = document.createElement("div");
+      const trigger = document.createElement("button");
+      const nextTarget = document.createElement("button");
+      background.append(trigger, nextTarget);
+      container.append(background);
+      trigger.focus();
+      const { modal } = await mountModal();
+
+      background.inert = true;
+      modal.remove();
+      background.inert = false;
+      if (moved) {
+        nextTarget.focus();
+      }
+
+      await expect.poll(() => document.activeElement).toBe(moved ? nextTarget : trigger);
+    },
+  );
+
   it.each(["standard", "drawer"])(
     "honors reduced motion when opening and closing (%s)",
     async (variant) => {

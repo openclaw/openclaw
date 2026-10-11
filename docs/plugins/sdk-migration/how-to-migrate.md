@@ -52,8 +52,18 @@ For transcript callbacks, use the separate
 [transcript preparation contract](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation),
 which checks duplicates before preparation and supports explicit suppression.
 
-The original synchronous keyed stores and opaque `update`/`deleteIf` callbacks
-remain compatibility APIs. They
+For account-scoped conversation bindings, use
+`createAccountScopedConversationBindingManagerV2` from
+`openclaw/plugin-sdk/thread-bindings-runtime`. Await bind, touch, unbind, and
+lookup methods, including lookups that expire bindings. Register custom adapters
+with `registerSessionBindingAdapterV2`; the V2 interface requires asynchronous
+readers and current-owner checks. The service exposes `listBySessionAsync`,
+`resolveByConversationAsync`, and `touchAsync`. An async failure never selects a
+synchronous fallback. External adapters remain responsible for their own
+storage, currentness, and committed publication.
+
+The original synchronous keyed stores, opaque `update`/`deleteIf` callbacks,
+binding managers, and adapter registrations remain compatibility APIs. They
 preserve synchronous commit-before-return and callback ordering, and are
 **removed in the next Plugin SDK major** after the approved compatibility window.
 Actual legacy use emits one diagnostic per plugin and capability family per
@@ -66,6 +76,26 @@ When state-backed reads feed a channel, migrate its config and security adapters
 to the [async channel hooks](/plugins/sdk-channel-plugins). Forward these hooks
 through wrapper and setup adapters while keeping existing synchronous signatures
 for older hosts.
+
+## Migrate inspection, authorization, and approval factories
+
+Use these async replacements when inspection or channel eligibility reads
+worker-owned state:
+
+| SDK subpath                               | Synchronous API                                    | Replacement                                             |
+| ----------------------------------------- | -------------------------------------------------- | ------------------------------------------------------- |
+| `conversation-binding-inspection-runtime` | `inspectConversationBinding`                       | `inspectConversationBindingAsync`                       |
+| `command-auth-native`                     | `resolveCommandAuthorization`                      | `resolveCommandAuthorizationAsync`                      |
+| `approval-delivery-runtime`               | `createApproverRestrictedNativeApprovalCapability` | `createApproverRestrictedNativeApprovalCapabilityAsync` |
+| `approval-handler-runtime`                | `createChannelApprovalNativeRuntimeAdapter`        | `createChannelApprovalNativeRuntimeAdapterAsync`        |
+| `approval-handler-adapter-runtime`        | `createLazyChannelApprovalNativeRuntimeAdapter`    | `createLazyChannelApprovalNativeRuntimeAdapterAsync`    |
+
+Await inspection and command authorization before consuming their results. The
+approval factories still return adapters synchronously; their async eligibility
+callbacks are awaited by the host. The original APIs preserve their synchronous
+contracts through the next Plugin SDK major compatibility window. Use the narrow
+subpaths above for new imports; broad compatibility barrels retain existing APIs
+without duplicating the replacements.
 
 ## Await Gateway approval publication
 
