@@ -80,7 +80,8 @@ const sharedClientMocks = vi.hoisted(() => ({
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
 
-vi.mock("./app-server/shared-client.js", () => ({
+vi.mock("./app-server/shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./app-server/shared-client.js")>()),
   ...sharedClientMocks,
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient:
@@ -88,7 +89,7 @@ vi.mock("./app-server/shared-client.js", () => ({
   releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
     lease.client = undefined;
   }),
-  withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
+  withCodexAppServerClientRequestScope: async (params: {
     lease: { client?: unknown };
     options?: { timeoutMs?: number };
     run: (

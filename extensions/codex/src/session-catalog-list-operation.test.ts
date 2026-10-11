@@ -12,55 +12,6 @@ import { CODEX_TERMINAL_START_COMMAND } from "./session-catalog-terminal.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
 describe("Codex catalog list operation", () => {
-  it("serves the retained node immediately and rejects an older refresh after a newer publication", async () => {
-    const f = await nodeFixture();
-    await f.read();
-    const older = createDeferred<unknown>();
-    const newer = createDeferred<unknown>();
-    f.invoke.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-    const first = observe(f.read());
-    const second = observe(f.read());
-    try {
-      await nextTurn();
-      expect(first.state.settled).toBe(true);
-      expect(second.state.settled).toBe(true);
-      for (const result of [first, second]) {
-        await expect(result.done).resolves.toMatchObject({
-          status: "fulfilled",
-          value: [
-            { hostId: "gateway:local" },
-            { hostId: "node:remote", sessions: [{ threadId: "original" }] },
-          ],
-        });
-      }
-      newer.resolve({ payloadJSON: JSON.stringify(page(["newer"])) });
-      await nextTurn();
-      older.resolve({ payloadJSON: JSON.stringify(page(["older"])) });
-      await Promise.all(f.publications);
-      const published = f.onHost.mock.calls.flatMap(([host]) =>
-        host.hostId === "node:remote"
-          ? host.sessions.map((row: { threadId: string }) => row.threadId)
-          : [],
-      );
-      expect(published).toContain("newer");
-      expect(published).not.toContain("older");
-      const held = createDeferred<unknown>();
-      f.invoke.mockReturnValueOnce(held.promise);
-      try {
-        await expect(f.read()).resolves.toMatchObject([
-          { hostId: "gateway:local" },
-          { hostId: "node:remote", sessions: [{ threadId: "newer" }] },
-        ]);
-      } finally {
-        held.resolve({ payloadJSON: JSON.stringify(page(["final"])) });
-      }
-    } finally {
-      older.resolve({ payloadJSON: JSON.stringify(page([])) });
-      newer.resolve({ payloadJSON: JSON.stringify(page([])) });
-      await Promise.allSettled([first.done, second.done, ...f.publications]);
-    }
-  });
-
   it("yields an inert exclusion checkpoint and retains filled rows, limits and cursors", async () => {
     const f = await fixture();
     f.listPage
@@ -431,54 +382,6 @@ describe("Codex catalog list operation", () => {
       held.resolve({ payloadJSON: JSON.stringify(page([])) });
       await pending.done;
       await Promise.allSettled(f.publications);
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not bind a delayed inventory to a newer connection", async () => {
-    const f = await nodeFixture();
-    const inventory = createDeferred<Awaited<ReturnType<typeof f.listNodes>>>();
-    const inventoryStarted = createDeferred<void>();
-    const newer = createDeferred<unknown>();
-    f.invoke
-      .mockReturnValueOnce(newer.promise)
-      .mockResolvedValueOnce({ payloadJSON: JSON.stringify(page(["obsolete"])) });
-    const first = observe(
-      f.read({
-        listNodes: () => {
-          inventoryStarted.resolve();
-          return inventory.promise;
-        },
-      }),
-    );
-    await inventoryStarted.promise;
-    f.listNodes.mockResolvedValue({ nodes: [{ ...f.node, connectedAtMs: 2 }] });
-    vi.useFakeTimers();
-    const second = observe(f.read());
-    try {
-      await nextTurn();
-      inventory.resolve({ nodes: [f.node] });
-      await nextTurn();
-      await vi.advanceTimersByTimeAsync(250);
-      expect(first.state.settled).toBe(true);
-      expect(second.state.settled).toBe(true);
-      expect(
-        f.onHost.mock.calls.flatMap(([host]) =>
-          host.sessions.map((row: { threadId: string }) => row.threadId),
-        ),
-      ).not.toContain("obsolete");
-      newer.resolve({ payloadJSON: JSON.stringify(page(["current"])) });
-      await Promise.all(f.publications);
-      expect(f.onHost).toHaveBeenCalledWith(
-        expect.objectContaining({
-          hostId: "node:remote",
-          sessions: [expect.objectContaining({ threadId: "current" })],
-        }),
-      );
-    } finally {
-      inventory.resolve({ nodes: [f.node] });
-      newer.resolve({ payloadJSON: JSON.stringify(page([])) });
-      await Promise.allSettled([first.done, second.done, ...f.publications]);
       vi.useRealTimers();
     }
   });

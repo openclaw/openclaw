@@ -38,7 +38,7 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
   const getLeasedSharedCodexAppServerClient = sharedClient.getLeasedSharedCodexAppServerClient;
   it.each([
     "context",
-    "prestart-artifact-drain",
+    "entry-selection",
     "transport-registration",
     "initialize",
     "catalog-observation",
@@ -70,7 +70,7 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
           return startOptions;
         },
       );
-    } else if (boundary === "prestart-artifact-drain") {
+    } else if (boundary === "entry-selection") {
       vi.mocked(authBridge.reconcileCodexComputerUseStartArtifacts).mockImplementationOnce(park);
     } else if (boundary === "catalog-observation") {
       vi.spyOn(catalogEvents, "observeCodexCatalogClient").mockImplementationOnce(park);

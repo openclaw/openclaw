@@ -14,7 +14,6 @@ import {
   readRealDirectoryIdentity,
 } from "./computer-use-service-path.js";
 import { resolveMacOSDesktopCodexComputerUseServiceAppCandidates } from "./desktop-app-paths.js";
-import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 
 const SERVICE_APP_NAME = "Codex Computer Use.app";
 const SERVICE_BUNDLE_ID = "com.openai.sky.CUAService";
@@ -30,10 +29,7 @@ const CLIENT_RELATIVE_PATH = path.join(
 const SERVICE_PARENT_LABEL = "Computer Use service parent";
 const COPY_TIMEOUT_MS = 120_000;
 const INSPECT_TIMEOUT_MS = 30_000;
-const activeInstalls = new Map<
-  string,
-  { syncKey: string; promise: Promise<CodexComputerUseServiceStatus> }
->();
+const activeInstalls = new Map<string, Promise<CodexComputerUseServiceStatus>>();
 
 type CodexComputerUseServiceStatus = {
   status: "installed" | "refreshed" | "already_current" | "source_missing" | "unsupported";
@@ -56,12 +52,6 @@ type CodexComputerUseServiceIdentity = {
   clientBundleId: string;
   clientCdHash: string;
   clientTeamId: string;
-};
-
-type ServiceAppSnapshot = {
-  exists: boolean;
-  identity?: CodexComputerUseServiceIdentity;
-  filesystemKey?: string;
 };
 
 /** Finds the first signed native service from one ordered desktop owner set. */
@@ -107,14 +97,10 @@ export async function ensureCodexComputerUseServiceApp(params: {
   const candidates =
     params.sourceAppCandidates ??
     resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform, params.appServerCommand);
-  const syncKey = [targetPath, ...candidates].join("\0");
   const active = activeInstalls.get(targetPath);
   if (active) {
-    if (active.syncKey === syncKey) {
-      return await active.promise;
-    }
-    await active.promise.catch(() => undefined);
-    return await ensureCodexComputerUseServiceApp(params);
+    // A source change during an install is picked up by the next acquisition.
+    return await active;
   }
   const install = ensureCodexComputerUseServiceAppOnce({
     ...params,
@@ -124,15 +110,12 @@ export async function ensureCodexComputerUseServiceApp(params: {
     targetPath,
     sourceAppCandidates: candidates,
   });
-  const activeEntry = { syncKey, promise: install };
-  activeInstalls.set(targetPath, activeEntry);
-  const clearActive = () => {
-    if (activeInstalls.get(targetPath) === activeEntry) {
-      activeInstalls.delete(targetPath);
-    }
-  };
-  void install.then(clearActive, clearActive);
-  return await install;
+  activeInstalls.set(targetPath, install);
+  try {
+    return await install;
+  } finally {
+    activeInstalls.delete(targetPath);
+  }
 }
 
 async function ensureCodexComputerUseServiceAppOnce(params: {
@@ -165,8 +148,9 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   });
   const operationTargetPath = path.join(ownedParent.realPath, SERVICE_APP_NAME);
   await assertNotSymlink(operationTargetPath, "Computer Use service target");
-  const initialTarget = await readServiceAppSnapshot(operationTargetPath, inspectServiceApp);
-  if (initialTarget.identity && identitiesMatch(initialTarget.identity, sourceIdentity)) {
+  const targetExisted = await pathExists(operationTargetPath);
+  const initialIdentity = await inspectServiceApp(operationTargetPath);
+  if (initialIdentity && identitiesMatch(initialIdentity, sourceIdentity)) {
     return alreadyCurrent;
   }
 
@@ -182,19 +166,6 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     `.service-app.backup-${process.pid}-${Date.now()}`,
   );
   let backupCreated = false;
-  const restoreBackup = async () => {
-    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-    await fs.rename(backupPath, operationTargetPath);
-    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-    backupCreated = false;
-  };
-  const removeBackup = async () => {
-    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-    await assertNotSymlink(backupPath, "Computer Use service backup");
-    await fs.rm(backupPath, { recursive: true, force: true });
-    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-    backupCreated = false;
-  };
   try {
     await (params.copyServiceApp ?? copyServiceAppWithDitto)(sourcePath, stagedPath);
     await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
@@ -209,89 +180,41 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
         `Copied Computer Use service app at ${stagedPath} does not match its selected signed source.`,
       );
     }
-    const stagedSnapshot = await readServiceAppSnapshot(stagedPath, inspectServiceApp);
-    const currentSourceIdentity = await inspectServiceApp(sourcePath);
-    // ditto can notify the source watcher without changing its generation. Settle
-    // those events before the original generation's synchronous publication guard.
-    await waitForCodexDesktopGeneration();
     await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     await assertDirectoryIdentityStable(
       stagingRootIdentity,
       "Computer Use service staging directory",
     );
-    if (!currentSourceIdentity || !identitiesMatch(currentSourceIdentity, sourceIdentity)) {
-      throw new Error("Selected Computer Use service source changed during refresh.");
-    }
     await assertNotSymlink(operationTargetPath, "Computer Use service target");
     if (await pathExists(operationTargetPath)) {
       await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       params.assertCurrent?.();
       await fs.rename(operationTargetPath, backupPath);
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       backupCreated = true;
-      const movedTarget = await readServiceAppSnapshot(backupPath, inspectServiceApp);
-      if (movedTarget.identity && identitiesMatch(movedTarget.identity, sourceIdentity)) {
-        // Another runtime installed the selected signed generation while this
-        // process was staging. Keep that winner rather than replacing it.
-        await restoreBackup();
-        return alreadyCurrent;
-      }
-      if (!snapshotsMatch(initialTarget, movedTarget)) {
-        await restoreBackup();
-        throw new Error(
-          "Computer Use service target changed to an unexpected generation during refresh.",
-        );
-      }
     }
-    try {
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-      params.assertCurrent?.();
-      await fs.rename(stagedPath, operationTargetPath);
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-    } catch (error) {
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-      await assertNotSymlink(operationTargetPath, "Computer Use service target");
-      const winnerIdentity = await inspectServiceApp(operationTargetPath);
-      if (!winnerIdentity || !identitiesMatch(winnerIdentity, sourceIdentity)) {
-        if (backupCreated && !(await pathExists(operationTargetPath))) {
-          await restoreBackup();
-        }
-        throw error;
-      }
-      // A concurrent installer won with the same selected signed generation.
-      if (backupCreated) {
-        await removeBackup();
-      }
-      return alreadyCurrent;
-    }
+    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+    params.assertCurrent?.();
+    await fs.rename(stagedPath, operationTargetPath);
     await assertNotSymlink(operationTargetPath, "Installed Computer Use service app");
-    const installedSnapshot = await readServiceAppSnapshot(operationTargetPath, inspectServiceApp);
-    if (
-      !installedSnapshot.identity ||
-      !identitiesMatch(installedSnapshot.identity, sourceIdentity)
-    ) {
-      if (filesystemSnapshotsMatch(installedSnapshot, stagedSnapshot)) {
-        await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-        await fs.rm(operationTargetPath, { recursive: true, force: true });
-        await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-        if (backupCreated) {
-          await fs.rename(backupPath, operationTargetPath);
-          await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-          backupCreated = false;
-        }
-      }
+    const installedIdentity = await inspectServiceApp(operationTargetPath);
+    if (!installedIdentity || !identitiesMatch(installedIdentity, sourceIdentity)) {
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      await fs.rm(operationTargetPath, { recursive: true, force: true });
       throw new Error(
         "Installed Computer Use service app failed post-install identity verification.",
       );
     }
     if (backupCreated) {
-      await removeBackup();
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      await assertNotSymlink(backupPath, "Computer Use service backup");
+      await fs.rm(backupPath, { recursive: true, force: true });
+      backupCreated = false;
     }
     return {
       ...alreadyCurrent,
-      status: initialTarget.exists ? "refreshed" : "installed",
+      status: targetExisted ? "refreshed" : "installed",
       changed: true,
-      ...(initialTarget.identity ? { previousBuild: initialTarget.identity.build } : {}),
+      ...(initialIdentity ? { previousBuild: initialIdentity.build } : {}),
     };
   } catch (error) {
     if (
@@ -332,61 +255,6 @@ async function findUsableServiceApp(
     }
   }
   return undefined;
-}
-
-async function readServiceAppSnapshot(
-  appPath: string,
-  inspectServiceApp: InspectServiceApp,
-): Promise<ServiceAppSnapshot> {
-  if (!(await pathExists(appPath))) {
-    return { exists: false };
-  }
-  return {
-    exists: true,
-    identity: await inspectServiceApp(appPath),
-    filesystemKey: await readServiceAppFilesystemKey(appPath),
-  };
-}
-
-async function readServiceAppFilesystemKey(appPath: string): Promise<string | undefined> {
-  const paths = [
-    appPath,
-    path.join(appPath, "Contents", "Info.plist"),
-    path.join(appPath, CLIENT_RELATIVE_PATH),
-  ];
-  const entries = await Promise.all(
-    paths.map((entryPath) =>
-      fs.stat(entryPath).then(
-        (stat) => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`,
-        () => "missing",
-      ),
-    ),
-  );
-  return entries.join("|");
-}
-
-function snapshotsMatch(left: ServiceAppSnapshot, right: ServiceAppSnapshot): boolean {
-  if (left.exists !== right.exists) {
-    return false;
-  }
-  if (!left.exists) {
-    return true;
-  }
-  if (left.filesystemKey && right.filesystemKey && left.filesystemKey !== right.filesystemKey) {
-    return false;
-  }
-  if (left.identity || right.identity) {
-    return Boolean(
-      left.identity && right.identity && identitiesMatch(left.identity, right.identity),
-    );
-  }
-  return left.filesystemKey !== undefined && left.filesystemKey === right.filesystemKey;
-}
-
-function filesystemSnapshotsMatch(left: ServiceAppSnapshot, right: ServiceAppSnapshot): boolean {
-  return Boolean(
-    left.exists && right.exists && left.filesystemKey && left.filesystemKey === right.filesystemKey,
-  );
 }
 
 function identitiesMatch(

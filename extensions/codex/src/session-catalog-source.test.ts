@@ -88,41 +88,6 @@ afterEach(async () => {
 });
 
 describe("Codex catalog physical status sources", () => {
-  it("fences an older read when a source withdraws before becoming a status witness", async () => {
-    const { a, b, index, active } = await fixture();
-    const nativeRead = vi.spyOn(b.client, "request");
-    active(a, "shared-state");
-    b.send({ method: "turn/completed", params: { threadId: "thread-1", turn: {} } });
-    const request = JSON.parse(await b.waitForWrite(0));
-    expect(request.method).toBe("thread/read");
-    b.send({
-      method: "thread/status/changed",
-      params: { threadId: "thread-1", status: { type: "notLoaded" } },
-    });
-    b.send({
-      id: request.id,
-      result: {
-        thread: thread({
-          cwd: "/workspace/read-settled",
-          status: { type: "active", activeFlags: ["shared-state"] },
-        }),
-      },
-    });
-    await nativeRead.mock.results[0]!.value;
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions[0]).toMatchObject({
-        cwd: "/workspace/read-settled",
-        status: "active",
-        activeFlags: ["shared-state"],
-      });
-    });
-    a.client.close();
-    const current = (await index.list({})).sessions[0];
-    expect(current?.status).toBe("notLoaded");
-    expect(current).not.toHaveProperty("activeFlags");
-    expect(b.writes).toHaveLength(1);
-  });
-
   it.each(["close", "notLoaded"] as const)(
     "retains an equivalent broadcast after one source reports %s",
     async (withdrawal) => {

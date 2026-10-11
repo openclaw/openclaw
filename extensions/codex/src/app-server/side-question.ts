@@ -112,7 +112,7 @@ import {
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
-  withLeasedCodexAppServerClientStartSelectionRetry,
+  withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
@@ -345,7 +345,7 @@ export async function runCodexAppServerSideQuestion(
     config: params.cfg,
     ...(params.opts?.abortSignal ? { abandonSignal: params.opts.abortSignal } : {}),
   } satisfies CodexAppServerClientOptions;
-  let client = await getLeasedSharedCodexAppServerClient(clientOptions);
+  const client = await getLeasedSharedCodexAppServerClient(clientOptions);
   const clientLease: CodexAppServerClientLease = { client };
   let collector: CodexEphemeralTurn | undefined;
   const runAbortController = new AbortController();
@@ -684,7 +684,7 @@ export async function runCodexAppServerSideQuestion(
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     });
-    const sideThreadId = await withLeasedCodexAppServerClientStartSelectionRetry({
+    const sideThreadId = await withCodexAppServerClientRequestScope({
       lease: clientLease,
       options: clientOptions,
       signal: runAbortController.signal,
@@ -838,9 +838,6 @@ export async function runCodexAppServerSideQuestion(
           },
           { assertCurrent, authority },
         ),
-      onClientChange: (nextClient) => {
-        client = nextClient;
-      },
     });
 
     const effort = usesSupervisionConnection

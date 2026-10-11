@@ -106,7 +106,6 @@ export class CodexCatalogNativePages {
       const filterCwdLocally = Boolean(cwd && this.settings.hasLiveCwd());
       const ascending = position.backwards && !position.anchorThreadId;
       const pageLimit = position.anchorThreadId ? 64 : limit;
-      const statusRevision = this.status.capture();
       const page = await request.read(Number.POSITIVE_INFINITY, () =>
         options.readNative(
           {
@@ -125,7 +124,7 @@ export class CodexCatalogNativePages {
       );
       options.assertCurrent();
       for (const row of page.rows) {
-        this.status.observe(row, statusRevision);
+        this.status.observe(row);
       }
       if (cwd && !filterCwdLocally && this.settings.hasLiveCwd()) {
         continue;

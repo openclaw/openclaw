@@ -135,6 +135,7 @@ export type NativeChildAdmissionEvidence = DirectSpawnEvidence &
   );
 export type ParentState = {
   parentThreadId: string;
+  nativeLoad?: { loaded: boolean };
   // Retirement sees pending captures, but notifications cannot admit their work.
   preparing?: true;
   pendingRegistrations?: number;
@@ -191,7 +192,6 @@ export type ChildState = NativeSubagentAssignment & {
   nativeCompletionDelivered: boolean;
   completionDeliveryAttempt: number;
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
-  deliveringCompletion: boolean;
   deliveryOwnerKey?: string;
   settledWithoutCompletion: boolean;
   releaseDirectChild?: () => void;
@@ -201,6 +201,7 @@ export type ChildState = NativeSubagentAssignment & {
 };
 
 export type KnownChild = {
+  nativeLoad?: { loaded: boolean };
   configurationQualification?: CodexInferenceThreadQualification;
   parent: ParentState;
   nativeParentThreadId: string;
@@ -233,13 +234,6 @@ export type ThreadRecovery = {
   fallbackCompletion?: RecoveredCompletion;
   resumable: boolean;
   threadState: "unavailable" | "active" | "system_error" | "other";
-};
-
-export type ThreadStatusRevision = {
-  value: number;
-  readers: number;
-  terminal?: true;
-  parentThreadId?: string;
 };
 
 export type MonitorOptions = {
