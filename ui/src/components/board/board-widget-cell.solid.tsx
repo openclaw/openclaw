@@ -141,6 +141,8 @@ function BoardWidgetCellContent(
   const state = createMemo(() => {
     revision();
     return {
+      // Publish activity with observed visibility, not ahead of the lifecycle effects.
+      active: untrack(active),
       error: actionError,
       pending: actionPending,
       frameError: frame.error,
@@ -477,7 +479,7 @@ function BoardWidgetCellContent(
       <Match when={renderedMcp()}>
         <BoardMcpAppContent
           accessNotice={<AccessNotice />}
-          active={active()}
+          active={state().active}
           appView={state().appView}
           busy={unavailable()}
           loading={state().loading}
