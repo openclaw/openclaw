@@ -100,6 +100,7 @@ describe("managed Completions cache markers", () => {
   it.each([true, false])(
     "skips runtime carriers after tool replay (supportsTools=%s)",
     (supportsTools) => {
+      const route = { ...model, compat: { ...model.compat, supportsTools } };
       const toolLoop: Context["messages"] = [
         ...context.messages,
         {
@@ -134,7 +135,7 @@ describe("managed Completions cache markers", () => {
         [[...toolLoop, { role: "user", content: "Next", timestamp: 4 }], "Next"],
       ] satisfies Array<[Context["messages"], string]>) {
         const payload = buildOpenAICompletionsParams(
-          { ...model, compat: { supportsTools } },
+          route,
           {
             ...context,
             messages: [

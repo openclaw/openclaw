@@ -9,13 +9,13 @@ import {
 } from "./openai-completions-params.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
 
-const model = makeCompletionsModel({
+const baseModel = makeCompletionsModel({
   provider: "custom",
   id: "local-model",
   baseUrl: "http://localhost:1234/v1",
   input: ["text", "image"],
-  compat: { supportsTools: false },
 });
+const model = { ...baseModel, compat: { ...baseModel.compat, supportsTools: false } };
 const context: Context = {
   systemPrompt: "Keep file identities intact.",
   tools: [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
@@ -120,13 +120,12 @@ describe("no-tools Chat Completions replay", () => {
         ...context,
         messages: context.messages.map((message) =>
           message.role === "toolResult"
-            ? {
-                ...message,
+            ? Object.assign({}, message, {
                 content: [
                   ...message.content,
                   { type: "image", mimeType: "image/png", data: message.toolCallId },
                 ],
-              }
+              })
             : message,
         ),
       },
