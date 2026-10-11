@@ -65,6 +65,11 @@ import { createGatewayMemoryCloseRegistryFactory } from "../server-close.memory.
 import { startGatewayServer } from "../server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
 
+const nativeApi = await loadBundledPluginFacade<NativeBindingTestApi & NativeBindingClientTestApi>({
+  pluginId: "codex",
+  artifactBasename: "native-session-binding.test-api.js",
+});
+
 let scenarioWork: Promise<void> | undefined;
 afterEach(async () => {
   // Vitest deadlines do not join the timed-out body before the next fixture changes process.env.
@@ -339,12 +344,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 token: "agent-delete-test-token",
                 scopes: ["operator.admin", "operator.read", "operator.write"],
               });
-              const nativeApi = await loadBundledPluginFacade<
-                NativeBindingTestApi & NativeBindingClientTestApi
-              >({
-                pluginId: "codex",
-                artifactBasename: "native-session-binding.test-api.js",
-              });
               const native = nativeApi.createNativeBindingDeletionFixture(
                 createPluginRuntimeMock({
                   state: createPluginStateRuntimeStores("codex", () => signal.throwIfAborted()),
@@ -523,7 +522,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     },
                   },
                 };
-                const createMemory = await createGatewayMemoryCloseRegistryFactory(memoryConfig);
+                const createMemory = createGatewayMemoryCloseRegistryFactory(memoryConfig);
                 const memory = createMemory(async () => {});
                 const priorMemoryCapabilities = [...registry.memoryCapabilities];
                 const scanStarted = createDeferred();
