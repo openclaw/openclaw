@@ -37,7 +37,6 @@ import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { renderChatQueue } from "./chat-composer-queue.tsx";
 import {
   ComposerQueue,
-  SolidProgressContent,
   ComposerInputScope,
   ComposerProgress,
   ComposerGoal,
@@ -294,9 +293,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           </div>
           <ComposerQuestionDock panel={context.questionPanelProps} />
           {props.disabledBanner?.kind === "above-composer" ? disabledBanner() : undefined}
-          <SolidProgressContent binding={props.progressCardVisibility}>
-            <ComposerProgress composer={props} shown={context.showComposer} />
-          </SolidProgressContent>{" "}
+          <ComposerProgress composer={props} shown={context.showComposer} />{" "}
           <ComposerQueue composer={props} showAbortableUi={context.showAbortableUi} />
           {renderChatGoalRecoverySolid(props.goalRecovery, props.connected)}{" "}
           <ComposerGoal

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
@@ -158,6 +158,28 @@ describe("chat goal status", () => {
     const runningLabel = container.querySelector(".agent-chat__goal-label");
     expect(runningLabel?.hasAttribute("tabindex")).toBe(false);
     expect(runningLabel?.closest("openclaw-tooltip")?.content).toBe("");
+  });
+
+  it("restores goal actions and expansion after a transient missing session goal", () => {
+    const container = document.createElement("div");
+    onTestFinished(() => render(null, container));
+    const onGoalAction = vi.fn();
+    const selectedSession = goalSession({ status: "paused", pausedAt: Date.now() });
+    renderChatInto(container, { selectedSession, onGoalAction });
+    container.querySelector<HTMLButtonElement>('button[aria-label="Show goal details"]')!.click();
+
+    renderChatInto(container, { selectedSession: undefined, onGoalAction });
+    expect(container.querySelector(".agent-chat__goal")).toBeNull();
+
+    renderChatInto(container, {
+      selectedSession: goalSession({ status: "paused", lastStatusNote: "Ready to resume" }),
+      onGoalAction,
+    });
+    expect(container.querySelector(".agent-chat__goal-detail")?.getAttribute("aria-hidden")).toBe(
+      "false",
+    );
+    container.querySelector<HTMLButtonElement>('button[aria-label="Resume goal"]')!.click();
+    expect(onGoalAction).toHaveBeenCalledExactlyOnceWith("goal-1", "resume");
   });
 
   it("edits the plain objective and restores the conversation draft on cancellation", () => {

@@ -70,6 +70,8 @@ describe("chat composer pointer activation", () => {
     const send = button(sendContainer, t("chat.runControls.sendMessage"));
 
     sendInput.focus();
+    // A native target listener runs before Solid's delegated bubble handler.
+    send.addEventListener("pointerdown", () => sendInput.blur(), { once: true });
     const sendPointerDown = primaryPointerDown();
     send.dispatchEvent(sendPointerDown);
     expect(sendPointerDown.defaultPrevented).toBe(true);

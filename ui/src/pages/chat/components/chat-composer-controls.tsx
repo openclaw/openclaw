@@ -385,6 +385,12 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
   );
 }
 
+function primaryPointerDownRef(read: () => ((event: PointerEvent) => void) | undefined) {
+  // Preserve input focus before native tooltip listeners run at the target.
+  return (button: HTMLButtonElement) =>
+    button.addEventListener("pointerdown", (event) => read()?.(event), true);
+}
+
 function ComposerDictationSendAction(props: {
   readDictation: () => ComposerDictationController;
   onSend: (submissionAction?: Event) => void;
@@ -415,7 +421,7 @@ function ComposerDictationSendAction(props: {
             <button
               class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
               type="button"
-              onPointerDown={(event) => props.onPointerDown?.(event)}
+              ref={primaryPointerDownRef(() => props.onPointerDown)}
               onClick={(event: MouseEvent) => void finishAndSend(event)}
               aria-disabled={props.readDictation().finalizing ? "true" : "false"}
               aria-label={t("chat.runControls.send")}
@@ -469,7 +475,7 @@ export function renderChatAbortActionSolid(
         <openclaw-tooltip prop:content={t("chat.runControls.stop")}>
           <button
             class="chat-send-btn chat-send-btn--stop"
-            onPointerDown={(event) => props.onPrimaryActionPointerDown?.(event)}
+            ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
             onClick={() => props.onAbort?.()}
             aria-label={t("chat.runControls.stopGenerating")}
           >
@@ -536,7 +542,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     >
       <button
         class={`chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}`}
-        onPointerDown={(event) => props.onPrimaryActionPointerDown?.(event)}
+        ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
         onClick={(event) => props.onSend(event)}
         disabled={!hasSendableContent()}
         aria-label={sendStatus() ?? description()}
@@ -559,11 +565,9 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
       <button
         class={`chat-send-btn chat-send-btn--${action.camera ? "voice" : "talk-mode"}`}
         type={action.camera ? undefined : "button"}
-        onPointerDown={(event) => {
-          if (!action.camera) {
-            props.onPrimaryActionPointerDown?.(event);
-          }
-        }}
+        ref={primaryPointerDownRef(() =>
+          action.camera ? undefined : props.onPrimaryActionPointerDown,
+        )}
         onClick={() => {
           if (action.camera) {
             props.onToggleCamera?.();

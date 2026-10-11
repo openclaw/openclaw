@@ -484,7 +484,20 @@ function ChatQueueItem(rowProps: {
             event.preventDefault();
             const targetId = segment()[moveIndex() + delta];
             if (targetId) {
+              const handle = event.currentTarget;
               move()?.(item().id, targetId);
+              // A keyed DOM move can blur its focused descendant. Preserve the
+              // same handle for repeated arrow presses after the queued commit.
+              queueMicrotask(() => {
+                if (
+                  handle instanceof HTMLButtonElement &&
+                  handle.isConnected &&
+                  !handle.disabled &&
+                  handle.ownerDocument.activeElement === handle.ownerDocument.body
+                ) {
+                  handle.focus({ preventScroll: true });
+                }
+              });
             }
           }}
         >
