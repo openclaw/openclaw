@@ -594,4 +594,57 @@ describe("stageSandboxMedia", () => {
       );
     });
   });
+
+  it("follows agents.defaults.mediaMaxMb when it raises the staging limit", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg: baseCfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const cfg = {
+        ...baseCfg,
+        agents: { ...baseCfg.agents, defaults: { ...baseCfg.agents?.defaults, mediaMaxMb: 51 } },
+      };
+      const mediaPath = await writeInboundMedia(home, "above-default-limit.pdf", "");
+      await fs.truncate(mediaPath, SANDBOX_MEDIA_MAX_BYTES + 1);
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = result.staged.get(0)!;
+      expect(ctx.media?.[0]?.path).toBe(stagedPath);
+      await expect(fs.stat(join(sandboxDir, stagedPath))).resolves.toMatchObject({
+        size: SANDBOX_MEDIA_MAX_BYTES + 1,
+      });
+    });
+  });
+
+  it("keeps the default staging limit when mediaMaxMb is lower", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg: baseCfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const cfg = {
+        ...baseCfg,
+        agents: { ...baseCfg.agents, defaults: { ...baseCfg.agents?.defaults, mediaMaxMb: 5 } },
+      };
+      const mediaPath = await writeInboundMedia(home, "above-low-media-limit.bin", "");
+      await fs.truncate(mediaPath, 10 * 1024 * 1024);
+
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = result.staged.get(0)!;
+      await expect(fs.stat(join(sandboxDir, stagedPath))).resolves.toMatchObject({
+        size: 10 * 1024 * 1024,
+      });
+    });
+  });
 });
