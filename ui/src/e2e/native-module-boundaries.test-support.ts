@@ -14,7 +14,7 @@ export function defineNativeModuleBoundaryTests(
 
     it("closes navigation while the sidebar element is still unregistered", async () => {
       const testCase = {
-        module: moduleRequest("ui/src/components/app-sidebar.ts"),
+        module: moduleRequest("ui/src/components/app-sidebar.tsx"),
         pathname: "new",
         readySelector: ".new-session-page__message",
         tag: "openclaw-app-sidebar",
@@ -77,7 +77,7 @@ export function defineNativeModuleBoundaryTests(
         beforeNavigate: async (targetPage) => {
           held = await holdModuleResponse(
             targetPage,
-            moduleRequest("ui/src/components/sidebar-attention-panel.runtime.ts"),
+            moduleRequest("ui/src/components/sidebar-attention-panel.runtime.tsx"),
           );
         },
       });

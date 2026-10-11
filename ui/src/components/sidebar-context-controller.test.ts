@@ -6,7 +6,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationRouter, RouteId } from "../app-routes.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
-import "./app-sidebar.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { getAppSidebarOwner } from "./app-sidebar.tsx";
 
 setupSidebarTest();
 
@@ -32,12 +33,16 @@ it("updates contextual navigation from its router and retires the subscription o
     ],
   });
   onTestFinished(() => router.stop());
-  const { sidebar } = await mountSidebar(
+  const { provider, sidebar } = await mountSidebar(
     createGateway({} as GatewayBrowserClient),
     createSessions("main", []),
   );
+  const element = provider.querySelector<HTMLElement>("openclaw-app-sidebar")!;
+  const owner = getAppSidebarOwner(element);
+  expect(owner).toBeDefined();
   sidebar.router = router;
   await sidebar.updateComplete;
+  expect(getAppSidebarOwner(element)).toBe(owner);
   const navigation = router.navigate("systems", {});
   await vi.waitFor(() => expect(sidebar.contextualSidebar?.loaderPending).toBe(true));
   const pending = sidebar.contextualSidebar;
@@ -50,6 +55,7 @@ it("updates contextual navigation from its router and retires the subscription o
   expect(pending?.loaderPending).toBe(true);
   expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain("machine inventory");
   sidebar.remove();
+  await waitForSolid(() => expect(getAppSidebarOwner(element)).toBeUndefined());
   expect(sidebar.contextualSidebar).toBeUndefined();
   await router.navigate("cron", {});
   await router.navigate("systems", {});

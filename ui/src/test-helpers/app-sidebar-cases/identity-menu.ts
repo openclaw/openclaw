@@ -7,7 +7,7 @@ import {
   resolveUpdateAttentionDismissal,
 } from "../../components/sidebar-attention-dismissals.ts";
 import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar footer identity menu", () => {
   it("opens Profile from the Owner header without a self user", async () => {

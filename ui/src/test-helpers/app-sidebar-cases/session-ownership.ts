@@ -14,7 +14,7 @@ import {
   registerSessionOwnershipAvatarTests,
   setEffectiveOwner,
 } from "./session-ownership-avatars.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 async function expectSort(sidebar: SidebarLifecycleState, mode: string, keys: string[]) {
   await selectSessionMenuValue(sidebar, `sort:${mode}`);

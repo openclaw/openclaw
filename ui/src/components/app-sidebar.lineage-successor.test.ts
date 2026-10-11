@@ -13,7 +13,7 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { createGatewayHarness, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 async function mount(request: Parameters<typeof createTestGatewayClient>[0]) {
   const harness = createGatewayHarness(createTestGatewayClient(request));

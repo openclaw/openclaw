@@ -6,7 +6,7 @@ afterEach(() => document.body.replaceChildren());
 
 describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM identity", () => {
   it("moves existing row DOM when a new session shifts the list", async () => {
-    await import("./app-sidebar.ts");
+    await import("./app-sidebar.tsx");
     const { createGatewayHarness, createSessionsHarness, createSessionState, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
     const alphaKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";

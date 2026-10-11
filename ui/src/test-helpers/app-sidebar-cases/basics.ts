@@ -16,7 +16,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { settleRoster } from "./roster.test-support.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 await import("../../components/viewer-facepile.ts");
 

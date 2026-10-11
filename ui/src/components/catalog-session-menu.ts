@@ -104,3 +104,5 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-catalog-session-menu")) {
   customElements.define("openclaw-catalog-session-menu", CatalogSessionMenu);
 }
+
+export type { CatalogSessionMenu };

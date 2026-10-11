@@ -479,10 +479,20 @@ export function render(data: SystemsRouteData | undefined, _pending: boolean, pr
     : nothing;
 }
 
-export function renderSidebar(data: SystemsRouteData | undefined) {
-  return data
-    ? html`<openclaw-systems-sidebar .controller=${data.controller}></openclaw-systems-sidebar>`
-    : nothing;
+// The shell owns one sidebar slot; both renderers reuse this controller's node.
+const sidebarNodes = new WeakMap<SystemsController, HTMLElement>();
+
+export function renderSidebar(data: SystemsRouteData | undefined): HTMLElement | null {
+  if (!data) {
+    return null;
+  }
+  let sidebar = sidebarNodes.get(data.controller);
+  if (!sidebar) {
+    sidebar = document.createElement("openclaw-systems-sidebar");
+    Object.assign(sidebar, { controller: data.controller });
+    sidebarNodes.set(data.controller, sidebar);
+  }
+  return sidebar;
 }
 
 export function load(context: ApplicationContext): SystemsRouteData {

@@ -12,8 +12,8 @@ import {
 import "../test-helpers/app-sidebar-suite.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
-import "./app-sidebar.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import "./app-sidebar.tsx";
 
 async function fixture(onlySelf = false) {
   const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -39,9 +39,6 @@ async function fixture(onlySelf = false) {
     result.ownerSessionCounts = [{ profileId: "self", open: result.sessions.length, running: 0 }];
   }
   const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-  if (!(sidebar instanceof AppSidebarSessionNavigationElement)) {
-    throw new Error("expected sidebar");
-  }
   sidebar.connected = true;
   sidebar.sidebarEntries = [];
   sidebar.onUpdateSidebarEntries = (entries) => {
@@ -65,6 +62,7 @@ describe("personal navigation rail", () => {
         button.getAttribute("aria-label"),
       ),
     ).toEqual(["Pages", "Sessions", "Online"]);
+    const frame = sidebar.querySelector("aside.sidebar")!;
     const bottom = sidebar.querySelector(".sidebar-rail__bottom")!;
     expect(bottom.querySelector(".sidebar-footer-bar__home")).not.toBeNull();
     expect(bottom.querySelector("openclaw-sidebar-attention")).not.toBeNull();
@@ -75,6 +73,7 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-pages")).not.toBeNull();
     expect(sidebar.querySelector(".sidebar-session-content")).toBeNull();
+    expect(sidebar.querySelector("aside.sidebar")).toBe(frame);
     expect(sidebar.querySelector(".sidebar-rail__bottom")).toBe(bottom);
   });
 
@@ -185,14 +184,22 @@ describe("personal navigation rail", () => {
     ]);
     const pin = sidebar.querySelector('.sidebar-rail [data-sidebar-entry="route:usage"]')!;
     const menu = pin.querySelector("wa-dropdown")!;
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "before" } } }));
+    menu.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: menu.querySelector('wa-dropdown-item[value="before"]')! },
+      }),
+    );
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([
       "person:offline",
       "route:usage",
       "session:agent:other:unloaded",
     ]);
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "remove" } } }));
+    menu.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: menu.querySelector('wa-dropdown-item[value="remove"]')! },
+      }),
+    );
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["person:offline", "session:agent:other:unloaded"]);
   });
@@ -232,8 +239,9 @@ describe("personal navigation rail", () => {
     expect(sidebar.navigationScope).toBe("mine");
     expect(persist).not.toHaveBeenCalled();
     gateway.publish({ selfUser: { id: "self", name: "Self" } });
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
+    await waitForSolid(() => {
+      expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
+    });
     expect(sidebar.querySelector('[data-session-key="agent:main:other"]')).toBeNull();
     expect(sidebar.querySelector('[aria-label="Mine"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(sidebar.navigationScope).toBe("mine");
@@ -386,7 +394,7 @@ describe("personal navigation rail", () => {
     sidebar.remove();
     await sidebar.updateComplete;
     expect(catalogQueries()).toHaveLength(0);
-    parent.append(sidebar);
+    parent.append(sidebar.hostElement);
     await sidebar.updateComplete;
     expect(catalogQueries()).toHaveLength(2);
     expect(sidebar.querySelector(".sidebar-pages")).not.toBeNull();

@@ -37,3 +37,5 @@ class RelativeTime extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-relative-time")) {
   customElements.define("openclaw-relative-time", RelativeTime);
 }
+
+export type { RelativeTime };

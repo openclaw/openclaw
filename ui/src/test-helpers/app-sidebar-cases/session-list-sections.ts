@@ -8,7 +8,7 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session section visibility", () => {
   it("paginates each expanded section independently", async () => {

@@ -37,3 +37,5 @@ class ElapsedTime extends TickingLabel {
 if (!customElements.get("openclaw-elapsed-time")) {
   customElements.define("openclaw-elapsed-time", ElapsedTime);
 }
+
+export type { ElapsedTime };

@@ -9,7 +9,9 @@ import {
   type ExecApprovalRequest,
 } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
-import { renderExecApprovalCard, renderSidebarApprovalRow } from "./exec-approval-card.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { renderExecApprovalCard } from "./exec-approval-card.ts";
+import { renderSidebarApprovalRow } from "./sidebar-issue-item.tsx";
 
 let container: HTMLDivElement;
 
@@ -168,15 +170,18 @@ describe("exec approval card", () => {
         return resolveApprovalRequest(client, request, decision);
       });
       const props = { approval: request, busy: false, canGrant: true, error: null };
-      render(
-        variant === "sidebar"
-          ? renderSidebarApprovalRow({
+      if (variant === "sidebar") {
+        mountSolid(
+          () =>
+            renderSidebarApprovalRow({
               ...props,
               onDecision: (_event, id, decision) => void onDecision(id, decision),
-            })
-          : renderExecApprovalCard({ ...props, variant, onDecision }),
-        container,
-      );
+            }),
+          { container },
+        );
+      } else {
+        render(renderExecApprovalCard({ ...props, variant, onDecision }), container);
+      }
       const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
       expect(buttons.map((button) => button.textContent?.trim())).toEqual([
         "Allow once",

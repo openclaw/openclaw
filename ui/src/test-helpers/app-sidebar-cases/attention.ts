@@ -12,7 +12,7 @@ import {
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import { mountRoster, settleRoster } from "./roster.test-support.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 const sessionKey = "agent:main:attention";
 

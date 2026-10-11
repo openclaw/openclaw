@@ -1,5 +1,6 @@
+import { flush } from "solid-js";
 import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
 import { settleLitElements } from "./lit-settle.ts";
 import { createStorageMock } from "./storage.ts";
@@ -67,9 +68,10 @@ export function setupSidebarTest() {
       modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
     }
     await vi.dynamicImportSettled();
-    const sidebars =
-      document.body.querySelectorAll<AppSidebarSessionNavigationElement>("openclaw-app-sidebar");
+    const sidebars = document.body.querySelectorAll<AppSidebarElement>("openclaw-app-sidebar");
     document.body.replaceChildren();
+    await Promise.resolve();
+    flush();
     disposeSidebarContextLifecycles();
     // Disconnection queues Lit updates; finish them before retiring the DOM globals.
     await settleLitElements(sidebars);
@@ -104,7 +106,7 @@ export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
 
 /** Select a view through its actual fixed rail control. */
 export async function selectSidebarView(
-  sidebar: HTMLElement & Pick<AppSidebarSessionNavigationElement, "updateComplete">,
+  sidebar: HTMLElement & Pick<AppSidebarElement, "updateComplete">,
   view: "pages" | "sessions" | "online",
 ): Promise<void> {
   const button = sidebar.querySelector<HTMLButtonElement>(`[data-navigation-view="${view}"]`);

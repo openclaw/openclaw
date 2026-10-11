@@ -1,4 +1,3 @@
-import { nothing, render } from "lit";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -20,7 +19,7 @@ import {
   hovercardBootstrapIntentActive,
   remainingHovercardOpenDelay,
 } from "./lazy-hovercard-registration.ts";
-import { renderPersonActivityCard } from "./person-activity-card.ts";
+import { mountPersonActivityCard, type PersonCardInput } from "./person-activity-card.tsx";
 import { observePersonActivityData } from "./person-activity-data.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
@@ -39,6 +38,7 @@ export class SidebarPeopleRuntime {
   private readonly portal = new PortaledHovercardController(() => this.close(), 100);
   private readonly observer = new MutationObserver(() => this.sync());
   private lastOpenAt = -Infinity;
+  private cardView: ReturnType<typeof mountPersonActivityCard> | undefined;
   private activity: ReturnType<typeof observePersonActivityData> | undefined;
   private readonly stopLocale: () => void;
 
@@ -152,7 +152,7 @@ export class SidebarPeopleRuntime {
       client: gateway.snapshot.client,
     };
     this.portal.markTrigger(trigger);
-    this.observer.observe(this.host, { childList: true, subtree: true });
+    this.observer.observe(this.host.hostElement, { childList: true, subtree: true });
     document.addEventListener("pointerdown", this.outsideInteraction, true);
     document.addEventListener("focusin", this.outsideInteraction, true);
     document.addEventListener("keydown", this.outsideKey, true);
@@ -237,68 +237,71 @@ export class SidebarPeopleRuntime {
       );
     const label = presenceUserLabel(user, t("presence.card.person"));
     card.setAttribute("aria-label", t("presence.card.ariaLabel", { name: label.name }));
-    this.portal.renderContents(card, () =>
-      render(
-        renderPersonActivityCard({
-          user,
-          sessionData: activity.data,
-          watchAgentId: resolveUiDefaultAgentId(defaults),
-          mainKey: resolveUiConfiguredMainKey(defaults),
-          globalScope: isUiGlobalScopeConfigured(defaults),
-          routing: personActivityRouting(
-            {
-              basePath: this.host.basePath,
-              navigate: (route, options) => this.host.onNavigate?.(route, options),
-            },
-            () => this.close(),
-          ),
-          openSession: (row, agentId) => {
-            const face = resolveSessionPreferredFace(row);
-            const target = sessionNavigationTarget({
-              face,
-              sessionKey: row.key,
-              row,
-              fallbackAgentId: agentId,
-              basePath: this.host.basePath,
-              mainKey: resolveUiConfiguredMainKey(defaults),
-            });
-            this.close();
-            runSessionNavigationIntent(this.host, {
-              agentId,
-              face,
-              sessionKey: row.key,
-              commit: () => {
-                if (
-                  this.host.sessionDataContext?.gateway !== active.gateway ||
-                  context.gateway.snapshot.client !== active.client ||
-                  context.gateway.snapshot.phase !== "connected" ||
-                  active.scope !== this.scope()
-                ) {
-                  return false;
-                }
-                this.host.prepareSessionNavigation(row.key, target.options.pathname);
-                this.host.onNavigate?.(face, target.options);
-                selectApplicationSession({
-                  selection: context.agentSelection,
-                  gateway: context.gateway,
-                  sessionKey: row.key,
-                  agentId,
-                });
-                return true;
-              },
-            });
-          },
-        }),
-        card,
+    const input: PersonCardInput = {
+      user,
+      sessionData: activity.data,
+      watchAgentId: resolveUiDefaultAgentId(defaults),
+      mainKey: resolveUiConfiguredMainKey(defaults),
+      globalScope: isUiGlobalScopeConfigured(defaults),
+      routing: personActivityRouting(
+        {
+          basePath: this.host.basePath,
+          navigate: (route, options) => this.host.onNavigate?.(route, options),
+        },
+        () => this.close(),
       ),
-    );
+      openSession: (row, agentId) => {
+        const face = resolveSessionPreferredFace(row);
+        const target = sessionNavigationTarget({
+          face,
+          sessionKey: row.key,
+          row,
+          fallbackAgentId: agentId,
+          basePath: this.host.basePath,
+          mainKey: resolveUiConfiguredMainKey(defaults),
+        });
+        this.close();
+        runSessionNavigationIntent(this.host, {
+          agentId,
+          face,
+          sessionKey: row.key,
+          commit: () => {
+            if (
+              this.host.sessionDataContext?.gateway !== active.gateway ||
+              context.gateway.snapshot.client !== active.client ||
+              context.gateway.snapshot.phase !== "connected" ||
+              active.scope !== this.scope()
+            ) {
+              return false;
+            }
+            this.host.prepareSessionNavigation(row.key, target.options.pathname);
+            this.host.onNavigate?.(face, target.options);
+            selectApplicationSession({
+              selection: context.agentSelection,
+              gateway: context.gateway,
+              sessionKey: row.key,
+              agentId,
+            });
+            return true;
+          },
+        });
+      },
+    };
+    this.portal.renderContents(card, () => {
+      if (this.cardView) {
+        this.cardView.update(input);
+      } else {
+        this.cardView = mountPersonActivityCard(card, input);
+      }
+    });
     if (existing) {
       this.portal.position();
       return;
     }
     this.lastOpenAt = performance.now();
     card.addEventListener("pointerleave", this.portal.handleCardPointerLeave);
-    this.portal.mount(active.row, card, "horizontal", true, () => render(nothing, card));
+    const view = this.cardView;
+    this.portal.mount(active.row, card, "horizontal", true, () => view?.dispose());
   }
 
   private readonly outsideInteraction = (event: Event) => {
@@ -335,6 +338,7 @@ export class SidebarPeopleRuntime {
     document.removeEventListener("focusin", this.outsideInteraction, true);
     document.removeEventListener("keydown", this.outsideKey, true);
     this.portal.reset();
+    this.cardView = undefined;
     this.active?.trigger.setAttribute("aria-haspopup", "dialog");
     this.active?.trigger.setAttribute("aria-expanded", "false");
     this.active = null;

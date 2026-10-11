@@ -17,7 +17,7 @@ import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 const parentKey = "agent:main:parent";
 const childKey = "agent:worker:child";

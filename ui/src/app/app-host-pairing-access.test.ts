@@ -13,7 +13,7 @@ import {
   persistChatComposerState,
 } from "../pages/chat/composer-persistence.ts";
 import { settleLitElements } from "../test-helpers/lit-settle.ts";
-import "../components/app-sidebar.ts";
+import "../components/app-sidebar.tsx";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";

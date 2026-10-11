@@ -12,7 +12,7 @@ import {
 import { createDataTransferStub } from "../drag-data.ts";
 import { installDialogPolyfill, submitInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 function dispatchDragEvent(
   target: Element,
@@ -95,7 +95,7 @@ describe("AppSidebar group mutation collapsed state", () => {
       new CustomEvent("wa-select", {
         bubbles: true,
         cancelable: true,
-        detail: { item: { value } },
+        detail: { item },
       }),
     );
     await vi.dynamicImportSettled();
@@ -346,14 +346,14 @@ describe("AppSidebar group mutation collapsed state", () => {
       new CustomEvent("wa-select", {
         bubbles: true,
         cancelable: true,
-        detail: { item: { value: "rename-group" } },
+        detail: { item: rename },
       }),
     );
     dropdown?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
         cancelable: true,
-        detail: { item: { value: "delete-group" } },
+        detail: { item: remove },
       }),
     );
 

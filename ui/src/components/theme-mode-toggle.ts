@@ -55,3 +55,5 @@ class ThemeModeToggle extends OpenClawLightDomContentsElement {
 if (!customElements.get("openclaw-theme-mode-toggle")) {
   customElements.define("openclaw-theme-mode-toggle", ThemeModeToggle);
 }
+
+export type { ThemeModeToggle };

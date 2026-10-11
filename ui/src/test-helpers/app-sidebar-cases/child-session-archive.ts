@@ -9,7 +9,7 @@ import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import { createGatewayHarness, mountSidebar } from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar child session archives", () => {
   it.each([

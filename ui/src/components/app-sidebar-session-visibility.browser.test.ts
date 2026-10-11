@@ -13,7 +13,7 @@ import {
   mountSidebar,
 } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/load-styles.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 setupSidebarTest();
 
@@ -201,7 +201,7 @@ it("pauses offscreen session indicators and resumes them when their rows scroll 
   expect(disconnect).toHaveBeenCalledOnce();
   expect(activeObservers.size).toBe(0);
   probe.reset();
-  provider.append(sidebar);
+  provider.append(sidebar.hostElement);
   await sidebar.updateComplete;
   await revealRunningRows();
   await probe.delivered;

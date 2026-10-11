@@ -16,7 +16,7 @@ import {
   mountSessionCatalogSidebar,
   type TestSessionMenu,
 } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session catalog pagination", () => {
   it("ignores a catalog response that settles after the Gateway client changes", async () => {

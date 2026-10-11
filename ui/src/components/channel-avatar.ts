@@ -9,7 +9,7 @@ class ChannelAvatar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) authTokens: readonly string[] = [];
   @property({ attribute: false }) authReady = false;
   /** Shown while no avatar blob is usable (loading, missing auth, 404). */
-  @property({ attribute: false }) fallback: TemplateResult | typeof nothing = nothing;
+  @property({ attribute: false }) fallback: TemplateResult | Node | typeof nothing = nothing;
   @state() private undecodableRouteUrl: string | null = null;
   private readonly loader = new AuthenticatedAvatarRouteLoader(this);
 
@@ -42,3 +42,5 @@ class ChannelAvatar extends OpenClawLightDomContentsElement {
 if (!customElements.get("openclaw-channel-avatar")) {
   customElements.define("openclaw-channel-avatar", ChannelAvatar);
 }
+
+export type { ChannelAvatar };

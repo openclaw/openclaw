@@ -13,7 +13,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { registerCatalogPageHostTests } from "./catalog-page-hosts.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session catalog pagination", () => {
   it("keeps an in-flight catalog refresh across a stable same-client Gateway notification", async () => {
@@ -21,7 +21,7 @@ describe("AppSidebar session catalog pagination", () => {
     let provider: HTMLElement | undefined;
     try {
       // Shared UI workers retain real custom elements despite later module mocks.
-      await vi.importActual("../../components/sidebar-attention.ts");
+      await vi.importActual("../../components/sidebar-attention.tsx");
       const pendingPage = deferred<SessionsCatalogListResult>();
       const request = vi.fn().mockReturnValue(pendingPage.promise);
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);

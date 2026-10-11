@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
@@ -29,7 +30,7 @@ import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
-import "./sidebar-attention.ts";
+import "./sidebar-attention.tsx";
 
 const ATTENTION_KEY = 'openclaw.control.sidebarAttention.v2:["ws://gateway.test","alice"]';
 
@@ -76,7 +77,6 @@ function mentionItem(id: string, createdAt = 1_000): MentionInboxItem {
 
 type SidebarAttentionElement = HTMLElement & {
   context: ApplicationContext;
-  updateComplete: Promise<boolean>;
   dismissPanel: () => boolean;
   onNavigate?: ApplicationContext["navigate"];
 };
@@ -166,9 +166,9 @@ describe("sidebar attention refresh ownership", () => {
       store.dispose();
     }
     stores.clear();
+    vi.restoreAllMocks();
     document.body.replaceChildren();
     vi.useRealTimers();
-    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -225,9 +225,9 @@ describe("sidebar attention refresh ownership", () => {
     expect(panel).not.toBeNull();
     expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();
     panel!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await element.updateComplete;
+    flush();
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
-    expect(document.activeElement).toBe(trigger);
+    await waitForFast(() => expect(document.activeElement).toBe(trigger));
   });
 
   it("dismisses for a plain outside frame without restoring trigger focus", async () => {
@@ -239,7 +239,7 @@ describe("sidebar attention refresh ownership", () => {
     // jsdom can focus the frame but does not emit the browsing-context blur.
     frame.focus();
     window.dispatchEvent(new Event("blur"));
-    await element.updateComplete;
+    flush();
 
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
     expect(document.activeElement).toBe(frame);
@@ -251,7 +251,7 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
 
     window.dispatchEvent(new Event("blur"));
-    await element.updateComplete;
+    flush();
 
     expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull();
   });
@@ -310,22 +310,29 @@ describe("sidebar attention refresh ownership", () => {
       "chat",
       expect.objectContaining({ pathname: "/chat/writer/review" }),
     );
-    await element.updateComplete;
+    flush();
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
   });
 
-  it("keeps a reconnected attention panel closed until a new open", async () => {
+  it("retains an open panel during a move but resets it after a genuine disconnect", async () => {
     const { element, provider, trigger } = await mountAttention();
     trigger.click();
     await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+    const panel = element.querySelector(".sidebar-issues-panel");
 
     element.remove();
     provider.append(element);
-    await element.updateComplete;
+    flush();
+    expect(element.querySelector(".sidebar-issues-panel")).toBe(panel);
 
+    element.remove();
+    await Promise.resolve();
+    provider.append(element);
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-button")).not.toBeNull());
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    trigger.click();
+    const reconnectedTrigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
+    expect(reconnectedTrigger.getAttribute("aria-expanded")).toBe("false");
+    reconnectedTrigger.click();
     await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
   });
 
@@ -411,15 +418,15 @@ describe("sidebar attention refresh ownership", () => {
         document.dispatchEvent(new Event("visibilitychange"));
       }
       await vi.advanceTimersByTimeAsync(deadline - Date.now());
-      await element.updateComplete;
+      flush();
       expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
       await vi.advanceTimersByTimeAsync(1);
-      await element.updateComplete;
+      flush();
       if (presentation === "hidden") {
         expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
         visibility = "visible";
         document.dispatchEvent(new Event("visibilitychange"));
-        await element.updateComplete;
+        flush();
       }
       expect(element.querySelector(".sidebar-issues-button__count")?.textContent).toBe("1");
       await vi.advanceTimersByTimeAsync(30 * 60_000);
@@ -429,26 +436,28 @@ describe("sidebar attention refresh ownership", () => {
 
   it("does not let an obsolete open render steal focus from a later interaction", async () => {
     const { element, trigger } = await mountAttention();
-    const rendered = deferred<boolean>();
-    const updateComplete = vi
-      .spyOn(element, "updateComplete", "get")
-      .mockReturnValueOnce(rendered.promise);
+    const pending: VoidFunction[] = [];
+    vi.spyOn(globalThis, "queueMicrotask").mockImplementation((callback) => pending.push(callback));
     trigger.click();
-    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
-    expect(updateComplete).toHaveBeenCalledOnce();
-    updateComplete.mockRestore();
+    await vi.dynamicImportSettled();
+    flush();
+    expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull();
+    const obsolete = pending.splice(0);
 
     element.dismissPanel();
-    await element.updateComplete;
+    flush();
     trigger.click();
-    await waitForFast(() =>
-      expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list")),
-    );
+    await vi.dynamicImportSettled();
+    flush();
+    for (const callback of pending.splice(0)) {
+      callback();
+    }
+    expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list"));
     const nextControl = document.body.appendChild(document.createElement("button"));
     nextControl.focus();
-    rendered.resolve(true);
-    await rendered.promise;
-
+    for (const callback of obsolete) {
+      callback();
+    }
     expect(document.activeElement).toBe(nextControl);
   });
 
@@ -456,27 +465,27 @@ describe("sidebar attention refresh ownership", () => {
     const { element, trigger } = await mountAttention();
     trigger.click();
     await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
-    const rendered = deferred<boolean>();
-    const updateComplete = vi
-      .spyOn(element, "updateComplete", "get")
-      .mockReturnValueOnce(rendered.promise);
+    const pending: VoidFunction[] = [];
+    vi.spyOn(globalThis, "queueMicrotask").mockImplementation((callback) => pending.push(callback));
     element
       .querySelector(".sidebar-issues-panel")!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(updateComplete).toHaveBeenCalledOnce();
-    updateComplete.mockRestore();
-    await element.updateComplete;
+    flush();
+    const obsolete = pending.splice(0);
     trigger.click();
-    await waitForFast(() =>
-      expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list")),
-    );
+    await vi.dynamicImportSettled();
+    flush();
+    for (const callback of pending.splice(0)) {
+      callback();
+    }
+    expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list"));
     element.dismissPanel();
-    await element.updateComplete;
+    flush();
     const nextControl = document.body.appendChild(document.createElement("button"));
     nextControl.focus();
-    rendered.resolve(true);
-    await rendered.promise;
-
+    for (const callback of obsolete) {
+      callback();
+    }
     expect(document.activeElement).toBe(nextControl);
   });
 
@@ -527,7 +536,7 @@ describe("sidebar attention refresh ownership", () => {
       });
       if (reopen) {
         element.dismissPanel();
-        await element.updateComplete;
+        flush();
         trigger.click();
         await waitForFast(() =>
           expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list")),
@@ -539,13 +548,15 @@ describe("sidebar attention refresh ownership", () => {
       }
       resolution.resolve({ ok: true });
       await decideApproval.mock.results[0]!.value;
-      await element.updateComplete;
+      flush();
 
       expect(overlays.snapshot.approvalQueue.map((approval) => approval.id)).toEqual(["remaining"]);
-      expect(document.activeElement).toBe(
-        reopen
-          ? tab
-          : element.querySelector('[data-approval-id="remaining"] [data-issue-row-focus]'),
+      await waitForFast(() =>
+        expect(document.activeElement).toBe(
+          reopen
+            ? tab
+            : element.querySelector('[data-approval-id="remaining"] [data-issue-row-focus]'),
+        ),
       );
     } finally {
       resolution.resolve({ ok: true });
@@ -670,7 +681,7 @@ describe("sidebar attention refresh ownership", () => {
         listener();
       }
 
-      await element.updateComplete;
+      flush();
       expect(element.querySelector('[data-attention-kind="modelAuthExpired"]')).toBeNull();
       expect(element.querySelector('[data-attention-kind="cronFailed"]')).not.toBeNull();
       expect(element.querySelector('[data-attention-kind="updateAvailable"]')).not.toBeNull();
@@ -700,7 +711,7 @@ describe("sidebar attention refresh ownership", () => {
       await new Promise<void>((resolve) => {
         globalThis.setTimeout(resolve, 0);
       });
-      await element.updateComplete;
+      flush();
 
       expect(
         element

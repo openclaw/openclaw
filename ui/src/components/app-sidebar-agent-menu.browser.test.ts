@@ -7,9 +7,9 @@ afterEach(() => document.body.replaceChildren());
 
 describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", () => {
   it("shows the same mixed avatars in count-aware groups without a backing circle", async () => {
-    await import("./app-sidebar.ts");
+    await import("./app-sidebar.tsx");
     const { render } = await import("lit");
-    const { renderSidebarAgentMenuSwitcher } = await import("./sidebar-agent-menu-switcher.ts");
+    const { renderSidebarAgentMenuSwitcher } = await import("./sidebar-agent-menu-switcher.tsx");
     const image =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR7sAAAAASUVORK5CYII=";
     const agents = Array.from({ length: 8 }, (_, index) => ({
@@ -106,7 +106,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
   });
 
   it("aligns short and wrapped names beside active and inactive avatars", async () => {
-    await import("./app-sidebar.ts");
+    await import("./app-sidebar.tsx");
     const { createGatewayHarness, createSessions, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
     const { sidebar } = await mountSidebar(
@@ -206,8 +206,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       });
       document.documentElement.setAttribute("data-theme-mode", theme);
       await page.viewport(width, 900);
-      await import("./app-sidebar.ts");
-      await import("./sidebar-agent-roster.ts");
+      await import("./app-sidebar.tsx");
+      await import("./sidebar-agent-roster.tsx");
       const { createGatewayHarness, createSessions, mountSidebar } =
         await import("../test-helpers/app-sidebar.ts");
       const { sidebar } = await mountSidebar(

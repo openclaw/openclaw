@@ -9,7 +9,7 @@ import {
   rowLink,
   sessionMenu,
 } from "./multi-select-support.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar new group dialog", () => {
   it("moves captured sessions even when both leave the bounded list mid-write", async () => {

@@ -38,7 +38,7 @@ import {
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
+import { sidebarPluginTabs } from "./app-sidebar-nav-menus.tsx";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,

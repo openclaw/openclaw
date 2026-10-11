@@ -144,7 +144,7 @@ describe("Control UI build chunking", () => {
     const repoRoot = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
     // Representative always-loaded boot surface and a lazy island that must
     // keep its own chunk (terminal runtime is not part of the default boot).
-    expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar.ts`)).toBe(true);
+    expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar.tsx`)).toBe(true);
     // Chat reaches narration through a dynamic import without a request of its own.
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`)).toBe(
       true,

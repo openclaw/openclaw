@@ -48,3 +48,5 @@ export function renderThemeBrandIcon(
     aria-hidden="true"
   ></openclaw-theme-brand-icon>`;
 }
+
+export type { ThemeBrandIcon };

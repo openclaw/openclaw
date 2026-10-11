@@ -1,8 +1,11 @@
-import { render } from "lit";
+import { render as renderSolid, type JSX } from "@solidjs/web";
+import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
@@ -10,15 +13,28 @@ import "../styles/sidebar-issues.css";
 import "./web-awesome-tabs.ts";
 // Upgrade the real element: the floating layout once regressed because a base
 // class stamped inline `display: contents`, which only a live upgrade reveals.
-import "./sidebar-attention.ts";
+import "./sidebar-attention.tsx";
 import {
   buildSidebarInboxEntries,
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
-import { renderSidebarAttentionPanel } from "./sidebar-attention-panel.runtime.ts";
+import {
+  SidebarAttentionPanel,
+  type SidebarAttentionPanelParams,
+} from "./sidebar-attention-panel.runtime.tsx";
 import layoutCss from "../styles/layout.css?inline";
 import floatingCss from "../styles/sidebar-attention-floating.css?inline";
+
+const mountedPanels = new Map<Element, () => void>();
+function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams) {
+  return () => createComponent(SidebarAttentionPanel, params);
+}
+function render(view: () => JSX.Element, container: Element) {
+  mountedPanels.get(container)?.();
+  mountedPanels.set(container, renderSolid(view, container));
+  flush();
+}
 
 const authWarning: SidebarAttentionItem = {
   type: "attention",
@@ -49,9 +65,7 @@ function inboxMention(id: string): MentionInboxItem {
   };
 }
 
-function panelParams(
-  entries: readonly SidebarInboxEntry[],
-): Parameters<typeof renderSidebarAttentionPanel>[0] {
+function panelParams(entries: readonly SidebarInboxEntry[]): SidebarAttentionPanelParams {
   return {
     context: {
       basePath: "",
@@ -87,6 +101,10 @@ function panelParams(
 }
 
 afterEach(() => {
+  for (const dispose of mountedPanels.values()) {
+    dispose();
+  }
+  mountedPanels.clear();
   document.body.replaceChildren();
   document.documentElement.classList.remove(
     "openclaw-native-nav",
@@ -226,24 +244,22 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         ).join("")}
       </nav>
       <main class="content">
-        <openclaw-sidebar-attention class="sidebar-attention--floating">
-          <button class="sidebar-issues-button"></button>
-        </openclaw-sidebar-attention>
+        <openclaw-sidebar-attention class="sidebar-attention--floating"></openclaw-sidebar-attention>
       </main>
     `;
-      document.body.append(shell);
+      const provider = createApplicationContextProvider(panelParams([]).context);
+      provider.append(shell);
+      document.body.append(provider);
 
-      const attention = shell.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-        "openclaw-sidebar-attention",
-      )!;
+      const attention = shell.querySelector<HTMLElement>("openclaw-sidebar-attention")!;
       const chrome = shell.querySelector<HTMLElement>(".shell-chrome-controls")!;
       const nativeChrome = shell.querySelector<HTMLElement>(".macos-titlebar-controls")!;
-      const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
-
       // The real shell mounts this row only in native web-chrome mode.
       nativeChrome.remove();
-      await attention.updateComplete;
-      attention.append(inbox);
+      await waitForSolid(() =>
+        expect(attention.querySelector(".sidebar-issues-button")).not.toBeNull(),
+      );
+      const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
 
       expect(getComputedStyle(attention).position).toBe("fixed");
       expect(getComputedStyle(attention).display).toBe("flex");

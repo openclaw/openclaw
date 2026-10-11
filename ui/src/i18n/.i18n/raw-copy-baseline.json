@@ -122,6 +122,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/app-sidebar-session-indicators.tsx",
+      "text": "0ms"
+    },
+    {
+      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/components/app-topbar.ts",
@@ -280,6 +287,27 @@
       "name": "label",
       "path": "ui/src/components/provider-icon-data.ts",
       "text": "Machine0"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/sidebar-build-chip.tsx",
+      "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/solid/sidebar-community-invite.tsx",
+      "text": "follow"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/solid/sidebar-community-invite.tsx",
+      "text": "join"
     },
     {
       "count": 1,

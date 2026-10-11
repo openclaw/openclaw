@@ -14,6 +14,7 @@ import "../test-helpers/app-sidebar-suite.ts";
 import {
   createContext,
   createGatewayHarness,
+  createSidebarElement,
   mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
@@ -28,9 +29,8 @@ import {
 } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { storeSidebarSessionOwnerFilter } from "./app-sidebar-session-types.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 async function mountSessionRoster(request: GatewayRequestHandler) {
   const gateway = createGatewayHarness(createTestGatewayClient(request));
@@ -414,10 +414,7 @@ describe("AppSidebar initial managed-list hydration", () => {
         })
       : Promise.resolve();
     const provider = createApplicationContextProvider(context);
-    const sidebar = document.createElement("openclaw-app-sidebar");
-    if (!(sidebar instanceof AppSidebarSessionNavigationElement)) {
-      throw new Error("Expected registered sidebar");
-    }
+    const sidebar = await createSidebarElement();
     sidebar.navigationScope = filter === "mine" ? "mine" : "all";
     if (filter !== "mine") {
       storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, "synthetic-operator", {
@@ -425,7 +422,7 @@ describe("AppSidebar initial managed-list hydration", () => {
         involvingMe: filter === "involving-me",
       });
     }
-    provider.append(sidebar);
+    provider.append(sidebar.hostElement);
     document.body.append(provider);
     await sidebar.updateComplete;
     const heldLater = invalidate

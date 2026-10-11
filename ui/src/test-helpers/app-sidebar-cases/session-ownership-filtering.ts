@@ -9,7 +9,7 @@ import {
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 async function selectOwner(sidebar: SidebarLifecycleState, ownerId: string, involvingMe = false) {
   await activateSessionMenuValue(sidebar, involvingMe ? "involving-me" : `owner:${ownerId}`);

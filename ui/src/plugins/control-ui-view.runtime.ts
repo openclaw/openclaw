@@ -12,7 +12,7 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { icons, type IconName } from "../components/icons.ts";
-import type { SidebarMenusController } from "../components/sidebar-menus-controller.ts";
+import type { SidebarMenusController } from "../components/sidebar-menus-controller.tsx";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
@@ -33,6 +33,8 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) surface: ControlUiSurface = "workspace";
   @property({ attribute: false }) props: unknown = {};
   @property({ attribute: false }) defaultView: unknown = nothing;
+  /** Renderer-owned fallback; each delegated mount owns its own cleanup. */
+  @property({ attribute: false }) mountDefaultView?: (target: HTMLElement) => () => void;
   @property({ attribute: false }) replacementCompanion: unknown = nothing;
   @property({ attribute: false }) defaultHost?: LitElement;
   @property({ type: Boolean }) presented = true;
@@ -44,7 +46,9 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   private ownerChanged = false;
   private handle?: ReturnType<ControlUiView<unknown>>;
   private viewContext?: ControlUiViewContext<unknown>;
-  private readonly defaultContainers = new Set<HTMLElement>();
+  private readonly defaultContainers = new Map<HTMLElement, () => void>();
+  private fallbackContainer?: HTMLElement;
+  private disposeFallback?: () => void;
   private readonly subscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.plugins,
     () => {
@@ -113,6 +117,12 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   }
 
   override updated(): void {
+    const fallback = this.querySelector<HTMLElement>("[data-plugin-default-root]");
+    if (fallback !== this.fallbackContainer) {
+      this.disposeFallback?.();
+      this.fallbackContainer = fallback ?? undefined;
+      this.disposeFallback = fallback ? this.mountDefaultContent(fallback) : undefined;
+    }
     const registration = this.registration;
     if (!registration || this.error || registration.signal.aborted) {
       return;
@@ -143,16 +153,18 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
               throw new Error("This plugin UI view has ended.");
             }
             const firstDefault = this.defaultContainers.size === 0;
-            this.defaultContainers.add(target);
-            render(this.defaultView, target, { host: this.defaultHost ?? this });
+            this.defaultContainers.get(target)?.();
+            const dispose = this.mountDefaultContent(target);
+            this.defaultContainers.set(target, dispose);
             if (firstDefault) {
               this.requestUpdate();
             }
             return () => {
-              if (!this.defaultContainers.delete(target)) {
+              if (this.defaultContainers.get(target) !== dispose) {
                 return;
               }
-              render(nothing, target);
+              this.defaultContainers.delete(target);
+              dispose();
               if (this.defaultContainers.size === 0) {
                 this.requestUpdate();
               }
@@ -168,12 +180,22 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
         };
         this.handle?.update?.(this.viewContext);
       }
-      for (const container of this.defaultContainers) {
-        render(this.defaultView, container, { host: this.defaultHost ?? this });
+      if (!this.mountDefaultView) {
+        for (const container of this.defaultContainers.keys()) {
+          render(this.defaultView, container, { host: this.defaultHost ?? this });
+        }
       }
     } catch (error) {
       this.fail(error);
     }
+  }
+
+  private mountDefaultContent(target: HTMLElement): () => void {
+    if (this.mountDefaultView) {
+      return this.mountDefaultView(target);
+    }
+    render(this.defaultView, target, { host: this.defaultHost ?? this });
+    return () => render(nothing, target);
   }
 
   private scopedProps(signal: AbortSignal): unknown {
@@ -245,8 +267,8 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
     } catch (error) {
       this.context?.plugins.reportError(this.registration?.pluginId ?? "host", error);
     }
-    for (const container of this.defaultContainers) {
-      render(nothing, container);
+    for (const dispose of this.defaultContainers.values()) {
+      dispose();
     }
     this.defaultContainers.clear();
     this.viewContext = undefined;
@@ -258,6 +280,9 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback(): void {
+    this.disposeFallback?.();
+    this.disposeFallback = undefined;
+    this.fallbackContainer = undefined;
     this.unmount();
     this.subscriptions.clear();
     super.disconnectedCallback();
@@ -278,7 +303,7 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
               </button>
             </div>`
           : nothing
-      }${this.defaultView}`;
+      }${this.mountDefaultView ? html`<div data-plugin-default-root style="display: contents"></div>` : this.defaultView}`;
     }
     // The host owns the mount root. A new lifetime gets new DOM even when the
     // plugin has no disposer or its framework caches render state on the root.
@@ -566,3 +591,5 @@ if (!customElements.get("openclaw-plugin-contributions")) {
 if (!customElements.get("openclaw-plugin-view")) {
   customElements.define("openclaw-plugin-view", ControlUiPluginView);
 }
+
+export type { ControlUiPluginView, ControlUiPluginContributions };
