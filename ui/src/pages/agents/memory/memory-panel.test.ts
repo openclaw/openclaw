@@ -255,21 +255,21 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     page.connect();
     await page.updateComplete;
     const previousState = page.dreaming;
-    previousState.resources.dreamDiary.value = { path: "DREAMS.md", content: "main-only" };
+    previousState.dreamDiaryContent = "main-only";
 
     page.agentId = "support";
     await page.updateComplete;
 
     expect(page.dreaming).not.toBe(previousState);
     expect(page.dreaming.selectedAgentId).toBe("support");
-    expect(page.dreaming.resources.dreamDiary.value).toBeNull();
+    expect(page.dreaming.dreamDiaryContent).toBeNull();
 
-    page.dreaming.resources.dreamDiary.value = { path: "DREAMS.md", content: "support-only" };
+    page.dreaming.dreamDiaryContent = "support-only";
     page.agentId = "";
     await page.updateComplete;
 
     expect(page.dreaming.selectedAgentId).toBeNull();
-    expect(page.dreaming.resources.dreamDiary.value).toBeNull();
+    expect(page.dreaming.dreamDiaryContent).toBeNull();
   });
 
   it("resets provider and modal state when the gateway source changes", async () => {
@@ -278,7 +278,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     page.connect();
     await page.updateComplete;
     const previousState = page.dreaming;
-    previousState.resources.dreamDiary.value = { path: "DREAMS.md", content: "old provider" };
+    previousState.dreamDiaryContent = "old provider";
     const wikiPreview = {
       loading: true,
       error: null,
@@ -291,7 +291,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     await replaceContext(page, contextWithGateway(client, false));
 
     expect(page.dreaming).not.toBe(previousState);
-    expect(page.dreaming.resources.dreamDiary.value).toBeNull();
+    expect(page.dreaming.dreamDiaryContent).toBeNull();
     expect(page.viewState.wikiPreview).toBeNull();
     expect(page.toggleConfirmLoading).toBe(false);
     expect(page.pendingEnabled).toBeNull();
@@ -542,7 +542,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     const page = createMemoryState();
     page.context = context;
     page.agentId = "main";
-    page.dreaming.resources.dreamingStatus.value = {
+    page.dreaming.dreamingStatus = {
       enabled: true,
       promotedToday: 7,
       timezone: "Mars/Base",
@@ -567,7 +567,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
           minPatternStrength: 0,
         },
       },
-    } as NonNullable<DreamingState["resources"]["dreamingStatus"]["value"]>;
+    } as NonNullable<DreamingState["dreamingStatus"]>;
     const container = document.createElement("div");
 
     mountSolid(() => AgentMemoryView({ state: page as unknown as AgentMemoryState }), {
