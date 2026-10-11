@@ -237,7 +237,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved async skill-command preparation pairs on two existing entrypoints.
       // +15: approved async auth, model, and TTS replacement pairs.
       // +7: approved async session, command-menu, model-override, TTS-path, and list replacements.
-      3694,
+      // +1: preview adapters strip only normalization-owned response decoration.
+      3695,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -260,7 +261,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: the same skill-command preparation replacements.
       // +15: the same auth, model, and TTS replacement pairs.
       // +7: the same session, command-menu, model-override, TTS-path, and list replacements.
-      2155,
+      // +1: stripReplyPayloadResponsePrefix preserves durable text while assembling previews.
+      2156,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

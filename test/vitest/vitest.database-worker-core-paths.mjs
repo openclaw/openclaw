@@ -312,6 +312,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/server-methods/chat-webchat-acp-binding.test.ts",
   "src/gateway/server-close.conversation-bindings.test.ts",
   "src/auto-reply/reply/dispatch-acp.owner.test.ts",
+  "src/auto-reply/reply/acp-spawn-owner.test.ts",
   "src/auto-reply/reply/commands-subagents.test.ts",
   "test/subagent-announce-origin.integration.test.ts",
   "test/subagent-progress-telegram-retirement.integration.test.ts",
