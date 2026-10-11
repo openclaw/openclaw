@@ -1,18 +1,21 @@
-import { render, spread, type JSX } from "@solidjs/web";
+import { insert, render, spread } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import {
   createComponent,
   createEffect,
   createRenderEffect,
+  createRoot,
   createSignal,
   flush,
   onCleanup,
   runWithOwner,
+  untrack,
 } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
+import type { JSX } from "../types/solid-elements.d.ts";
 
 type Property<T> = {
   default: T;
@@ -31,6 +34,7 @@ type Spec<Props, Methods> = {
   properties: { [Key in keyof Props]-?: Property<Props[Key]> };
   connected?(host: SolidBridgeElement<Props, Methods>): void;
   disconnected?(host: SolidBridgeElement<Props, Methods>): void;
+  propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
   methods?: {
     [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
       ? (host: SolidBridgeElement<Props, Methods>, ...args: Args) => Result
@@ -115,6 +119,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         return;
       }
       this.#values.set(key, value);
+      // SAFETY: Keys come only from spec.properties, which maps every Props key.
+      spec.propertyChanged?.(this.#host, key as keyof Props);
       const property = declarations.get(key);
       if (property?.reflect && property.attribute !== false) {
         const attribute = property.attribute ?? key.toLowerCase();
@@ -140,7 +146,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           : typeof property.default === "number"
             ? Number
             : String);
-      this.#write(
+      Reflect.set(
+        this,
         key,
         type === Boolean
           ? value !== null
@@ -148,6 +155,10 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             ? Number(value)
             : value,
       );
+    }
+
+    connectedMoveCallback() {
+      // Atomic parking keeps the existing provider and owned child tree.
     }
 
     connectedCallback() {
@@ -222,14 +233,18 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         if (!this.#content) {
           this.#content = this.ownerDocument.createDocumentFragment();
           this.#start = this.ownerDocument.createComment("solid-bridge-content");
-          this.#content.append(this.#start, ...this.childNodes);
+          this.prepend(this.#start);
+        } else {
+          this.append(...this.#content.childNodes);
         }
-        source = [...this.#content.childNodes];
+        // Adopt passthrough children in place so lazy upgrade keeps focus and hover intent.
+        source = [...this.childNodes];
       }
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
-      this.#dispose = render(() => {
-        const [revision, setRevision] = createSignal(0);
+      const view = () => {
+        // Solid-owned hosts publish property updates while their parent renders.
+        const [revision, setRevision] = createSignal(0, { ownedWrite: true });
         this.#notify = () => setRevision((value) => value + 1);
         const props = {
           ...defaults,
@@ -246,7 +261,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           });
         }
         const renderContent = () => content(props, this.#host);
-        const view = () =>
+        const contentView = () =>
           layout
             ? createComponent(ShellLayoutProvider, {
                 value: { owner: layout, host: this },
@@ -259,11 +274,18 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           ? createComponent(ApplicationProvider, {
               value: this.#application,
               get children() {
-                return view();
+                return contentView();
               },
             })
-          : view();
-      }, this);
+          : contentView();
+      };
+      // A nested top-level render would flush child effects under the parent's render owner.
+      this.#dispose = this.#solidOwned
+        ? createRoot((dispose) => {
+            insert(this, view());
+            return dispose;
+          })
+        : render(view, this, source);
     }
 
     #disposeRoot() {
@@ -276,6 +298,9 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         this.#content.append(...outlet.childNodes);
       }
       this.#dispose?.();
+      if (this.#solidOwned) {
+        this.replaceChildren();
+      }
       this.#dispose = undefined;
       this.#application = undefined;
       this.#mountedApplication = undefined;
@@ -291,7 +316,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           () => (Reflect.has(props, key) ? Reflect.get(props, key) : absent),
           (value) => {
             if (value !== absent) {
-              host.#write(key, value === undefined ? property.default : value);
+              Reflect.set(host, key, value === undefined ? property.default : value);
             }
           },
         );
@@ -316,9 +341,21 @@ export function defineSolidBridge<Props extends object, Methods extends object =
 }
 
 /** Unported stateless templates exclusively own this adapter's descendants. */
-export function LitContent(props: { render: () => unknown }) {
-  const host = document.createElement("span");
-  host.style.display = "contents";
+export function LitContent(props: {
+  render: () => unknown;
+  tag?: "span" | "div" | "code";
+  class?: string;
+}) {
+  // Host shape stays fixed while the template updates.
+  const tag = untrack(() => props.tag ?? "span");
+  const host = document.createElement(tag);
+  if (tag === "span") {
+    host.style.display = "contents";
+  }
+  const className = untrack(() => props.class ?? "lit-content");
+  if (className) {
+    host.className = className;
+  }
   let part: ReturnType<typeof renderLit> | undefined;
   createEffect(
     () => props.render(),

@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, onSettled, untrack } from "solid-js";
-import { reclaimTabFocus, rememberTabFocus } from "../../lib/tab-focus-handoff.ts";
+import { reclaimHubTabFocus, rememberHubTabFocus } from "../hub-tabs-focus.ts";
 import { Tabs } from "./tabs.tsx";
 import "../../styles/hub-tabs.css";
 import hubStyles from "../../styles/hub-tabs.css?inline";
@@ -53,7 +53,7 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       (tab) => tab.dataset.tabValue === initial.active,
     );
     if (initial.active !== null) {
-      reclaimTabFocus(initial.id, initial.active, selected);
+      reclaimHubTabFocus(initial.id, initial.active, selected);
     }
   });
   return (
@@ -80,7 +80,7 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
           return false;
         }
         if (event instanceof KeyboardEvent) {
-          rememberTabFocus(props.id, tab.value, element);
+          rememberHubTabFocus(props.id, tab.value, element);
         }
         props.onSelect(tab.value);
         props.onActivate?.(element);

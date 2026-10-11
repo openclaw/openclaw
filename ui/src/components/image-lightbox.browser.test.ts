@@ -38,12 +38,12 @@ async function mountImage(item: ImageLightboxItem, deferredClose = false) {
   );
   const viewer = container.querySelector("openclaw-image-lightbox")!;
   await viewer.updateComplete;
-  const modal = viewer.shadowRoot!.querySelector("openclaw-modal-dialog")!;
+  const modal = viewer.querySelector("openclaw-modal-dialog")!;
   await modal.updateComplete;
   const dialog = modal.querySelector("dialog")!;
   await expect.poll(() => dialog.open).toBe(true);
   await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
-  const image = viewer.shadowRoot!.querySelector<HTMLImageElement>("img")!;
+  const image = viewer.querySelector<HTMLImageElement>("img")!;
   await image.decode();
   await nextFrame();
   return { viewer, image };
@@ -70,7 +70,7 @@ describe("progressive image viewer geometry", () => {
       { src: imageSource(320, 200, "#264060"), title: "Focus return" },
       true,
     );
-    const modal = viewer.shadowRoot!.querySelector("openclaw-modal-dialog")!;
+    const modal = viewer.querySelector("openclaw-modal-dialog")!;
     const dialog = modal.querySelector("dialog")!;
     const animation = dialog.animate({ opacity: [1, 0.5] }, { duration: 60_000 });
     animation.pause();
@@ -95,7 +95,7 @@ describe("progressive image viewer geometry", () => {
         src: imageSource(320, 200, "#264060"),
         title: "Retained close",
       });
-      const modal = viewer.shadowRoot!.querySelector("openclaw-modal-dialog")!;
+      const modal = viewer.querySelector("openclaw-modal-dialog")!;
       const dialog = modal.querySelector("dialog")!;
       const animation = dialog.animate({ opacity: [1, 0.5] }, { duration: 60_000 });
       animation.pause();
@@ -153,8 +153,8 @@ describe("progressive image viewer geometry", () => {
       expect(fitted.top).toBeGreaterThanOrEqual(0);
       expect(fitted.bottom).toBeLessThanOrEqual(window.innerHeight);
 
-      viewer.shadowRoot!.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!.click();
-      const zoom = viewer.shadowRoot!.querySelector(".zoom-level")!;
+      viewer.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!.click();
+      const zoom = viewer.querySelector(".zoom-level")!;
       await expect.poll(() => zoom.textContent?.trim()).not.toBe("100%");
       await Promise.all(image.getAnimations().map((animation) => animation.finished));
       const zoomBefore = zoom.textContent;
@@ -180,7 +180,7 @@ describe("progressive image viewer geometry", () => {
       height: 960,
       gallery: { index: 0, items: [async () => null, async () => neighbor] },
     });
-    viewer.shadowRoot!.querySelector<HTMLButtonElement>('[aria-label="Next image"]')!.click();
+    viewer.querySelector<HTMLButtonElement>('[aria-label="Next image"]')!.click();
     await expect.poll(() => image.src).toBe(neighbor.src);
     await image.decode();
     await nextFrame();

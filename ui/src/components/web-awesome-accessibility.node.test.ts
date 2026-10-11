@@ -178,7 +178,7 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
           }),
           root,
         );
-        await Promise.resolve();
+        await root.querySelector("openclaw-panel-tab-strip").updateComplete;
       `,
       async (_page, accessibility) => {
         const { nodes } = await accessibility.send("Accessibility.getFullAXTree");

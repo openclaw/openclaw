@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { icons } from "../icons.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, readPanelHostedTabs } from "../panel-hosted-tabs.ts";
@@ -31,7 +32,7 @@ describe("Browser panel hosted tabs", () => {
     panel.available = true;
     panel.embedded = embedded;
     panel.tabsInHeader = tabsInHeader;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
     const controller = (panel as unknown as { browserPanelController: BrowserPanelController })
       .browserPanelController;
@@ -67,20 +68,26 @@ describe("Browser panel hosted tabs", () => {
     "renders its own strip=$ownsStrip for embedded=$embedded and tabsInHeader=$tabsInHeader",
     async ({ embedded, tabsInHeader, ownsStrip }) => {
       const { panel } = await mount(embedded, tabsInHeader);
-      expect(Boolean(panel.shadowRoot?.querySelector(".bp-header"))).toBe(ownsStrip);
-      expect(Boolean(panel.shadowRoot?.querySelector(".tabstrip"))).toBe(ownsStrip);
-      expect(panel.shadowRoot?.querySelector(".bp-toolbar")).not.toBeNull();
-      expect(panel.shadowRoot?.querySelector(".bp-viewport")?.getAttribute("aria-labelledby")).toBe(
-        ownsStrip ? "browser-tab-remote:a" : null,
+      expect(Boolean(panel.renderRoot?.querySelector(".bp-header"))).toBe(ownsStrip);
+      expect(Boolean(panel.renderRoot?.querySelector(".tabstrip"))).toBe(ownsStrip);
+      expect(panel.renderRoot?.querySelector(".bp-toolbar")).not.toBeNull();
+      const viewport = panel.renderRoot.querySelector<HTMLElement>(".bp-viewport")!;
+      const activeTab = panel.renderRoot.querySelector<HTMLElement>(
+        '.tabstrip-tab[aria-selected="true"]',
       );
+      expect(viewport.getAttribute("aria-labelledby")).toBe(ownsStrip ? activeTab?.id : null);
+      if (ownsStrip) {
+        expect(activeTab).not.toBeNull();
+        expect(activeTab?.getAttribute("aria-controls")).toBe(viewport.id);
+      }
       if (embedded) {
-        expect(panel.shadowRoot?.querySelector(".bp-header [data-new-tab-action]")).toBeNull();
-        expect(panel.shadowRoot?.querySelector(".bp-toolbar [data-new-tab-action]")).not.toBeNull();
+        expect(panel.renderRoot?.querySelector(".bp-header [data-new-tab-action]")).toBeNull();
+        expect(panel.renderRoot?.querySelector(".bp-toolbar [data-new-tab-action]")).not.toBeNull();
       }
     },
   );
 
-  it("projects controller tabs with the same labels as the panel's own strip", async () => {
+  it("projects controller tabs and keeps simultaneous panels' DOM associations separate", async () => {
     const { panel } = await mount(true, false);
     expect(readPanelHostedTabs(panel)).toBe(panel);
     expect(panel.hostedTabs).toEqual([
@@ -96,15 +103,29 @@ describe("Browser panel hosted tabs", () => {
     ]);
     expect(panel.activeHostedTabId).toBe("remote:a");
     expect(
-      [...panel.shadowRoot!.querySelectorAll(".tabstrip-tab__label")].map(
+      [...panel.renderRoot!.querySelectorAll(".tabstrip-tab__label")].map(
         (label) => label.textContent,
       ),
     ).toEqual(["Example", "second.test", "New tab"]);
-    const nativeIcon = panel.shadowRoot!.querySelector(
-      "#browser-tab-native\\:b .tabstrip-tab__icon",
-    );
+    const nativeIcon = panel.renderRoot
+      .querySelectorAll(".tabstrip-tab")[1]
+      ?.querySelector(".tabstrip-tab__icon");
     expect(nativeIcon?.querySelector("img")?.getAttribute("src")).toBe(favicon);
     expect(nativeIcon?.querySelector("svg")).toBeNull();
+
+    const second = await mount(true, false);
+    for (const browser of [panel, second.panel]) {
+      const viewport = browser.renderRoot.querySelector<HTMLElement>(".bp-viewport")!;
+      expect(document.getElementById(viewport.id)).toBe(viewport);
+      for (const tab of browser.renderRoot.querySelectorAll<HTMLElement>(".tabstrip-tab")) {
+        expect(document.getElementById(tab.id)).toBe(tab);
+        expect(tab.getAttribute("aria-controls")).toBe(viewport.id);
+      }
+      const activeTab = browser.renderRoot.querySelector<HTMLElement>(
+        '.tabstrip-tab[aria-selected="true"]',
+      )!;
+      expect(viewport.getAttribute("aria-labelledby")).toBe(activeTab.id);
+    }
   });
 
   it("publishes favicon-only native pushes to hosted tabs and the dock strip", async () => {
@@ -130,7 +151,7 @@ describe("Browser panel hosted tabs", () => {
     panel.remoteAvailable = false;
     panel.embedded = true;
     panel.presented = true;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
     const changed = vi.fn();
     panel.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);
@@ -141,7 +162,7 @@ describe("Browser panel hosted tabs", () => {
     );
     await panel.updateComplete;
     expect(panel.hostedTabs[0]?.favicon).toBe(favicon);
-    expect(panel.shadowRoot?.querySelector("img.tabstrip-tab__favicon")?.getAttribute("src")).toBe(
+    expect(panel.renderRoot?.querySelector("img.tabstrip-tab__favicon")?.getAttribute("src")).toBe(
       favicon,
     );
     expect(changed).toHaveBeenCalledOnce();
@@ -152,7 +173,7 @@ describe("Browser panel hosted tabs", () => {
     );
     await panel.updateComplete;
     expect(panel.hostedTabs[0]?.favicon).toBeUndefined();
-    expect(panel.shadowRoot?.querySelector("img.tabstrip-tab__favicon")).toBeNull();
+    expect(panel.renderRoot?.querySelector("img.tabstrip-tab__favicon")).toBeNull();
     expect(changed).toHaveBeenCalledTimes(2);
   });
 

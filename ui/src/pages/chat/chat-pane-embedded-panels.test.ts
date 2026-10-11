@@ -4,7 +4,7 @@ import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, render, type LitElement } from "lit";
-import "./components/chat-detail-panel.ts";
+import "./components/chat-detail-panel.tsx";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
@@ -12,7 +12,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import {
-  createReviewFixture,
+  createReviewFixture as createUnboundReviewFixture,
   renderPanelFixture,
 } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -40,6 +40,7 @@ import {
   openSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
+import { createChatSidebarContainer } from "./components/chat-sidebar.test-support.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
 import {
   installTranscriptDomMocks,
@@ -47,7 +48,7 @@ import {
   threadProps,
 } from "./components/chat-transcript.test-support.ts";
 import "./components/chat-sidebar-region.runtime.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import {
   closeSlot,
   ensureSidebarConversation,
@@ -57,6 +58,14 @@ import {
   setSidebarOpen,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
+
+function createReviewFixture() {
+  const fixture = createUnboundReviewFixture();
+  const provider = createChatSidebarContainer();
+  fixture.mount.before(provider);
+  provider.append(fixture.mount);
+  return fixture;
+}
 
 function discussionSlots(discussionAvailable: boolean) {
   const discussion = {} as SessionDiscussionPanelConfig;
@@ -231,7 +240,7 @@ describe("chat pane embedded panels", () => {
       const attachmentId = crypto.randomUUID();
       const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
       const container = document.body.appendChild(document.createElement("div"));
-      const detail = document.body.appendChild(document.createElement("div"));
+      const detail = document.body.appendChild(createChatSidebarContainer());
       let sidebarContent: SidebarContent | null = null;
       const pending = createDeferred<{ url: string } | null>();
       const secondResolver = vi.fn(() => pending.promise);
@@ -631,7 +640,7 @@ describe("chat pane embedded panels", () => {
       sidebarLayout: { columns: [] },
       settings: loadSettings(),
     } as unknown as ChatPageHost;
-    const mount = document.body.appendChild(document.createElement("div"));
+    const mount = document.body.appendChild(createChatSidebarContainer());
     let presented = true;
     const owner = new EventTarget();
     const renderPanels = async (layout: SidebarLayout) => {

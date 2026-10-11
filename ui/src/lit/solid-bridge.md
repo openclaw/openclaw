@@ -54,6 +54,11 @@ methods can change declared properties or invoke its native DOM operations.
 The returned component's `Element` constructor exposes that same registered,
 typed host for imperative callers.
 
+For owners that must invalidate requests or presentation synchronously, the optional
+`propertyChanged(host, key)` hook runs after a changed value is stored and before
+rendering is scheduled. Equal assignments do not invoke it. Keep cancellation and
+authority in that owner; the hook is not a second render lifecycle.
+
 Host property reads and writes are synchronous. Component updates are batched
 until the microtask commit. The bridge queues its flush during Lit's property
 commit, so awaiting the caller's `updateComplete` sees committed synchronous

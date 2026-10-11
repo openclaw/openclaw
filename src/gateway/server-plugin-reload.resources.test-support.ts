@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
+import { scopePreparedModelRuntimeLease } from "../agents/prepared-model-runtime-generation-scope.js";
 import { retainRuntimePluginWork } from "../agents/runtime-plugin-work.js";
 import * as configJournal from "../config/config-journal-snapshot.js";
 import * as configAudit from "../config/io.audit.js";
@@ -216,7 +219,7 @@ async function verifySelfConsumerReload(
     await closing;
     assert(consumer);
     consumer.release();
-    // A refusal on a later instance must unwind reservations already acquired for earlier ones.
+    // A refusal leaves each previous instance available for ordinary work.
     for (const previous of fixture.previousRegistry.plugins) {
       getPluginInstance(previous)?.retainWork()();
     }
@@ -277,7 +280,6 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     await Promise.race([reserved.promise, reloading]);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(disposed).toEqual([]);
-    expect(() => retainRuntimePluginWork([old])).toThrow("replacement is in progress");
     first();
     expect(instance.run(() => "old run finishes")).toBe("old run finishes");
     expect(fixture.candidates).toHaveLength(0);
@@ -351,7 +353,6 @@ async function verifyExplicitDrainWait(
     expect(fixture.candidates).toHaveLength(0);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(instance.disposing).toBe(false);
-    expect(() => instance.retainWork()).toThrow("replacement is in progress");
     if (outcome === "cancel") {
       controller.abort(new Error("operator cancelled reload"));
       await vi.advanceTimersByTimeAsync(0);
@@ -501,6 +502,56 @@ async function verifyDrainConfigObservation(
 export function registerPluginRetainedWorkReloadTests(
   createRecoveryFixture: RecoveryFixtureFactory,
 ) {
+  it("refuses a live borrowed turn before effects and permits its closed context to reload", async () => {
+    // #151706: the requesting turn holds the plugin even between its callbacks.
+    let allowEffects = false;
+    const prepareConfigEffects = vi.fn(() => {
+      if (!allowEffects) {
+        throw new Error("Self-reload reached config effects");
+      }
+      return { retire: () => {}, rollback: async () => {} };
+    });
+    const fixture = await createRecoveryFixture({
+      abortOnCandidateStart: false,
+      prepareConfigEffects,
+    });
+    const registry = fixture.previousRegistry;
+    const instance = getPluginInstance(registry.plugins.find((record) => record.id === "first")!);
+    assert(instance);
+    const snapshot = createModelRuntimeChoiceOwnerFixture({}, () => true, {
+      pluginRegistry: registry,
+    });
+    const releaseWork = retainRuntimePluginWork([registry]);
+    const lease = scopePreparedModelRuntimeLease({
+      snapshot,
+      pluginGeneration: {
+        pluginRegistry: registry,
+        pluginMetadataSnapshot: snapshot.metadataSnapshot,
+        remoteCatalog: null,
+        inlineProviderModels: [],
+        configuredCatalogEntries: [],
+      },
+      [Symbol.asyncDispose]: async () => releaseWork(),
+    });
+    const runInTurn = lease.run(() => AsyncLocalStorage.snapshot());
+    try {
+      expect(runInTurn(() => instance.hasActiveCall)).toBe(false);
+      await expect(runInTurn(() => fixture.reload())).rejects.toThrow("own active turn");
+      expect(prepareConfigEffects).not.toHaveBeenCalled();
+      expect(fixture.firstStop).not.toHaveBeenCalled();
+      expect(fixture.siblingStop).not.toHaveBeenCalled();
+      expect(fixture.registryOwner.registry).toBe(registry);
+      expect(instance.run(() => "still serving")).toBe("still serving");
+
+      await lease[Symbol.asyncDispose]();
+      allowEffects = true;
+      await expect(runInTurn(() => fixture.reload())).resolves.toMatchObject({
+        runtime: { pluginIds: ["first"] },
+      });
+    } finally {
+      await lease[Symbol.asyncDispose]();
+    }
+  });
   it.each([
     ["retained work", "install echo"],
     ["retained work", "external edit"],

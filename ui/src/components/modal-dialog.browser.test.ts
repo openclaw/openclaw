@@ -336,6 +336,32 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     },
   );
 
+  it("scrolls long default modal content without a child scroll container", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const { modal, dialog } = await mountModal(container, "", false);
+    const body = modal.querySelector<HTMLElement>(".oc-modal-dialog__body")!;
+    const form = document.createElement("form");
+    const content = document.createElement("div");
+    content.style.height = "200dvh";
+    content.textContent = "Long form content";
+    const action = document.createElement("button");
+    action.type = "button";
+    action.textContent = "Save changes";
+    let clicked = false;
+    action.addEventListener("click", () => {
+      clicked = true;
+    });
+    form.append(content, action);
+    body.replaceChildren(form);
+
+    expect(body.clientHeight).toBeGreaterThan(0);
+    expect(body.clientHeight).toBeLessThanOrEqual(dialog.clientHeight);
+    expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+    await userEvent.click(action);
+    expect(clicked).toBe(true);
+    expect(body.scrollTop).toBeGreaterThan(0);
+  });
+
   it("dismisses a tooltip before native modal cancellation and preserves the draft", async () => {
     const { userEvent } = await import("vitest/browser");
     const { modal, dialog, notes } = await mountModal();

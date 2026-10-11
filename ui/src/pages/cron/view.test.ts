@@ -277,6 +277,7 @@ describe("cron view editor", () => {
       form: {
         ...DEFAULT_CRON_FORM,
         scheduleKind: "cron",
+        deliveryMode: "announce",
         deliveryChannel: "telegram",
         failureAlertMode: "custom",
         failureAlertDeliveryMode: "webhook",
@@ -293,6 +294,7 @@ describe("cron view editor", () => {
     for (const field of ["name", "sessionKey", "deliveryAccountId", "payloadModel"] as const) {
       const id = `cron-${field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
       const input = getElement(container, `#${id}`, HTMLInputElement);
+      expect(input.disabled).toBe(false);
       if (field === "sessionKey" || field === "deliveryAccountId") {
         expect(input.placeholder).toBe(field === "sessionKey" ? "agent:main:main" : "default");
       }

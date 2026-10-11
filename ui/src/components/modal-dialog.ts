@@ -1,3 +1,4 @@
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { createComponent, createEffect, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { composedParent } from "../lib/navigation-click.ts";
@@ -25,6 +26,21 @@ type ModalDialogMethods = {
 };
 
 export type OpenClawModalDialog = SolidBridgeElement<ModalDialogProperties, ModalDialogMethods>;
+
+type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
+  label: string;
+  manual?: boolean;
+  description?: string;
+  "onModal-cancel"?: (event: Event) => void;
+};
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-modal-dialog": ModalDialogAttributes;
+    }
+  }
+}
 
 type ModalState = {
   policy?: ModalPolicy;
@@ -323,7 +339,11 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
 
   createEffect(
     () => props.open,
-    (open) => request(open),
+    (open) => {
+      if (mounted) {
+        request(open);
+      }
+    },
   );
 
   const dispatch = (type: string, cancelable = false) =>

@@ -2,8 +2,8 @@ import { html, nothing, type TemplateResult } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 import { ref } from "lit/directives/ref.js";
-import { rememberTabFocus, reclaimTabFocus } from "../lib/tab-focus-handoff.ts";
 import { createTabsController, type TabsOptions } from "../lib/tabs-controller.ts";
+import { rememberHubTabFocus, reclaimHubTabFocus } from "./hub-tabs-focus.ts";
 import "../styles/hub-tabs.css";
 import "../styles/tabs.css";
 import { bindShadowStyles } from "./solid/shadow-styles.ts";
@@ -24,7 +24,7 @@ class TabsDirective extends AsyncDirective {
   }
 
   override update(part: ElementPart, [options, styles = []]: [TabsOptions, (readonly string[])?]) {
-    // SAFETY: Both callers attach nativeTabs to their native div tablists.
+    // SAFETY: The directive attaches to the native div tablist rendered below.
     this.#element = part.element as HTMLElement;
     this.#options = options;
     const styleTexts = [tabsStyles, ...styles];
@@ -70,7 +70,7 @@ class TabsDirective extends AsyncDirective {
   }
 }
 
-export const nativeTabs = directive(TabsDirective);
+const nativeTabs = directive(TabsDirective);
 
 type HubTabOption<T extends string> = {
   value: T;
@@ -118,7 +118,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
               return false;
             }
             if (event instanceof KeyboardEvent) {
-              rememberTabFocus(props.id, tab.value, element);
+              rememberHubTabFocus(props.id, tab.value, element);
             }
             props.onSelect(tab.value);
             props.onActivate?.(element);
@@ -143,7 +143,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
             .tabIndex=${selected || tab.value === fallbackFocusValue ? 0 : -1}
             aria-selected=${selected ? "true" : "false"}
             data-test-id=${tab.testId ?? nothing}
-            ${selected ? ref((element) => reclaimTabFocus(props.id, tab.value, element)) : nothing}
+            ${selected ? ref((element) => reclaimHubTabFocus(props.id, tab.value, element)) : nothing}
           >
             ${tab.label}${
               tab.count == null

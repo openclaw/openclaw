@@ -18,6 +18,7 @@ export {
 export {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
+  readSqliteDatabasePendingWriteToken,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
 export { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
@@ -34,3 +35,4 @@ export type {
 export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 export { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 export { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";

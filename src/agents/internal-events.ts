@@ -67,9 +67,7 @@ export function collectAgentInternalEventMedia(events: AgentInternalEvent[] | un
   attachments: NonNullable<AgentInternalEvent["attachments"]>;
   trustByUrl: Map<string, boolean>;
 } {
-  const mediaUrls: string[] = [];
-  const attachments: NonNullable<AgentInternalEvent["attachments"]> = [];
-  const indexByUrl = new Map<string, number>();
+  const attachmentsByUrl = new Map<string, AgentGeneratedAttachment>();
   const trustByUrl = new Map<string, boolean>();
   for (const event of events ?? []) {
     const generatedMediaEvent = hasGeneratedMediaCompletionEvent([event]);
@@ -90,21 +88,18 @@ export function collectAgentInternalEventMedia(events: AgentInternalEvent[] | un
         continue;
       }
       const metadata = attachmentByUrl.get(normalized);
-      const existingIndex = indexByUrl.get(normalized);
-      if (existingIndex !== undefined) {
-        trustByUrl.set(normalized, trustByUrl.get(normalized) === true || generatedMediaEvent);
-        if (metadata && Object.keys(attachments[existingIndex] ?? {}).length === 0) {
-          attachments[existingIndex] = metadata;
-        }
-        continue;
+      const existing = attachmentsByUrl.get(normalized);
+      trustByUrl.set(normalized, trustByUrl.get(normalized) === true || generatedMediaEvent);
+      if (!existing || (metadata && Object.keys(existing).length === 0)) {
+        attachmentsByUrl.set(normalized, metadata ?? {});
       }
-      indexByUrl.set(normalized, mediaUrls.length);
-      trustByUrl.set(normalized, generatedMediaEvent);
-      mediaUrls.push(normalized);
-      attachments.push(metadata ?? {});
     }
   }
-  return { mediaUrls, attachments, trustByUrl };
+  return {
+    mediaUrls: [...attachmentsByUrl.keys()],
+    attachments: [...attachmentsByUrl.values()],
+    trustByUrl,
+  };
 }
 
 function sanitizeSingleLineField(value: string, fallback: string, raw = false): string {

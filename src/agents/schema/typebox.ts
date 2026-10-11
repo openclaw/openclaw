@@ -65,22 +65,16 @@ export function optionalFiniteNumberSchema(options: NumberSchemaOptions = {}) {
   return Type.Optional(Type.Number(options));
 }
 
+function optionalIntegerSchema(minimum: number, options: IntegerSchemaOptions) {
+  return Type.Optional(Type.Integer({ minimum, ...options }));
+}
+
 /** Builds an optional positive integer schema. */
 export function optionalPositiveIntegerSchema(options: IntegerSchemaOptions = {}) {
-  return Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      ...options,
-    }),
-  );
+  return optionalIntegerSchema(1, options);
 }
 
 /** Builds an optional non-negative integer schema. */
 export function optionalNonNegativeIntegerSchema(options: IntegerSchemaOptions = {}) {
-  return Type.Optional(
-    Type.Integer({
-      minimum: 0,
-      ...options,
-    }),
-  );
+  return optionalIntegerSchema(0, options);
 }

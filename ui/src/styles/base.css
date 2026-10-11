@@ -126,6 +126,8 @@
   --qr-text: #444444;
   --media-bg: #000000;
   --media-foreground: #ffffff;
+  --media-control-bg: rgba(255, 255, 255, 0.16);
+  --media-control-bg-hover: rgba(255, 255, 255, 0.22);
   --exec-highlight: #f97316;
   --moon-highlight: #fef3c7;
   --moon-base: #fbbf24;
@@ -555,6 +557,8 @@
 /* Light theme tokens apply to every light-mode family. */
 /* Defaults must lose to named palettes even when their link precedes the app CSS. */
 :root:where([data-theme-mode="light"]) {
+  --media-control-bg: rgba(12, 16, 24, 0.64);
+  --media-control-bg-hover: rgba(12, 16, 24, 0.78);
   /*
    * Warm paper light mode - terracotta accent on ivory
    *

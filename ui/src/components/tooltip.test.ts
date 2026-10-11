@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { renderKbd } from "./kbd.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
@@ -827,11 +828,18 @@ describe("title tooltips", () => {
       document.body.append(provider, wrapper);
       dispatchMousePointer(link, "pointerover");
       // previewForAnchor arms its hover timer after the tooltip's first commit.
-      await commitTooltip(document.querySelector<TooltipElement>("openclaw-tooltip")!);
+      const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip")!;
+      await commitTooltip(tooltip);
       await vi.advanceTimersByTimeAsync(200);
       await expectOpenCount(1);
       provider.append(moved === "link" ? link : wrapper);
       await vi.advanceTimersByTimeAsync(0);
+      await settleTooltip(tooltip);
+      expect(tooltip.hasAttribute("open")).toBe(false);
+      expect(tooltip.content).toBe("");
+      // Accepted closure precedes the native top layer's finite exit work.
+      finishElementAnimations(currentTooltipSurface(tooltip)!);
+      vi.advanceTimersToNextFrame();
       await expectOpenCount(0);
       expect(link.title).toBe("");
       expect(link.hasAttribute("aria-expanded")).toBe(false);

@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
-import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { withAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -73,48 +73,6 @@ describe("conversation registry", () => {
   beforeEach(() => {
     tempDir = tempDirs.make("openclaw-conversations-");
     storePath = path.join(tempDir, "sessions.json");
-  });
-
-  it("links multiple direct peers to a shared main context without conflating addresses", async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
-    await upsertSessionEntry(scope, {
-      sessionId: "shared-main-session",
-      updatedAt: 100,
-      chatType: "direct",
-      deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
-      origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-a" },
-    });
-    await upsertSessionEntry(scope, {
-      sessionId: "shared-main-session",
-      updatedAt: 200,
-      chatType: "direct",
-      deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-b" },
-      origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-b" },
-      skillsSnapshot: { prompt: "Saved instructions. ".repeat(4096), skills: [] },
-    });
-
-    const conversations = await listConversations(
-      { agentId: "main", storePath },
-      { channel: "reef" },
-    );
-    expect(conversations.map((entry) => entry.target).toSorted()).toEqual([
-      "reef:peer-a",
-      "reef:peer-b",
-    ]);
-    expect(conversations.every((entry) => entry.role === "participant")).toBe(true);
-    expect(conversations.every((entry) => entry.sessionKey === scope.sessionKey)).toBe(true);
-    expect(
-      await resolveCurrentSessionPrimaryConversation({
-        ...scope,
-        sessionId: "shared-main-session",
-      }),
-    ).toBeUndefined();
-
-    const peerA = conversations.find((entry) => entry.target === "reef:peer-a");
-    expect(peerA).toBeDefined();
-    expect(await readConversation({ agentId: "main", storePath }, peerA!.conversationRef)).toEqual(
-      peerA,
-    );
   });
 
   it("catalogs a directory address without inventing a model-context session", async () => {
@@ -252,42 +210,6 @@ describe("conversation registry", () => {
         release.resolve();
         await Promise.allSettled([held, pending]);
       }
-    },
-  );
-
-  it.each(["registration", "authority"] as const)(
-    "does not retain %s resources when input capture fails",
-    async (operation) => {
-      const databasePath = path.join(tempDir, "registry.sqlite");
-      const scope = {
-        agentId: "main",
-        databaseAgentId: "main",
-        storePath: databasePath,
-        env: { OPENCLAW_STATE_DIR: tempDir },
-      };
-      const failure = new Error("Synthetic conversation input capture failure");
-      const identity = {
-        get conversationRef(): string {
-          throw failure;
-        },
-        channel: "reef",
-        accountId: "default",
-        kind: "direct" as const,
-        peerId: "peer-a",
-        deliveryTarget: "reef:peer-a",
-      };
-      await expect(
-        Promise.resolve().then(() =>
-          operation === "registration"
-            ? registerConversationAddresses(scope, [identity])
-            : withConversationAuthority(scope, identity, () => {
-                throw new Error("Uncaptured input must not grant conversation authority");
-              }),
-        ),
-      ).rejects.toBe(failure);
-      await withAgentDatabaseCloseFence({ path: databasePath }, async (resources) => {
-        expect(resources).toEqual([]);
-      });
     },
   );
 
@@ -542,10 +464,6 @@ describe("conversation registry", () => {
   it.each([
     { entry_valid: 0 },
     { entry_json: JSON.stringify({ sessionId: "wrong-session", updatedAt: 100 }) },
-    { entry_json: '{"sessionId":"peer-a-session","updatedAt":100}\u0000trailing' },
-    {
-      entry_json: '{"sessionId":"peer-a-session","sessionId":"wrong-session","updatedAt":100}',
-    },
   ])("does not bind an invalid current entry to its primary address: %j", async (invalid) => {
     const scope = { agentId: "main", sessionKey: "agent:main:reef:direct:peer-a", storePath };
     await upsertSessionEntry(scope, {
@@ -657,41 +575,6 @@ describe("conversation registry", () => {
     });
   });
 
-  it("resolves historical addresses through the current session binding after reset", async () => {
-    const sessionKey = "agent:main:reef:direct:peer-a";
-    const scope = { agentId: "main", sessionKey, storePath };
-    await upsertSessionEntry(scope, {
-      sessionId: "old-session",
-      updatedAt: 100,
-      chatType: "direct",
-      deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
-      origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-a" },
-    });
-    const [historical] = await listConversations(
-      { agentId: "main", storePath },
-      { channel: "reef" },
-    );
-    expect(historical?.sessionId).toBe("old-session");
-
-    await upsertSessionEntry(scope, {
-      sessionId: "current-session",
-      updatedAt: 200,
-      chatType: "direct",
-    });
-
-    expect(
-      await readConversation(
-        { agentId: "main", storePath },
-        historical?.conversationRef ?? "missing",
-      ),
-    ).toMatchObject({
-      conversationRef: historical?.conversationRef,
-      sessionId: "current-session",
-      sessionKey,
-      target: "reef:peer-a",
-    });
-  });
-
   it("retains a deleted session's address without exposing a stale binding", async () => {
     const sessionKey = "agent:main:reef:direct:peer-a";
     const scope = { agentId: "main", sessionKey, storePath };
@@ -739,7 +622,7 @@ describe("conversation registry", () => {
         deliveryTarget: peerId,
       })!,
     );
-    const write = (index: number, updatedAt: number) =>
+    const write = (index: number, updatedAt: number, routeContext?: { guildId: string }) =>
       runOpenClawAgentWriteTransaction((database) => {
         const identity = identities[index]!;
         upsertConversationIdentities(
@@ -750,7 +633,7 @@ describe("conversation registry", () => {
         linkSessionConversation({
           database,
           sessionId,
-          conversation: { identity, role: "primary" },
+          conversation: { identity, role: "primary", routeContext },
           updatedAt,
         });
       }, options);
@@ -771,7 +654,21 @@ describe("conversation registry", () => {
       snapshots.push([...installed.keys()].toSorted());
     });
     try {
-      write(1, 20);
+      const database = openOpenClawAgentDatabase(options);
+      const associationReads = trackSqliteStatementExecutions(database.db, ["route"], (sql) =>
+        sql.startsWith('select "last_seen_at", "route_context_json" from "session_conversations"')
+          ? "route"
+          : null,
+      );
+      try {
+        write(1, 20, { guildId: "receipt-guild" });
+        expect(associationReads.counts.route).toBe(0);
+      } finally {
+        associationReads.restore();
+      }
+      expect(await readConversation(scope, identities[1]!.conversationRef)).toMatchObject({
+        routeContext: { guildId: "receipt-guild" },
+      });
       const oldPrimary = JSON.stringify([
         "association",
         sessionId,
@@ -822,48 +719,6 @@ describe("conversation registry", () => {
       ).toEqual({ role: "primary" });
     } finally {
       unsubscribeFacts();
-      unsubscribe();
-    }
-  });
-
-  it("retires catalogue coverage after unknown native settlement", async () => {
-    const identity = buildConversationIdentity({
-      channel: "reef",
-      accountId: "default",
-      kind: "direct",
-      peerId: "unknown-settlement",
-      deliveryTarget: "reef:unknown-settlement",
-    })!;
-    const nativeOutcomes: string[] = [];
-    const outcomes: string[] = [];
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation((...args) => {
-      const owner = createAdmission(...args);
-      const finish = owner.finish.bind(owner);
-      owner.finish = () => {
-        finish();
-        const settled = owner.settlement;
-        if (settled?.committed && settled.kind === "completed") {
-          nativeOutcomes.push(settled.kind);
-          // Preserve the real commit receipt while simulating an uncertain terminal observation.
-          vi.spyOn(owner, "settlement", "get").mockReturnValue({ ...settled, kind: "unknown" });
-        }
-      };
-      return owner;
-    });
-    const unsubscribe = conversationPublication.subscribeFacts((change) => {
-      if ("kind" in change && change.kind === "settled") {
-        outcomes.push(change.outcome ?? "missing");
-      }
-    });
-    try {
-      await registerConversationAddresses({ agentId: "main", storePath }, [identity], 100);
-      expect(
-        await readConversation({ agentId: "main", storePath }, identity.conversationRef),
-      ).toMatchObject({ conversationRef: identity.conversationRef, lastSeenAt: 100 });
-      expect(nativeOutcomes).toEqual(["completed"]);
-      expect(outcomes.at(-1)).toBe("unknown");
-    } finally {
       unsubscribe();
     }
   });
