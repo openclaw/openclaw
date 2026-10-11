@@ -10,8 +10,8 @@ import {
   type ConversationTurnResult,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import {
+  prepareConversationRegistryScope,
   readConversation,
-  resolveConversationRegistryScope,
   type ConversationRecord,
 } from "../../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -216,7 +216,7 @@ async function resolveConversationBudgetContext(
   let record: ConversationRecord | undefined;
   try {
     record = await deps.readConversation(
-      resolveConversationRegistryScope({
+      await prepareConversationRegistryScope({
         agentId: resolveToolAgentId(options),
         config: options.config,
       }),
