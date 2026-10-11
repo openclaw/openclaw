@@ -16,8 +16,15 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
+  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as registry from "./reply-run-registry.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "./reply-run-registry.state.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
@@ -53,6 +60,63 @@ function complete(result: Awaited<ReturnType<typeof admitReplyTurn>> | undefined
     result.operation.complete();
   }
 }
+
+it("keeps native incognito admission with its existing owner without an actor", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const key = "agent:main:dashboard:incognito-reply-admission";
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const scope = { agentId: "main", storePath, sessionKey: key };
+    sessionEntries.replaceSessionEntrySync(scope, { sessionId, updatedAt: 1, incognito: true });
+    const native = getOpenClawAgentDatabaseIfOpen({
+      agentId: "main",
+      path: storePath,
+      env: state.env,
+    });
+    expect(native).toBeDefined();
+    const result = await admit(storePath, { agentId: "main", sessionKey: key });
+    try {
+      if (result.status !== "owned" || !result.databaseClaim) {
+        throw new Error("Native incognito admission must retain its database claim");
+      }
+      const { operation, databaseClaim } = result;
+      expect(getReplyOperationSessionTarget(operation)).toMatchObject({
+        agentId: "main",
+        storePath,
+        readSource: {
+          agentId: "main",
+          path: storePath,
+          databaseIdentity: databaseClaim.identity,
+        },
+        target: { canonicalKey: key, storeKeys: [key] },
+      });
+      expect(typeof databaseClaim.identity).toBe("symbol");
+      await expect(acquireReplyOperationSessionActor(operation)).resolves.toBeUndefined();
+      expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({
+        sessionId,
+        incognito: true,
+        updatedAt: 1,
+      });
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBe(native);
+      expect(fs.existsSync(storePath)).toBe(false);
+      expect(databaseClaim.isCurrent()).toBe(true);
+      operation.complete();
+      expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
+      expect(() => getReplyOperationSessionTarget(operation)).toThrow();
+      expect(
+        await withinTest(registry.waitForReplyRunSuccessorAdmission(key, null), signal),
+      ).toMatchObject({ settled: true });
+      expect(databaseClaim.isCurrent()).toBe(false);
+      expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 1 });
+      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBe(native);
+      expect(fs.existsSync(storePath)).toBe(false);
+    } finally {
+      complete(result);
+      await registry.waitForReplyRunSuccessorAdmission(key, null);
+    }
+  });
+});
 
 it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
   "does not admit a delayed healthy rotation after %s",

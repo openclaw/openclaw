@@ -13,7 +13,12 @@ type LegacyAttributes<T extends HTMLElement> = JSX.HTMLAttributes<T> & JSX.Prope
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-tooltip": HTMLAttributes<HTMLElement> & { "prop:content": string };
+      "openclaw-tooltip": HTMLAttributes<HTMLElementTagNameMap["openclaw-tooltip"]> & {
+        "prop:content"?: string;
+        placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
+        "open-on-click"?: boolean;
+        "auto-size"?: boolean;
+      };
       "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
         label: string;
         "onModal-cancel"?: (event: Event) => void;

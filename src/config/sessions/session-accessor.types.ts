@@ -472,6 +472,8 @@ export type SessionTranscriptTurnPersistOptions = {
   onMessageCommitted?: (
     result: TranscriptMessageAppendResult<unknown>,
     acceptCompletion: (complete: () => Promise<void>) => void,
+    /** Exact guarded-turn postimage; absent for legacy, unguarded single-message writes. */
+    turn?: Pick<SessionTranscriptTurnPersistResult, "sessionEntry" | "sessionTurnMutationResult">,
   ) => void;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;

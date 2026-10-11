@@ -152,6 +152,16 @@ current policy, pending canonical validation, and current-row reads remain
 with the reader. When physical admission is already known, the first canonical
 read enters its snapshot before policy reads, avoiding discarded probes.
 
+Gateway placement moves read their intents through the existing worker operation.
+Move preparation carries the coordinator's captured source; the final worker
+transition still compares the exact move and placement before committing. Approval
+decisions, allow-once consumption, expiry, and placement transitions return their
+committed rows from the write instead of selecting them again. Group catalog
+snapshots read ordering and defaults together, and group mutation checks membership
+once while retaining the final caller authorization check. These changes preserve
+schemas, stored bytes, permissions, and update behavior. Released synchronous SDK
+approval and placement contracts retain their native effect guards.
+
 ## Config CLI ownership
 
 ### Non-session bookkeeping
@@ -413,7 +423,6 @@ reentering FIFO admission or consuming a potentially unsettled cached postimage.
 Transcript callbacks retain their existing append and preparation queues, and
 the writer settles accepted reads before releasing its reservation. The plain
 reader keeps its projection and error contracts on the supplied database handle.
-
 Each database retains at most 128 keys and 8 MiB of serialized fact data, including
 saved prompt snapshots; the process retains at most 32 such databases. Least
 recently used entries are evicted when either bound is reached. Eviction, worker
@@ -618,6 +627,23 @@ statements, and committed transactions separately. Unmigrated phase callers keep
 their existing owners. Schemas, stored bytes, durability, retention, permissions,
 released SDK completion contracts, and update behavior
 are unchanged; existing published updaters need no actor migration.
+
+Chat input recorders retain the admitted actor through accepted-work settlement.
+Pending-input acceptance and transcript-only acceptance use `acceptInput` before
+the started acknowledgement; adopting staged input combines its transcript and
+recovery claim in `adoptRun`. Ordinary recovery checks consume the MAIN replica,
+while each effect still checks its live source, run, lifecycle, and permission
+authority. Pre- and post-hook checkpoints remain separate when the hook is an
+external effect. Actor-bound acceptance does not hold a legacy writer reservation
+around its commands. Unbound native and SDK callers retain their compatibility
+adapters, whose committed writes invalidate actor facts.
+
+Canonical retry payloads stay with the existing bounded reader. A fresh input
+can prove absence from complete MAIN pending, completion, and idempotency facts;
+a positive match cannot substitute metadata for stored bytes. Consumption can
+retire the raw pending row, so a completion-tracked retry still verifies its
+approved payload against the committed transcript. A final turn commit carries
+its exact candidate into the live custody check before SQLite commits.
 
 ### Conversation and plugin-state receipt coverage
 
