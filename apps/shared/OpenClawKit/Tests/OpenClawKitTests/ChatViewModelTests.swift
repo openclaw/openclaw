@@ -2427,7 +2427,7 @@ struct ChatViewModelTests {
         #expect(vm.progressCard?.revision == 3)
     }
 
-    @Test @MainActor func `global progress card capability cannot cross a gateway route change`() async throws {
+    @Test @MainActor func `global progress card capability cannot cross a gateway route change`() async {
         let oldCapability = SessionSubscribeGate()
         let calls = AsyncCounter()
         let oldReplyReady = AsyncCounter()
@@ -2515,7 +2515,7 @@ struct ChatViewModelTests {
             removed: 4))
     }
 
-    @Test @MainActor func `transient Swarm capability failure preserves state and retries until explicit false`() async throws {
+    @Test @MainActor func `transient Swarm capability failure preserves state and retries until explicit false`() async {
         let script = SwarmCapabilityScript([.value(true), .failure, .value(false)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
         child.parentSessionKey = "main"
@@ -2540,7 +2540,7 @@ struct ChatViewModelTests {
         #expect(!viewModel.swarmEnabled && viewModel.swarmSessions.isEmpty)
     }
 
-    @Test @MainActor func `metadata changes enable and disable Swarm progress without reconnecting`() async throws {
+    @Test @MainActor func `metadata changes enable and disable Swarm progress without reconnecting`() async {
         let script = SwarmCapabilityScript([.value(false), .value(true), .value(false)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
         child.parentSessionKey = "main"
@@ -2609,7 +2609,7 @@ struct ChatViewModelTests {
         #expect(viewModel.swarmSessions.isEmpty)
     }
 
-    @Test @MainActor func `route change clears and revalidates Swarm state`() async throws {
+    @Test @MainActor func `route change clears and revalidates Swarm state`() async {
         let script = SwarmCapabilityScript([.value(true), .value(true)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
         child.parentSessionKey = "main"
@@ -2988,7 +2988,7 @@ struct ChatViewModelTests {
         #expect(await getCalls.current() == 1)
     }
 
-    @Test @MainActor func `question refresh retries transport failure`() async throws {
+    @Test @MainActor func `question refresh retries transport failure`() async {
         let listCalls = AsyncCounter()
         let getCalls = AsyncCounter()
         let transport = TestChatTransport(
@@ -3068,7 +3068,7 @@ struct ChatViewModelTests {
         #expect(await listCalls.current() == 3)
     }
 
-    @Test @MainActor func `question refresh resets exhausted retry budget after partial progress`() async throws {
+    @Test @MainActor func `question refresh resets exhausted retry budget after partial progress`() async {
         let listCalls = AsyncCounter()
         let recoveringCalls = AsyncCounter()
         let progressed = chatQuestionRecord(id: "ask_progressed")
@@ -3116,7 +3116,7 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards.first { $0.id == progressed.id }?.status() == .answeredElsewhere)
     }
 
-    @Test @MainActor func `question refresh resets retry budget after state change during backoff`() async throws {
+    @Test @MainActor func `question refresh resets retry budget after state change during backoff`() async {
         let listCalls = AsyncCounter()
         let transport = TestChatTransport(
             historyResponses: [],
@@ -3146,7 +3146,7 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards[0].status() == .cancelled)
     }
 
-    @Test @MainActor func `question refresh stops after bounded retries`() async throws {
+    @Test @MainActor func `question refresh stops after bounded retries`() async {
         let listCalls = AsyncCounter()
         let transport = TestChatTransport(
             historyResponses: [],
@@ -7215,7 +7215,7 @@ struct ChatViewModelTests {
         })
     }
 
-    @Test func `accepts canonical session key events for external runs`() async throws {
+    @Test func `accepts canonical session key events for external runs`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload(messages: [chatTextMessage(role: "user", text: "first", timestamp: now)])
         let history2 = historyPayload(
@@ -7638,7 +7638,7 @@ struct ChatViewModelTests {
         })
     }
 
-    @Test func `appends same content user transcript when it is not local echo`() async throws {
+    @Test func `appends same content user transcript when it is not local echo`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(
             historyResponses: [
@@ -7774,7 +7774,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.errorText == nil })
     }
 
-    @Test func `session choices prefer main and recent`() async throws {
+    @Test func `session choices prefer main and recent`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (2 * 60 * 60 * 1000)
         let recentOlder = now - (5 * 60 * 60 * 1000)
@@ -7798,7 +7798,7 @@ struct ChatViewModelTests {
         #expect(keys == ["main", "recent-1", "recent-2"])
     }
 
-    @Test func `context usage follows active session switches`() async throws {
+    @Test func `context usage follows active session switches`() async {
         let sessions = sessionsResponse([
             sessionEntry(
                 key: "main",
@@ -7829,7 +7829,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.contextUsageFraction == 0.8 })
     }
 
-    @Test func `session choices include current when missing`() async throws {
+    @Test func `session choices include current when missing`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (30 * 60 * 1000)
         let history = historyPayload(sessionKey: "custom", sessionId: "sess-custom")
@@ -7849,7 +7849,7 @@ struct ChatViewModelTests {
         #expect(keys == ["main", "custom"])
     }
 
-    @Test func `session choices use resolved main session key instead of literal main`() async throws {
+    @Test func `session choices use resolved main session key instead of literal main`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (30 * 60 * 1000)
         let recentOlder = now - (90 * 60 * 1000)
@@ -7880,7 +7880,7 @@ struct ChatViewModelTests {
         #expect(keys == ["Luke’s MacBook Pro", "recent-1"])
     }
 
-    @Test func `session choices hide internal onboarding session`() async throws {
+    @Test func `session choices hide internal onboarding session`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (2 * 60 * 1000)
         let recentOlder = now - (5 * 60 * 1000)
@@ -8044,7 +8044,7 @@ struct ChatViewModelTests {
         #expect(await transport.createdParentSessionKeys() == ["agent:alice:main"])
     }
 
-    @Test func `send attempts request when cached health is stale false`() async throws {
+    @Test func `send attempts request when cached health is stale false`() async {
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             healthResponses: [false])
@@ -9052,7 +9052,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.errorText } == nil)
     }
 
-    @Test func `slash command catalog filters commands and skills`() async throws {
+    @Test func `slash command catalog filters commands and skills`() async {
         let commands = [
             commandChoice(
                 name: "compact",
@@ -9114,7 +9114,7 @@ struct ChatViewModelTests {
         #expect(await transport.sentMessages() == ["/model gpt-5"])
     }
 
-    @Test func `slash command catalog loads for current session`() async throws {
+    @Test func `slash command catalog loads for current session`() async {
         let commands = [
             commandChoice(name: "model", aliases: ["/model"], source: .command, acceptsArgs: true),
         ]
@@ -9268,7 +9268,7 @@ struct ChatViewModelTests {
 
     @Test(arguments: [false, true])
     @MainActor func `old model catalog cannot overwrite a changed session or reconnected catalog`(
-        reconnect: Bool) async throws
+        reconnect: Bool) async
     {
         let gate = SessionSubscribeGate()
         defer { Task { await gate.release() } }
@@ -9442,7 +9442,7 @@ struct ChatViewModelTests {
         #expect(vm.canSend)
     }
 
-    @Test @MainActor func `metadata refresh supersedes an in flight sequence recovery catalog`() async throws {
+    @Test @MainActor func `metadata refresh supersedes an in flight sequence recovery catalog`() async {
         let sequenceRecoveryGate = AsyncGate()
         let unavailable = modelChoice(
             id: "claude-opus-4-6",
@@ -14031,7 +14031,7 @@ struct ChatViewModelSessionManagementTests {
         #expect(OpenClawChatSessionListOrganizer.filter(sessions, search: "  ") == sessions)
     }
 
-    @Test func `pin patches transport and reorders optimistically`() async throws {
+    @Test func `pin patches transport and reorders optimistically`() async {
         let initial = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
             sessionEntry(key: "agent:main:topic-b", updatedAt: 100),
@@ -14060,7 +14060,7 @@ struct ChatViewModelSessionManagementTests {
         #expect(await MainActor.run { vm.sessions.first?.isPinned == true })
     }
 
-    @Test func `rename patches label optimistically and reverts on failure`() async throws {
+    @Test func `rename patches label optimistically and reverts on failure`() async {
         let initial = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200, displayName: "Old name"),
         ])
@@ -14101,7 +14101,7 @@ struct ChatViewModelSessionManagementTests {
         #expect(await MainActor.run { vm.errorText } == "rename failed")
     }
 
-    @Test func `archive removes the session from the active list`() async throws {
+    @Test func `archive removes the session from the active list`() async {
         let archivedSession = sessionEntry(
             key: "agent:main:topic-b",
             updatedAt: 100,
@@ -14176,7 +14176,7 @@ struct ChatViewModelSessionManagementTests {
         #expect(changes.allSatisfy { !$0.archived })
     }
 
-    @Test func `fetchSessionList falls back to local filtering when the server is unreachable`() async throws {
+    @Test func `fetchSessionList falls back to local filtering when the server is unreachable`() async {
         let cached = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 2, displayName: "Trip planning"),
             sessionEntry(key: "agent:main:topic-b", updatedAt: 1, displayName: "Groceries"),
@@ -14270,5 +14270,75 @@ struct ChatHistoryObservationTests {
             #expect(observed.count == 1)
             #expect(vm.transcriptMessages.isEmpty)
         }
+    }
+}
+
+struct ChatStreamPresentationTests {
+    @Test @MainActor func `paced words do not invalidate transcript shape or timeline`() throws {
+        final class Fired: @unchecked Sendable { var count = 0 }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        vm.updateStreamingAssistantText("First")
+        let before = vm.timelineRevision
+        let transcript = Fired()
+        let bubble = Fired()
+        withObservationTracking {
+            _ = vm.liveAssistantTextShape
+            _ = vm.hasStreamingAssistantText
+            _ = vm.timelineRevision
+        } onChange: { transcript.count += 1 }
+        withObservationTracking { _ = vm.liveAssistantDisplayText } onChange: { bubble.count += 1 }
+        vm.updateStreamingAssistantText("First second")
+        vm.updateStreamingAssistantText("First second third")
+        #expect(vm.streamingAssistantText == "First second third")
+        #expect(vm.liveAssistantDisplayText == "First")
+        #expect(bubble.count == 0)
+        try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
+        #expect(vm.liveAssistantDisplayText == "First second third")
+        #expect(bubble.count == 1)
+        #expect(transcript.count == 0)
+        #expect(vm.timelineRevision == before)
+        vm.updateStreamingAssistantText(nil)
+        #expect(transcript.count == 1)
+        #expect(vm.liveAssistantDisplayText == nil)
+    }
+
+    @Test @MainActor func `retired callback cannot publish old or new session text`() throws {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        vm.updateStreamingAssistantText("Old first")
+        vm.updateStreamingAssistantText("Old queued")
+        let retired = try #require(vm.streamPacing.scheduledID)
+        vm.clearStreamingActivity()
+        vm.updateStreamingAssistantText("New first")
+        vm.updateStreamingAssistantText("New queued")
+        let current = try #require(vm.streamPacing.scheduledID)
+        vm.flushStreamingAssistantDisplay(scheduledID: retired)
+        #expect(vm.liveAssistantDisplayText == "New first")
+        #expect(vm.streamPacing.scheduledID == current)
+        vm.flushStreamingAssistantDisplay(scheduledID: current)
+        #expect(vm.liveAssistantDisplayText == "New queued")
+    }
+
+    @Test @MainActor func `visibility changes invalidate shape and durable history suppresses live duplicates`() throws {
+        final class Fired: @unchecked Sendable { var count = 0 }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        vm.updateStreamingAssistantText(" ")
+        let transcript = Fired()
+        withObservationTracking { _ = vm.liveAssistantTextShape } onChange: { transcript.count += 1 }
+        vm.updateStreamingAssistantText("Ready")
+        try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
+        #expect(transcript.count == 1)
+        vm.replaceMessages([OpenClawChatMessage(
+            role: "assistant", content: [.init(type: "text", text: "Ready")], timestamp: 1)])
+        #expect(vm.liveAssistantDisplayText == nil)
+        #expect(vm.liveAssistantTextShape == nil)
+        let restored = Fired()
+        withObservationTracking { _ = vm.liveAssistantTextShape } onChange: { restored.count += 1 }
+        vm.updateStreamingAssistantText("Ready now")
+        try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
+        #expect(vm.liveAssistantDisplayText == "Ready now")
+        #expect(restored.count == 1)
     }
 }

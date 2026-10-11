@@ -441,6 +441,10 @@ extension OpenClawChatView {
             .safeAreaInset(edge: .top, spacing: 0) {
                 self.messageListNoticeBanner(hasVisibleContent: hasVisibleContent)
             }
+            // Let native layout follow a growing live bubble without issuing a command per word.
+            .defaultScrollAnchor(
+                self.followTarget == .latest && !self.isUserScrolling ? .bottom : nil,
+                for: .sizeChanges)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
                 return distanceFromBottom <= Layout.liveEdgeThreshold
@@ -690,7 +694,7 @@ extension OpenClawChatView {
             }
         }
 
-        if let text = viewModel.liveAssistantText {
+        ChatLiveAssistantText(viewModel: self.viewModel) { text in
             let preparedText = ChatStreamingAssistantText(
                 sourceText: text,
                 includesThinking: self.displayOptions.contains(.reasoning))
@@ -919,7 +923,7 @@ extension OpenClawChatView {
             base = messages
         }
         var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: base))
-        let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.streamingAssistantText != nil
+        let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.hasStreamingAssistantText
         let activeRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         // Footers and visible rows share the merged, onboarding-trimmed input, before work moves into disclosures.
         let metadata = ChatTranscriptRow.footerMetadata(
@@ -1029,7 +1033,7 @@ extension OpenClawChatView {
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
-        guard let text = self.viewModel.liveAssistantText else { return false }
+        guard let text = self.viewModel.liveAssistantTextShape else { return false }
         return AssistantTextParser.hasVisibleContent(
             in: text,
             includeThinking: self.displayOptions.contains(.reasoning))
@@ -1171,7 +1175,7 @@ extension OpenClawChatView {
         if self.viewModel.messages.isEmpty,
            !self.viewModel.hasBlockingRunActivity,
            self.viewModel.pendingToolCalls.isEmpty,
-           self.viewModel.streamingAssistantText == nil
+           !self.viewModel.hasStreamingAssistantText
         {
             self.lastTurnStartID = nil
             self.followTarget = .latest
@@ -1553,5 +1557,17 @@ private struct ChatRunStatusContent<Content: View>: View {
 
     var body: some View {
         self.content()
+    }
+}
+
+/// Owns the observation of the paced words; its parent only observes live-content shape.
+private struct ChatLiveAssistantText<Content: View>: View {
+    let viewModel: OpenClawChatViewModel
+    @ViewBuilder var content: (String) -> Content
+
+    var body: some View {
+        if let text = self.viewModel.liveAssistantDisplayText {
+            self.content(text)
+        }
     }
 }

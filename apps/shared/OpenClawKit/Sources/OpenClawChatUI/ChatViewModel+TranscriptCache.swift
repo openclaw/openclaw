@@ -26,7 +26,33 @@ extension OpenClawChatViewModel {
 
     /// Prefer the transcript's copy of a sentence over the live stream, regardless of arrival order.
     var liveAssistantText: String? {
-        guard let text = self.streamingAssistantText else { return nil }
+        self.liveText(self.streamingAssistantText)
+    }
+
+    var liveAssistantDisplayText: String? {
+        self.liveText(self.displayedStreamingAssistantText)
+    }
+
+    /// A structural read must not subscribe the whole transcript to every new word.
+    var liveAssistantTextShape: String? {
+        _ = self.liveTextShape
+        return self.liveText(self.displayedStreamingAssistantTextUntracked)
+    }
+
+    var hasStreamingAssistantText: Bool {
+        _ = self.liveTextShape
+        return self.displayedStreamingAssistantTextUntracked != nil
+    }
+
+    func streamingTextShape(_ text: String?) -> [Bool] {
+        let live = self.liveText(text)
+        return [text != nil] + [true, false].map { thinking in
+            live.map { AssistantTextParser.hasVisibleContent(in: $0, includeThinking: thinking) } ?? false
+        }
+    }
+
+    func liveText(_ streaming: String?) -> String? {
+        guard let text = streaming else { return nil }
         let live = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !live.isEmpty else { return text }
         let recorded = self.transcriptMessages.reversed().prefix { $0.role.lowercased() != "user" }.contains {
