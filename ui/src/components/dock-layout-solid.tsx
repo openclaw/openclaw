@@ -1,7 +1,6 @@
 import { Show } from "solid-js";
 import type { DockLayoutController } from "./dock-layout-controller.ts";
 import type { DockPanelPlacement } from "./dock-panel-layout.ts";
-import "./panel-elements.ts";
 import "./resizable-divider.ts";
 
 export function DockResizer<TDock extends DockPanelPlacement>(props: {

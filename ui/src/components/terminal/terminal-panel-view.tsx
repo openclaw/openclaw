@@ -3,7 +3,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DockLayoutController } from "../dock-layout-controller.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
-import "../panel-elements.ts";
 import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
 import type { PanelEmptyStateElement, PanelEmptyStateProps } from "../solid/panel-empty-state.tsx";
@@ -405,7 +404,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
           id={viewportId}
           class="tp-viewport"
           name={props.view().activeId ?? "terminal"}
-          active
+          prop:active
           aria-labelledby={
             props.view().activeId && !props.view().hosted
               ? `${idPrefix}-tab-${props.view().activeId}`
