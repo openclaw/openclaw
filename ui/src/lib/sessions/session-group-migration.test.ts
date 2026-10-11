@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe("legacy session group migration", () => {
-  it.each(["current", "disconnected", "disposed"] as const)(
+  it.each(["disconnected", "disposed"] as const)(
     "settles overlapping automatic group invalidations for a %s owner",
     async (boundary) => {
       const stale = createDeferred<{ groups: { name: string }[] }>();
@@ -107,13 +107,7 @@ describe("legacy session group migration", () => {
         }
         stale.resolve({ groups: [{ name: "Stale" }] });
         await completion;
-        expect(reads).toBe(boundary === "current" ? 2 : 1);
-        if (boundary === "current") {
-          expect(sessions.state.groupSettings).toEqual([
-            expect.objectContaining({ name: "Current", cwd: "/workspace/current", worktree: true }),
-          ]);
-          expect(sessions.groupsStatus()).toBe("ready");
-        }
+        expect(reads).toBe(1);
       } finally {
         stale.resolve({ groups: [] });
         sessions.dispose();

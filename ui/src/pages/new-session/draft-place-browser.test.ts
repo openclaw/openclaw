@@ -62,7 +62,6 @@ function createBrowser(
       state: {
         groupSettings: [{ name: "Client", cwd: "/workspace/client", worktree: false }],
       },
-      groupsGeneration: () => 1,
       groupsStatus: () => "ready",
     },
   } as unknown as ApplicationContext;

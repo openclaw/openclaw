@@ -44,8 +44,6 @@ function readLegacyStoredGroups(): string[] {
 
 export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   let loadedEpoch = -1;
-  let loadGeneration = 0;
-  let catalogGeneration = 0;
   let defaultsStatus: SessionGroupDefaultsStatus = "idle";
   let pendingLoad: Promise<readonly SessionGroupSettings[] | null> | null = null;
   let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -59,17 +57,13 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
 
   const dispose = () => {
     loadedEpoch = -1;
-    loadGeneration += 1;
     pendingLoad = null;
     clearRetry();
   };
 
   const invalidate = () => {
     dispose();
-    catalogGeneration += 1;
     defaultsStatus = "loading";
-    // Every invalidation publishes its generation, including back-to-back
-    // events while the previous reload is still pending.
     host.publish({ ...host.readState() });
   };
 
@@ -78,44 +72,17 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     sectionOrder: readonly string[],
     status: SessionGroupDefaultsStatus,
   ) => {
-    const state = host.readState();
-    const groups = groupSettings.map((group) => group.name);
-    const groupsUnchanged =
-      groups.length === state.groups.length &&
-      groups.every((group, i) => group === state.groups[i]);
-    const orderUnchanged =
-      sectionOrder.length === state.sectionOrder.length &&
-      sectionOrder.every((sectionId, i) => sectionId === state.sectionOrder[i]);
-    const settingsUnchanged =
-      groupSettings.length === state.groupSettings.length &&
-      groupSettings.every((group, index) => {
-        const current = state.groupSettings[index];
-        return (
-          current?.name === group.name &&
-          current.position === group.position &&
-          current.cwd === group.cwd &&
-          current.worktree === group.worktree
-        );
-      });
-    const statusChanged = defaultsStatus !== status;
     defaultsStatus = status;
-    if (!groupsUnchanged || !settingsUnchanged || !orderUnchanged || statusChanged) {
-      host.publish({
-        ...state,
-        groups: [...groups],
-        groupSettings: [...groupSettings],
-        sectionOrder: [...sectionOrder],
-      });
-    }
+    host.publish({
+      ...host.readState(),
+      groups: groupSettings.map((group) => group.name),
+      groupSettings: [...groupSettings],
+      sectionOrder: [...sectionOrder],
+    });
   };
 
-  const finishLoadFailure = (
-    scope: SessionConnectionScope,
-    generation: number,
-    error: unknown,
-    retry: boolean,
-  ) => {
-    if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+  const finishLoadFailure = (scope: SessionConnectionScope, error: unknown, retry: boolean) => {
+    if (!host.connection.isCurrent(scope)) {
       return null;
     }
     if (defaultsStatus !== "unavailable") {
@@ -130,7 +97,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     if (delay !== null) {
       retryTimer = setTimeout(() => {
         retryTimer = null;
-        if (host.connection.isCurrent(scope) && generation === loadGeneration) {
+        if (host.connection.isCurrent(scope)) {
           void load();
         }
       }, delay);
@@ -138,14 +105,10 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     return null;
   };
 
-  const loadAttempt = async (
-    scope: SessionConnectionScope,
-    generation: number,
-    advertised: boolean | null,
-  ) => {
+  const loadAttempt = async (scope: SessionConnectionScope, advertised: boolean | null) => {
     try {
       const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
-      if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+      if (!host.connection.isCurrent(scope)) {
         return null;
       }
       let settings = readSessionCustomGroups(listed);
@@ -161,7 +124,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       ) {
         if (settings.length === 0) {
           const put = await scope.client.request("sessions.groups.put", { names: legacy });
-          if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+          if (!host.connection.isCurrent(scope)) {
             return null;
           }
           settings = readSessionCustomGroups(put);
@@ -188,18 +151,18 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       publishCatalog(settings, sectionOrder, "loading");
       try {
         const defaults = await scope.client.request(GROUPS_DEFAULTS_METHOD, {});
-        if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+        if (!host.connection.isCurrent(scope)) {
           return null;
         }
         settings = mergeSessionGroupDefaults(settings, defaults);
       } catch (error) {
-        return finishLoadFailure(scope, generation, error, true);
+        return finishLoadFailure(scope, error, true);
       }
       publishCatalog(settings, sectionOrder, "ready");
       return settings;
     } catch (error) {
       // Gateways without feature metadata retain the legacy one-shot probe.
-      return finishLoadFailure(scope, generation, error, advertised === true);
+      return finishLoadFailure(scope, error, advertised === true);
     }
   };
 
@@ -214,7 +177,6 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
     const advertised = isGatewayMethodAdvertised(host.snapshot(), GROUPS_LIST_METHOD);
     clearRetry();
-    const generation = ++loadGeneration;
     loadedEpoch = scope.epoch;
     if (defaultsStatus !== "loading") {
       defaultsStatus = "loading";
@@ -224,17 +186,12 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       publishCatalog([], [], "ready");
       return [];
     }
-    const promise = loadAttempt(scope, generation, advertised)
-      .then((result) => {
-        // Another invalidation can join the same admitted bootstrap task.
-        // Its completion must include the current catalog generation.
-        return host.connection.isCurrent(scope) && generation !== loadGeneration ? load() : result;
-      })
-      .finally(() => {
-        if (pendingLoad === promise) {
-          pendingLoad = null;
-        }
-      });
+    // Concurrent catalog changes settle best effort until the next invalidation or reconnect.
+    const promise = loadAttempt(scope, advertised).finally(() => {
+      if (pendingLoad === promise) {
+        pendingLoad = null;
+      }
+    });
     pendingLoad = promise;
     return promise;
   };
@@ -323,7 +280,6 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   return {
     delete: remove,
     dispose,
-    generation: () => catalogGeneration,
     invalidate,
     load,
     put,

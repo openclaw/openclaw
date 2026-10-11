@@ -18,10 +18,7 @@ export class UsageRefreshPolicy {
   private publicationPending = false;
   private reloadPending = false;
   private retryTimer: number | null = null;
-  private retryInFlight: Promise<void> | null = null;
-  private pendingIncomplete = false;
   private retryAttempts = 0;
-  private retryCycle = 0;
   private exhaustionReported = false;
   private connection: unknown;
 
@@ -69,8 +66,6 @@ export class UsageRefreshPolicy {
     }
     if (!incomplete) {
       this.resetRetryCycle();
-    } else if (this.retryInFlight !== null) {
-      this.pendingIncomplete = true;
     } else if (this.retryTimer === null) {
       this.armRetry();
     }
@@ -87,34 +82,18 @@ export class UsageRefreshPolicy {
       return;
     }
     this.retryAttempts += 1;
-    this.pendingIncomplete = false;
-    const cycle = this.retryCycle;
     // Let the Gateway's 30s aggregate cache expire without increasing request volume.
     this.retryTimer = window.setTimeout(
       () => {
         this.retryTimer = null;
-        const inFlight = this.requestAndWait("poll").catch(() => undefined);
-        this.retryInFlight = inFlight;
-        void inFlight.finally(() => {
-          if (this.retryCycle !== cycle || this.retryInFlight !== inFlight) {
-            return;
-          }
-          this.retryInFlight = null;
-          if (this.pendingIncomplete) {
-            this.pendingIncomplete = false;
-            this.armRetry();
-          }
-        });
+        void this.requestAndWait("poll").catch(() => undefined);
       },
       5_000 * 2 ** (this.retryAttempts - 1),
     );
   }
 
   private resetRetryCycle(): void {
-    this.retryCycle += 1;
     this.retryAttempts = 0;
-    this.pendingIncomplete = false;
-    this.retryInFlight = null;
     this.exhaustionReported = false;
     if (this.retryTimer !== null) {
       window.clearTimeout(this.retryTimer);
