@@ -67,9 +67,9 @@ const STATE_FIELDS = [
   "skillCardLoadingKey",
   "skillCardErrors",
   "clawhubIconUrls",
-  "searchResults",
-  "searchLoading",
-  "searchError",
+  "clawhubSearchResults",
+  "clawhubSearchLoading",
+  "clawhubSearchError",
 ] as const;
 
 export type SkillsRouteData = {
@@ -138,16 +138,15 @@ class SkillsPageState {
   private clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
-  private debouncedClawHubSearchQuery = "";
   readonly gateway: ReturnType<typeof useGatewayPage>["gateway"];
   private readonly gatewayRevision: () => number;
   readonly library: SkillLibraryController;
   private readonly clawhubIcons: PluginIconController;
   private searchAbort: AbortController | null = null;
   private searchGeneration = 0;
-  private searchResults: ClawHubSearchResult[] | null = null;
-  private searchLoading = false;
-  private searchError: string | null = null;
+  clawhubSearchResults: ClawHubSearchResult[] | null = null;
+  clawhubSearchLoading = false;
+  clawhubSearchError: string | null = null;
 
   constructor(
     readonly context: ApplicationContext,
@@ -267,32 +266,26 @@ class SkillsPageState {
   private async runSearch() {
     this.searchAbort?.abort();
     const generation = ++this.searchGeneration;
-    this.searchResults = null;
-    this.searchError = null;
-    this.searchLoading = this.connected && this.surface === "discovery";
-    this.changed();
+    this.clawhubSearchResults = null;
+    this.clawhubSearchError = null;
+    this.clawhubSearchLoading = this.connected && this.surface === "discovery";
     const client = this.client;
-    if (!this.searchLoading || !client || this.clawhubSearchTimer) {
+    if (!this.clawhubSearchLoading || !client || this.clawhubSearchTimer) {
       return;
     }
     const controller = (this.searchAbort = new AbortController());
     try {
-      const results = await searchClawHub(
-        client,
-        this.debouncedClawHubSearchQuery,
-        controller.signal,
-      );
+      const results = await searchClawHub(client, this.clawhubSearchQuery, controller.signal);
       if (generation === this.searchGeneration) {
-        this.searchResults = results;
+        this.clawhubSearchResults = results;
       }
     } catch (error) {
       if (generation === this.searchGeneration) {
-        this.searchError = formatUiError(error);
+        this.clawhubSearchError = formatUiError(error);
       }
     } finally {
       if (generation === this.searchGeneration) {
-        this.searchLoading = false;
-        this.changed();
+        this.clawhubSearchLoading = false;
       }
     }
   }
@@ -322,6 +315,9 @@ class SkillsPageState {
     this.searchAbort?.abort();
     this.searchGeneration++;
     this.clearClawHubSearchTimer();
+    this.clawhubSearchResults = null;
+    this.clawhubSearchLoading = false;
+    this.clawhubSearchError = null;
     if (this.routeDataInitialized) {
       this.routeDataEnabled = false;
     }
@@ -335,7 +331,6 @@ class SkillsPageState {
     this.skillMessages = {};
     this.skillsDetailKey = null;
     this.skillsDetailTab = "overview";
-    this.debouncedClawHubSearchQuery = this.clawhubSearchQuery.trim();
     this.clawhubDetail = null;
     this.clawhubDetailRef = null;
     this.clawhubDetailLoading = false;
@@ -435,16 +430,17 @@ class SkillsPageState {
 
   private changeClawHubQuery(query: string) {
     this.clawhubSearchQuery = query;
+    this.clawhubSearchResults = null;
+    this.clawhubSearchError = null;
+    this.clawhubSearchLoading = true;
     this.clawhubInstallMessage = null;
     this.clearClawHubSearchTimer();
     this.searchAbort?.abort();
     this.searchGeneration++;
     this.clawhubSearchTimer = setTimeout(() => {
       this.clawhubSearchTimer = null;
-      this.debouncedClawHubSearchQuery = query.trim();
       void this.runSearch();
     }, 300);
-    this.changed();
   }
 
   private clearClawHubSearchTimer() {
@@ -452,23 +448,6 @@ class SkillsPageState {
       clearTimeout(this.clawhubSearchTimer);
       this.clawhubSearchTimer = null;
     }
-  }
-
-  get clawhubSearchResults(): ClawHubSearchResult[] | null {
-    this.revision();
-    return this.debouncedClawHubSearchQuery === this.clawhubSearchQuery.trim()
-      ? this.searchResults
-      : null;
-  }
-  get clawhubSearchLoading(): boolean {
-    this.revision();
-    return this.clawhubSearchTimer !== null || this.searchLoading;
-  }
-  get clawhubSearchError(): string | null {
-    this.revision();
-    return this.debouncedClawHubSearchQuery === this.clawhubSearchQuery.trim()
-      ? this.searchError
-      : null;
   }
 
   private changeDetailTab(tab: SkillDetailTab) {

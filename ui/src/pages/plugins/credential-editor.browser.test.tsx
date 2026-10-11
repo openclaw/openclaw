@@ -1,4 +1,3 @@
-import { render as mountSolid } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCredentialInspection } from "../../../../packages/gateway-protocol/src/schema/plugin-credentials.ts";
@@ -6,16 +5,13 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   PluginCredentialEditor,
   type PluginCredentialEditorContext,
 } from "./credential-editor.tsx";
 
-const disposers: Array<() => void> = [];
 afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
   document.body.replaceChildren();
 });
 const path = ["plugins", "entries", "example", "config", "key"];
@@ -66,7 +62,7 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
   help.textContent = "Provider-owned credential help.";
   document.body.append(help, host);
   const [props, setProps] = createSignal({ field: { ...field }, context: { ...context } });
-  const view = mountSolid(
+  mountSolid(
     () => (
       <PluginCredentialEditor
         field={props().field}
@@ -76,7 +72,6 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
     ),
     { container: host },
   );
-  disposers.push(view.unmount);
   const editor = host.querySelector<HTMLElement>("openclaw-plugin-credential-editor")!;
   const update = async () => {
     setProps({ field: { ...field }, context: { ...context } });

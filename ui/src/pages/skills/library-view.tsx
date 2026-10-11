@@ -2,15 +2,18 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
 import "../../components/modal-dialog.ts";
-import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import {
+  SettingsEmpty,
+  SettingsSection,
+  SettingsStatus,
+} from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import type { SkillLibraryController } from "./library-controller.ts";
-import { LibraryDialogHeader, LibraryIdentity } from "./library-detail.tsx";
 import { libraryEventControl } from "./library-events.ts";
 import { libraryFileText } from "./library-files.ts";
 import { SkillLibraryToolbar } from "./library-toolbar.tsx";
-import { SkillLibraryStatus } from "./skill-status.tsx";
 
 export function SkillLibrary(props: {
   library: SkillLibraryController;
@@ -91,7 +94,10 @@ export function SkillLibrary(props: {
                       </span>
                     </button>
                     <div class="settings-row__control">
-                      <SkillLibraryStatus enabled={entry().enabled} />
+                      <SettingsStatus
+                        kind={entry().enabled ? "ok" : "muted"}
+                        label={t(entry().enabled ? "skillsPage.enabled" : "skillsPage.disabled")}
+                      />
                     </div>
                   </div>
                 )}
@@ -184,11 +190,20 @@ function LibraryDialog(props: {
           }
         }}
       >
-        <LibraryDialogHeader
-          title={props.editor?.title ?? t("skillLibrary.import")}
-          onClose={() => props.library.close()}
-          busy={props.library.busy}
-        />
+        <div class="exec-approval-header">
+          <strong class="exec-approval-title">
+            {props.editor?.title ?? t("skillLibrary.import")}
+          </strong>
+          <button
+            type="button"
+            class="btn btn--icon btn--ghost"
+            aria-label={t("common.close")}
+            disabled={props.library.busy}
+            onClick={() => props.library.close()}
+          >
+            <Icon name="x" />
+          </button>
+        </div>
         <div
           class={["skill-reader-dialog__body", { "skill-library-import": !props.editor }]}
           style={
@@ -255,7 +270,17 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
           : t("skillLibrary.personalTarget")}
       </p>
       <Show when={draft().entry}>
-        <LibraryIdentity entry={draft().entry!} />
+        <details class="muted" style={{ "overflow-wrap": "anywhere", "min-width": "0" }}>
+          <summary>{t("skillLibrary.technicalDetails")}</summary>
+          <dl>
+            <dt>{t("skillLibrary.skillId")}</dt>
+            <dd>{draft().entry!.skillId}</dd>
+            <dt>{t("skillLibrary.revision")}</dt>
+            <dd>{draft().entry!.revision}</dd>
+            <dt>{t("skillLibrary.command")}</dt>
+            <dd>{draft().entry!.name}</dd>
+          </dl>
+        </details>
       </Show>
       <Show when={!props.library.canEdit}>
         <p role="status">{t("skillLibrary.readOnly")}</p>

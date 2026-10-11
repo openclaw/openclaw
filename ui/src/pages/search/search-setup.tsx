@@ -1,7 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Show, createMemo, untrack } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import type { ApplicationContext } from "../../app/context-types.ts";
 import { resolveConfigFieldMeta } from "../../components/config-form.search.ts";
 import { analyzeConfigSchema, renderNode } from "../../components/config-form.ts";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -10,8 +11,6 @@ import {
   currentConfigObject,
   type RuntimeConfigState,
 } from "../../lib/config/config-state-model.ts";
-import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { LitContent } from "../../lit/lit-content.tsx";
@@ -22,16 +21,9 @@ import { readConfigValue } from "./search-config.ts";
 type SearchProvider = WebSearchStatusResult["providers"][number];
 type SearchSettingsProps = {
   state: () => Readonly<RuntimeConfigState>;
-  runtime: RuntimeConfigCapability;
-  basePath: string;
-  gateway: GatewayPageController;
   canEdit: () => boolean;
   busy: () => boolean;
-  commit: (
-    scope: GatewayConnectionScope | null,
-    path: Array<string | number>,
-    value: unknown,
-  ) => Promise<boolean>;
+  commit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
 };
 type SearchConfigFieldProps = Pick<SearchSettingsProps, "state" | "canEdit" | "busy">;
 function SearchConfigField(
@@ -73,13 +65,15 @@ function SearchConfigField(
   );
 }
 
-export function SearchSetup(props: SearchSettingsProps & { provider: SearchProvider }) {
-  // A delayed blur keeps its rendered connection, even after this view retires.
-  const scope = untrack(() => props.gateway.capture());
-  const commit = (path: Array<string | number>, value: unknown) => props.commit(scope, path, value);
-  const state = () => props.state();
-  const config = () => currentConfigObject(state());
-  const analysis = createMemo(() => analyzeConfigSchema(state().configSchema));
+export function SearchSetup(
+  props: SearchSettingsProps & {
+    context: ApplicationContext;
+    gateway: GatewayPageController;
+    provider: SearchProvider;
+  },
+) {
+  const config = () => currentConfigObject(props.state());
+  const analysis = createMemo(() => analyzeConfigSchema(props.state().configSchema));
   const unsupported = createMemo(() => new Set(analysis().unsupportedPaths));
   const schema = () =>
     props.provider.configPath.length
@@ -137,12 +131,12 @@ export function SearchSetup(props: SearchSettingsProps & { provider: SearchProvi
                 descriptor={descriptor()}
                 context={{
                   pluginId: props.provider.pluginId,
-                  baseHash: state().configSnapshot?.hash ?? null,
+                  baseHash: props.state().configSnapshot?.hash ?? null,
                   gateway: props.gateway,
                   canInspect: props.canEdit(),
-                  saveError: state().lastError,
-                  onCommit: commit,
-                  onDiscard: () => props.runtime.discardFormValue(descriptor().path),
+                  saveError: props.state().lastError,
+                  onCommit: props.commit,
+                  onDiscard: () => props.context.runtimeConfig.discardFormValue(descriptor().path),
                 }}
               />
             }
@@ -156,7 +150,7 @@ export function SearchSetup(props: SearchSettingsProps & { provider: SearchProvi
             path={[...props.provider.configPath, field()[0]]}
             value={values()?.[field()[0]]}
             unsupported={unsupported()}
-            patch={commit}
+            patch={props.commit}
             state={props.state}
             canEdit={props.canEdit}
             busy={props.busy}
@@ -169,7 +163,7 @@ export function SearchSetup(props: SearchSettingsProps & { provider: SearchProvi
         control={
           <a
             class="btn btn--sm"
-            href={`${pathForRoute("plugin-settings", props.basePath)}/${encodeURIComponent(props.provider.pluginId)}?view=settings`}
+            href={`${pathForRoute("plugin-settings", props.context.basePath)}/${encodeURIComponent(props.provider.pluginId)}?view=settings`}
           >
             {t("pluginsPage.detailSettings")}
           </a>
@@ -185,14 +179,11 @@ export function SearchSetup(props: SearchSettingsProps & { provider: SearchProvi
 }
 
 export function AdvancedSearchSettings(props: SearchSettingsProps) {
-  const scope = untrack(() => props.gateway.capture());
-  const commit = (path: Array<string | number>, value: unknown) => props.commit(scope, path, value);
   const analysis = createMemo(() => analyzeConfigSchema(props.state().configSchema));
   const unsupported = createMemo(() => new Set(analysis().unsupportedPaths));
   const schema = () => analysis().schema?.properties?.tools?.properties?.web?.properties?.search;
   const config = () => currentConfigObject(props.state());
-  const value = () =>
-    asNullableRecord(asNullableRecord(asNullableRecord(config()?.tools)?.web)?.search);
+  const value = () => asNullableRecord(readConfigValue(config(), ["tools", "web", "search"]));
   const fields = () =>
     Object.entries(schema()?.properties ?? {}).filter(
       ([key]) => key !== "enabled" && key !== "provider",
@@ -211,7 +202,7 @@ export function AdvancedSearchSettings(props: SearchSettingsProps) {
                 path={["tools", "web", "search", field()[0]]}
                 value={value()?.[field()[0]]}
                 unsupported={unsupported()}
-                patch={commit}
+                patch={props.commit}
                 state={props.state}
                 canEdit={props.canEdit}
                 busy={props.busy}

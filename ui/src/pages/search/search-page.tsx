@@ -34,7 +34,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/lit-content.tsx";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { newSessionModelSearch } from "../new-session/model-location.ts";
-import { searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
+import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
 import { renderSearchTestResult } from "./search-results.tsx";
 import { SearchSetup, AdvancedSearchSettings } from "./search-setup.tsx";
 
@@ -338,34 +338,69 @@ function SearchPageContent() {
 
   const configState = () => runtimeView.read().state;
   const config = () => currentConfigObject(configState());
-  const search = () =>
-    asNullableRecord(asNullableRecord(asNullableRecord(config()?.tools)?.web)?.search);
+  const search = () => asNullableRecord(readConfigValue(config(), ["tools", "web", "search"]));
   const providers = createMemo(() =>
     (result()?.providers ?? []).toSorted((a, b) => a.label.localeCompare(b.label)),
   );
   const providerOptions = createMemo(() =>
     providers().map(({ id, label }) => ({ value: id, label })),
   );
-  const configuredProvider = () =>
-    config()
-      ? typeof search()?.provider === "string"
-        ? (search()!.provider as string)
-        : ""
-      : (result()?.provider ?? "");
+  const configuredProvider = () => {
+    const value = search()?.provider;
+    return config() ? (typeof value === "string" ? value : "") : (result()?.provider ?? "");
+  };
+  const enabled = () => {
+    const value = search()?.enabled;
+    return typeof value === "boolean" ? value : result()!.enabled;
+  };
+  const configuredOptions = () => [
+    { value: "", label: t("searchPage.automatic") },
+    ...providerOptions(),
+    ...(configuredProvider() &&
+    !providers().some((provider) => provider.id === configuredProvider())
+      ? [{ value: configuredProvider(), label: configuredProvider() }]
+      : []),
+  ];
+  const modelOptions = () => [
+    {
+      value: "",
+      label: `${t("searchPage.agentDefault")} · ${result()!.model.provider}/${result()!.model.id}`,
+    },
+    ...models().map((entry) => ({
+      value: `${entry.provider}/${entry.id}`,
+      label: entry.name || entry.id,
+      provider: entry.provider,
+    })),
+  ];
+  const routeStatus = () => {
+    const kind = result()!.route.kind;
+    return kind === "unavailable"
+      ? "warn"
+      : kind === "disabled" || kind === "external"
+        ? "muted"
+        : "ok";
+  };
+  const health = () => {
+    const failed = testError() || testResult()?.status === "error";
+    return {
+      kind: failed ? ("danger" as const) : testResult() ? ("ok" as const) : ("muted" as const),
+      label: t(
+        `searchPage.${testing() ? "testing" : failed ? "failure" : testResult() ? "success" : "untested"}`,
+      ),
+    };
+  };
+  const healthDescription = () => {
+    const last = testResult();
+    return last
+      ? `${last.provider} · ${t("searchPage.duration", { ms: String(last.latencyMs) })}${last.cached ? ` · ${t("searchPage.cached")}` : ""}`
+      : undefined;
+  };
   const selectedProvider = () => providers().find((provider) => provider.id === setupProvider());
   const agentOptions = () =>
     (agents.read().agentsList?.agents ?? [])
       .filter((agent) => agent.kind !== "system")
       .map((agent) => ({ value: agent.id, label: agent.name || agent.id }));
   const disabled = () => !canEdit() || busy() || !configState().configSnapshot;
-  const scope = () => {
-    gatewayRevision();
-    return gateway.capture();
-  };
-  const statusGeneration = () => {
-    result();
-    return generation;
-  };
 
   return (
     <>
@@ -384,285 +419,232 @@ function SearchPageContent() {
           {configState().lastError ? (
             <div role="alert" class="callout danger">
               {configState().lastError}
-              <button class="btn btn--sm" onClick={() => retryConfig(scope())}>
+              <button class="btn btn--sm" onClick={() => retryConfig(gateway.capture())}>
                 {t("common.retry")}
               </button>
             </div>
           ) : undefined}
           {!result() && loading() ? <SettingsLoadingSkeleton rows={4} /> : undefined}
           <Show when={result()}>
-            {(current) => (
-              <>
-                <SettingsSection
-                  description={t("searchPage.scopeHint")}
-                  notice={
-                    !canEdit() ? <p class="callout">{t("searchPage.readOnly")}</p> : undefined
-                  }
-                >
-                  <SettingsToggleRow
-                    title={t("searchPage.enabled")}
-                    description={t("searchPage.enabledHint")}
-                    checked={
-                      typeof search()?.enabled === "boolean"
-                        ? (search()!.enabled as boolean)
-                        : current().enabled
+            {(current) => {
+              // Retired controls keep this connection; same-connection refreshes keep their DOM.
+              const renderScope = gateway.capture();
+              return (
+                <>
+                  <SettingsSection
+                    description={t("searchPage.scopeHint")}
+                    notice={
+                      !canEdit() ? <p class="callout">{t("searchPage.readOnly")}</p> : undefined
                     }
-                    disabled={disabled()}
-                    onChange={(enabled) => {
-                      void patch(scope(), ["tools", "web", "search", "enabled"], enabled);
-                    }}
-                  />
-                  <SettingsSelectRow
-                    title={t("searchPage.provider")}
-                    description={t("searchPage.automaticHint")}
-                    value={configuredProvider()}
-                    options={[
-                      { value: "", label: t("searchPage.automatic") },
-                      ...providerOptions(),
-                      ...(configuredProvider() &&
-                      !providers().some((provider) => provider.id === configuredProvider())
-                        ? [{ value: configuredProvider(), label: configuredProvider() }]
-                        : []),
-                    ]}
-                    disabled={disabled()}
-                    onChange={(provider) => {
-                      setSetupProvider(provider || setupProvider());
-                      void patch(
-                        scope(),
-                        ["tools", "web", "search", "provider"],
-                        provider || undefined,
-                      );
-                    }}
-                  />
-                </SettingsSection>
-                <SettingsSection title={t("searchPage.route")}>
-                  <SettingsSelectRow
-                    title={t("searchPage.agent")}
-                    value={selectionProjection.read().state.selectedId ?? ""}
-                    options={agentOptions()}
-                    onChange={(agent) => context.settingsAgentSelection.set(agent)}
-                    disabled={!connected()}
-                  />
-                  <SettingsRow
-                    title={t("searchPage.model")}
-                    description={current().model.runtimeLabel}
-                    control={
-                      <LitContent>
-                        {renderModelPicker({
-                          label: t("searchPage.model"),
-                          value: model(),
-                          options: [
-                            {
-                              value: "",
-                              label: `${t("searchPage.agentDefault")} · ${current().model.provider}/${current().model.id}`,
-                            },
-                            ...models().map((entry) => ({
-                              value: `${entry.provider}/${entry.id}`,
-                              label: entry.name || entry.id,
-                              provider: entry.provider,
-                            })),
-                          ],
-                          disabled: !connected(),
-                          onChange: (value) => {
-                            setModel(value);
-                            void load(value);
-                          },
-                        })}
-                      </LitContent>
-                    }
-                  />
-                  <SettingsRow
-                    title={current().route.label}
-                    description={current().route.reason}
-                    control={
-                      <SettingsStatus
-                        kind={
-                          current().route.kind === "unavailable"
-                            ? "warn"
-                            : current().route.kind === "disabled" ||
-                                current().route.kind === "external"
-                              ? "muted"
-                              : "ok"
-                        }
-                        label={
-                          loading()
-                            ? t("searchPage.loading")
-                            : t(`searchPage.routeKinds.${current().route.kind}`)
-                        }
-                      />
-                    }
-                  />
-                </SettingsSection>
-                <SettingsSection
-                  title={t("searchPage.health")}
-                  description={t("searchPage.untestedHint")}
-                  actions={
-                    <button
-                      class="btn btn--sm"
-                      disabled={loading() || testing() || !connected()}
-                      onClick={() => load()}
-                    >
-                      {t("searchPage.refresh")}
-                    </button>
-                  }
-                >
-                  <SettingsRow
-                    title={t("searchPage.health")}
-                    description={
-                      testResult()
-                        ? `${testResult()!.provider} · ${t("searchPage.duration", { ms: String(testResult()!.latencyMs) })}${testResult()!.cached ? ` · ${t("searchPage.cached")}` : ""}`
-                        : undefined
-                    }
-                    control={
-                      <span role="status">
-                        <SettingsStatus
-                          kind={
-                            testError() || testResult()?.status === "error"
-                              ? "danger"
-                              : testResult()
-                                ? "ok"
-                                : "muted"
-                          }
-                          label={
-                            testing()
-                              ? t("searchPage.testing")
-                              : testError() || testResult()?.status === "error"
-                                ? t("searchPage.failure")
-                                : testResult()
-                                  ? t("searchPage.success")
-                                  : t("searchPage.untested")
-                          }
-                        />
-                      </span>
-                    }
-                  />
-                  <Show when={current().testProvider || current().route.testable}>
-                    <SettingsRow
-                      title={t("searchPage.query")}
-                      control={
-                        <input
-                          ref={(element) => {
-                            queryInput = element;
-                          }}
-                          class="settings-input"
-                          aria-label={t("searchPage.query")}
-                          maxlength="500"
-                          disabled={testing()}
-                          value={query()}
-                          placeholder={t("searchPage.queryPlaceholder")}
-                          onInput={(event) => {
-                            if (!testing()) {
-                              setQuery(event.currentTarget.value);
-                              invalidateTest();
-                            }
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              void test(scope(), statusGeneration());
-                            }
-                          }}
-                        />
-                      }
-                    />
-                    <SettingsRow
-                      title={t("searchPage.test")}
-                      control={
-                        <button
-                          class="btn"
-                          disabled={
-                            !canEdit() ||
-                            !query().trim() ||
-                            query().trim().length > 500 ||
-                            testing() ||
-                            loading() ||
-                            !isSearchConfigSettled(configState()) ||
-                            !connected()
-                          }
-                          onClick={() => test(scope(), statusGeneration())}
-                        >
-                          {testing()
-                            ? t("searchPage.testing")
-                            : current().testProvider
-                              ? t("searchPage.testProvider", {
-                                  provider: current().testProvider!.label,
-                                })
-                              : t("searchPage.test")}
-                        </button>
-                      }
-                    />
-                  </Show>
-                  <Show
-                    when={current().route.kind === "native" || current().route.kind === "external"}
                   >
-                    <SettingsNavRow
-                      title={t("searchPage.testInChat")}
-                      description={t("searchPage.testInChatHint")}
-                      onClick={() => {
-                        const connection = scope();
-                        if (
-                          connection &&
-                          gateway.isCurrent(connection) &&
-                          statusGeneration() === generation &&
-                          !loading()
-                        ) {
-                          context.navigate("new-session", {
-                            search: newSessionModelSearch(
-                              current().agentId,
-                              `${current().model.provider}/${current().model.id}`,
-                            ),
-                          });
-                        }
+                    <SettingsToggleRow
+                      title={t("searchPage.enabled")}
+                      description={t("searchPage.enabledHint")}
+                      checked={enabled()}
+                      disabled={disabled()}
+                      onChange={(value) => {
+                        void patch(renderScope, ["tools", "web", "search", "enabled"], value);
                       }}
                     />
-                  </Show>
-                </SettingsSection>
-                {renderSearchTestResult(testResult(), testError())}
-                <SettingsSection
-                  title={t("searchPage.setup")}
-                  description={t("searchPage.setupHint")}
-                >
-                  <SettingsSelectRow
-                    title={t("searchPage.setupProvider")}
-                    description={selectedProvider()?.hint}
-                    value={setupProvider()}
-                    options={providerOptions()}
-                    onChange={setSetupProvider}
-                  />
-                  <Show when={selectedProvider()?.id} keyed>
-                    {(providerId) => (
-                      <SearchSetup
-                        provider={selectedProvider()!}
-                        state={configState}
-                        runtime={context.runtimeConfig}
-                        basePath={context.basePath}
-                        gateway={gateway}
-                        canEdit={canEdit}
-                        busy={busy}
-                        commit={(fieldScope, path, value) =>
-                          providerId === setupProvider()
-                            ? patch(fieldScope, path, value)
-                            : Promise.resolve(false)
+                    <SettingsSelectRow
+                      title={t("searchPage.provider")}
+                      description={t("searchPage.automaticHint")}
+                      value={configuredProvider()}
+                      options={configuredOptions()}
+                      disabled={disabled()}
+                      onChange={(provider) => {
+                        setSetupProvider(provider || setupProvider());
+                        void patch(
+                          renderScope,
+                          ["tools", "web", "search", "provider"],
+                          provider || undefined,
+                        );
+                      }}
+                    />
+                  </SettingsSection>
+                  <SettingsSection title={t("searchPage.route")}>
+                    <SettingsSelectRow
+                      title={t("searchPage.agent")}
+                      value={selectionProjection.read().state.selectedId ?? ""}
+                      options={agentOptions()}
+                      onChange={(agent) => context.settingsAgentSelection.set(agent)}
+                      disabled={!connected()}
+                    />
+                    <SettingsRow
+                      title={t("searchPage.model")}
+                      description={current().model.runtimeLabel}
+                      control={
+                        <LitContent>
+                          {renderModelPicker({
+                            label: t("searchPage.model"),
+                            value: model(),
+                            options: modelOptions(),
+                            disabled: !connected(),
+                            onChange: (value) => {
+                              setModel(value);
+                              void load(value);
+                            },
+                          })}
+                        </LitContent>
+                      }
+                    />
+                    <SettingsRow
+                      title={current().route.label}
+                      description={current().route.reason}
+                      control={
+                        <SettingsStatus
+                          kind={routeStatus()}
+                          label={
+                            loading()
+                              ? t("searchPage.loading")
+                              : t(`searchPage.routeKinds.${current().route.kind}`)
+                          }
+                        />
+                      }
+                    />
+                  </SettingsSection>
+                  <SettingsSection
+                    title={t("searchPage.health")}
+                    description={t("searchPage.untestedHint")}
+                    actions={
+                      <button
+                        class="btn btn--sm"
+                        disabled={loading() || testing() || !connected()}
+                        onClick={() => load()}
+                      >
+                        {t("searchPage.refresh")}
+                      </button>
+                    }
+                  >
+                    <SettingsRow
+                      title={t("searchPage.health")}
+                      description={healthDescription()}
+                      control={
+                        <span role="status">
+                          <SettingsStatus {...health()} />
+                        </span>
+                      }
+                    />
+                    <Show when={current().testProvider || current().route.testable}>
+                      <SettingsRow
+                        title={t("searchPage.query")}
+                        control={
+                          <input
+                            ref={(element) => {
+                              queryInput = element;
+                            }}
+                            class="settings-input"
+                            aria-label={t("searchPage.query")}
+                            maxlength="500"
+                            disabled={testing()}
+                            value={query()}
+                            placeholder={t("searchPage.queryPlaceholder")}
+                            onInput={(event) => {
+                              if (!testing()) {
+                                setQuery(event.currentTarget.value);
+                                invalidateTest();
+                              }
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                void test(renderScope, generation);
+                              }
+                            }}
+                          />
                         }
                       />
-                    )}
-                  </Show>
-                  <SettingsNavRow
-                    title={t("searchPage.moreProviders")}
-                    description={t("searchPage.moreProvidersHint")}
-                    onClick={() => context.navigate("plugins")}
+                      <SettingsRow
+                        title={t("searchPage.test")}
+                        control={
+                          <button
+                            class="btn"
+                            disabled={
+                              !canEdit() ||
+                              !query().trim() ||
+                              query().trim().length > 500 ||
+                              testing() ||
+                              loading() ||
+                              !isSearchConfigSettled(configState()) ||
+                              !connected()
+                            }
+                            onClick={() => test(renderScope, generation)}
+                          >
+                            {testing()
+                              ? t("searchPage.testing")
+                              : current().testProvider
+                                ? t("searchPage.testProvider", {
+                                    provider: current().testProvider!.label,
+                                  })
+                                : t("searchPage.test")}
+                          </button>
+                        }
+                      />
+                    </Show>
+                    <Show
+                      when={
+                        current().route.kind === "native" || current().route.kind === "external"
+                      }
+                    >
+                      <SettingsNavRow
+                        title={t("searchPage.testInChat")}
+                        description={t("searchPage.testInChatHint")}
+                        onClick={() => {
+                          if (renderScope && gateway.isCurrent(renderScope) && !loading()) {
+                            context.navigate("new-session", {
+                              search: newSessionModelSearch(
+                                current().agentId,
+                                `${current().model.provider}/${current().model.id}`,
+                              ),
+                            });
+                          }
+                        }}
+                      />
+                    </Show>
+                  </SettingsSection>
+                  {renderSearchTestResult(testResult(), testError())}
+                  <SettingsSection
+                    title={t("searchPage.setup")}
+                    description={t("searchPage.setupHint")}
+                  >
+                    <SettingsSelectRow
+                      title={t("searchPage.setupProvider")}
+                      description={selectedProvider()?.hint}
+                      value={setupProvider()}
+                      options={providerOptions()}
+                      onChange={setSetupProvider}
+                    />
+                    <Show when={selectedProvider()?.id} keyed>
+                      {(providerId) => (
+                        <SearchSetup
+                          provider={selectedProvider()!}
+                          state={configState}
+                          context={context}
+                          gateway={gateway}
+                          canEdit={canEdit}
+                          busy={busy}
+                          commit={(path, value) =>
+                            providerId === setupProvider()
+                              ? patch(renderScope, path, value)
+                              : Promise.resolve(false)
+                          }
+                        />
+                      )}
+                    </Show>
+                    <SettingsNavRow
+                      title={t("searchPage.moreProviders")}
+                      description={t("searchPage.moreProvidersHint")}
+                      onClick={() => context.navigate("plugins")}
+                    />
+                  </SettingsSection>
+                  <AdvancedSearchSettings
+                    state={configState}
+                    canEdit={canEdit}
+                    busy={busy}
+                    commit={(path, value) => patch(renderScope, path, value)}
                   />
-                </SettingsSection>
-                <AdvancedSearchSettings
-                  state={configState}
-                  runtime={context.runtimeConfig}
-                  basePath={context.basePath}
-                  gateway={gateway}
-                  canEdit={canEdit}
-                  busy={busy}
-                  commit={patch}
-                />
-              </>
-            )}
+                </>
+              );
+            }}
           </Show>
         </SettingsPage>
       </SettingsWorkspace>

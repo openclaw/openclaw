@@ -1,4 +1,3 @@
-import { render as mountSolid } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
@@ -13,12 +12,13 @@ import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
 import { SearchPage } from "./search-page.tsx";
 
 const providerPath = ["plugins", "entries", "example", "config", "webSearch"];
@@ -57,7 +57,6 @@ const testResult: WebSearchTestResult = {
 
 beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 afterEach(() => {
-  document.body.replaceChildren();
   vi.useRealTimers();
 });
 
@@ -313,7 +312,6 @@ describe("Search configuration lifecycle", () => {
       );
       await committed;
     }
-    await flush();
     await flush();
     try {
       expect(fixture.runtime.state.configSaving).toBe(false);

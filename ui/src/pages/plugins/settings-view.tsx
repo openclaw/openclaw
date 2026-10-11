@@ -105,24 +105,43 @@ export type DetailProps = SharedProps &
   };
 function renderRetryError(error: string, onRetry: () => void): JSX.Element {
   return (
-    <>
-      <div class="callout danger plugins-settings-error oc-banner oc-banner-error" role="alert">
-        <span>{error}</span>
-        <button type="button" class="btn btn--sm oc-action oc-action-secondary" onClick={onRetry}>
-          {t("pluginsPage.tryAgain")}
-        </button>
-      </div>
-    </>
+    <div class="callout danger plugins-settings-error oc-banner oc-banner-error" role="alert">
+      <span>{error}</span>
+      <button type="button" class="btn btn--sm oc-action oc-action-secondary" onClick={onRetry}>
+        {t("pluginsPage.tryAgain")}
+      </button>
+    </div>
   );
 }
-function renderConnectionStatus(ready: boolean, label: string) {
-  return ready ? (
+function PluginConnectionAction(props: {
+  kind: "Account" | "Credential";
+  ready: boolean;
+  name: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  const verb = () => (props.ready ? "edit" : props.kind === "Account" ? "connect" : "configure");
+  return (
     <>
-      <span class="plugin-connection-status" role="status">
-        <Icon name="check" /> {t(label)}{" "}
-      </span>
+      {props.ready ? (
+        <span class="plugin-connection-status" role="status">
+          <Icon name="check" />
+          {t(
+            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
+          )}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        class="btn btn--sm oc-action oc-action-secondary"
+        aria-label={t(`pluginsPage.auth.${verb()}${props.kind}`, { name: props.name })}
+        disabled={props.disabled}
+        onClick={() => props.onClick()}
+      >
+        {t(`pluginsPage.auth.${verb()}`)}
+      </button>
     </>
-  ) : null;
+  );
 }
 function InstalledInventory(props: InventoryProps): JSX.Element {
   const query = createMemo(() => props.query.trim().toLocaleLowerCase());
@@ -538,40 +557,21 @@ function PluginOverview(props: DetailProps): JSX.Element {
               (props.inspection?.mcpAuth ?? []).map((server) => ({
                 name: server.serverName,
                 trailing: (
-                  <>
-                    {renderConnectionStatus(
-                      server.state === "authorized",
-                      "pluginsPage.auth.connected",
-                    )}
-                    <button
-                      type="button"
-                      class="btn btn--sm oc-action oc-action-secondary"
-                      aria-label={t(
-                        server.state === "authorized"
-                          ? "pluginsPage.auth.editAccount"
-                          : "pluginsPage.auth.connectAccount",
-                        {
-                          name: server.serverName,
-                        },
-                      )}
-                      disabled={
-                        server.state === "authorized"
-                          ? !props.onEditMcp
-                          : !props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin
-                      }
-                      onClick={() =>
-                        server.state === "authorized"
-                          ? props.onEditMcp?.()
-                          : props.onMcpLogin?.(server.serverName)
-                      }
-                    >
-                      {t(
-                        server.state === "authorized"
-                          ? "pluginsPage.auth.edit"
-                          : "pluginsPage.auth.connect",
-                      )}
-                    </button>
-                  </>
+                  <PluginConnectionAction
+                    kind="Account"
+                    name={server.serverName}
+                    ready={server.state === "authorized"}
+                    disabled={
+                      server.state === "authorized"
+                        ? !props.onEditMcp
+                        : !props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin
+                    }
+                    onClick={() =>
+                      server.state === "authorized"
+                        ? props.onEditMcp?.()
+                        : props.onMcpLogin?.(server.serverName)
+                    }
+                  />
                 ),
               })),
               () => (
@@ -583,31 +583,12 @@ function PluginOverview(props: DetailProps): JSX.Element {
               (props.inspection?.credentials ?? []).map((credential) => ({
                 name: credential.envVars.join(" / ") || credential.label,
                 trailing: (
-                  <>
-                    {renderConnectionStatus(
-                      credential.status === "configured",
-                      "pluginsPage.auth.configured",
-                    )}
-                    <button
-                      type="button"
-                      class="btn btn--sm oc-action oc-action-secondary"
-                      aria-label={t(
-                        credential.status === "configured"
-                          ? "pluginsPage.auth.editCredential"
-                          : "pluginsPage.auth.configureCredential",
-                        {
-                          name: credential.label,
-                        },
-                      )}
-                      onClick={() => props.onTabChange("configuration")}
-                    >
-                      {t(
-                        credential.status === "configured"
-                          ? "pluginsPage.auth.edit"
-                          : "pluginsPage.auth.configure",
-                      )}
-                    </button>
-                  </>
+                  <PluginConnectionAction
+                    kind="Credential"
+                    name={credential.label}
+                    ready={credential.status === "configured"}
+                    onClick={() => props.onTabChange("configuration")}
+                  />
                 ),
               })),
               () => (

@@ -1,9 +1,9 @@
-import { render as mountSolid } from "@solidjs/testing-library";
 import { html } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { LitContent } from "./lit-content.tsx";
 
 it("retains a Lit island's nodes and disconnects its directives on Solid disposal", () => {

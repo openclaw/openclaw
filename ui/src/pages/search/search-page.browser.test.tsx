@@ -1,6 +1,5 @@
-import { render as mountSolid } from "@solidjs/testing-library";
 import { flush } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
@@ -9,11 +8,12 @@ import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
 import { SearchPage } from "./search-page.tsx";
 
 const providerPath = ["plugins", "entries", "searxng", "config", "webSearch"];
@@ -152,7 +152,6 @@ async function mount(
     </ApplicationProvider>
   ));
   const element = view.container;
-  onTestFinished(() => view.unmount());
   const settle = async () => {
     await flush();
     await settleModelCatalogRequests(client, { agentId: selection.state.selectedId });
@@ -204,8 +203,6 @@ function select(element: Element, label: string, value: string) {
   field.value = value;
   field.dispatchEvent(new Event("change", { bubbles: true }));
 }
-
-afterEach(() => document.body.replaceChildren());
 
 describe("Search settings", () => {
   it.each(["success", "failure"] as const)(

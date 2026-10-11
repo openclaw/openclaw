@@ -1,18 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { render as mountSolid } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createInspectResult, createPlugin, createResult } from "./plugins-page.test-support.ts";
 import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
-const disposers: Array<() => void> = [];
 afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
   document.body.replaceChildren();
 });
 
@@ -58,8 +54,7 @@ function mount(overrides: Partial<DetailProps>) {
   };
   const container = document.createElement("div");
   document.body.append(container);
-  const view = mountSolid(() => renderPluginSettingsDetail(props), { container });
-  disposers.push(view.unmount);
+  mountSolid(() => renderPluginSettingsDetail(props), { container });
   flush();
   return container;
 }

@@ -1,0 +1,65 @@
+name: Solid page parity proof
+
+on:
+  pull_request:
+    paths: [".github/workflows/solid-pg3b-proof.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solid-pg3b-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      SCENES: "^(route-(plugins|plugin-settings|skills|skill-settings|search)|plugin-settings-loading)$"
+      PROFILES: "^(desktop|mobile)-(light|dark)$"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.21.0"
+          install-bun: "false"
+          cache-mode: restore
+      - name: Install the pinned browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Capture the merge base
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          base=$(git merge-base HEAD "$BASE_REF")
+          before="$RUNNER_TEMP/solid-pg3b-before"
+          git worktree add --detach "$before" "$base"
+          rm -r "$before/scripts/control-ui-parity"
+          cp -R scripts/control-ui-parity "$before/scripts/control-ui-parity"
+          cd "$before"
+          pnpm install --frozen-lockfile
+          pnpm ui:parity capture --scene "$SCENES" --profile "$PROFILES" --output "$GITHUB_WORKSPACE/.artifacts/solid-page-parity/before"
+      - name: Capture the candidate
+        run: pnpm ui:parity capture --scene "$SCENES" --profile "$PROFILES" --output "$GITHUB_WORKSPACE/.artifacts/solid-page-parity/after"
+      - name: Compare captures
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          before=$(find .artifacts/solid-page-parity/before -name manifest.json -printf '%h\n')
+          after=$(find .artifacts/solid-page-parity/after -name manifest.json -printf '%h\n')
+          pnpm ui:parity diff "$before" "$after" --output "$GITHUB_WORKSPACE/.artifacts/solid-page-parity/comparison"
+      - name: Upload synthetic visual proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: solid-page-parity-${{ github.event.pull_request.head.sha }}
+          path: .artifacts/solid-page-parity/
+          if-no-files-found: warn
+          retention-days: 7

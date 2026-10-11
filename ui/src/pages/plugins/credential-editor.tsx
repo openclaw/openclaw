@@ -57,48 +57,36 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
   });
   const [literal, setLiteral] = createSignal("");
   const [revealed, setRevealed] = createSignal(false);
-  const [saving, setSaving] = createSignal(false);
-  const [cancelling, setCancelling] = createSignal(false);
+  const [operation, setOperation] = createSignal<"save" | "discard">();
+  const saving = () => operation() === "save";
+  const cancelling = () => operation() === "discard";
   let referenceSubmitted = false;
   let generation = 0;
-  let identity = "";
-  let fieldIdentity = "";
-  let binding: PluginCredentialEditorContext["gateway"] | undefined;
   let connection: GatewayConnectionScope | null = null;
   let active = true;
   let pending = false;
 
   createEffect(
-    () =>
-      [
-        props.context.pluginId,
-        props.field.path,
-        props.context.baseHash,
-        props.context.gateway,
-        props.context.gateway.epoch,
-        props.context.canInspect,
-      ] as const,
     () => {
-      const nextIdentity = JSON.stringify([
-        props.context.pluginId,
-        props.field.path,
-        props.context.baseHash,
-        props.context.gateway.epoch,
-        props.context.canInspect,
-      ]);
-      if (nextIdentity === identity && binding === props.context.gateway) {
+      const { pluginId, baseHash, gateway, canInspect } = props.context;
+      const field = JSON.stringify([pluginId, props.field.path]);
+      return {
+        field,
+        gateway,
+        canInspect,
+        identity: JSON.stringify([field, baseHash, gateway.epoch, canInspect]),
+      };
+    },
+    (next, previous) => {
+      if (next.identity === previous?.identity && next.gateway === previous?.gateway) {
         return;
       }
-      const nextFieldIdentity = JSON.stringify([props.context.pluginId, props.field.path]);
       const sourceChanged =
-        binding !== props.context.gateway ||
-        fieldIdentity !== nextFieldIdentity ||
-        !props.context.canInspect ||
-        (connection && !props.context.gateway.isCurrent(connection));
+        next.gateway !== previous?.gateway ||
+        next.field !== previous?.field ||
+        !next.canInspect ||
+        (connection && !next.gateway.isCurrent(connection));
       const wasOpen = dialogOpen();
-      identity = nextIdentity;
-      fieldIdentity = nextFieldIdentity;
-      binding = props.context.gateway;
       setRevealed(false);
       // Other settings can advance the revision before this field's blur commit.
       // Only retiring the field or connection may discard its uncommitted key.
@@ -106,8 +94,7 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
         setLiteral("");
         setDialogOpen(false);
         pending = false;
-        setSaving(false);
-        setCancelling(false);
+        setOperation(undefined);
         referenceSubmitted = false;
         setReference({ source: "env", provider: "default", id: "" });
       }
@@ -209,15 +196,7 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
     ) {
       return;
     }
-    const gateway = props.context.gateway;
-    const capturedConnection = connection;
-    const owner = JSON.stringify([props.context.pluginId, props.field.path]);
-    const current = () =>
-      active &&
-      props.context.gateway === gateway &&
-      gateway.isCurrent(capturedConnection) &&
-      JSON.stringify([props.context.pluginId, props.field.path]) === owner;
-    return commitOrDiscardReference(current, value);
+    return commitOrDiscardReference(value);
   }
 
   async function cancelReference() {
@@ -228,25 +207,22 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
       setDialogOpen(false);
       return;
     }
+    return commitOrDiscardReference(undefined);
+  }
+
+  async function commitOrDiscardReference(value: string | SecretRef | undefined) {
     const gateway = props.context.gateway;
     const capturedConnection = connection;
-    const owner = fieldIdentity;
+    const owner = JSON.stringify([props.context.pluginId, props.field.path]);
     const current = () =>
       active &&
       props.context.gateway === gateway &&
       capturedConnection !== null &&
       gateway.isCurrent(capturedConnection) &&
-      fieldIdentity === owner;
-    return commitOrDiscardReference(current, undefined);
-  }
-
-  async function commitOrDiscardReference(
-    current: () => boolean,
-    value: string | SecretRef | undefined,
-  ) {
+      JSON.stringify([props.context.pluginId, props.field.path]) === owner;
+    // Admission is synchronous; Solid publishes the pending presentation after this task.
     pending = true;
-    const setPending = value === undefined ? setCancelling : setSaving;
-    setPending(true);
+    setOperation(value === undefined ? "discard" : "save");
     if (value !== undefined) {
       referenceSubmitted ||= dialogOpen();
       setError("");
@@ -282,7 +258,7 @@ function PluginCredentialEditorContent(props: PluginCredentialEditorProps) {
     } finally {
       if (current()) {
         pending = false;
-        setPending(false);
+        setOperation(undefined);
       }
     }
   }

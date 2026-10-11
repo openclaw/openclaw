@@ -45,8 +45,7 @@ import {
   type PluginsPageCatalogDetail,
   type PluginsPageDetail,
 } from "./plugins-page-model.ts";
-import { createPluginsPageProjection } from "./plugins-page-projection.ts";
-import { renderPluginsPage } from "./plugins-page-view.tsx";
+import { PluginsPageView } from "./plugins-page-view.tsx";
 import type { PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { PluginPreviewController } from "./skill-preview.tsx";
@@ -61,7 +60,6 @@ export class PluginsPageController implements ReactiveControllerHost {
   constructor(
     private readonly options: {
       context: () => ApplicationContext;
-      track: () => number;
       notify: () => void;
     },
   ) {}
@@ -704,12 +702,6 @@ export class PluginsPageController implements ReactiveControllerHost {
       },
     );
   }
-
-  track() {
-    return this.options.track();
-  }
-
-  readonly view = createPluginsPageProjection(this);
 }
 
 export type PluginsPageProps = { routeData?: PluginsRouteData; surface?: "discovery" | "settings" };
@@ -721,7 +713,6 @@ export const PluginsPage = defineSolidBridge<PluginsPageProps>(
     const [revision, setRevision] = createSignal(0);
     const page = new PluginsPageController({
       context: () => context,
-      track: revision,
       notify: () => setRevision((value) => value + 1),
     });
     page.element = host;
@@ -731,7 +722,7 @@ export const PluginsPage = defineSolidBridge<PluginsPageProps>(
     );
     createEffect(revision, () => page.afterCommit());
     onCleanup(() => page.dispose());
-    return renderPluginsPage(page.view);
+    return <PluginsPageView page={page} revision={revision} />;
   },
   {
     properties: {

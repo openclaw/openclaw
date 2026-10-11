@@ -8,17 +8,17 @@ import type {
 import type { FilePreviewModalFile } from "../../components/file-preview-modal.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/file-preview-modal-registration.ts";
-import { t } from "../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { renderPluginCapabilitySection as PluginCapabilitySection } from "./overview.tsx";
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 import "./skill-preview.css";
 
-registerFilePreviewEnglish();
-registerPluginManagementEnglish();
+registerEnglishCatalog(registerFilePreviewEnglish);
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 export type PluginSkillPreviewState = {
   request: PluginsSkillsReadParams;

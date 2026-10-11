@@ -213,38 +213,24 @@ function PluginSettingsRow(props: FieldProps) {
 function PluginSettingsFields(
   props: Pick<PluginSettingsEditorProps, "onAskSetting" | "resolveCredential"> & {
     fields: PluginSettingsField[];
+    loading?: boolean;
   },
 ) {
   return (
-    <For each={props.fields} keyed={(field) => JSON.stringify(field.path)}>
-      {(field) => (
-        <PluginSettingsRow
-          field={field()}
-          onAskSetting={props.onAskSetting}
-          resolveCredential={props.resolveCredential}
-        />
-      )}
-    </For>
-  );
-}
-
-function PluginSettingsPermissions(
-  props: Pick<PluginSettingsEditorProps, "onAskSetting" | "resolveCredential"> & {
-    permissions: NonNullable<PluginSettingsEditorProps["permissions"]>;
-  },
-) {
-  return (
-    <>
-      {props.permissions.loading && !props.permissions.fields.length ? (
-        <SettingsLoadingSkeleton rows={3} carapace />
-      ) : (
-        <PluginSettingsFields
-          fields={props.permissions.fields}
-          onAskSetting={props.onAskSetting}
-          resolveCredential={props.resolveCredential}
-        />
-      )}
-    </>
+    <Show
+      when={!props.loading || props.fields.length}
+      fallback={<SettingsLoadingSkeleton rows={3} carapace />}
+    >
+      <For each={props.fields} keyed={(field) => JSON.stringify(field.path)}>
+        {(field) => (
+          <PluginSettingsRow
+            field={field()}
+            onAskSetting={props.onAskSetting}
+            resolveCredential={props.resolveCredential}
+          />
+        )}
+      </For>
+    </Show>
   );
 }
 
@@ -386,8 +372,8 @@ function PluginSettingsGroups(props: GroupsProps) {
             title={t("pluginsPage.editor.permissions")}
             id={sectionId("__permissions")}
           >
-            <PluginSettingsPermissions
-              permissions={props.permissions!}
+            <PluginSettingsFields
+              {...props.permissions!}
               onAskSetting={props.onAskSetting}
               resolveCredential={props.resolveCredential}
             />
@@ -495,8 +481,8 @@ function PluginSettingsEditorContent(props: PluginSettingsEditorProps) {
           ) : null}
           {permissions() && !params() ? (
             <EditorSection title={t("pluginsPage.editor.permissions")}>
-              <PluginSettingsPermissions
-                permissions={permissions()!}
+              <PluginSettingsFields
+                {...permissions()!}
                 onAskSetting={props.onAskSetting}
                 resolveCredential={props.resolveCredential}
               />
@@ -508,79 +494,45 @@ function PluginSettingsEditorContent(props: PluginSettingsEditorProps) {
   );
 }
 
-defineSolidBridge<Partial<GroupsProps>>(
+defineSolidBridge<{ props?: GroupsProps }>(
   "openclaw-plugin-settings-groups",
-  (props) => (
-    <>
-      {props.params ? (
-        <PluginSettingsGroups
-          params={props.params}
-          permissions={props.permissions}
-          query={props.query ?? ""}
-          onAskSetting={props.onAskSetting}
-          resolveCredential={props.resolveCredential}
-        />
-      ) : null}
-    </>
+  (bridge) => (
+    <Show when={Boolean(bridge.props)}>
+      <PluginSettingsGroups {...bridge.props!} />
+    </Show>
   ),
-  {
-    properties: {
-      params: { default: undefined, attribute: false },
-      permissions: { default: undefined, attribute: false },
-      query: { default: "", attribute: false },
-      onAskSetting: { default: undefined, attribute: false },
-      resolveCredential: { default: undefined, attribute: false },
-    },
-  },
+  { properties: { props: { default: undefined, attribute: false } } },
 );
 
 function PluginSettingsDraft(props: GroupsProps) {
-  const initial = createMemo(() => resolveStructuredDraftInitialValue(props.params));
-  const draftProps = createMemo(() => {
-    const initialValue = initial();
+  const draft = createMemo(() => {
+    const initialValue = resolveStructuredDraftInitialValue(props.params);
     if (initialValue === undefined) {
       return undefined;
     }
-    const query = props.query;
-    const permissions = props.permissions;
-    const onAskSetting = props.onAskSetting;
-    const resolveCredential = props.resolveCredential;
+    const groups = { ...props };
     return {
       identity: JSON.stringify(props.params.path),
       sourceIdentity: props.params.value,
       initialValue,
       params: props.params,
       renderNode: (params: ConfigNodeRenderParams) => html`<openclaw-plugin-settings-groups
-        .params=${params}
-        .permissions=${permissions}
-        .query=${query}
-        .onAskSetting=${onAskSetting}
-        .resolveCredential=${resolveCredential}
+        .props=${{ ...groups, params }}
       ></openclaw-plugin-settings-groups>`,
     };
   });
   return (
-    <>
-      {initial() !== undefined ? (
-        <LitContent>{html`<openclaw-config-form-structured-draft
-          .props=${draftProps()}
-        ></openclaw-config-form-structured-draft>`}</LitContent>
-      ) : (
-        <PluginSettingsGroups
-          params={props.params}
-          permissions={props.permissions}
-          query={props.query}
-          onAskSetting={props.onAskSetting}
-          resolveCredential={props.resolveCredential}
-        />
-      )}
-    </>
+    <Show when={Boolean(draft())} fallback={<PluginSettingsGroups {...props} />}>
+      <LitContent>{html`<openclaw-config-form-structured-draft
+        .props=${draft()}
+      ></openclaw-config-form-structured-draft>`}</LitContent>
+    </Show>
   );
 }
 
 export const PluginSettingsEditor = defineSolidBridge<PluginSettingsEditorProps>(
   "openclaw-plugin-settings-editor",
-  (props) => <PluginSettingsEditorContent {...props} />,
+  PluginSettingsEditorContent,
   {
     properties: {
       model: { default: undefined, attribute: false },

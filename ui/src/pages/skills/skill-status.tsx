@@ -1,6 +1,5 @@
 import { createMemo } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
-import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
@@ -11,15 +10,6 @@ import {
 import { clawhubVerdictKey, type ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 
 registerSkillsBrowserEnglish();
-
-export function SkillLibraryStatus(props: { enabled: boolean }) {
-  return (
-    <SettingsStatus
-      kind={props.enabled ? "ok" : "muted"}
-      label={t(props.enabled ? "skillsPage.enabled" : "skillsPage.disabled")}
-    />
-  );
-}
 
 export function verdictForSkill(
   skill: SkillStatusEntry,

@@ -1,9 +1,9 @@
-import { render as mountSolid } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { REDACTED_SENTINEL, type JsonSchema } from "../../lib/config-form-utils.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { PluginSettingsEditor, type PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
 import "../../styles.css";
@@ -61,8 +61,7 @@ async function mount(overrides: Partial<PluginSettingsEditorModel> = {}) {
   const [props, setProps] = createSignal<PluginSettingsEditorProps>({ model });
   const host = document.createElement("div");
   document.body.append(host);
-  const view = mountSolid(() => <PluginSettingsEditor {...props()} />, { container: host });
-  disposers.push(view.unmount);
+  mountSolid(() => <PluginSettingsEditor {...props()} />, { container: host });
   const editor = host.querySelector<HTMLElement>("openclaw-plugin-settings-editor")!;
   const update = async (next: Partial<PluginSettingsEditorProps>) => {
     setProps((current) => ({ ...current, ...next }));
@@ -78,16 +77,12 @@ async function searchSettings(editor: HTMLElement, query: string) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await settle();
 }
-const disposers: Array<() => void> = [];
 async function settle() {
   flush();
   await Promise.resolve();
   flush();
 }
 afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
   document.body.replaceChildren();
 });
 describe("grouped plugin settings", () => {
