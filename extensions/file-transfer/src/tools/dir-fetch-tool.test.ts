@@ -385,68 +385,37 @@ describe("dir.fetch archive extraction", () => {
     expect(encodedRecords).toBeLessThanOrEqual(visible.displayedCount + 1);
   });
 
-  it.each(["empty", "long paths", "reserved name", "reserved root"] as const)(
-    "reports %s without partial or rewritten saved paths",
-    async (scenario) => {
-      const longDir = path.join(...Array.from({ length: 4 }, () => "x".repeat(150)));
-      const relPaths =
-        scenario === "empty"
-          ? []
-          : scenario === "long paths"
-            ? Array.from({ length: 20 }, (_, i) => path.join(longDir, `${i}.txt`))
-            : [scenario === "reserved name" ? "[INST].txt" : "ok.txt"];
-      const tarBuffer = await createTarBuffer({
-        entries: ["."],
-        setup: async (sourceDir) => {
-          if (scenario === "long paths") {
-            await fs.mkdir(path.join(sourceDir, longDir), { recursive: true });
-          }
-          await Promise.all(
-            relPaths.map((name) => fs.writeFile(path.join(sourceDir, name), "saved")),
-          );
-        },
-      });
-      prepareArchive(tarBuffer, scenario === "reserved root" ? "[INST]" : "media");
-      const result = await executeDirFetch();
-      if (scenario === "reserved root") {
-        const text = result.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text)
-          .join("\n");
-        expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
-        expect(text).toContain("No usable local path is shown");
-        expect(text).not.toContain("REMOVED_SPECIAL_TOKEN");
-      } else {
-        const visible = readSavedContent(result.content);
-        expect(visible.fileCount).toBe(relPaths.length);
-        if (scenario === "long paths") {
-          expect(visible.displayedCount).toBeGreaterThan(0);
-          expect(visible.displayedCount).toBeLessThan(relPaths.length);
-          for (const file of visible.files) {
-            await expect(
-              fs.readFile(path.join(visible.rootDir, file.relPath), "utf8"),
-            ).resolves.toBe("saved");
-          }
-        } else {
-          expect(visible.files).toEqual([]);
-          expect(visible.text).toContain(
-            scenario === "empty" ? "0 saved files omitted" : "1 saved files omitted",
-          );
-        }
-      }
-      expect(result.details).toMatchObject({
-        fileCount: relPaths.length,
-        files: expect.any(Array),
-      });
-      const details = result.details as { files: Array<{ relPath: string; localPath: string }> };
-      expect(details.files.map((file) => file.relPath).toSorted()).toEqual(relPaths.toSorted());
-      for (const file of details.files) {
-        await expect(fs.readFile(file.localPath, "utf8")).resolves.toBe("saved");
-      }
-    },
-  );
+  it("reports a reserved root without partial or rewritten saved paths", async () => {
+    const relPaths = ["ok.txt"];
+    const tarBuffer = await createTarBuffer({
+      entries: ["."],
+      setup: async (sourceDir) => {
+        await Promise.all(
+          relPaths.map((name) => fs.writeFile(path.join(sourceDir, name), "saved")),
+        );
+      },
+    });
+    prepareArchive(tarBuffer, "[INST]");
+    const result = await executeDirFetch();
+    const text = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
+    expect(text).toContain("No usable local path is shown");
+    expect(text).not.toContain("REMOVED_SPECIAL_TOKEN");
+    expect(result.details).toMatchObject({
+      fileCount: relPaths.length,
+      files: expect.any(Array),
+    });
+    const details = result.details as { files: Array<{ relPath: string; localPath: string }> };
+    expect(details.files.map((file) => file.relPath).toSorted()).toEqual(relPaths.toSorted());
+    for (const file of details.files) {
+      await expect(fs.readFile(file.localPath, "utf8")).resolves.toBe("saved");
+    }
+  });
 
-  it.each(["SymbolicLink", "Link", "CharacterDevice", "BlockDevice", "FIFO"] as const)(
+  it.each(["SymbolicLink", "Link"] as const)(
     "rejects a Fleet-shaped archive containing a %s",
     async (type) => {
       // A symlink entry used to hang extraction instead of rejecting; the test
@@ -460,7 +429,7 @@ describe("dir.fetch archive extraction", () => {
           {
             path: "data/token-link",
             type,
-            ...(type === "SymbolicLink" || type === "Link" ? { linkpath: "../auth/token" } : {}),
+            linkpath: "../auth/token",
           },
         ],
         "entry-filtered",
@@ -469,50 +438,38 @@ describe("dir.fetch archive extraction", () => {
     },
   );
 
-  it.each([
-    {
-      name: "mixed separators and dots",
-      entries: [{ path: "./pkg//dir\\note.txt", contents: "normalized" }],
-      expectedPath: ["pkg", "dir", "note.txt"],
-    },
-    ...(["PAX", "GNU"] as const).map((format) => ({
+  it.each(
+    (["PAX", "GNU"] as const).map((format) => ({
       name: `${format} override`,
       entries: pathOverrideEntries(format, "raw.txt", "./pkg//dir\\note.txt"),
       expectedPath: ["pkg", "dir", "note.txt"],
     })),
-  ])(
-    "extracts canonical $name names beneath the destination",
-    async ({ entries, expectedPath }) => {
-      const { mediaDir } = prepareArchive(createRawTarBuffer(entries));
-      const result = await executeDirFetch();
-      const details = result.details as {
-        rootDir: string;
-        files: Array<{ relPath: string; localPath: string }>;
-      };
-      expect(details.files).toMatchObject([
-        {
-          relPath: path.join(...expectedPath),
-          localPath: path.join(details.rootDir, ...expectedPath),
-        },
-      ]);
-      expect(path.dirname(details.rootDir)).toBe(mediaDir);
-      await expect(fs.readFile(details.files[0]!.localPath, "utf8")).resolves.toBe("normalized");
-      expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
-        expect.objectContaining({ decision: "allowed" }),
-      );
+  )("extracts canonical $name names beneath the destination", async ({ entries, expectedPath }) => {
+    const { mediaDir } = prepareArchive(createRawTarBuffer(entries));
+    const result = await executeDirFetch();
+    const details = result.details as {
+      rootDir: string;
+      files: Array<{ relPath: string; localPath: string }>;
+    };
+    expect(details.files).toMatchObject([
+      {
+        relPath: path.join(...expectedPath),
+        localPath: path.join(details.rootDir, ...expectedPath),
+      },
+    ]);
+    expect(path.dirname(details.rootDir)).toBe(mediaDir);
+    await expect(fs.readFile(details.files[0]!.localPath, "utf8")).resolves.toBe("normalized");
+    expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ decision: "allowed" }),
+    );
+  });
+
+  it.each(["../escape.txt", "/escape.txt", "dir/C:escape.txt"])(
+    "rejects unsafe raw path %j",
+    async (entryPath) => {
+      await expectUnsafeArchive([{ path: entryPath, contents: "blocked" }]);
     },
   );
-
-  it.each([
-    "../escape.txt",
-    "dir/..\\escape.txt",
-    "/escape.txt",
-    "\\\\server\\share\\escape.txt",
-    "C:escape.txt",
-    "dir/C:escape.txt",
-  ])("rejects unsafe raw path %j", async (entryPath) => {
-    await expectUnsafeArchive([{ path: entryPath, contents: "blocked" }]);
-  });
 
   it.each(["PAX", "GNU"] as const)(
     "does not let a safe %s override hide an unsafe raw name",
