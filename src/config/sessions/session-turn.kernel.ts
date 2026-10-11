@@ -1,11 +1,12 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
   applySessionGoalOperation,
+  prepareSessionTurnGoalMessage,
+} from "./goals-operation-policy.js";
+import {
   readSessionGoalOperationReceipt,
   writeSessionGoalOperationReceipt,
 } from "./goals-operations.js";
-import type { SessionTranscriptTurnMutation } from "./goals-operations.types.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readQualifiedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
@@ -308,27 +309,5 @@ export function sqliteSessionTranscriptTurnRebound(
     rejectedReason: "session-rebound",
     sessionEntry: selected?.entry,
     sessionFile,
-  };
-}
-
-export function prepareSessionTurnGoalMessage(
-  message: unknown,
-  mutation: SessionTranscriptTurnMutation | undefined,
-  goalId: string | undefined,
-): unknown {
-  if (!mutation || !goalId || !isRecord(message) || message.role !== "user") {
-    return message;
-  }
-  return {
-    ...message,
-    __openclaw: {
-      ...(isRecord(message["__openclaw"]) ? message["__openclaw"] : {}),
-      intent: {
-        kind: mutation.operation.action === "start" ? "session-goal-start" : "session-goal-resume",
-        version: 1,
-        goalId,
-        operationId: mutation.operation.operationId,
-      },
-    },
   };
 }
