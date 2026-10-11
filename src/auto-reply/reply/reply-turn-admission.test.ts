@@ -15,6 +15,8 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
+  describeCompetingSessionWorkAdmissions,
+  getSessionWorkAdmissionRelease,
   getTerminalSessionWorkAdmissionRelease,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
@@ -313,6 +315,38 @@ it.each([true, false])(
     admitted.complete();
   },
 );
+it("keeps drain attribution redacted while a competing admission holds the fence", async ({
+  signal,
+}) => {
+  // #167078: the rollover drain timeout now embeds a blocking-owner summary.
+  // The summary must carry the owner kind and state without ever leaking raw
+  // session identifiers into errors and logs.
+  const storePath = store();
+  const owner = owned(await admit({ storePath, expectedSessionId: sessionId }));
+  const heldSummary = describeCompetingSessionWorkAdmissions({
+    scope: storePath,
+    identities: [sessionKey, sessionId],
+  });
+  expect(heldSummary).toContain("reply-turn");
+  expect(heldSummary).toContain("phase=acquired");
+  expect(heldSummary).not.toContain(sessionKey);
+  expect(heldSummary).not.toContain(sessionId);
+  const release = getSessionWorkAdmissionRelease({
+    scope: storePath,
+    identities: [sessionKey, sessionId],
+  });
+  if (!release) {
+    throw new Error("Reply admission release not registered");
+  }
+  owner.complete();
+  await withinTest(release, signal);
+  expect(
+    describeCompetingSessionWorkAdmissions({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+    }),
+  ).toBe("no competing admission held");
+});
 it("schedules released recovery only after retained admission exits", async () => {
   const storePath = store(interruptedEntry());
   const blocker = operation();

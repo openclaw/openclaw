@@ -85,6 +85,7 @@ import {
 import { recordSessionCreated } from "../../sessions/session-created.js";
 import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+  describeCompetingSessionWorkAdmissions,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -321,8 +322,15 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
           timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
         });
         if (!drained) {
+          // Surface who is still holding the fence so the blocking owner is
+          // attributable instead of a bare fixed-timeout failure (#167078).
           throw new Error(
-            `timed out draining work before reply session rollover: ${candidate.sessionKey}`,
+            `timed out draining work before reply session rollover: ${candidate.sessionKey} (${describeCompetingSessionWorkAdmissions(
+              {
+                scope: attemptContext.storePath,
+                identities,
+              },
+            )})`,
           );
         }
         if (candidate.resetTriggered) {

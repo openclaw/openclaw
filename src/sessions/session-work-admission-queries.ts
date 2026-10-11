@@ -6,6 +6,11 @@ import {
 type ReleasableSessionWorkAdmission = {
   phase: "pending" | "acquired";
   owner?: symbol;
+  interrupted?: Error;
+  /** Wall-clock admission start; drain diagnostics report blocking age from it. */
+  admittedAtMs?: number;
+  /** Short owner kind for redacted drain diagnostics (e.g. "reply-turn"). */
+  label?: string;
   released: Promise<void>;
   isSettling?: () => boolean;
 };
@@ -118,6 +123,37 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
     );
   }
 
+  /**
+   * Redacted summary of the competing admissions currently blocking a drain:
+   * owner kind, phase, interrupt state, and age. Never includes raw session
+   * identifiers, so it is safe to embed in thrown errors and logs (#167078).
+   */
+  function describeCompetingSessionWorkAdmissions(
+    params: SessionWorkAdmissionReleaseParams,
+  ): string {
+    const current = currentAdmissions();
+    const blocking = collectSessionWorkAdmissions(
+      normalizeSessionIdentities(params.scope, params.identities),
+      (admission) => admission.phase === "acquired" && !current?.has(admission),
+    );
+    if (blocking.size === 0) {
+      return "no competing admission held";
+    }
+    const summaries = [...blocking]
+      .slice(0, 4)
+      .map((admission) =>
+        [
+          admission.label ?? admission.owner?.description ?? "unnamed",
+          `phase=${admission.phase}`,
+          `interrupted=${admission.interrupted !== undefined}`,
+          ...(admission.admittedAtMs === undefined
+            ? []
+            : [`ageMs=${Math.max(0, Date.now() - admission.admittedAtMs)}`]),
+        ].join(","),
+      );
+    return `${blocking.size} competing admission(s): ${summaries.join("; ")}`;
+  }
+
   /** Capture terminal owners without waiting on a live turn or a later successor. */
   function getTerminalSessionWorkAdmissionRelease(
     params: SessionWorkAdmissionReleaseParams,
@@ -143,6 +179,7 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
     getSessionWorkAdmissionRelease,
     getSessionWorkAdmissionOwnerRelease,
     getCompetingSessionWorkAdmissionRelease,
+    describeCompetingSessionWorkAdmissions,
     getTerminalSessionWorkAdmissionRelease,
   };
 }

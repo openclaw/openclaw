@@ -252,6 +252,7 @@ export async function admitReplyTurn(
                 (operation.result !== null || hasCommittedReplyOperationOutcome(operation)),
               resolveGatewayContext,
               identities: [params.sessionKey],
+              label: "reply-turn",
               storeWriterIdentities:
                 parseAgentSessionKey(params.sessionKey) &&
                 normalizeStoreSessionKey(params.sessionKey) === params.sessionKey
@@ -603,6 +604,8 @@ export async function admitReplyTurn(
             // Keep immutable store correlation after releasing only this admission's lease.
             operationAdmission.lease = undefined;
             // Keep reset/delete behind durable owner release and its writer lock.
+            // When this wait loses a same-key write contention, the rollover
+            // drain timeout now reports the redacted blocking owner (#167078).
             void Promise.all([releaseRecoveryOwner(), releaseWorkerDatabaseClaim?.()]).then(
               ([pendingTarget]) => {
                 admission.release();
