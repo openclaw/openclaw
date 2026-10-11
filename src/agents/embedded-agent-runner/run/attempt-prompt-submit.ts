@@ -79,6 +79,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   images: ImageContent[];
   leasedSteering?: SteeringLease;
   modelPrompt: string;
+  modelPromptProvenance?: EmbeddedRunAttemptParams["inputProvenance"];
   onFinalPromptText: (prompt: string) => void;
   assertHostActive?: () => void;
   getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
@@ -285,6 +286,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     session: activeSession,
     transcriptPrompt: input.transcriptPrompt,
     modelPrompt: input.modelPrompt,
+    modelPromptProvenance: input.modelPromptProvenance,
     prependContext: input.prependContext,
     appendContext: input.appendContext,
     shouldCapturePrompt: () => captureCurrentPromptForModel,

@@ -410,6 +410,7 @@ export async function runEmbeddedAttemptPromptPhase(
         images: imageResult.images,
         ...(leasedSteering ? { leasedSteering } : {}),
         modelPrompt: promptContext.promptForModel,
+        modelPromptProvenance: promptContext.modelPromptProvenance,
         onFinalPromptText: (prompt) => {
           promptState.finalPromptText = prompt;
         },

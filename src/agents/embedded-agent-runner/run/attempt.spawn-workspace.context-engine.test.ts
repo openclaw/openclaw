@@ -9,11 +9,15 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
+import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { sumToolResultTextChars } from "../tool-result-context-guard.test-support.js";
 import {
   completedStream,
+  capturePrompt,
+  doneMessage,
+  signedAssistant,
   contextEngineInfo,
   createTestContextEngine,
   expectFields,
@@ -23,10 +27,8 @@ import {
   requireRecords,
   runtimeContextMessage,
   useContextEngineAttemptHarness,
-  type ContextEngineAttemptOptions as AttemptOptions,
   type MockCallSource,
 } from "./attempt-context-engine.test-support.js";
-import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import {
   createDefaultEmbeddedSession,
   createContextEngineBootstrapAndAssemble,
@@ -36,49 +38,9 @@ function useHooks(hooks: Parameters<typeof createHookRunnerWithRegistry>[0]) {
   hoisted.getGlobalHookRunnerMock.mockReturnValue(createHookRunnerWithRegistry(hooks).runner);
 }
 const embeddedSessionId = "embedded-session";
-const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
 
 const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
 const { hoisted, runAttempt, tempPaths } = useContextEngineAttemptHarness(sessionKey);
-
-function capturePrompt(
-  transform: boolean | "preprocessed" = false,
-  assistant: unknown = doneMessage,
-) {
-  const seen: {
-    prompt?: string;
-    messages?: unknown[];
-    modelMessages?: unknown[];
-    systemPrompt?: string;
-  } = {};
-  const sessionPrompt: NonNullable<AttemptOptions["sessionPrompt"]> = async (session, prompt) => {
-    seen.prompt = prompt;
-    seen.messages = [...session.messages];
-    seen.systemPrompt = session.agent.state.systemPrompt;
-    if (transform) {
-      const transformContext = (
-        session.agent as {
-          transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
-        }
-      ).transformContext;
-      const messages = await transformContext?.([
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: transform === "preprocessed" ? `session preprocessed\n\n${prompt}` : prompt,
-            },
-          ],
-          timestamp: 1,
-        },
-      ]);
-      seen.modelMessages = messages && normalizeMessagesForLlmBoundary(messages);
-    }
-    session.messages = [...session.messages, assistant];
-  };
-  return { seen, sessionPrompt };
-}
 
 function installPromptHook(prependContext: string, appendContext: string) {
   useHooks([
@@ -87,26 +49,6 @@ function installPromptHook(prependContext: string, appendContext: string) {
       handler: vi.fn(async () => ({ prependContext, appendContext })),
     },
   ]);
-}
-
-function signedAssistant(
-  thinking: string,
-  thinkingSignature: string,
-  text: string,
-  timestamp: number,
-) {
-  return {
-    role: "assistant",
-    content: [
-      { type: "thinking", thinking, thinkingSignature },
-      { type: "text", text },
-    ],
-    stopReason: "stop",
-    api: "anthropic-messages",
-    provider: "anthropic",
-    model: "claude-sonnet-4-6",
-    timestamp,
-  } as AgentMessage;
 }
 
 type TrajectoryEvent = { type?: string; data?: Record<string, unknown> };
@@ -686,9 +628,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ).toBe(false);
   });
 
-  it.each([true, "preprocessed"] as const)(
-    "keeps hook prompt context visible while hiding inter-session provenance (%s)",
-    async (transform) => {
+  it.each([true, "preprocessed", "preprocessed-canonical"] as const)(
+    "keeps hook context and inter-session provenance in model text (%s)",
+    async (mode) => {
+      const transform = mode === true ? true : "preprocessed";
       hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
       const recalledMemoryContext = [
         "<relevant-memories>",
@@ -696,7 +639,16 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         "</relevant-memories>",
       ].join("\n");
       installPromptHook(recalledMemoryContext, "dynamic hook tail");
-      const { seen, sessionPrompt } = capturePrompt(transform);
+      const canonicalPrompt = annotateInterSessionPromptText("visible ask", {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:discord:source",
+        sourceTool: "sessions_send",
+      });
+      const { seen, sessionPrompt } = capturePrompt(
+        transform,
+        doneMessage,
+        mode === "preprocessed-canonical" ? canonicalPrompt : undefined,
+      );
 
       const result = await runAttempt({
         attemptOverrides: {
@@ -726,7 +678,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       if (transform === "preprocessed") {
         expect(JSON.stringify(seen.modelMessages)).toContain("session preprocessed");
       }
-      expect(JSON.stringify(seen.modelMessages)).not.toContain("[Inter-session message]");
+      expect(JSON.stringify(seen.modelMessages)).toMatch(/\[Inter-session message\].*isUser=false/);
+      expect(JSON.stringify(seen.modelMessages).match(/\[Inter-session message\]/g)).toHaveLength(
+        1,
+      );
+      expect(JSON.stringify(seen.modelMessages)).toContain("visible ask");
       expect(JSON.stringify(seen.modelMessages)).not.toContain("secret runtime context");
       const runtimeContext = runtimeContextMessage(seen.messages);
       expect(seen.systemPrompt).not.toContain("[Inter-session message]");

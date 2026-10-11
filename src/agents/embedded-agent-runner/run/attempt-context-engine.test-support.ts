@@ -1,3 +1,4 @@
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -115,4 +116,77 @@ export function useContextEngineAttemptHarness(sessionKey: string) {
         ...options,
       }),
   };
+}
+
+export function signedAssistant(
+  thinking: string,
+  thinkingSignature: string,
+  text: string,
+  timestamp: number,
+) {
+  return {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking, thinkingSignature },
+      { type: "text", text },
+    ],
+    stopReason: "stop",
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    timestamp,
+  } as AgentMessage;
+}
+
+export const doneMessage = {
+  role: "assistant",
+  content: "done",
+  timestamp: 2,
+} as unknown as AgentMessage;
+
+export function capturePrompt(
+  transform: boolean | "preprocessed" = false,
+  assistant: unknown = doneMessage,
+  preprocessedPrompt?: string,
+) {
+  const seen: {
+    prompt?: string;
+    messages?: unknown[];
+    modelMessages?: unknown[];
+    systemPrompt?: string;
+  } = {};
+  const sessionPrompt: NonNullable<ContextEngineAttemptOptions["sessionPrompt"]> = async (
+    session,
+    prompt,
+  ) => {
+    seen.prompt = prompt;
+    seen.messages = [...session.messages];
+    seen.systemPrompt = session.agent.state.systemPrompt;
+    if (transform) {
+      const transformContext = (
+        session.agent as {
+          transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
+        }
+      ).transformContext;
+      const messages = await transformContext?.([
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text:
+                transform === "preprocessed"
+                  ? `session preprocessed\n\n${preprocessedPrompt ?? prompt}`
+                  : prompt,
+            },
+          ],
+          timestamp: 1,
+        },
+      ]);
+      const { normalizeMessagesForLlmBoundary } = await import("./attempt-llm-boundary.js");
+      seen.modelMessages = messages && normalizeMessagesForLlmBoundary(messages);
+    }
+    session.messages = [...session.messages, assistant];
+  };
+  return { seen, sessionPrompt };
 }
