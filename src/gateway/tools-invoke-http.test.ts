@@ -1230,6 +1230,22 @@ describe("tools.invoke Gateway RPC", () => {
     expect(error?.message).toBe('agent "other" does not match session key agent "main"');
   });
 
+  it("accepts a non-canonical spelling of the session agent id", async () => {
+    allowAgentsListForMain();
+
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      args: {},
+      sessionKey: "main",
+      agentId: "Main",
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.ok).toBe(true);
+    expect(call?.[1]?.toolName).toBe("agents_list");
+    expect(call?.[1]?.output).toEqual({ ok: true, result: [] });
+  });
+
   it("rejects malformed params at the RPC boundary", async () => {
     const call = await invokeToolsRpc({ name: "" });
 

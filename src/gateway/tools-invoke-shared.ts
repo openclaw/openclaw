@@ -440,7 +440,7 @@ async function invokeGatewayToolWithSignal(
     ({ agentId, tools, workspaceDir } = await resolveTools(false));
   }
   const requestedAgentId = normalizeOptionalString(params.input.agentId);
-  if (requestedAgentId && agentId && requestedAgentId !== agentId) {
+  if (requestedAgentId && agentId && selectedAgentId !== agentId) {
     return failure(
       400,
       "invalid_request",
