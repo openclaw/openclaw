@@ -7,7 +7,7 @@ import type { SessionGoal } from "../../api/types.ts";
 import { renderComposerMenu } from "../../components/composer-menu.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { createComposerProps } from "./chat-composer.test-support.ts";
+import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
 import { renderAttachmentPreview } from "./components/chat-attachments.ts";
 import { ChatGoal, clearGoalElapsedTimers } from "./components/chat-composer-goal.tsx";
 import { resetChatComposerState } from "./components/chat-composer-state.ts";
@@ -45,7 +45,7 @@ describe("composer overflow presentation", () => {
       goalStyles,
     ].join("\n");
     document.head.append(styles);
-    container = document.createElement("div");
+    container = createComposerContainer();
     container.className = "agent-chat__input";
     container.style.width = "760px";
     document.body.append(container);

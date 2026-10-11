@@ -3,7 +3,11 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
 
 afterEach(() => resetComposerFixture());
@@ -40,7 +44,9 @@ it("keeps the context popover open and its usage link focused during live usage 
       },
     }),
   );
-  const view = mountSolid(() => <ChatComposer {...current()} />);
+  const view = mountSolid(() => <ChatComposer {...current()} />, {
+    container: document.body.appendChild(createComposerContainer()),
+  });
   const details = view.container.querySelector<HTMLDetailsElement>(".context-usage details");
   const usageLink = view.container.querySelector<HTMLAnchorElement>("[data-chat-provider-usage]");
   if (!details || !usageLink) {

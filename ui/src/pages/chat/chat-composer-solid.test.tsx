@@ -4,12 +4,22 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
 import { renderComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import { ChatComposer } from "./components/chat-composer.tsx";
 import { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(() => resetComposerFixture());
+
+function mountComposer(view: Parameters<typeof mountSolid>[0]) {
+  return mountSolid(view, {
+    container: document.body.appendChild(createComposerContainer()),
+  });
+}
 
 it("retains the native input and IME draft across external composer updates", () => {
   let draft = "hello";
@@ -23,7 +33,7 @@ it("retains the native input and IME draft across external composer updates", ()
       onDraftChange,
     }),
   );
-  const view = mountSolid(() => <ChatComposer {...current()} />);
+  const view = mountComposer(() => <ChatComposer {...current()} />);
   const textarea = view.container.querySelector("textarea")!;
   const nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!;
   const setValue = vi.spyOn(HTMLTextAreaElement.prototype, "value", "set");
@@ -70,7 +80,7 @@ it("ends the old IME scope without writing into a newly selected session", () =>
       onDraftChange: onOldDraftChange,
     }),
   );
-  const view = mountSolid(() => <ChatComposer {...current()} />);
+  const view = mountComposer(() => <ChatComposer {...current()} />);
   const oldInput = view.container.querySelector("textarea")!;
   oldInput.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
   oldInput.value = "unfinished composition";
@@ -107,7 +117,7 @@ it("updates follow-up controls during IME without replacing or writing the input
     followUpMode: "queue",
     onDraftChange,
   });
-  const view = mountSolid(() => <ChatComposer {...props} />);
+  const view = mountComposer(() => <ChatComposer {...props} />);
   const textarea = view.container.querySelector("textarea")!;
   expect(view.container.querySelector(".chat-send-btn--stop")).not.toBeNull();
   textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
@@ -127,7 +137,7 @@ it("updates follow-up controls during IME without replacing or writing the input
 it("keeps the open permission picker through parent updates", () => {
   const permissionPicker = { canSelectFull: true, onSelect: vi.fn() };
   const [current, setCurrent] = createSignal(createComposerProps({ permissionPicker }));
-  const view = mountSolid(() => <ChatComposer {...current()} />);
+  const view = mountComposer(() => <ChatComposer {...current()} />);
   const picker = view.container.querySelector<HTMLElement & { open: boolean }>(
     ".chat-controls__permission-picker",
   )!;

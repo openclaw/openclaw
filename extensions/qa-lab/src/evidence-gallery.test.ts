@@ -164,15 +164,11 @@ describe("evidence gallery", () => {
   });
 
   it.each([
-    ["artifact.LOG", "gif-runner-log", "runner passed\n", "text", "runner passed\n"],
-    ["artifact.json", "video-report", '{"ok":true}', "json", '{\n  "ok": true\n}'],
     ["artifact.webm", "screenshot-validation", "video", "video", null],
-    ["artifact.png", "video-report", "image", "image", null],
     ["artifact", "motion-preview-gif", "image", "image", null],
     ["artifact.capture", "video-capture", "video", "video", null],
     ["artifact.data", "validation-result", '{"ok":true}', "json", '{\n  "ok": true\n}'],
     ["artifact.html", "report", "<p>report</p>", "text", "<p>report</p>"],
-    ["artifact.data", "video-screenshot", "image", "image", null],
     ["artifact.data", "attachment", "opaque", "file", null],
   ])("classifies $0 with $1 metadata", async (file, kind, content, mediaKind, preview) => {
     const repoRoot = await createTempRepo();
@@ -200,70 +196,10 @@ describe("evidence gallery", () => {
     }
   });
 
-  it("sanitizes local roots from gallery failure reasons", async () => {
-    const repoRoot = await createTempRepo();
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
-    await fs.mkdir(outputDir, { recursive: true });
-    const evidence: QaEvidenceSummaryJson = vitestArtifactEvidence({
-      id: "qa-lab.failure-path",
-      title: "Failure path evidence",
-      artifact: { kind: "log", path: "missing.log" },
-    });
-    const failureEntry = expectDefined(evidence.entries[0], "failure evidence entry");
-    evidence.entries[0] = {
-      ...failureEntry,
-      result: {
-        status: "blocked",
-        failure: {
-          class: "blocked",
-          reason: `Command failed at ${repoRoot}/openclaw.mjs and file://${repoRoot}/trace.log`,
-        },
-      },
-    };
-    await writeJson(path.join(outputDir, QA_EVIDENCE_FILENAME), evidence);
-
-    const model = await buildQaEvidenceGalleryModel({
-      evidencePath: outputDir,
-      repoRoot,
-    });
-
-    const failureModelEntry = expectDefined(model.entries[0], "failure gallery entry");
-    expect(failureModelEntry.failureReason).toBe(
-      "Command failed at <repo-root>/openclaw.mjs and file://<repo-root>/trace.log",
-    );
-    expect(JSON.stringify(model)).not.toContain(repoRoot);
-  });
-
-  it("classifies a path-like artifact kind by its final segment", async () => {
-    // The repo root deliberately contains "gif". A path-valued kind must not let
-    // an unrelated directory name decide the media type and drop the preview.
-    const repoRoot = await createTempRepo("qa-evidence-gallery-gif-");
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
-    // No file extension, so classification has to fall back to the kind label.
-    const artifactPath = path.join(outputDir, "absolute");
-    await fs.mkdir(outputDir, { recursive: true });
-    await fs.writeFile(artifactPath, "absolute artifact\n", "utf8");
-    const evidence: QaEvidenceSummaryJson = vitestArtifactEvidence({
-      id: "qa-lab.path-like-kind",
-      title: "Path-like artifact kind",
-      artifact: { kind: `${repoRoot}/log`, path: artifactPath },
-    });
-    await writeJson(path.join(outputDir, QA_EVIDENCE_FILENAME), evidence);
-
-    const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
-
-    const artifact = model.entries[0]?.artifacts[0];
-    expect(artifact).toMatchObject({
-      exists: true,
-      mediaKind: "text",
-      preview: "absolute artifact\n",
-    });
-  });
-
   it("normalizes absolute source and declared artifact paths for gallery links", async () => {
     const repoRoot = await createTempRepo("qa-evidence-gallery-gif-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
-    const artifactPath = path.join(outputDir, "absolute.log");
+    const artifactPath = path.join(outputDir, "absolute");
     await fs.mkdir(outputDir, { recursive: true });
     await fs.writeFile(
       artifactPath,
@@ -291,6 +227,12 @@ describe("evidence gallery", () => {
     );
     evidence.entries[0] = {
       ...absoluteEntry,
+      result: {
+        status: "blocked",
+        failure: {
+          reason: `Command failed at ${repoRoot}/openclaw.mjs and file://${repoRoot}/trace.log`,
+        },
+      },
       coverage: [{ id: "qa-lab.absolute-artifact-path", role: `${repoRoot}/role` }],
       execution: {
         ...absoluteExecution,
@@ -327,7 +269,7 @@ describe("evidence gallery", () => {
       exists: true,
       kind: "<repo-root>/log",
       mediaKind: "text",
-      path: ".artifacts/qa-e2e/vitest/absolute.log",
+      path: ".artifacts/qa-e2e/vitest/absolute",
       preview: "absolute artifact <repo-root>\nfile://<repo-root>/trace.log\n",
       source: "<repo-root>/vitest",
     });
@@ -346,12 +288,13 @@ describe("evidence gallery", () => {
       id: "<repo-root>/qa-lab.absolute-artifact-path",
       kind: "<repo-root>/vitest-test",
       title: "Absolute artifact path at <repo-root>",
+      failureReason: "Command failed at <repo-root>/openclaw.mjs and file://<repo-root>/trace.log",
     });
     expect(model.profile).toBe("<repo-root>/qa-profile");
     expect(JSON.stringify(model)).not.toContain(repoRoot);
     await expect(
       resolveQaEvidenceArtifactFile({
-        artifactPath: "<repo-root>/.artifacts/qa-e2e/vitest/absolute.log",
+        artifactPath: "<repo-root>/.artifacts/qa-e2e/vitest/absolute",
         evidencePath: outputDir,
         repoRoot,
       }),

@@ -12,7 +12,10 @@ import {
   PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   parsePackageDistContentInventory,
 } from "../../lib/package-dist-inventory-contract.mts";
-import { isUpdateCompatibilityChunk } from "../../lib/update-compat-contract.mjs";
+import {
+  isUpdateCompatibilityChunk,
+  supportsUpdateSchemas,
+} from "../../lib/update-compat-contract.mjs";
 import { readJson } from "./fixtures/common.mjs";
 
 // Frozen candidates predating the recorded inventory retain their original fixture contract.
@@ -35,9 +38,13 @@ function readFirstHopReleases(packageRoot) {
 }
 
 export function listFirstHopSourceVersions(packageRoot, filter = "") {
-  const versions = readFirstHopReleases(packageRoot).map((release) => release.version);
+  const releases = readFirstHopReleases(packageRoot);
+  const target = readJson(path.join(packageRoot, "package.json")).openclaw?.schemaVersions;
+  const versions = releases
+    .filter((release) => supportsUpdateSchemas(release.schemaVersions, target))
+    .map((release) => release.version);
   if (
-    versions.length === 0 ||
+    releases.length === 0 ||
     new Set(versions).size !== versions.length ||
     versions.some(
       (version) =>
@@ -49,8 +56,9 @@ export function listFirstHopSourceVersions(packageRoot, filter = "") {
   const selected = filter.split(/[\s,]+/u).filter(Boolean);
   const unrecorded = selected.filter((version) => !versions.includes(version));
   if (unrecorded.length > 0) {
+    const recorded = releases.some((release) => unrecorded.includes(release.version));
     throw new Error(
-      `first-hop sources are not recorded in the candidate: ${unrecorded.join(", ")}`,
+      `first-hop sources are ${recorded ? "unsupported by" : "not recorded in"} the candidate: ${unrecorded.join(", ")}`,
     );
   }
   return selected.length > 0 ? versions.filter((version) => selected.includes(version)) : versions;

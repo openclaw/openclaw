@@ -18,6 +18,7 @@ import {
   renderAttachmentHarness,
   renderSettledPastedTextAttachment,
 } from "./chat-attachment-picker.test-support.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps, createPasteEvent, requireElement } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
@@ -36,7 +37,7 @@ afterEach(() => {
 });
 
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]>) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   render(
     renderChat(
       createChatProps({
@@ -267,7 +268,7 @@ describe("chat attachment reading", () => {
 
   it("waits for an in-flight clipboard attachment before accepting an immediate send", async () => {
     const readers = deferFileReaders();
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const file = new File(["attachment proof"], "proof.png", { type: "image/png" });
     const draft = "Send the attachment with this message";
     let attachments: ChatAttachment[] = [];
