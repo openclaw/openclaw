@@ -271,7 +271,7 @@ export async function withWorktreeBasePreparation<T>(
         throw error;
       }
       options.beforeRun();
-      const { branch, ...base } = selected;
+      const { branch: _branch, ...base } = selected;
       return base;
     }
   };
