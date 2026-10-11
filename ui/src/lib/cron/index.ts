@@ -26,6 +26,7 @@ import {
   parseStaggerSchedule,
   hasUnchangedCronSchedule,
   buildCronSchedule,
+  parseCronScheduleAt,
 } from "./form-schedule.ts";
 import { loadCronJobsPage } from "./jobs.ts";
 import { getCronJobPayload } from "./payload.ts";
@@ -186,8 +187,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     errors.name = "cron.errors.nameRequired";
   }
   if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    if (!Number.isFinite(ms)) {
+    if (!parseCronScheduleAt(form.scheduleAt)) {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
