@@ -69,7 +69,6 @@ export function observeSessionMaintenanceCompletion(
             : undefined;
       } else if (
         params.plan.kind === "maintenance-age" &&
-        params.plan.expected &&
         result.kind === "maintenance-age" &&
         emptyPlan &&
         accept(emptyPlan)
