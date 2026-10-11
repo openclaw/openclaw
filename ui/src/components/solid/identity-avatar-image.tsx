@@ -1,9 +1,8 @@
 import { createEffect, createMemo, onCleanup, untrack, type Accessor } from "solid-js";
 import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
-import type { IdentityAvatarView } from "../identity-avatar-view.ts";
 
 export type IdentityAvatarImageProps = {
-  view: Pick<IdentityAvatarView, "imageUrl" | "sourceUrl">;
+  view: { imageUrl: string | Promise<string | null> | null; sourceUrl?: string };
   fallbackSelector: string;
   class?: string;
   alt?: string;
@@ -22,7 +21,7 @@ export function setIdentityAvatarState(
 
 /** An image owns loaded/failed; frames without an image still need their fallback. */
 export function identityAvatarState(
-  view: Accessor<Pick<IdentityAvatarView, "imageUrl" | "pending">>,
+  view: Accessor<IdentityAvatarImageProps["view"] & { pending: boolean }>,
 ) {
   let frame: HTMLElement;
   createEffect(view, (value) => {

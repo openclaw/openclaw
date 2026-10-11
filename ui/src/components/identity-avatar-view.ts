@@ -32,10 +32,8 @@ import { AVATAR_HAT_SPRITES } from "./theme-flair-sprites.ts";
 
 type IdentityAvatarFallback = Extract<ResolvedIdentityAvatar, { kind: "initials" }>;
 
-export type IdentityAvatarView = {
+export type IdentityAvatarView = IdentityAvatarImageProps["view"] & {
   fallback: IdentityAvatarFallback;
-  imageUrl: string | Promise<string | null> | null;
-  sourceUrl?: string;
   pending: boolean;
 };
 
