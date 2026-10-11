@@ -292,28 +292,28 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view.tsx",
       "text": "memory-wiki"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view.tsx",
       "text": "plugins.entries.memory-wiki.enabled = true"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view.tsx",
       "text": "z"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
+      "path": "ui/src/pages/agents/memory/view.tsx",
       "text": "Z"
     },
     {
