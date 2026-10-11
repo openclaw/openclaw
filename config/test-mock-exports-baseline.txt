@@ -3669,7 +3669,6 @@
 ["src/auto-reply/reply/agent-runner.final-media-runreplyagent.test.ts","./agent-runner-memory.js","34a046b92ff351b49882431903696c5e30ec355ffd6fcb6d9faf8b9e4d4131cc",1]
 ["src/auto-reply/reply/agent-runner.final-media-runreplyagent.test.ts","./session-updates.js","a398fcf2ce1aedf4215ecc2ea96134b48f611304287c0342e54249b0e6847d30",1]
 ["src/auto-reply/reply/agent-runner.final-media-runreplyagent.test.ts","./session-usage.js","094ee1fa3182f3ee62981f82ff53c2631df28ee5ac59bfa33f48a84b3a124c7d",1]
-["src/auto-reply/reply/agent-runner.media-paths.test-harness.ts","../../agents/context.js","2edba613de49450743025d02222e202d9b0901b49b183d717ccb73bb77fb9345",1]
 ["src/auto-reply/reply/agent-runner.media-paths.test-harness.ts","../../agents/embedded-agent-runner/runs.js","dda820b3a04be91c64db0f757309b25ae7907589b4ae2135fab9444c796ca3dc",1]
 ["src/auto-reply/reply/agent-runner.media-paths.test-harness.ts","../../agents/embedded-agent.js","a53856618e8d2ef4c97529796a9cedb3a218125fe0d3e6c8629d9897012e262d",1]
 ["src/auto-reply/reply/agent-runner.media-paths.test-harness.ts","../../agents/model-fallback-attempt.js","69b4ee12bd76eeff3aec2c011f9a00c4c4aa578996097c3a355f9b727f61a540",1]

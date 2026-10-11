@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { ModelContextTokenProjection } from "../../agents/context-resolution.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../agents/embedded-agent-runner/runs.js";
 import {
   runInitialModelFallbackAttempt,
@@ -100,8 +101,21 @@ vi.mock("../../agents/model-runtime-aliases.js", async () => {
   };
 });
 
+// mock-isolation: Keep catalog discovery outside the media delivery fixture.
 vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => 200_000,
+  resolveModelContextTokenProjection: (): ModelContextTokenProjection => ({
+    contextTokens: 200_000,
+    authoredContextTokens: undefined,
+    configuredContextTokenLimits: undefined,
+    source: "model",
+  }),
+  resolveContextTokenBudgetForModel: async (): Promise<ModelContextTokenProjection> => ({
+    contextTokens: 200_000,
+    authoredContextTokens: undefined,
+    configuredContextTokenLimits: undefined,
+    source: "model",
+  }),
 }));
 
 vi.mock("../../infra/agent-events.js", async () => {
