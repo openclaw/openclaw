@@ -408,7 +408,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
     );
     return owners.length === 1 ? owners[0] : null;
   },
-  registerSessionBindingAdapter: vi.fn(),
+  registerSessionBindingAdapterV2: vi.fn(),
   unregisterSessionBindingAdapter: vi.fn(),
   resolveThreadBindingConversationIdFromBindingId: (bindingId: string) =>
     bindingId.split(":").at(-1) ?? bindingId,

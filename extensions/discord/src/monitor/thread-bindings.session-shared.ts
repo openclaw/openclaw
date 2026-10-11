@@ -36,13 +36,11 @@ export function mutateBindingsForTargetSession(
 ): Promise<ThreadBindingRecord[]> {
   const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
   const managers: ThreadBindingManager[] = [];
-  const stoppingAccounts = new Set<string>();
+  const stoppingAtAdmission = new Map<string, boolean>();
   for (const [ownerAccountId, manager] of MANAGERS_BY_ACCOUNT_ID) {
     if (accountId === undefined || ownerAccountId === accountId) {
       managers.push(manager);
-      if (manager.isStopping()) {
-        stoppingAccounts.add(ownerAccountId);
-      }
+      stoppingAtAdmission.set(ownerAccountId, manager.isStopping());
     }
   }
   // Include pending binds whose target rows do not exist until their account work settles.
@@ -56,7 +54,8 @@ export function mutateBindingsForTargetSession(
           continue;
         }
         const manager = MANAGERS_BY_ACCOUNT_ID.get(existing.accountId);
-        if (stoppingAccounts.has(existing.accountId) || manager?.isStopping()) {
+        // Shutdown drains admitted work; only newly discovered owners use their current state.
+        if (stoppingAtAdmission.get(existing.accountId) ?? manager?.isStopping()) {
           throw new Error("Discord thread binding manager is stopping");
         }
       }
