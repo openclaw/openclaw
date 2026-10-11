@@ -126,8 +126,8 @@ async function mountBrowserCard() {
   return {
     card,
     copy: () =>
-      card.shadowRoot
-        ?.querySelector("wa-dropdown")
+      card
+        .querySelector("wa-dropdown")
         ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "copy-url" } } })),
   };
 }

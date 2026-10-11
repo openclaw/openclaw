@@ -6,7 +6,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
-import { useApplication } from "../../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
@@ -21,8 +21,8 @@ export const ChatSkillLearnedNotice = defineSolidBridge<{
 }>(
   "openclaw-chat-skill-learned-notice",
   (props) => {
-    const context = useApplication();
-    const gateway = projectGateway(context.gateway);
+    const context = useOptionalApplication();
+    const gateway = context && projectGateway(context.gateway);
     return (
       <Show when={props.notice} keyed>
         {(notice) => {
@@ -33,9 +33,10 @@ export const ChatSkillLearnedNotice = defineSolidBridge<{
             disposed = true;
           });
           const runUndo = () => {
-            const snapshot = context.gateway.snapshot;
+            const snapshot = context?.gateway.snapshot;
             if (
-              snapshot.phase !== "connected" ||
+              !context ||
+              snapshot?.phase !== "connected" ||
               pending ||
               undo() === "done" ||
               !canCallGatewayMethod(snapshot, "skills.workshop.undo", "operator.admin")
@@ -69,8 +70,8 @@ export const ChatSkillLearnedNotice = defineSolidBridge<{
             })();
           };
           const openSkill = (agentId: string, name: string) => {
-            context.agentSelection.set(normalizeAgentId(agentId));
-            context.navigate("skill-workshop", { search: `?skill=${encodeURIComponent(name)}` });
+            context?.agentSelection.set(normalizeAgentId(agentId));
+            context?.navigate("skill-workshop", { search: `?skill=${encodeURIComponent(name)}` });
           };
           const error = () => {
             const state = undo();
@@ -115,7 +116,7 @@ export const ChatSkillLearnedNotice = defineSolidBridge<{
                   fallback={
                     <Show
                       when={canCallGatewayMethod(
-                        gateway.read().snapshot,
+                        gateway?.read().snapshot,
                         "skills.workshop.undo",
                         "operator.admin",
                       )}

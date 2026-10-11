@@ -17,7 +17,7 @@ import { loadCompactCronJobsPage } from "../../../lib/cron/jobs.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { formatCronSchedule } from "../../../lib/presenter.ts";
-import { useApplication } from "../../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
@@ -36,7 +36,7 @@ export type ChatSummaryAutomationsElement = SolidBridgeElement<Props>;
 export const ChatSummaryAutomations = defineSolidBridge<Props>(
   "openclaw-chat-summary-automations",
   (props, host) => {
-    const context = useApplication();
+    const context = useOptionalApplication();
     const gateway = createMemo(() => props.gateway);
     const sessionKey = createMemo(() => props.sessionKey);
     const presented = createMemo(() => props.presented);

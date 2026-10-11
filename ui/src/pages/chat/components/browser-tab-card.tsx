@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import type { ControlUiLinkPreview } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
@@ -14,7 +14,7 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { loadLinkPreview } from "../../../lib/link-preview.ts";
 import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
-import { useApplication } from "../../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
@@ -30,9 +30,9 @@ type BrowserTabCardProps = {
 };
 
 function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<BrowserTabCardProps>) {
-  const application = useApplication();
+  const application = useOptionalApplication();
   const projection = projectSource<ApplicationContext | undefined, ApplicationContext | undefined>(
-    props.context ?? application,
+    untrack(() => props.context ?? application),
     {
       read: (context) => context,
       subscribe: (context, notify) => {
@@ -59,8 +59,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
     | { client: unknown; url: string; generation: number; recoveryScope: string }
     | undefined;
   let active = true;
-  const canLoadPagePreview = () => {
-    const current = context();
+  const canLoadPagePreview = (current: ApplicationContext | undefined) => {
     return Boolean(
       current?.config.current.automaticallyFetchFavicons &&
       canCallGatewayMethod(current.gateway.snapshot, "controlUi.linkPreview", "operator.read", {
@@ -68,28 +67,27 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       }),
     );
   };
-  const pagePreviewCurrent = () => {
-    const client = context()?.gateway.snapshot.client;
+  const pagePreviewCurrent = (current: ApplicationContext | undefined, url: string | undefined) => {
+    const client = current?.gateway.snapshot.client;
     return Boolean(
       pageIdentity &&
       client &&
-      canLoadPagePreview() &&
+      canLoadPagePreview(current) &&
       pageIdentity.client === client &&
-      pageIdentity.url === props.preview?.url &&
+      pageIdentity.url === url &&
       pageIdentity.generation === client.connectionGeneration &&
       pageIdentity.recoveryScope === client.recoveryScope,
     );
   };
   createEffect(
     () => [context(), props.preview, props.revision, props.latest, projection.revision()] as const,
-    () => {
-      const current = context();
+    ([current, preview, revision, latest]) => {
       const client = current?.gateway.snapshot.client;
-      const url = props.preview?.url;
-      if (!canLoadPagePreview() || !client || !url) {
+      const url = preview?.url;
+      if (!canLoadPagePreview(current) || !client || !url) {
         pageIdentity = undefined;
         setPagePreview(undefined);
-      } else if (!pagePreviewCurrent()) {
+      } else if (!pagePreviewCurrent(current, url)) {
         const identity = {
           client,
           url,
@@ -99,31 +97,29 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
         pageIdentity = identity;
         setPagePreview(undefined);
         setFailedImages(new Set());
-        void loadLinkPreview(client, url).then((preview) => {
+        void loadLinkPreview(client, url).then((loadedPreview) => {
           if (
             active &&
             host.isConnected &&
             pageIdentity === identity &&
-            pagePreviewCurrent() &&
+            pagePreviewCurrent(untrack(context), host.preview?.url) &&
             host.preview?.url === url
           ) {
-            setPagePreview(preview);
+            setPagePreview(loadedPreview);
           }
         });
       }
-      const preview = props.preview;
       const snapshot = current?.gateway.snapshot;
-      const revision = props.revision;
       if (
         !preview ||
         !current ||
         !snapshot ||
         !client ||
         !isBrowserPanelAvailable(snapshot) ||
-        !props.latest ||
+        !latest ||
         !revision
       ) {
-        if (!props.latest || !snapshot || !isBrowserPanelAvailable(snapshot)) {
+        if (!latest || !snapshot || !isBrowserPanelAvailable(snapshot)) {
           requestIdentity = undefined;
           setThumbnail(undefined);
         }
@@ -167,13 +163,13 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
   });
   const opensExternally = () => context()?.theme.settings.openLinksExternally === true;
   const openExternal = () => {
-    const url = resolveSafeExternalUrl(props.preview?.url ?? "", window.location.href);
+    const url = resolveSafeExternalUrl(host.preview?.url ?? "", window.location.href);
     if (url && !postNativeExternalLink(url)) {
       openExternalUrlSafe(url);
     }
   };
   const openPanel = () => {
-    const browserTab = readBrowserTabTarget(props.preview);
+    const browserTab = readBrowserTabTarget(host.preview);
     if (browserTab) {
       host.dispatchEvent(
         new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {
@@ -184,14 +180,14 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       );
     }
   };
-  const open = () => (opensExternally() ? openExternal() : openPanel());
+  const open = () => (untrack(opensExternally) ? openExternal() : openPanel());
   const onMenuSelect = (event: CustomEvent<{ item: { value?: string } }>) => {
-    const url = props.preview?.url;
+    const url = host.preview?.url;
     if (!url) {
       return;
     }
     if (event.detail.item.value === "copy-url") {
-      void copyToClipboard(url, () => active && props.preview?.url === url);
+      void copyToClipboard(url, () => active && host.preview?.url === url);
     } else if (event.detail.item.value === "open-new-tab") {
       openExternal();
     } else if (event.detail.item.value === "open-within-openclaw") {
@@ -210,7 +206,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       requestIdentity?.key === JSON.stringify([browserTabKey(preview), props.revision])
         ? loadedThumbnail
         : undefined;
-    const page = pagePreviewCurrent() ? loadedPage : undefined;
+    const page = pagePreviewCurrent(context(), preview.url) ? loadedPage : undefined;
     const image =
       currentImage && !failedImages().has(currentImage) ? currentImage : page?.imageDataUrl;
     let pageHost = preview.url;

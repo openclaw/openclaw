@@ -561,6 +561,7 @@ describe("browser tab card", () => {
     first.remove();
     duplicate.remove();
     older.remove();
+    await Promise.resolve();
     expect(gateway.listeners.size).toBe(0);
     const remounted = await card(gateway.context);
     await vi.waitFor(() => expect(remounted.querySelector("img")).not.toBeNull());

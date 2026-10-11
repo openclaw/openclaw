@@ -1,17 +1,15 @@
 import type { Question } from "@openclaw/gateway-protocol";
-import { ContextNotFoundError } from "@solidjs/signals";
 import { createEffect, createSignal, For, onCleanup, untrack } from "solid-js";
 import { isQuestionThumbnail } from "../../../../../packages/gateway-protocol/src/question-media.js";
 import type {
   QuestionResourceAction,
   QuestionResourceActionResult,
 } from "../../../../../packages/gateway-protocol/src/question-resource.js";
-import type { ApplicationContext } from "../../../app/context.ts";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
-import { useApplication } from "../../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { assertUploadsEnabled } from "../../../lib/uploads.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
@@ -30,15 +28,7 @@ type ResourceProps = {
 export const ChatQuestionResource = defineSolidBridge<ResourceProps>(
   "openclaw-chat-question-resource",
   (props, host) => {
-    // A standalone question still renders its choices without application capabilities.
-    let context: ApplicationContext | undefined;
-    try {
-      context = useApplication();
-    } catch (error) {
-      if (!(error instanceof ContextNotFoundError)) {
-        throw error;
-      }
-    }
+    const context = useOptionalApplication();
     const gateway = context && projectGateway(context.gateway);
     const [operationRevision, setOperationRevision] = createSignal(0);
     const isBusy = () => {
