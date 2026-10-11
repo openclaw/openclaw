@@ -191,7 +191,6 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
           lifecycleRevision: preparedEntry.lifecycleRevision,
           activeWriterRunId: preparedEntry.activeWriterRunId,
         }),
-        "read",
       );
       assertCurrent();
       resolved.assertCurrent(options.getConfig());
@@ -458,6 +457,8 @@ export const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(a
     managedWorktrees,
     resolveWorkerPlacementSessionRuntime:
       placementSessionRuntime.resolveWorkerPlacementSessionRuntime,
+    resolveWorkerPlacementSessionRuntimeAsync:
+      placementSessionRuntime.resolveWorkerPlacementSessionRuntimeAsync,
     resolveCanonicalSessionEntryFromStoreKeys:
       sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
     resolveGatewaySessionStoreTargetWithStore:

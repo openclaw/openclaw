@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { afterAll, expect, it, vi } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -16,15 +16,10 @@ const enabledBuildId = "browser-capabilities-e2e";
 const enabled = createControlUiE2eSuite({
   name: "Control UI browser capability gate enabled",
   startServer: async () => {
-    vi.stubEnv("VITE_OPENCLAW_REQUIRE_MODERN_BROWSER", "true");
-    try {
-      return await startProductionControlUiE2eServer(
-        builds.make("openclaw-browser-capabilities-"),
-        enabledBuildId,
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    return await startProductionControlUiE2eServer(
+      builds.make("openclaw-browser-capabilities-"),
+      enabledBuildId,
+    );
   },
 });
 
@@ -224,27 +219,4 @@ enabled.define(() => {
       });
     },
   );
-});
-
-const dormant = createControlUiE2eSuite({ name: "Control UI browser capability gate dormant" });
-dormant.define(() => {
-  it("keeps today's application available on older browsers until cutover", async () => {
-    await dormant.withPage({ serviceWorkers: "block", colorScheme: "light" }, async ({ page }) => {
-      await setBrowserFeatures(page, false);
-      await installMockGateway(page);
-      await page.goto(`${dormant.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor();
-      expect(await page.locator(".unsupported-browser").count()).toBe(0);
-      const frame = await takeControlUiScreenshotFrame(
-        page,
-        page.locator("openclaw-app"),
-        [composer],
-        {
-          animations: "disabled",
-        },
-      );
-      await writeFile(path.join(dormant.artifactDir, "before-dormant.png"), frame.png);
-    });
-  });
 });

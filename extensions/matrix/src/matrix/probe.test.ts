@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createMatrixClientMock = vi.fn();
+const stopWithoutPersistMock = vi.fn();
 
 vi.mock("./client.js", () => ({
   createMatrixClient: (...args: unknown[]) => createMatrixClientMock(...args),
@@ -12,7 +13,9 @@ import { probeMatrix } from "./probe.js";
 describe("probeMatrix", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stopWithoutPersistMock.mockResolvedValue(undefined);
     createMatrixClientMock.mockResolvedValue({
+      stopWithoutPersist: stopWithoutPersistMock,
       getUserId: vi.fn(async () => "@bot:example.org"),
     });
   });
@@ -37,6 +40,7 @@ describe("probeMatrix", () => {
   it("authenticates a configured userId instead of trusting the local client identity", async () => {
     createMatrixClientMock.mockImplementation(async (params: { userId?: string }) => {
       return {
+        stopWithoutPersist: stopWithoutPersistMock,
         getUserId: vi.fn(async () => {
           if (params.userId) {
             return params.userId;

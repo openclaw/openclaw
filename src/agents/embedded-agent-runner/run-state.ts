@@ -69,6 +69,8 @@ export type EmbeddedAgentQueueHandle = {
   isAborted?: () => boolean;
   /** True only while this exact runtime owns a live wait, not unresolved host work or cleanup. */
   ownsLiveness?: () => boolean;
+  /** Interrupts a current model request; its attempt still owns settlement and replay policy. */
+  recoverStalledModelCall?: () => boolean;
   isAbortable?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
@@ -81,6 +83,13 @@ export type EmbeddedAgentQueueHandle = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   terminalReplyExpectation?: ReplyExpectation;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+};
+
+export type AbortAndDrainEmbeddedAgentRunResult = {
+  recoveringModelAttempt?: true;
+  aborted: boolean;
+  drained: boolean;
+  forceCleared: boolean;
 };
 
 export type EmbeddedAgentQueueMessageOutcome =

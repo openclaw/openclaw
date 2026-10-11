@@ -5,7 +5,10 @@ import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cac
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import { adoptSqliteSchemaContracts } from "../infra/sqlite-schema-contract.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
-import { serializeAgentSchemaInspectionError } from "./openclaw-agent-schema-inspection-response.js";
+import {
+  serializeAgentSchemaInspectionError,
+  type AgentSchemaInspectionResponse,
+} from "./openclaw-agent-schema-inspection-response.js";
 import type { AgentSchemaInspectionSnapshot } from "./openclaw-agent-schema-inspection-worker.js";
 import {
   inspectAgentDatabaseSchema,
@@ -25,7 +28,7 @@ import {
 if (!process.send || !process.disconnect) {
   throw new Error("Agent schema inspection requires parent IPC.");
 }
-const send = process.send.bind(process);
+const send = (response: AgentSchemaInspectionResponse) => process.send?.(response);
 const disconnect = process.disconnect.bind(process);
 // SAFETY: Only the schema preflight owner sends this private IPC input.
 process.on(
@@ -122,9 +125,9 @@ process.on(
         inspection: inspection
           ? {
               ...inspection,
-              ...(inspection.failure
-                ? { failure: serializeAgentSchemaInspectionError(inspection.failure) }
-                : {}),
+              failure: inspection.failure
+                ? serializeAgentSchemaInspectionError(inspection.failure)
+                : undefined,
             }
           : null,
       });

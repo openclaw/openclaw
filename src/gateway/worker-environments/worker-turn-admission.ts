@@ -51,8 +51,11 @@ export function createRequiredWorkerTurnAdmission(options: {
   withRequiredSession?: RequiredSessionPlacementAdmission;
 }) {
   return {
-    usesWorkerInference: (identity: Omit<LocalTurnPlacementClaim, "runId">) => {
-      const placement = options.placements.get(identity.sessionId);
+    usesWorkerInference: async (identity: Omit<LocalTurnPlacementClaim, "runId">) => {
+      const projection = await options.placements.readProjection([identity.sessionId], {
+        current: true,
+      });
+      const placement = projection.placements.get(identity.sessionId);
       const environment = placement?.environmentId
         ? options.environments.get(placement.environmentId)
         : undefined;
@@ -207,10 +210,8 @@ export async function waitForInitialWorkerPlacement(params: {
       assertSources();
     },
   );
-  assertSessionCurrent();
   const completed = await params.wait(params.placement, params.turn.abortSignal);
   // Setup completion is a notification, not authority: read the durable owner again.
-  assertSessionCurrent();
   let placement = completed;
   const assertCurrent = composeSessionSourceAssertion([assertSessionCurrent], (assertSession) => {
     assertSession();
@@ -343,11 +344,7 @@ export function requireActivePlacement(
   placement: WorkerSessionPlacementRecord,
 ): ActiveWorkerPlacement {
   const failureDetail = placement.state === "failed" ? `: ${placement.recoveryError}` : "";
-  if (
-    placement.state !== "active" ||
-    !placement.remoteWorkspaceDir ||
-    !placement.workerBundleHash
-  ) {
+  if (placement.state !== "active") {
     throw new Error(`Worker turn rejected in placement ${placement.state}${failureDetail}`);
   }
   return placement;
@@ -373,17 +370,13 @@ export async function executeLocalTurn<T>(params: {
 }): Promise<T> {
   let identity: ReturnType<typeof resolvePlacementIdentity>;
   let claimSessionKey: string;
-  const assertPreflightCurrent = () => {
-    params.assertCurrent?.();
-    params.preparedPlacement?.assertCurrent();
-  };
+  const assertPreflightCurrent = params.assertCurrent ?? (() => {});
   try {
     const current = params.preparedPlacement
       ? params.preparedPlacement.placement
       : (await params.placements.readProjection([params.claim.sessionId])).placements.get(
           params.claim.sessionId,
         );
-    assertPreflightCurrent();
     identity = resolvePlacementIdentity(params.claim, current);
     claimSessionKey = current?.sessionKey ?? identity.sessionKey;
     const assertLocalWorkspace = (repositoryWorkspaceId: string | undefined) => {
@@ -410,10 +403,8 @@ export async function executeLocalTurn<T>(params: {
       );
     } else {
       const entry = await readSessionEntryReadOnlyInWorker(scope, assertPreflightCurrent);
-      assertPreflightCurrent();
       assertLocalWorkspace(entry?.repositoryWorkspaceId);
     }
-    assertPreflightCurrent();
   } finally {
     // The claim transaction rechecks placement predicates and publishes its own observation.
     params.preparedPlacement?.release();
@@ -520,17 +511,7 @@ export async function claimWorkerTurn(params: {
       return null;
     }
     if (!(cancelledClaim && params.isCancellationRequested(cancelledClaim))) {
-      const refreshed = await params.placements.getAsync(params.identity.sessionId);
-      params.signal?.throwIfAborted();
-      params.assertCurrent?.();
-      if (
-        refreshed?.state !== "active" ||
-        !matchesWorkerPlacementTarget(refreshed, params.placement) ||
-        refreshed.turnClaim
-      ) {
-        throw error;
-      }
-      return { placement: refreshed, turnClaim: await claim() };
+      throw error;
     }
   }
   await params.placements.waitForTurnClaimRelease(params.identity.sessionId, {

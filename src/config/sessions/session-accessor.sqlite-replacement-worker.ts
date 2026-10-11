@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Result } from "@openclaw/normalization-core/result";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
@@ -7,7 +7,6 @@ import {
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -15,7 +14,6 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { getChildLogger } from "../../logging/logger.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
   AgentDatabaseGenerationClaim,
@@ -36,6 +34,8 @@ import {
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
+import { withSessionEntryWriterReads } from "./session-entry-read-facts.js";
+import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import { parseSessionTranscriptAuthorityReceipts } from "./session-transcript-authority.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
@@ -118,42 +118,17 @@ export async function withSessionEntryWorker<T>(
     }
     throw error;
   }
-  const assertRetainedIdentity = () => {
-    if (!retainedExecution) {
-      return;
-    }
-    if (!options.env || execution.agentId !== normalizeAgentId(options.agentId)) {
-      throw new Error("Session writer differs from its captured database scope");
-    }
-    const accepted = execution.fileIdentity;
-    if (!accepted) {
-      if (databaseIdentity !== undefined || execution.path !== options.path) {
-        throw new Error("Session writer has no accepted identity for this target");
-      }
-      return;
-    }
-    if (databaseIdentity !== undefined && accepted.physicalIdentity !== databaseIdentity) {
-      throw new Error("Session writer differs from its original read snapshot");
-    }
-    assertExistingDatabaseIdentity(
-      options.path,
-      `file:${accepted.physicalIdentity}`,
-      accepted.birthtime,
-    );
-  };
   let assertNativeCurrent: (() => void) | undefined;
   const context: SessionEntryCommitContext = {
     env,
     assertCurrent() {
       execution.assertCurrent();
-      assertRetainedIdentity();
       assertNativeCurrent?.();
     },
   };
   const assertHeld = () => {
     execution.assertCurrent();
     assertCurrent();
-    assertRetainedIdentity();
     preparedReadClaim?.assertCurrent();
   };
   let preparedReadClaim: AgentDatabaseGenerationClaim | undefined;
@@ -183,6 +158,52 @@ export async function withSessionEntryWorker<T>(
         return { nativeLocations: binding.nativeLocations, admission };
       };
     },
+  };
+  const withWriterReads = <Value>(
+    nativeWorker: AgentDatabaseExecutionScope | undefined,
+    consume: () => Promise<Value>,
+  ): Promise<Value> => {
+    const read = <Read>(operation: (scope: AgentDatabaseExecutionScope) => Promise<Read>) =>
+      nativeWorker ? operation(nativeWorker) : execution.runExisting(source, operation);
+    return withSessionEntryWriterReads(
+      options,
+      {
+        async entry(scope) {
+          const result = await read((worker) =>
+            worker.execute({
+              type: "session.entry.readResult",
+              input: {
+                kind: "session-entry-read",
+                database: { agentId: options.agentId, path: options.path },
+                scope: { ...scope, databaseAgentId: options.agentId },
+              },
+            }),
+          );
+          assertHeld();
+          if (!result || result.kind !== "session-entry-read") {
+            throw new Error("Session entry read lost its active writer");
+          }
+          return {
+            ...(result.readError
+              ? err(decodeSessionTranscriptWorkerReadError(result.readError))
+              : ok(result.entry)),
+            source: result.source,
+            facts: result.facts,
+          };
+        },
+        async entries(request) {
+          const result = await read((worker) =>
+            worker.execute({ type: "session.entry.read", input: request }),
+          );
+          assertHeld();
+          if (!result) {
+            throw new Error("Session entry read lost its active writer");
+          }
+          return result;
+        },
+      },
+      consume,
+    );
   };
   let preparation: ReturnType<SessionEntryWorkerPreparation> | undefined;
   let outcome: Result<T, unknown>;
@@ -221,7 +242,21 @@ export async function withSessionEntryWorker<T>(
             options,
             () => {
               preparation?.beforeWrite();
-              return run(execution, source, context);
+              const writingExecution: OpenClawAgentDatabaseExecution = {
+                ...execution,
+                get fileIdentity() {
+                  return execution.fileIdentity;
+                },
+                runExisting(readSource, operation, readOptions) {
+                  // Lend the existing scope so a failed read unwinds before native cleanup.
+                  return execution.runExisting(
+                    readSource,
+                    (worker) => withWriterReads(worker, () => operation(worker)),
+                    readOptions,
+                  );
+                },
+              };
+              return withWriterReads(undefined, () => run(writingExecution, source, context));
             },
             undefined,
             signal,
@@ -503,31 +538,19 @@ export async function runSessionEntryWorkerMutation<T>(
       if (
         !isRecord(facts) ||
         !isRecord(facts.publication) ||
-        facts.publication.kind !== "session-entry-replacements" ||
-        !Array.isArray(facts.publication.changedKeys) ||
-        !facts.publication.changedKeys.every((key): key is string => typeof key === "string") ||
-        !Array.isArray(facts.publication.membershipInvalidatedKeys) ||
-        !facts.publication.membershipInvalidatedKeys.every(
-          (key): key is string => typeof key === "string",
-        ) ||
-        !Array.isArray(facts.publication.sharingUnchangedKeys) ||
-        !facts.publication.sharingUnchangedKeys.every(
-          (key): key is string => typeof key === "string",
-        ) ||
-        !Array.isArray(facts.publication.generationUnchangedKeys) ||
-        !facts.publication.generationUnchangedKeys.every(
-          (key): key is string => typeof key === "string",
-        )
+        facts.publication.kind !== "session-entry-replacements"
       ) {
         throw new Error("Session entry mutation commit omitted its publication keys");
       }
       admitted = { admission, retained };
+      // SAFETY: This command's native kernel supplies the typed publication, not external input.
+      const committed = facts.publication as SessionEntryReplacementPublication;
       publication.begin(
-        facts.publication.changedKeys,
-        facts.publication.membershipInvalidatedKeys,
-        facts.publication.sharingUnchangedKeys,
-        facts.publication.generationUnchangedKeys,
-        parseSessionTranscriptAuthorityReceipts(facts.publication.transcriptPublication),
+        committed.changedKeys,
+        committed.membershipInvalidatedKeys,
+        committed.sharingUnchangedKeys,
+        committed.generationUnchangedKeys,
+        committed.transcriptPublication,
       );
     },
     executionOptions.retainedExecution,

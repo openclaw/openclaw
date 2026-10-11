@@ -14,7 +14,6 @@ import {
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
   replaceSessionEntry,
-  replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -23,6 +22,7 @@ import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";

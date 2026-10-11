@@ -418,10 +418,10 @@ it and the active profile or container hint. See [memory index](/cli/memory#memo
 
 All under `memory.search.query`:
 
-| Key          | Type     | Default | Description                               |
-| ------------ | -------- | ------- | ----------------------------------------- |
-| `maxResults` | `number` | `6`     | Max memory hits returned before injection |
-| `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
+| Key          | Type     | Default | Description                                                                              |
+| ------------ | -------- | ------- | ---------------------------------------------------------------------------------------- |
+| `maxResults` | `number` | `6`     | Max memory hits returned before injection                                                |
+| `minScore`   | `number` | `0.35`  | Minimum relevance score before recency decay, including importance and project weighting |
 
 Without a per-call `maxResults`, primary-only `memory_search` calls use this
 configured limit, including `corpus=memory` and `corpus=sessions`. Wiki and

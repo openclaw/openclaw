@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { updateUserGitHubConnection } from "../state/user-github-connections.js";
+import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import {
   callPersonalPublicationRpc,
@@ -16,6 +16,7 @@ import {
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  root,
 } from "./github-publication.test-support.js";
 import {
   REQUEST,
@@ -85,6 +86,99 @@ describe("GitHub publication selection admission", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
+  it("rejects a stale turn claim after awaited identity verification", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-1",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
+    const active = await seedActivePlacement(placements, {
+      environmentId: "environment-1",
+      ownerEpoch: 2,
+    });
+    const claim = await placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "claim-1",
+      runId: "run-1",
+      owner: { kind: "worker", environmentId: "environment-1", ownerEpoch: 2 },
+    });
+    let resolveIdentity: ((value: unknown) => void) | undefined;
+    mocks.prepareIdentity.mockImplementationOnce(
+      async () =>
+        await new Promise((resolve) => {
+          resolveIdentity = resolve;
+        }),
+    );
+    const coordinator = createTestGitHubPublicationCoordinator({ placements });
+    const pending = coordinator.requestForClaim({
+      claim,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+      idempotencyKey: "publish-stale",
+    });
+    await vi.waitFor(() => expect(resolveIdentity).toBeTypeOf("function"));
+    await placements.releaseTurn(claim);
+    resolveIdentity?.({
+      source: "system-configured",
+      profileId: "ghp_11111111111111111111111111111111",
+      account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
+      env: {},
+    });
+
+    await expect(pending).rejects.toThrow("lost the live session turn claim after verification");
+  });
+
+  it("rejects reuse of a worker publication idempotency key by a later turn", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-idempotency",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
+    const active = await seedActivePlacement(placements, {
+      environmentId: "environment-idempotency",
+      ownerEpoch: 2,
+    });
+    const firstClaim = await placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "claim-first",
+      runId: "run-first",
+      owner: { kind: "worker", environmentId: "environment-idempotency", ownerEpoch: 2 },
+    });
+    const coordinator = createTestGitHubPublicationCoordinator({ placements });
+    await coordinator.requestForClaim({
+      claim: firstClaim,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+      idempotencyKey: "reused-worker-call",
+    });
+    await placements.releaseTurn(firstClaim);
+    const secondClaim = await placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "claim-second",
+      runId: "run-second",
+      owner: { kind: "worker", environmentId: "environment-idempotency", ownerEpoch: 2 },
+    });
+
+    await expect(
+      coordinator.requestForClaim({
+        claim: secondClaim,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+        idempotencyKey: "reused-worker-call",
+      }),
+    ).rejects.toThrow("idempotency key was reused");
+  });
+
   it("rejects publisher revocation during the final worktree read before claim admission", async () => {
     const fixture = await sharedAdmission("claim");
     const identity = await mocks.prepareIdentity();
@@ -128,8 +222,8 @@ describe("GitHub publication selection admission", () => {
         fixture.config.session = { scope: "global", store: "/synthetic/fixed.sqlite" };
       }
       fixture.client.connect.scopes = ["operator.admin"];
-      const publish = vi.spyOn(fixture.coordinator, "requestPersonalForSession");
-      const confirm = vi.spyOn(fixture.coordinator, "confirmPersonal");
+      const publish = vi.spyOn(fixture.coordinator, "requestPersonalForSessionV2");
+      const confirm = vi.spyOn(fixture.coordinator, "confirmPersonalV2");
       const stopEffect = () => {
         throw new Error("Publication effect reached before owner validation");
       };

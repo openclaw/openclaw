@@ -562,6 +562,7 @@ async function runGuidedOnboardingFlow(
       }
       gatewayExternallyManaged =
         applied.gateway.status === "skipped" && applied.gateway.reason === "external";
+      // Accepted one-shot setup exception: record completion after Gateway startup.
       const appliedSnapshot =
         localSetup?.status === "pending"
           ? await (

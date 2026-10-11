@@ -35,19 +35,19 @@ export async function prepareAgentFacts(
     env,
   );
   assertCurrent();
+  const authFacts = await discoverAuthStorageFacts(input.agentDir, {
+    config: input.config,
+    // Prepared owners consume only the already-published runtime auth generation. External CLI
+    // hydration belongs to startup/control-plane and turn-time producers, never rebuilds.
+    readOnly: true,
+    ambientCredentials,
+    ...(preparedStore ? { preparedStore } : {}),
+    ...(input.skipCredentials ? { skipCredentials: true } : {}),
+    ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
+    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    ...(input.env ? { env } : {}),
+  });
   return withAgentRosterFactsBatch(input.config, () => {
-    const authFacts = discoverAuthStorageFacts(input.agentDir, {
-      config: input.config,
-      // Prepared owners consume only the already-published runtime auth generation. External CLI
-      // hydration belongs to startup/control-plane and turn-time producers, never rebuilds.
-      readOnly: true,
-      ambientCredentials,
-      ...(preparedStore ? { preparedStore } : {}),
-      ...(input.skipCredentials ? { skipCredentials: true } : {}),
-      ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      ...(input.env ? { env } : {}),
-    });
     const credentials = authFacts.credentials;
     const templateAuthStorage = authFacts.authStorage;
     const rawConfiguredModelRefs = collectPreparedModelRuntimeConfiguredRefs(

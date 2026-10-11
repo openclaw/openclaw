@@ -21,7 +21,7 @@ import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { purgeDeletedAgentSessionEntries } from "../config/sessions/session-agent-purge.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { captureSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";

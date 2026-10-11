@@ -9,7 +9,7 @@ title: "macOS dev setup"
 
 Build and run the OpenClaw macOS application from source.
 
-The packaged app requires macOS 15.0 or later. The build host must also meet
+The packaged app requires macOS 26.2 or later. The build host must also meet
 the Xcode requirements below.
 
 ## Prerequisites
@@ -51,7 +51,7 @@ available. Ad-hoc signing is an explicit opt-in; it does not preserve TCC
 permissions. See [macOS signing](/platforms/mac/signing).
 
 Packaging builds the JavaScript runtime and Control UI, then stages the full
-canonical package with production dependencies under
+standard package with production dependencies under
 `Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
 package's `files` filter, including its CLI, Gateway, Control UI, npm, and
 optional `sqlite-vec`; on-demand plugins excluded from that package remain
@@ -375,7 +375,7 @@ If versions don't match, update macOS/Xcode and re-run the build.
 
 On a beta-only Xcode toolchain (for example Xcode 27 with the macOS 27 SDK),
 only the `openclaw-mlx-tts` helper may fail while the main app builds fine. The
-mlx-swift Metal compilation errors non-deterministically (a different `.metal`
+mlx-swift Metal compilation fails unpredictably (a different `.metal`
 file each run, `Could not read serialized diagnostics file` then a nonzero
 `metal` exit), because the beta `metal` compiler and its separately downloaded
 Metal Toolchain are still unstable. This is an upstream toolchain issue, not an

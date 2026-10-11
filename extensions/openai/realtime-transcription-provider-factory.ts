@@ -104,6 +104,16 @@ export function buildOpenAIRealtimeTranscriptionProvider(
           profileTypes: ["api_key"],
         }),
       ),
+    isConfiguredAsync: async ({ cfg, providerConfig }) =>
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ||
+        process.env.OPENAI_API_KEY?.trim() ||
+        (await runtime.isProviderAuthProfileConfiguredAsync({
+          provider: "openai",
+          cfg,
+          profileTypes: ["api_key"],
+        })),
+      ),
     createSession: (req) => {
       const normalized = normalizeProviderConfig(req.providerConfig);
       const config = {

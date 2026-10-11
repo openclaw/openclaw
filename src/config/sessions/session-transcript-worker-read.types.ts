@@ -1,7 +1,10 @@
+import type { BuildSessionEntryOptions } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
 import type { SessionCostUsageCacheRead } from "../../infra/session-cost-usage-cache-read.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { VoiceSessionLookup } from "../../talk/client-voice-session-store.js";
 import type { ArchivedSessionEvictionQuery } from "./disk-budget.types.js";
 import type {
@@ -21,6 +24,7 @@ import type {
   SessionTranscriptEventMatch,
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
@@ -81,6 +85,7 @@ export type SessionTranscriptAnchorsWorkerInput = {
   database: { agentId: string; path: string };
   resolved: ResolvedTranscriptScope;
   selection: SessionTranscriptAnchorSelection;
+  preparedEntry?: SessionTranscriptAnchorEntry;
   expectedIdentity: DatabaseFileIdentity;
 };
 
@@ -156,4 +161,36 @@ export type SessionUsageCacheWorkerInput = {
   database: { agentId: string; path: string };
   request: SessionCostUsageCacheRead;
   env: NodeJS.ProcessEnv;
+};
+
+export type SessionSqliteTargetWorkerInput = {
+  kind: "sqlite-target";
+  storePath: string;
+  agentId?: string;
+  defaultAgentId?: string;
+  env: NodeJS.ProcessEnv;
+  registeredDatabases: readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[];
+};
+
+export type SessionResetRecallWorkerInput = {
+  kind: "session-reset-recall";
+  scope: {
+    agentId: string;
+    sessionId: string;
+    sessionKey?: string;
+    storePath: string;
+  };
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
+export type SessionEntryWorkerInput = {
+  kind: "session-entry";
+  absPath: string;
+  options: Omit<BuildSessionEntryOptions, "onTranscriptMessage" | "parseYieldEveryLines"> & {
+    agentId: string;
+    sessionId: string;
+    storePath: string;
+  };
+  admission?: UserTurnTranscriptAdmissionReceipt;
+  redaction: SensitiveTextRedactionSnapshot;
 };

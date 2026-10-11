@@ -86,6 +86,7 @@ type ScreenshotFrameOptions = {
   viewport?: { width: number; height: number };
   scrollTo?: Locator;
   animations?: "disabled";
+  animationFrameBeforeCapture?: boolean;
   fullPage?: boolean;
 };
 
@@ -126,6 +127,7 @@ export async function takeControlUiScreenshotFrame(
         async () => {
           await preparation.evaluate((state) => state.prepare());
           await waitForControlUiFrameLayout(targets);
+          await preparation.evaluate((state) => state.freezeTransitions());
           if (options.scrollTo) {
             requestedScroll = await inspectControlUiProofScroll(options.scrollTo, true);
             await waitForControlUiFrameLayout(targets);
@@ -161,6 +163,14 @@ export async function takeControlUiScreenshotFrame(
     ).toBe(true);
     if (options.scrollTo) {
       expect(await inspectControlUiProofScroll(options.scrollTo, false)).toBe(requestedScroll);
+    }
+    if (options.animationFrameBeforeCapture) {
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
     }
     const frame = await captureControlUiFrame(page, options.elements ?? [], options);
     expect(
@@ -227,6 +237,7 @@ async function createControlUiFramePreparation(page: Page, disableAnimations: bo
       return result;
     };
     const resumed = new Set<Animation>();
+    const transitionStyles = new Map<Document | ShadowRoot, HTMLStyleElement>();
     const listeners = new Map<Document | ShadowRoot, () => void>();
     const carets = new Map<HTMLElement, { value: string; priority: string }>();
     const decoded = new Map<HTMLImageElement, string>();
@@ -286,6 +297,22 @@ async function createControlUiFramePreparation(page: Page, disableAnimations: bo
           }
         }
       },
+      freezeTransitions() {
+        if (!staticFrame) {
+          return;
+        }
+        // Finite effects and their completion handlers settle before removing the
+        // transition layers, which can otherwise retain fractional shadow paints.
+        for (const root of roots()) {
+          if (transitionStyles.has(root)) {
+            continue;
+          }
+          const style = document.createElement("style");
+          style.textContent = "*, *::before, *::after { transition: none !important; }";
+          (root instanceof Document ? root.head : root).append(style);
+          transitionStyles.set(root, style);
+        }
+      },
       async decodeImages() {
         await Promise.all(
           visibleImages().map(async (image) => {
@@ -321,6 +348,9 @@ async function createControlUiFramePreparation(page: Page, disableAnimations: bo
         });
       },
       restore() {
+        for (const style of transitionStyles.values()) {
+          style.remove();
+        }
         for (const [root, listener] of listeners) {
           root.removeEventListener("animationstart", listener);
           root.removeEventListener("transitionrun", listener);

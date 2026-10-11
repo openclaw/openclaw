@@ -97,7 +97,7 @@ async function promptWebToolsConfig(
   let workingConfig = nextConfig;
 
   if (enableSearch) {
-    const codexRelevant = isCodexNativeWebSearchRelevant({ config: nextConfig });
+    const codexRelevant = await isCodexNativeWebSearchRelevant({ config: nextConfig });
     let configureManagedProvider = true;
 
     if (codexRelevant) {

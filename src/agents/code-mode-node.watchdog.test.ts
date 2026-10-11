@@ -1,8 +1,13 @@
 import { expect, it } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { codeModeNodeInitialization, prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
 import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
-import type { CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
+import type { CodeModeNodeInput, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
+
+const initialization = prepareCodeModeNodeCatalog({ catalog: [], namespaces: [] })[
+  codeModeNodeInitialization
+];
 
 const config = {
   timeoutMs: 5_000,
@@ -15,7 +20,7 @@ const config = {
 it.skipIf(process.platform !== "linux")(
   "runs cells without per-evaluation native threads",
   async () => {
-    const pool = new WorkerTaskPool<unknown, CodeModeWorkerThreadResult<undefined>>({
+    const pool = new WorkerTaskPool<CodeModeNodeInput, CodeModeWorkerThreadResult<undefined>>({
       workerUrl: new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url),
       maxWorkers: 1,
     });
@@ -28,8 +33,7 @@ it.skipIf(process.platform !== "linux")(
             config,
             progress: new CodeModeNodeProgress(1024).buffer,
             inlineHost: false,
-            catalog: [],
-            namespaces: [],
+            initialization,
           },
           { timeoutMs: 5_000 },
         );
@@ -45,7 +49,7 @@ it.skipIf(process.platform !== "linux")(
 );
 
 it("publishes resumed output only to its fresh interruption buffer", async () => {
-  const pool = new WorkerTaskPool<unknown, CodeModeWorkerThreadResult<undefined>>({
+  const pool = new WorkerTaskPool<CodeModeNodeInput, CodeModeWorkerThreadResult<undefined>>({
     workerUrl: resolveRuntimeProcessEntrypointUrl("codeModeNode"),
     // The parked cell belongs to this worker; its resume must retain that custody.
     maxWorkers: 1,
@@ -69,8 +73,7 @@ it("publishes resumed output only to its fresh interruption buffer", async () =>
         config,
         progress: originalProgress.buffer,
         inlineHost: false,
-        catalog: [],
-        namespaces: [],
+        initialization,
       },
       { timeoutMs: config.timeoutMs },
     );

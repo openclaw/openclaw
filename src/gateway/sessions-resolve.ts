@@ -91,20 +91,49 @@ export async function withPreparedSessionResolve<T>(
   consume: (result: SessionsResolveResult) => T,
 ): Promise<T> {
   const { projection, p } = params;
-  const key = normalizeOptionalString(p.key);
-  const assertCurrent = () => {
-    if (params.isCurrent?.() === false) {
-      throw new Error("Session projection changed while resolving the session; retry the request");
-    }
-  };
-  const pending = new Map<string, SessionResolveLookup>();
-  const resolve = () => {
-    assertCurrent();
-    return consume(resolveSessionKeyFromResolveParams(params));
-  };
-  while (true) {
-    try {
-      if (key || pending.size > 0) {
+  // Keep background batches behind the complete indexed lookup and exact preparation.
+  return projection.withSelectionPreparation(async () => {
+    const key = normalizeOptionalString(p.key);
+    const assertCurrent = () => {
+      if (params.isCurrent?.() === false) {
+        throw new Error(
+          "Session projection changed while resolving the session; retry the request",
+        );
+      }
+    };
+    const pending = new Map<string, SessionResolveLookup>();
+    let candidateKeys: ReadonlySet<string> | undefined;
+    const sessionId = normalizeOptionalString(p.sessionId);
+    const label = parseSessionLabel(p.label);
+    let lookup: Awaited<ReturnType<SessionRowProjection["readLookup"]>> | undefined;
+    const topologyChanged = new Error("Session lookup topology changed");
+    const resolve = () => {
+      assertCurrent();
+      if (lookup && !lookup.isCurrent()) {
+        throw topologyChanged;
+      }
+      return consume(resolveSessionKeyFromResolveParams({ ...params, candidateKeys }));
+    };
+    while (true) {
+      try {
+        if (!key && !lookup && (sessionId || label.ok)) {
+          // Readiness admits stores; the indexed lookup never drains unrelated row metadata.
+          await withReadySessionRows(
+            projection,
+            () => [],
+            () => undefined,
+          );
+          lookup = await projection.readLookup(
+            sessionId
+              ? { kind: "session-id-or-key", sessionIdOrKey: sessionId }
+              : { kind: "label", label: label.ok ? label.label : "" },
+            p.agentId,
+          );
+          candidateKeys = new Set(lookup.queries.map((query) => query.key));
+          for (const query of lookup.queries) {
+            pending.set(JSON.stringify([query.agentId, query.key, query.storePath]), query);
+          }
+        }
         return await withReadySessionRows(
           projection,
           (cfg) => {
@@ -118,22 +147,25 @@ export async function withPreparedSessionResolve<T>(
             return selected;
           },
           resolve,
+          // Discovery needs current selection metadata, not every session's display row.
+          { selection: !key && candidateKeys === undefined },
         );
-      }
-      do {
-        await projection.ensureMaterialized();
-        assertCurrent();
-      } while (projection.needsMaterialization);
-      return resolve();
-    } catch (error) {
-      if (!(error instanceof SessionResolvePreparationRequired)) {
-        throw error;
-      }
-      for (const query of error.queries) {
-        pending.set(JSON.stringify([query.agentId, query.key, query.storePath]), query);
+      } catch (error) {
+        if (error === topologyChanged) {
+          lookup = undefined;
+          candidateKeys = undefined;
+          pending.clear();
+          continue;
+        }
+        if (!(error instanceof SessionResolvePreparationRequired)) {
+          throw error;
+        }
+        for (const query of error.queries) {
+          pending.set(JSON.stringify([query.agentId, query.key, query.storePath]), query);
+        }
       }
     }
-  }
+  });
 }
 
 export function resolveSessionKeyFromResolveParams(params: {
@@ -142,6 +174,7 @@ export function resolveSessionKeyFromResolveParams(params: {
   p: SessionsResolveParams;
   /** Anonymous HTTP audience sees only current publication grants, never operator discovery. */
   publicOnly?: boolean;
+  candidateKeys?: ReadonlySet<string>;
 }): SessionsResolveResult {
   const { client, p, projection } = params;
   const noSessionFoundResult = (message: string): SessionsResolveResult =>
@@ -163,7 +196,9 @@ export function resolveSessionKeyFromResolveParams(params: {
         agentId,
         configuredAgentsOnly,
       },
-      selector,
+      params.candidateKeys === undefined
+        ? selector
+        : { candidateKeys: params.candidateKeys, metadataPrepared: true },
     );
   const configuredAgentIds = new Set(listAgentIds(cfg));
   const prepareAgentChecks = (
@@ -314,9 +349,9 @@ export function resolveSessionKeyFromResolveParams(params: {
         ((hasOperatorBoundary(client, policyConfig) || params.publicOnly) &&
           entryFilter?.(target.key, entry) === false) ||
         (spawnedBy &&
-          !filterAndSortSessionEntries({ ...prepare(requestedAgent.agentId) }).some(
-            ([candidate]) => candidate === target.key,
-          ))
+          !filterAndSortSessionEntries({
+            ...prepare(requestedAgent.agentId, false, { key: target.key }),
+          }).some(([candidate]) => candidate === target.key))
       ) {
         return noSessionFoundResult(`No session found: ${key}`);
       }

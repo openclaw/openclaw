@@ -35,6 +35,18 @@ export type PluginStateCompareResult<T> =
   | { status: "applied" | "unchanged" }
   | { status: "conflict"; current: PluginStateObservation<T> };
 
+/** Additional same-plugin rows checked atomically with a conditional mutation. */
+export type PluginStateComparisonCondition = {
+  namespace: string;
+  key: string;
+  comparison: string;
+};
+
+export type PluginStateActionAuthority = {
+  assertCurrent: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
+};
+
 export type PluginStateOperationDefinitions = Record<string, { input: unknown; output: unknown }>;
 
 export type PluginStateOperationCommand<Operations extends PluginStateOperationDefinitions> = {
@@ -95,11 +107,15 @@ type PluginStateKeyedStoreBase<T> = {
   ) => PluginStateOperation<Operations>;
   /** Prepares a mutation observation through canonical writable admission; may create state. */
   observe?: (key: string) => Promise<PluginStateObservation<T>>;
-  /** Compares the observed row before applying prepared data; only explicit conflicts may retry. */
+  /**
+   * Compares the observed row and optional same-plugin conditions atomically before applying data.
+   * On conflict, reread all preparation inputs; only explicit conflicts may retry.
+   */
   compareAndApply?: (
     key: string,
     comparison: string,
     intent: PluginStateCompareIntent<T>,
+    options?: { conditions: readonly PluginStateComparisonCondition[] },
   ) => Promise<PluginStateCompareResult<T>>;
   register(
     key: string,
@@ -109,8 +125,8 @@ type PluginStateKeyedStoreBase<T> = {
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): Promise<boolean>;
   /**
    * The updater runs synchronously in the transaction; undefined leaves the entry unchanged.
-   * @deprecated This callback blocks the main thread. Use data-only operations when they preserve
-   * the complete atomic change. Retained through the next Plugin SDK major.
+   * @deprecated Use observe and compareAndApply to prepare data outside the worker transaction.
+   * This synchronous callback will be removed in the next Plugin SDK major.
    */
   update?: (
     key: string,
@@ -119,8 +135,8 @@ type PluginStateKeyedStoreBase<T> = {
   ) => Promise<boolean>;
   /**
    * The synchronous predicate and conditional deletion run in one transaction.
-   * @deprecated This callback blocks the main thread. Use deleteIfEqual for scalar comparisons;
-   * other atomic predicates remain supported through the next Plugin SDK major.
+   * @deprecated Use observe and compareAndApply, or deleteIfEqual for JSON scalars.
+   * This synchronous callback will be removed in the next Plugin SDK major.
    */
   deleteIf?: (key: string, predicate: (current: T) => boolean) => Promise<boolean>;
   /** Atomically deletes a live entry equal to the supplied JSON scalar, without a callback. */
@@ -154,37 +170,49 @@ export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extend
       Pick<PluginStateKeyedStoreBase<T>, "createOperation">
   : PluginStateKeyedStoreBase<T> & {
       /** Bind current action authority through read completion and final write admission. */
-      withCurrent?: (authority: {
-        assertCurrent: () => void;
-        /** Restricts native writes and comparisons; ordinary reads use assertCurrent. */
-        sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
-      }) => PluginStateKeyedStore<T, 2>;
+      withCurrent?: (authority: PluginStateActionAuthority) => PluginStateKeyedStore<T, 2>;
     };
 
 /**
  * Synchronous plugin-state compatibility contract.
- * @deprecated Use PluginStateKeyedStore from api.runtime.state.openKeyedStore
- * and await its operations. Retained through the next Plugin SDK major.
+ * @deprecated Use PluginStateKeyedStore<T, 2> from api.runtime.state.openKeyedStoreV2
+ * and await its operations. This synchronous API will be removed in the next Plugin SDK major.
  */
 export type PluginStateSyncKeyedStore<T> = {
+  /** @deprecated Await PluginStateKeyedStore.register; removed in the next Plugin SDK major. */
   register(key: string, value: T, opts?: { ttlMs?: number }): void;
+  /** @deprecated Await PluginStateKeyedStore.registerIfAbsent; removed in the next Plugin SDK major. */
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): boolean;
-  /** Expiry options are consumed after the synchronous updater returns. */
+  /**
+   * Expiry options are consumed after the synchronous updater returns.
+   * @deprecated Use observe and compareAndApply; removed in the next Plugin SDK major.
+   */
   update?: (
     key: string,
     updateValue: (current: T | undefined) => T | undefined,
     opts?: { ttlMs?: number },
   ) => boolean;
-  /** Atomically deletes an existing entry when its current value matches. */
+  /** @deprecated Use observe and compareAndApply; removed in the next Plugin SDK major. */
   deleteIf?: (key: string, predicate: (current: T) => boolean) => boolean;
+  /** @deprecated Await PluginStateKeyedStore.lookup; removed in the next Plugin SDK major. */
   lookup(key: string): T | undefined;
-  /** Positional outcomes for at most 10,000 keys; missing/expired values are undefined. */
+  /**
+   * Positional outcomes for at most 10,000 keys; missing/expired values are undefined.
+   * @deprecated Await PluginStateKeyedStore.lookupMany; removed in the next Plugin SDK major.
+   */
   lookupMany?: (keys: readonly string[]) => Array<Result<T | undefined, PluginStateStoreError>>;
+  /** @deprecated Await PluginStateKeyedStore.consume; removed in the next Plugin SDK major. */
   consume(key: string): T | undefined;
+  /** @deprecated Await PluginStateKeyedStore.delete; removed in the next Plugin SDK major. */
   delete(key: string): boolean;
+  /** @deprecated Await PluginStateKeyedStore.entries; removed in the next Plugin SDK major. */
   entries(): PluginStateEntry<T>[];
-  /** Counts live stored rows without decoding values; absent on older hosts and adapters. */
+  /**
+   * Counts live stored rows without decoding values; absent on older hosts and adapters.
+   * @deprecated Await PluginStateKeyedStore.count; removed in the next Plugin SDK major.
+   */
   count?: () => number;
+  /** @deprecated Await PluginStateKeyedStore.clear; removed in the next Plugin SDK major. */
   clear(): void;
 };
 

@@ -1,14 +1,13 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import {
   formatDeferredPluginMigration,
   readDeferredPluginMigrationCompletionsAsync,
   readDeferredPluginMigrationsAsync,
+  recordDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
-import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import {
   readPersistedInstalledPluginIndexRowSync,
   seedInstalledPluginIndex,
@@ -35,6 +34,45 @@ import {
 installUpdateLeaseHarness();
 
 describe("update completion ownership", () => {
+  it.each([false, true])(
+    "reconciles a delayed Doctor warning against current pending state (pending again=%s)",
+    async (pendingAgain) => {
+      const pending = {
+        pluginId: "acpx",
+        reason: "The installed plugin has not confirmed its saved data and settings.",
+        command: "openclaw doctor --fix",
+      };
+      const warning = formatDeferredPluginMigration(pending);
+      await recordDeferredPluginMigrations({ pending: [pending] });
+      await writeScenario("repair", {
+        doctorWarnings: [warning],
+        completeDeferredPluginMigration: pending.pluginId,
+      });
+      mocks.plugins.mockImplementationOnce(async () => {
+        // The child completed the migration before its buffered warning reached the parent.
+        expect(await readDeferredPluginMigrationsAsync()).toEqual([]);
+        expect(await readDeferredPluginMigrationCompletionsAsync()).toEqual([
+          expect.objectContaining({ pluginId: pending.pluginId }),
+        ]);
+        if (pendingAgain) {
+          await recordDeferredPluginMigrations({ pending: [pending] });
+        }
+        return { ...pluginResult, changed: false };
+      });
+
+      await invoke("repair");
+
+      expect(mocks.plugins).toHaveBeenCalledOnce();
+      expect(reportedResult("repair")).toMatchObject({
+        status: pendingAgain ? "warning" : "ok",
+      });
+      expect(reportedResult("repair")).toHaveProperty(
+        "postUpdate.doctor",
+        pendingAgain ? { status: "warning", warnings: [warning] } : { status: "ok" },
+      );
+    },
+  );
+
   it("repair completes deferred migrations after unchanged plugin convergence", async () => {
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     const pluginId = "repair-convergence";
@@ -202,35 +240,6 @@ describe("update completion ownership", () => {
     expect(mocks.restart).not.toHaveBeenCalled();
     expectDoctorDiagnostics();
   });
-
-  it.each([false, true])(
-    "resume reads the parent migration owner's committed generation (empty=%s)",
-    async (empty) => {
-      const old = { old: { source: "path" as const } };
-      await seedInstalledPluginIndex(old);
-      expect(await loadInstalledPluginIndexInstallRecords()).toEqual(old);
-      const recordsPath = await state.writeJson("forwarded.json", old);
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH", recordsPath);
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS", String(Date.now()));
-      const current: Record<string, PluginInstallRecord> = empty
-        ? {}
-        : { current: { source: "path" } };
-      await state.writeConfig({ plugins: { enabled: false }, gateway: { port: 19003 } });
-      await seedInstalledPluginIndex(current);
-      await writeScenario("resume");
-      await invoke("resume");
-      expectSuccess("resume", false);
-      expect(mocks.plugins).toHaveBeenCalledWith(
-        expect.objectContaining({
-          configSnapshot: expect.objectContaining({
-            config: expect.objectContaining({ gateway: expect.objectContaining({ port: 19003 }) }),
-          }),
-          pluginInstallRecords: current,
-        }),
-      );
-      expect(await events()).toEqual([]);
-    },
-  );
 
   it("legacy resume repairs Doctor-only node state before plugins even when config is current", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");

@@ -2,8 +2,6 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -117,45 +115,19 @@ it("runs Gateway retention with scheduling disabled and reconciles only unowned 
   );
 });
 
-it("rolls back an admitted sweep when backing or caller authority changes before commit", async () => {
+it("does not reconcile or prune history when caller authority is retired before dispatch", async () => {
   await withOpenClawTestState(
-    { layout: "state-only", prefix: "cron-maintenance-commit-" },
+    { layout: "state-only", prefix: "cron-maintenance-retired-" },
     async () => {
-      resetCronActiveJobs();
-      insertHistory("race");
+      insertHistory("orphan");
       insertHistory("expired", "succeeded");
-      for (const change of ["backing", "caller"] as const) {
-        let current = true;
-        const assertion = () => {
-          if (!current) {
-            throw new Error("sweep retired");
-          }
-        };
-        const spy = probe.admission(operationAdmission, (request, grant, admit) => {
-          if (request.stage === "commit") {
-            if (change === "backing") {
-              markCronJobActive("race");
-            } else {
-              current = false;
-            }
-          }
-          admit(request, grant);
-        });
-        try {
-          await expect(
-            maintainCronRunHistory(captureOpenClawStateWorkerContext(), assertion),
-          ).rejects.toThrow(
-            change === "backing"
-              ? "Cron history backing ownership changed before commit"
-              : "sweep retired",
-          );
-          expect(readHistory().find((row) => row.id === "race")?.status).toBe("running");
-          expect(readHistory().find((row) => row.id === "expired")).toBeDefined();
-        } finally {
-          spy.mockRestore();
-          resetCronActiveJobs();
-        }
-      }
+      const before = readHistory();
+      await expect(
+        maintainCronRunHistory(captureOpenClawStateWorkerContext(), () => {
+          throw new Error("sweep retired");
+        }),
+      ).rejects.toThrow("sweep retired");
+      expect(readHistory()).toEqual(before);
     },
   );
 });

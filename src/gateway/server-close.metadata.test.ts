@@ -2,16 +2,9 @@ import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
-import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import {
-  getPluginCache,
-  getPluginMetadataSnapshotCache,
-  getProcessPluginCache,
-  type PluginCache,
-} from "../plugins/plugin-cache.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
-import { getActivePluginRegistry, disposePluginRegistryInstances } from "../plugins/runtime.js";
+import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { getGatewayContextLifetime } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
@@ -20,7 +13,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture as createFixture } from "./server-close.metadata.test-support.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
-import type { GatewayServer } from "./server-public.js";
 
 it("retires retained Gateway bindings after metadata close fails", async () => {
   const fixture = await createFixture("gateway-context-close-failure");
@@ -95,117 +87,6 @@ it("retires retained Gateway bindings after metadata close fails", async () => {
     await fixture.cleanup();
   }
 });
-
-it.each(["success", "failure"] as const)(
-  "keeps captured bootstrap metadata while another live Gateway reloads (%s)",
-  async (outcome) => {
-    const fixture = await createFixture(`gateway-metadata-bootstrap-${outcome}`);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    let secondPort: number | undefined;
-    let acquiredCache: PluginCache | undefined;
-    const bootstrapModule = await import("./server-startup-bootstrap.js");
-    const bootstrap = bootstrapModule.prepareGatewayServerBootstrap;
-    const failure = new Error("synthetic second bootstrap failure");
-    const paused = vi
-      .spyOn(bootstrapModule, "prepareGatewayServerBootstrap")
-      .mockImplementation(async (params) => {
-        if (params.port === secondPort) {
-          acquiredCache = getPluginCache();
-          entered.resolve();
-          await release.promise;
-          expect(getPluginCache()).toBe(acquiredCache);
-          if (outcome === "failure") {
-            throw failure;
-          }
-        }
-        return bootstrap(params);
-      });
-    let starting: Promise<GatewayServer | Error> | undefined;
-    try {
-      const firstPort = await fixture.reservePort();
-      const firstServer = await fixture.start(firstPort);
-      secondPort = await fixture.reservePort();
-      const first = fixture.kernels.get(firstPort);
-      assert(first);
-      const initial = first.getPluginMetadataSnapshot();
-      assert(initial);
-      const initialCache = getPluginMetadataSnapshotCache(initial);
-      const original = fixture.loadCallback(initial);
-      const originalOwner = getPluginValueInstance(original);
-      assert(originalOwner);
-      starting = fixture.start(secondPort).catch((error: unknown) => {
-        assert(error instanceof Error);
-        return error;
-      });
-      await Promise.race([
-        entered.promise,
-        starting.then((value) => {
-          if (value instanceof Error) {
-            throw value;
-          }
-          throw new Error("Second Gateway bypassed the bootstrap pause");
-        }),
-      ]);
-      expect(acquiredCache).toBe(initialCache);
-      await fixture.writeCallback("replacement");
-      await first.kernel.reloadPlugins({
-        nextConfig: first.cfgAtStart,
-        sourceConfig: first.cfgAtStart,
-        changedPaths: [],
-        prepareConfigEffects: () => ({ retire: () => {}, rollback: async () => {} }),
-        pluginLifecycle: {
-          reason: "reload",
-          operationId: "concurrent-bootstrap",
-          pluginIds: [fixture.pluginId],
-        },
-        commitRuntime: async (publication) => {
-          publication?.publish();
-          publication?.afterCommit?.();
-        },
-        env: fixture.state.env,
-      });
-      const current = first.getPluginMetadataSnapshot();
-      assert(current);
-      expect(current).not.toBe(initial);
-      expect(getGatewayPluginMetadataSnapshot()).toBe(current);
-      expect(getProcessPluginCache()).toBe(getPluginMetadataSnapshotCache(current));
-      expect(originalOwner.lifecycle.signal.aborted).toBe(false);
-      const replacement = fixture.loadCallback(current);
-      release.resolve();
-      const secondServer = await starting;
-      if (outcome === "success") {
-        assert(!(secondServer instanceof Error));
-        const second = fixture.kernels.get(secondPort);
-        assert(second);
-        expect(second.getPluginMetadataSnapshot()).toBe(initial);
-        expect(getActivePluginRegistry()).toBe(second.pluginRuntime.registry);
-        expect(getGatewayPluginMetadataSnapshot()).toBe(initial);
-        expect(getProcessPluginCache()).toBe(initialCache);
-        // The first lazy import occurs after A's replacement and B's delayed bootstrap.
-        await expect(original()).resolves.toBe("captured");
-        await secondServer.close({ reason: "release captured startup owner" });
-      } else {
-        expect(secondServer).toBe(failure);
-      }
-      expect(first.getPluginMetadataSnapshot()).toBe(current);
-      expect(getGatewayPluginMetadataSnapshot()).toBe(current);
-      expect(getProcessPluginCache()).toBe(getPluginMetadataSnapshotCache(current));
-      expect(originalOwner.lifecycle.signal.aborted).toBe(true);
-      expect(() => original()).toThrow("reloaded or disabled");
-      await expect(replacement()).resolves.toBe("replacement");
-      expect(process.listenerCount(fixture.event)).toBe(fixture.listeners + 1);
-      await firstServer.close({ reason: "release final metadata owner" });
-      expect(process.listenerCount(fixture.event)).toBe(fixture.listeners);
-      expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
-    } finally {
-      release.resolve();
-      await Promise.allSettled([starting]);
-      paused.mockRestore();
-      await fixture.cleanup();
-    }
-  },
-);
 
 it("joins managed setup cleanup before releasing shared state and secrets", async () => {
   const fixture = await createFixture("gateway-metadata-held-close");

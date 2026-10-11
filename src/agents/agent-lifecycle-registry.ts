@@ -7,16 +7,11 @@ import type { PersistedClawInstall } from "../claws/provenance-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureActiveCronJobAgentDeletion } from "../cron/active-jobs.js";
 import {
-  withCronReceiptAuthorityMutation,
-  type CronReceiptAuthorityMutation,
-} from "../cron/store/receipt-authority-owner.js";
-import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   captureAgentDatabasePreparationDeletionForIdentity,
   readAgentDatabaseAdmissionRefusal,
@@ -43,10 +38,7 @@ import {
   type AgentLifecycleStoreFacts,
 } from "../state/agent-lifecycle-read.kernel.js";
 import type { AgentProvenance } from "../state/agent-provenance.js";
-import {
-  invalidateRegisteredAgentDatabasesMemo,
-  emitOpenClawAgentDatabaseRegistryChange,
-} from "../state/openclaw-agent-db-registry-listing.js";
+import { prepareOpenClawAgentDatabaseRegistryRemoval } from "../state/openclaw-agent-db-registry-listing.js";
 import { invalidateOpenClawAgentDatabaseValidationsForAgent } from "../state/openclaw-agent-db-validation-cache.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import type {
@@ -156,6 +148,7 @@ export function withAgentDeletion<T>(
     context,
     async (lease) =>
       withOpenClawStateLeaseWorkerAdmission(lease, statePath, async (lifetime) => {
+        let publishRegistryRemoval: () => void;
         let begun = false;
         let closed = false;
         let currentOperationId: string | undefined;
@@ -172,7 +165,6 @@ export function withAgentDeletion<T>(
             additionalIdentities: readonly OpenClawStateLeaseIdentity[],
           ) => Promise<Result>,
           publication?: {
-            mutation?: CronReceiptAuthorityMutation;
             assertCurrent?: () => void;
             onCommitted?: (facts: unknown) => void;
             onAdmission?: (request: SqliteWorkerAdmissionRequest, stateIdentityKey: string) => void;
@@ -189,7 +181,7 @@ export function withAgentDeletion<T>(
               throw new Error("Agent deletion requires a retained lease");
             }
             return runOpenClawStateWorkerOperation(
-              publication?.mutation?.context ?? context,
+              context,
               (scope) => apply(scope, identity, identities.slice(1)),
               {
                 assertCurrent: admission.assertCurrent,
@@ -222,19 +214,13 @@ export function withAgentDeletion<T>(
                       throw error;
                     }
                     if (facts.unregisterDatabases === true) {
-                      invalidateRegisteredAgentDatabasesMemo({ path: statePath });
                       invalidateOpenClawAgentDatabaseValidationsForAgent(id, []);
-                      emitOpenClawAgentDatabaseRegistryChange(id);
                     }
-                    sessionChanges.emit({ all: true, scope: "stores" });
+                    publishRegistryRemoval();
                   };
-                  if (publication?.mutation) {
-                    publication.mutation.observe(created.admission, retained, onCommitted);
-                  } else {
-                    observeSqliteWorkerCommittedFacts(created.admission, ({ facts }) =>
-                      onCommitted(facts),
-                    );
-                  }
+                  observeSqliteWorkerCommittedFacts(created.admission, ({ facts }) =>
+                    onCommitted(facts),
+                  );
                   return created;
                 },
               },
@@ -243,7 +229,6 @@ export function withAgentDeletion<T>(
           const authority = {
             assertCurrent: () => {
               assertCurrentHost();
-              publication?.mutation?.assertCurrent();
               publication?.assertCurrent?.();
             },
           };
@@ -269,6 +254,11 @@ export function withAgentDeletion<T>(
             }
             begun = true;
             const capturedEntry = structuredClone(entry);
+            publishRegistryRemoval = await prepareOpenClawAgentDatabaseRegistryRemoval(id, {
+              path: statePath,
+              env: context.environment,
+            });
+            assertCurrentHost();
             const preserveDeleteFiles = beginOptions.preserveDeleteFiles;
             const operationId = crypto.randomUUID();
             currentOperationId = operationId;
@@ -294,37 +284,33 @@ export function withAgentDeletion<T>(
                   { ...capturedEntry, agentId: id },
                   operationId,
                 )
-              : await withCronReceiptAuthorityMutation(context, async (mutation) =>
-                  execute(
-                    (scope, identity) =>
-                      scope.execute({
-                        type: "agentDeletion.begin",
-                        input: {
-                          entry: {
-                            ...capturedEntry,
-                            agentId: id,
-                            operationId,
-                            deleteFiles: capturedEntry.deleteFiles !== false,
-                          },
-                          lease: identity,
-                          expectedClawInstall: predicate.expectedClawInstall,
-                          preserveDeleteFiles,
-                          nonce: mutation.attachment.nonce,
+              : await execute(
+                  (scope, identity) =>
+                    scope.execute({
+                      type: "agentDeletion.begin",
+                      input: {
+                        entry: {
+                          ...capturedEntry,
+                          agentId: id,
+                          operationId,
+                          deleteFiles: capturedEntry.deleteFiles !== false,
                         },
-                      }),
-                    {
-                      mutation,
-                      onCommitted: () => {
-                        invalidatePreparation();
-                        cancelCronRuns();
+                        lease: identity,
+                        expectedClawInstall: predicate.expectedClawInstall,
+                        preserveDeleteFiles,
                       },
+                    }),
+                  {
+                    onCommitted: () => {
+                      invalidatePreparation();
+                      cancelCronRuns();
                     },
-                  ),
+                  },
                 );
             if (remoteOwner) {
               invalidatePreparation();
               cancelCronRuns();
-              sessionChanges.emit({ all: true, scope: "stores" });
+              publishRegistryRemoval();
             }
             assertCurrentHost();
             const authority: AgentDeletionWorkerAuthority = {
@@ -557,29 +543,22 @@ export function withAgentDeletion<T>(
                 if (remoteOwner) {
                   await rollbackRemoteAgentDeletionJournal(remoteOwner, id, operationId);
                   closed = true;
-                  sessionChanges.emit({ all: true, scope: "stores" });
+                  publishRegistryRemoval();
                   return;
                 }
-                await withCronReceiptAuthorityMutation(
-                  context,
-                  (mutation) =>
-                    execute(
-                      (scope, identity) =>
-                        scope.execute({
-                          type: "agentDeletion.rollback",
-                          input: {
-                            guard: { lease: identity, predicate },
-                            nonce: mutation.attachment.nonce,
-                          },
-                        }),
-                      {
-                        mutation,
-                        onCommitted: () => {
-                          closed = true;
-                        },
+                await execute(
+                  (scope, identity) =>
+                    scope.execute({
+                      type: "agentDeletion.rollback",
+                      input: {
+                        guard: { lease: identity, predicate },
                       },
-                    ),
-                  { settlement: true },
+                    }),
+                  {
+                    onCommitted: () => {
+                      closed = true;
+                    },
+                  },
                 );
               },
             };

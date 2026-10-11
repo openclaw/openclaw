@@ -12,6 +12,7 @@ export {
 } from "../channels/plugins/binding-routing.js";
 export {
   type SessionBindingRecord,
+  type SessionBindingServiceV2,
   getSessionBindingService,
 } from "../infra/outbound/session-binding-service.js";
 export { isPluginOwnedSessionBindingRecord } from "../plugins/conversation-binding-metadata.js";

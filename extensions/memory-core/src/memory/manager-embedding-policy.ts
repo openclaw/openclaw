@@ -216,11 +216,29 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
   items: TInput[];
+  maxInputsPerRequest?: number;
   run: (items: TInput[]) => Promise<TOutput[]>;
   onSuccess?: (items: TInput[], outputs: TOutput[]) => void | Promise<void>;
   waitForRetry: (delayMs: number) => Promise<void>;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
+  const split = async (splitAt: number): Promise<TOutput[]> => {
+    const results: TOutput[] = [];
+    for (let start = 0; start < params.items.length; start += splitAt) {
+      results.push(
+        ...(await runMemoryEmbeddingBatchRetryWithSplit({
+          ...params,
+          items: params.items.slice(start, start + splitAt),
+        })),
+      );
+    }
+    return results;
+  };
+  const cap = params.maxInputsPerRequest;
+  if (cap !== undefined && Number.isSafeInteger(cap) && cap > 0 && params.items.length > cap) {
+    return await split(cap);
+  }
+
   let outputs: TOutput[];
   try {
     outputs = await runMemoryEmbeddingRetryLoop({
@@ -244,16 +262,7 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
         ? itemLimit
         : Math.ceil(params.items.length / 2);
     params.onSplit?.({ itemCount: params.items.length, splitAt, message });
-    const results: TOutput[] = [];
-    for (let start = 0; start < params.items.length; start += splitAt) {
-      results.push(
-        ...(await runMemoryEmbeddingBatchRetryWithSplit({
-          ...params,
-          items: params.items.slice(start, start + splitAt),
-        })),
-      );
-    }
-    return results;
+    return await split(splitAt);
   }
   await params.onSuccess?.(params.items, outputs);
   return outputs;

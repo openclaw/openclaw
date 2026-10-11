@@ -16,6 +16,7 @@ import {
 import { readThemedPopupPaint } from "./popup-theme.test-support.ts";
 import { openSessionMenuSubmenu } from "./session-management.test-support.ts";
 import { routeAvatarFixtures } from "./session-ownership-visuals.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session owner assignment mocked Gateway E2E",
@@ -191,13 +192,10 @@ suite.define(() => {
             has: page.getByRole("checkbox", { name: `Select session: ${sessionKey}`, exact: true }),
           });
           await row.getByRole("button", { name: "Open session menu", exact: true }).click();
-          const settings = page.getByRole("menuitem", { name: "Session settings", exact: true });
           const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
           if (width < 560) {
-            await settings.click();
             await assignTo.click();
           } else {
-            await settings.hover();
             await assignTo.hover();
           }
           const current = page.getByRole("menuitemradio", { name: "Bob", exact: true });
@@ -237,6 +235,7 @@ suite.define(() => {
           Array.from({ length: 40 }, (_, index) => `Teammate ${index + 1}`),
         );
         if (surface === "sidebar") {
+          await selectAllSidebarSessions(page);
           const row = page.locator(`[data-session-key="${sessionKey}"]`);
           await row.hover();
           await row.click({ button: "right" });
@@ -245,10 +244,8 @@ suite.define(() => {
             .getByRole("button", { name: "Actions for Owner outcome", exact: true })
             .click();
         }
-        const settings = page.getByRole("menuitem", { name: "Session settings", exact: true });
-        await settings.hover();
         const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
-        const sibling = page.getByRole("menuitem", { name: "Icon & color", exact: true });
+        const sibling = page.getByRole("menuitem", { name: "Move to group", exact: true });
         // Settle the opening animation before freezing raw pointer coordinates.
         await assignTo.click({ trial: true });
         const anchor = await assignTo.boundingBox();
@@ -286,19 +283,11 @@ suite.define(() => {
         await expectBrowser(sibling).toHaveAttribute("aria-expanded", "false");
         await expectBrowser(me).toBeVisible();
 
-        const copy = page.getByRole("menuitem", { name: "Copy", exact: true });
-        // The header’s left-flipped settings children can cover the root label,
-        // so return through its exposed trailing edge before visiting Copy.
-        const settingsBounds = await settings.boundingBox();
-        expect(settingsBounds).not.toBeNull();
-        await settings.hover({ position: { x: settingsBounds!.width - 8, y: 8 } });
-        const copyBounds = await copy.boundingBox();
-        expect(copyBounds).not.toBeNull();
-        await copy.hover({ position: { x: copyBounds!.width - 8, y: 8 } });
-        await expectBrowser(copy).toHaveAttribute("aria-expanded", "true");
-        await settings.hover();
+        const advanced = page.getByRole("menuitem", { name: "Advanced", exact: true });
+        await advanced.hover();
+        await expectBrowser(advanced).toHaveAttribute("aria-expanded", "true");
         await assignTo.hover();
-        await expectBrowser(copy).toHaveAttribute("aria-expanded", "false");
+        await expectBrowser(advanced).toHaveAttribute("aria-expanded", "false");
         await expectBrowser(me).toBeVisible();
 
         // Follow a paced diagonal from the submenu-facing edge into a non-first
@@ -348,6 +337,7 @@ suite.define(() => {
         );
         const gateway = await installOwnerGateway(page);
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dash");
+        await selectAllSidebarSessions(page);
         const row = page.locator(`[data-session-key="${sessionKey}"]`);
         await row.hover();
         const trigger = row.locator(".sidebar-recent-session__link");
@@ -357,14 +347,7 @@ suite.define(() => {
         const rootAssignmentLabels = menu
           .locator(":scope > wa-dropdown > wa-dropdown-item > .session-menu__text")
           .filter({ hasText: /^Assign to/u });
-        await expectBrowser(rootAssignmentLabels).toHaveCount(0);
-        const settings = menu.getByRole("menuitem", { name: "Session settings", exact: true });
-        await settings.hover();
-        await expectBrowser(
-          settings
-            .locator(':scope > wa-dropdown-item[slot="submenu"] > .session-menu__text')
-            .filter({ hasText: /^Assign to/u }),
-        ).toHaveText([/^Assign to…$/u]);
+        await expectBrowser(rootAssignmentLabels).toHaveText([/^Assign to…$/u]);
         const assignTo = menu.getByRole("menuitem", {
           name: "Assign to…",
           exact: true,
@@ -415,7 +398,6 @@ suite.define(() => {
         await gateway.deferNext("sessions.assignOwner");
         await row.hover();
         await trigger.press("Shift+F10");
-        await openSessionMenuSubmenu(page, "Session settings");
         await openSessionMenuSubmenu(page, "Assign to…");
         const keyboardAssignTo = page.getByRole("menuitem", {
           name: "Assign to…",
@@ -428,7 +410,6 @@ suite.define(() => {
         await expectBrowser(menu).toHaveCount(0);
         await expectBrowser(trigger).toBeFocused();
         await trigger.press("Shift+F10");
-        await openSessionMenuSubmenu(page, "Session settings");
         await openSessionMenuSubmenu(page, "Assign to…");
         await expectBrowser(keyboardAssignTo).toHaveAttribute("aria-expanded", "true");
         await expectBrowser(
@@ -453,7 +434,6 @@ suite.define(() => {
         });
         await row.hover();
         await row.click({ button: "right" });
-        await settings.hover();
         const selfAssignment = page.getByRole("menuitem", { name: "Assign to…", exact: true });
         await selfAssignment.hover();
         const checked = selfAssignment.locator(
@@ -495,19 +475,17 @@ suite.define(() => {
             "This session is archived.",
           );
           if (surface === "sidebar") {
+            await selectAllSidebarSessions(page);
             const row = page.locator(`[data-session-key="${sessionKey}"]`);
             await row.hover();
             await row.click({ button: "right" });
           } else {
             await activePane.getByRole("button", { name: "Actions for Owner outcome" }).click();
           }
-          const settings = page.getByRole("menuitem", { name: "Session settings", exact: true });
           const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
           if (surface === "compact header") {
-            await settings.click();
             await assignTo.click();
           } else {
-            await settings.hover();
             await assignTo.hover();
           }
           await page.getByRole("menuitemradio", { name: "Me", exact: true }).waitFor();
@@ -553,13 +531,10 @@ suite.define(() => {
           });
           const openAssignment = async () => {
             await trigger.click();
-            const settings = page.getByRole("menuitem", { name: "Session settings", exact: true });
             const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
             if (width < 560) {
-              await settings.click();
               await assignTo.click();
             } else {
-              await settings.hover();
               await assignTo.hover();
             }
           };
@@ -616,7 +591,6 @@ suite.define(() => {
             });
             await gateway.deferNext("users.list");
             await menuTrigger.press("Enter");
-            await page.getByRole("menuitem", { name: "Session settings", exact: true }).hover();
             const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
             await assignTo.hover();
             await gateway.waitForRequest("users.list");
@@ -655,9 +629,9 @@ suite.define(() => {
             ).toBeVisible();
             await expectBrowser(assignTo.getByRole("menuitemradio")).toHaveCount(4);
           } else {
+            await selectAllSidebarSessions(page);
             await row.hover();
             await row.click({ button: "right" });
-            await page.getByRole("menuitem", { name: "Session settings", exact: true }).hover();
             await page.getByRole("menuitem", { name: "Assign to…", exact: true }).hover();
           }
           await chooseMe(page);

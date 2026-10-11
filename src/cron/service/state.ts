@@ -31,12 +31,12 @@ import type {
   CronFailureNotificationDetail,
   CronDeliveryStatus,
   CronDeliveryTrace,
-  CronResolvedDeliveryState,
   CronJob,
   CronNextCheckProposal,
   CronJobCreate,
   CronJobPatch,
   CronRunDiagnostics,
+  CronRunDeliveryResult,
   CronMessageChannel,
   CronRunOutcome,
   CronRunStatus,
@@ -108,17 +108,6 @@ export type CronSystemEventEnqueueResult =
 /** Notifications queued by cron mutations until their state is durable. */
 export type DeferredCronNotifications = CronNotificationIntent[];
 
-export type CronRunDeliveryResult = {
-  /** True after verified delivery, including a matching messaging-tool send. */
-  delivered?: boolean;
-  /** Delivery may have been attempted without a confirmed transport acknowledgment. */
-  deliveryAttempted?: boolean;
-  deliveryError?: string;
-  deliverySuppressionReason?: NormalizeReplySkipReason;
-  deliveryState?: CronResolvedDeliveryState;
-  delivery?: CronDeliveryTrace;
-};
-
 export type CronServiceDeps = {
   nowMs?: () => number;
   scheduler: GatewayScheduler;
@@ -143,7 +132,7 @@ export type CronServiceDeps = {
   /** Resolve the current default when runtime config can change after startup. */
   resolveDefaultAgentId?: () => string | undefined;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
-  resolveSessionStoreAgentIds?: () => string[];
+  resolveSessionStoreAgentIds?: () => string[] | Promise<string[]>;
   /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
   resolveSessionStorePath?: (agentId?: string) => string;
@@ -185,7 +174,7 @@ export type CronServiceDeps = {
   resolveOriginDeliveryContext?: (params: {
     sessionKey?: string;
     agentId?: string;
-  }) => DeliveryContext | undefined;
+  }) => DeliveryContext | undefined | Promise<DeliveryContext | undefined>;
   /** Binds the Gateway for complete scheduled operations, including admission and settlement. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;

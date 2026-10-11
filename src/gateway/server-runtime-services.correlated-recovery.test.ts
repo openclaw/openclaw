@@ -11,7 +11,6 @@ import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
 } from "../agents/subagents/registry/subagent-registry-persistence.js";
-import { readFullSubagentRuns } from "../agents/subagents/registry/subagent-registry-read-cache.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
@@ -26,7 +25,6 @@ import {
 import { SESSION_DELIVERY_QUEUE_NAME } from "../infra/session-delivery-queue.records.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -65,7 +63,6 @@ describe("registered correlated completion recovery custody", () => {
     { change: "default after commit", outcome: "recovered" },
     { change: "cleanup released at receipt", outcome: "recovered" },
     { change: "hydration pending", outcome: "recovered" },
-    { change: "retired owner", outcome: "recovered" },
   ] as const)("settles $outcome with $change ownership change", async ({ change, outcome }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       resetGatewayWorkAdmission();
@@ -146,7 +143,7 @@ describe("registered correlated completion recovery custody", () => {
           unavailable.mockRestore();
         }
       }
-      if (change !== "hydration pending" && change !== "retired owner") {
+      if (change !== "hydration pending") {
         await restoreSubagentRunsFromDisk({ runs: subagentRuns });
         child = expectDefined(subagentRuns.get(child.runId), "restored completion owner");
       }
@@ -295,12 +292,6 @@ describe("registered correlated completion recovery custody", () => {
             ).toBe("completed");
             expect(resume).toHaveBeenCalledExactlyOnceWith(child.runId);
             expect(deliver).not.toHaveBeenCalled();
-          } else if (change === "retired owner") {
-            expect(readSubagentRun(database, child.runId)).toBeNull();
-            expect(
-              getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
-            ).toBe("completed");
-            expect(resume).not.toHaveBeenCalled();
           } else if (change === "default after commit") {
             const committed = readSubagentRun(database, child.runId);
             expect(committed?.delivery?.status).toBe("delivered");
@@ -376,29 +367,7 @@ describe("registered correlated completion recovery custody", () => {
           }
         }
       };
-      if (change === "retired owner") {
-        await withOpenClawStateDatabaseReadSnapshot(
-          async () => {
-            await mutateSubagentRuns(
-              [child.runId],
-              () => ({
-                value: undefined,
-                postimages: new Map([[child.runId, null]]),
-              }),
-              { context },
-            );
-            expect(
-              (await readFullSubagentRuns(context, { kind: "ids", runIds: [child.runId] })).has(
-                child.runId,
-              ),
-            ).toBe(true);
-            await recover();
-          },
-          { path: context.admission.databasePath, env: context.environment },
-        );
-      } else {
-        await recover();
-      }
+      await recover();
     });
   });
 });

@@ -6,7 +6,7 @@ import {
   loadTranscriptEventsSync,
   readTranscriptStatsSync,
 } from "../../../../src/config/sessions/session-accessor.sqlite-read.js";
-import { replaceTranscriptEvents } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "../../../../src/config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../../../../src/config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../../../../src/config/sessions/session-cold-storage.js";

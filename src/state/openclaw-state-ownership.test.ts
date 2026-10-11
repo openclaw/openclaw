@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
@@ -10,7 +10,13 @@ import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "../config/io.health-state.js";
+import * as stateOwnerHeartbeat from "../infra/gateway-state-owner-heartbeat.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { isPathInside } from "../infra/path-guards.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import {
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
@@ -37,14 +43,51 @@ import {
   inspectOpenClawStateOwnershipAtPath,
   STATE_SUPERVISION_KEY,
 } from "./openclaw-state-ownership.js";
+import { findOpenFixtureFiles } from "./openclaw-state-ownership.test-support.js";
+
+const heartbeatExits: Promise<void>[] = [];
+beforeEach(() => {
+  const start = stateOwnerHeartbeat.startGatewayStateOwnerHeartbeat;
+  vi.spyOn(stateOwnerHeartbeat, "startGatewayStateOwnerHeartbeat").mockImplementation((...args) => {
+    const heartbeat = start(...args);
+    heartbeatExits.push(
+      new Promise<void>((resolve) => {
+        heartbeat.worker.once("exit", () => resolve());
+      }),
+    );
+    return heartbeat;
+  });
+});
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
+    try {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      for (const directory of tempDirs.dirs) {
+        retireFixtureAdmissions(directory);
+      }
+      // Synchronous lease release unlinks locks before its heartbeat worker finishes closing them.
+      await Promise.all(heartbeatExits);
+      const openFiles = findOpenFixtureFiles(tempDirs.dirs);
+      assert.deepEqual(openFiles, [], "Fixture files remain open after database cleanup");
+      cleanup();
+    } finally {
+      heartbeatExits.length = 0;
+      vi.restoreAllMocks();
+    }
   });
 });
+
+function retireFixtureAdmissions(root: string): void {
+  for (const admission of captureSqliteDatabaseAdmissions()) {
+    if (isPathInside(root, admission.location)) {
+      // Physical admission outlives database close; fixtures own its final removal.
+      retireSqliteDatabaseAdmissionForPath(admission.location);
+      assert.throws(() => fs.fstatSync(admission.descriptor), { code: "EBADF" });
+    }
+  }
+}
 
 function createEnv(external = false): NodeJS.ProcessEnv {
   return {
@@ -634,6 +677,7 @@ describe("external shared-state ownership", () => {
     const env = createEnv();
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
+    retireFixtureAdmissions(databasePath);
     fs.renameSync(databasePath, `${databasePath}.seed`);
     fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const { DatabaseSync } = requireNodeSqlite();
@@ -799,6 +843,7 @@ describe("external shared-state ownership", () => {
     const { path: databasePath, db: seeded } = openOpenClawStateDatabase({ env });
     const databaseLocation = seeded.location();
     closeOpenClawStateDatabaseForTest();
+    retireFixtureAdmissions(databasePath);
     fs.renameSync(databasePath, `${databasePath}.seed`);
     fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const { DatabaseSync } = requireNodeSqlite();
@@ -893,8 +938,13 @@ describe("external shared-state ownership", () => {
       )
       .run(STATE_SUPERVISION_KEY, '{"version":1,"mode":"external"}', Date.now());
     database.db.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
+    const location = database.db.location();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    const owner = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location);
+    assert(owner);
+    retireSqliteDatabaseAdmissionForPath(database.path);
+    assert.throws(() => fs.fstatSync(owner.descriptor), { code: "EBADF" });
     // Persisted startup damage gets a new physical admission, not a live foreign edit.
     fs.copyFileSync(database.path, `${database.path}.startup`);
     fs.renameSync(`${database.path}.startup`, database.path);

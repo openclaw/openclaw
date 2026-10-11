@@ -154,7 +154,6 @@ export function registerShutdownBudgetTests({
             });
             expect(systemctl.mock.calls).toHaveLength(probes);
           }
-          setTimeout(() => provider.resolve(), 600_000);
           captureSignal(signal)();
           await vi.advanceTimersByTimeAsync(inspectionMs);
           if (installedStopMs !== undefined) {
@@ -183,6 +182,11 @@ export function registerShutdownBudgetTests({
             expect(runtime.exit).not.toHaveBeenCalled();
           }
           await vi.advanceTimersByTimeAsync(1);
+          if (!honorsAbort) {
+            expect(runtime.exit).not.toHaveBeenCalled();
+            provider.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+          }
           const expectedExit = supervisor === "foreground" && !honorsAbort ? 1 : 0;
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(expectedExit);
           if (supervisor !== "foreground") {
@@ -192,7 +196,7 @@ export function registerShutdownBudgetTests({
           if (!honorsAbort) {
             expect(gatewayLog.warn).toHaveBeenCalledWith(
               expect.stringMatching(
-                /abandoning.*embeddedRuns=1.*pending owners: 1 active gateway request\(s\): heartbeat:wake.*pending close steps: shutdown.received-connection-work=\d+ms/,
+                /shutdown deadline reached; waiting for unfinished cleanup and active work.*embeddedRuns=1.*pending owners: 1 active gateway request\(s\): heartbeat:wake.*pending close steps: shutdown.received-connection-work=\d+ms/,
               ),
             );
             expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
@@ -204,6 +208,7 @@ export function registerShutdownBudgetTests({
           }
         } finally {
           provider.resolve();
+          await vi.advanceTimersByTimeAsync(0);
           await Promise.allSettled(close.mock.results.map((result) => result.value));
           clock.mockRestore();
           vi.clearAllTimers();

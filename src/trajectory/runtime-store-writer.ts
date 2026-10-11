@@ -51,10 +51,11 @@ import {
   scheduleSqliteTrajectoryRuntimeRetention,
   settleIncognitoTrajectoryRuntimeRetention,
 } from "./runtime-retention.js";
-import {
-  appendSqliteTrajectoryRuntimeEvents,
-  type SqliteTrajectoryRuntimeAppend,
-} from "./runtime-store.sqlite.js";
+import type {
+  SerializedTrajectoryEvent,
+  SqliteTrajectoryRuntimeAppend,
+} from "./runtime-store.contract.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeSinkParams = {
@@ -226,11 +227,11 @@ function buildSqliteTrajectoryRuntimeSink(
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const databaseOptions =
     preparedDatabase ?? toDatabaseOptions(resolveSqliteReadScope({ ...marker, env }));
-  let pendingEvents = new Map<TrajectoryEvent, number>();
+  let pendingEvents = new Map<SerializedTrajectoryEvent, number>();
   let queuedBytes = 0;
   let discardPrevious = false;
   let inFlight:
-    | { events: Map<TrajectoryEvent, number>; bytes: number; discardPrevious: boolean }
+    | { events: typeof pendingEvents; bytes: number; discardPrevious: boolean }
     | undefined;
   let unsettledAppend: SqliteWorkerError | undefined;
   const trimPending = () => {
@@ -420,7 +421,7 @@ function buildSqliteTrajectoryRuntimeSink(
     },
     write: (event: TrajectoryEvent, line: string) => {
       const bytes = Buffer.byteLength(line, "utf8") + 1;
-      pendingEvents.set(event, bytes);
+      pendingEvents.set({ runId: event.runId, ts: event.ts, line }, bytes);
       queuedBytes += bytes;
       trimPending();
       scheduleFlush();

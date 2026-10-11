@@ -3506,7 +3506,21 @@ async function buildWorkboardStatesAssets() {
   const { build } = await import("esbuild");
   const rootDir = path.join(repoRoot, "extensions/workboard");
   const entry = path.join(rootDir, "browser/index.ts");
-  let transformed = false;
+  const cardRenderer = fs.realpathSync(path.join(rootDir, "browser/pages/workboard/view-card.tsx"));
+  const fixtureProjections = fileURLToPath(
+    new URL("./control-ui-workboard-state-projections.ts", import.meta.url),
+  );
+  const projections = new Map([
+    [
+      "../../lib/workboard/index.ts",
+      { source: "index.ts", name: "getWorkboardLifecycle", fixture: "getFixtureLifecycle" },
+    ],
+    [
+      "../../lib/workboard/card-alerts.ts",
+      { source: "card-alerts.ts", name: "getCardAlerts", fixture: "getFixtureAlerts" },
+    ],
+  ]);
+  const reached = new Set<string>();
   const result = await build({
     absWorkingDir: rootDir,
     entryPoints: { index: entry },
@@ -3524,33 +3538,37 @@ async function buildWorkboardStatesAssets() {
     },
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
     plugins: [
-      createSolidControlUiBuildPlugin(uiRoot),
+      createSolidControlUiBuildPlugin(rootDir),
       {
         name: "workboard-state-projections",
         setup(builder) {
-          builder.onLoad(
-            { filter: /[/\\]pages[/\\]workboard[/\\]view-card\.ts$/ },
-            async ({ path: sourcePath }) => {
-              const source = await fs.promises.readFile(sourcePath, "utf8");
-              const lifecycleImport =
-                /\bgetWorkboardLifecycle,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/index\.ts")/g;
-              const alertImport =
-                /\bgetCardAlerts,(?=[\s\S]*?from "\.\.\/\.\.\/lib\/workboard\/card-alerts\.ts")/g;
-              if (
-                [...source.matchAll(lifecycleImport)].length !== 1 ||
-                [...source.matchAll(alertImport)].length !== 1
-              ) {
-                throw new Error(
-                  "Workboard state fixture import seam changed; update its exact import transform.",
-                );
+          builder.onResolve(
+            {
+              filter: /^\.\.\/\.\.\/lib\/workboard\/(?:index|card-alerts)\.ts$/,
+              namespace: "file",
+            },
+            ({ path: specifier, importer }) => {
+              if (importer !== cardRenderer) {
+                return undefined;
               }
-              transformed = true;
+              reached.add(specifier);
+              return { path: specifier, namespace: "workboard-state-projections" };
+            },
+          );
+          builder.onLoad(
+            { filter: /.*/, namespace: "workboard-state-projections" },
+            ({ path: specifier }) => {
+              const projection = projections.get(specifier);
+              if (!projection) {
+                throw new Error(`Unknown Workboard fixture projection: ${specifier}`);
+              }
               return {
                 loader: "ts",
-                resolveDir: path.dirname(sourcePath),
-                contents:
-                  source.replace(lifecycleImport, "").replace(alertImport, "") +
-                  `\nimport { getFixtureLifecycle as getWorkboardLifecycle, getFixtureAlerts as getCardAlerts } from ${JSON.stringify(fileURLToPath(new URL("./control-ui-workboard-state-projections.ts", import.meta.url)))};\n`,
+                resolveDir: rootDir,
+                contents: [
+                  `export * from ${JSON.stringify(path.join(rootDir, "browser/lib/workboard", projection.source))};`,
+                  `export { ${projection.fixture} as ${projection.name} } from ${JSON.stringify(fixtureProjections)};`,
+                ].join("\n"),
               };
             },
           );
@@ -3558,8 +3576,8 @@ async function buildWorkboardStatesAssets() {
       },
     ],
   });
-  if (!transformed) {
-    throw new Error("Workboard state fixture did not reach the real card renderer.");
+  if (reached.size !== projections.size) {
+    throw new Error("Workboard state fixture did not reach both real card renderer projections.");
   }
   const revision = createHash("sha256");
   for (const file of result.outputFiles) {

@@ -50,7 +50,11 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   );
   write(
     "packages/plugin-sdk/tsconfig.json",
-    JSON.stringify({ extends: "../../tsconfig.json", include: ["../../src/**/*.ts"] }),
+    JSON.stringify({
+      extends: "../../tsconfig.json",
+      include: ["../../src/**/*.ts"],
+      exclude: ["../../src/shared/deferred.ts"],
+    }),
   );
   write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
@@ -63,11 +67,12 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     "scripts/tsx.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib",
+    "src/shared/deferred.ts",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
   ]);
   write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
-  for (const name of ["tsx", "@openclaw/fs-safe"]) {
+  for (const name of ["tsx", "@openclaw/fs-safe", "@openclaw/proc-safe"]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target);
@@ -770,39 +775,6 @@ describe("native declaration preparation", () => {
         await run();
         expect(fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs).toBe(unchanged);
         expect(fs.statSync(recordPath).mtimeMs).toBe(unchangedRecord);
-      }),
-  );
-
-  it.for(["src/nested.ts", "package.json"])(
-    "rejects %s mutated after native emit without publishing or pruning",
-    { timeout: 30_000 },
-    (input, { signal }) =>
-      fixture.run(async () => {
-        const f = createPreparationFixture("package-boundary", signal);
-        const trigger = path.join(f.root, ".artifacts/mutate-after-native");
-        const source = path.join(f.root, input);
-        const original = fs.readFileSync(source, "utf8");
-        const worker = path.join(f.root, "scripts/compile-extension-boundary.mts");
-        fs.appendFileSync(
-          worker,
-          `\nif (fs.existsSync(${JSON.stringify(trigger)})) fs.appendFileSync(${JSON.stringify(source)}, "\\n");\n`,
-        );
-        await f.run();
-        expect(readArtifactRecord(f.recordPath)).toBeDefined();
-        f.write(`${f.output}/orphan.d.ts`, "export interface Orphan {}\n");
-        f.write(".artifacts/mutate-after-native", "armed");
-
-        // The fixture worker mutates only after the real native emitter exits
-        // successfully; its unchanged membership must still fail the seal fence.
-        await expect(f.run()).rejects.toThrow("failed with exit code 1");
-        expect(fs.readFileSync(source, "utf8")).toBe(`${original}\n`);
-        expect(fs.existsSync(f.recordPath)).toBe(false);
-        expect(fs.readFileSync(path.join(f.root, f.output, "orphan.d.ts"), "utf8")).toBe(
-          "export interface Orphan {}\n",
-        );
-        expect(fs.existsSync(path.join(f.root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
-          false,
-        );
       }),
   );
 

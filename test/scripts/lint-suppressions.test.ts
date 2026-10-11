@@ -272,10 +272,12 @@ describe("production lint suppressions", () => {
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
         // Synchronous acquisition failures reject with the acquiring owner's original value.
         "src/shared/store-writer-acquisitions.ts|typescript/prefer-promise-reject-errors|1",
-        "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
+        "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
+        // Native statement methods are captured before proxy forwarding restores their receiver.
+        "src/state/openclaw-agent-canonical-validation-receipt.test-support.ts|typescript/unbound-method|1",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.
         "src/state/openclaw-agent-worker-store.test-support.ts|unicorn/require-post-message-target-origin|1",
-        "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
+        "src/test-utils/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/utils/run-with-concurrency.ts|typescript/prefer-promise-reject-errors|1",
@@ -283,6 +285,11 @@ describe("production lint suppressions", () => {
         "ui/src/app/native-gateway-auth.ts|unicorn/prefer-add-event-listener|1",
         "ui/src/app/native-gateway-auth.ts|unicorn/require-post-message-target-origin|2",
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
+        // These Solid sinks consume HTML sanitized or escaped by their content owners.
+        "ui/src/components/solid/markdown-html.tsx|solid/no-innerhtml|1",
+        "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",
+        // PanelRefreshStatus keeps its shared className prop across rendering callers.
+        "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
       ]),
     );
   });

@@ -297,6 +297,38 @@ it("toggles a listed secondary-workspace plugin without a system owner", async (
   }
 });
 
+it.each([true, false])("keeps config bytes for repeated enabled=%s requests", async (enabled) => {
+  const root = tempDirs.make("managed-policy-noop-");
+  const pluginRoot = path.join(root, "plugin");
+  const configPath = path.join(root, "openclaw.json");
+  mkdirSafeDir(pluginRoot);
+  const fixture = createColdPluginFixture({ rootDir: pluginRoot, pluginId: "policy-noop" });
+  vi.stubEnv("OPENCLAW_HOME", path.join(root, "home"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  const config: OpenClawConfig = {
+    plugins: {
+      load: { paths: [pluginRoot] },
+      entries: { [fixture.pluginId]: { enabled } },
+    },
+  };
+  const raw = JSON.stringify(config);
+  fs.writeFileSync(configPath, raw);
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  configIo.read.mockImplementation(actual.readConfigFileSnapshotForWrite);
+  configIo.write.mockImplementation(actual.replaceConfigFile);
+
+  const result = await mutateManagedPluginEnabled({
+    caller: "cli",
+    pluginId: fixture.pluginId,
+    enabled,
+  });
+
+  expect(result).toMatchObject({ status: "committed", changedPaths: [] });
+  expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+});
+
 it("preserves env references across management capability consent", async () => {
   const root = makeTrackedTempDir("managed-consent-env", roots);
   const pluginRoot = path.join(root, "plugin");

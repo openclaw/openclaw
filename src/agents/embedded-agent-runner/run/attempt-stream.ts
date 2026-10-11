@@ -208,7 +208,7 @@ export function installEmbeddedAttemptStreamGuards(
       if (observation.broke) {
         const changes =
           observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
-          "no tracked cache input change";
+          observation.dropCause;
         log.warn(
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
@@ -390,6 +390,7 @@ export function installEmbeddedAttemptStreamGuards(
   }
   let diagnosticModelCallSeq = 0;
   let modelResponseTerminal = false;
+  let activeModelCallId: string | undefined;
   installStreamWrapper(wrapStreamFnWithDiagnosticModelCallEvents, {
     config: attempt.config,
     runId: attempt.runId,
@@ -420,7 +421,13 @@ export function installEmbeddedAttemptStreamGuards(
     onTerminal: () => {
       modelResponseTerminal = true;
     },
-    onStarted: () => {
+    onFinished: (callId) => {
+      if (activeModelCallId === callId) {
+        activeModelCallId = undefined;
+      }
+    },
+    onStarted: (callId) => {
+      activeModelCallId = callId;
       modelResponseTerminal = false;
       attempt.onExecutionPhase?.({
         phase: "model_call_started",
@@ -438,7 +445,7 @@ export function installEmbeddedAttemptStreamGuards(
     onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
       const previous = cacheObserver.getContextUsage();
       const request = cacheObserver.onModelRequest(...args);
-      if (request.requestIndex > 1) {
+      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
         contextGuards.checkMidTurnPrecheck({
           context: args[1],
           previousRequest:
@@ -464,5 +471,6 @@ export function installEmbeddedAttemptStreamGuards(
       }
     },
     getPromptCacheObservation: cacheObserver.getObservation,
+    isModelCallActive: () => activeModelCallId !== undefined,
   };
 }

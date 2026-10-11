@@ -64,7 +64,7 @@ import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-ref
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { isSetupCredentialAccessible } from "../auth-profiles/setup-access.js";
-import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../auth-profiles/store-runtime.js";
 import { resolveRuntimeAuthProfileAgentDir } from "../auth-profiles/store.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -161,10 +161,7 @@ import {
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import { resolveCliSkillsPrompt } from "./skills-prompt.js";
-import {
-  captureCliRunToolAuthority,
-  finalizeCliSessionEventSourcePolicy,
-} from "./tool-authority.js";
+import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
@@ -365,10 +362,10 @@ async function prepareCliRunContextWithinReadFence(
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
   let authStore: AuthProfileStore | undefined;
   let resolvedProfileAuth: ResolvedProviderAuth | undefined;
-  const loadScopedAuthStore = (options: { profileId?: string; readOnly?: boolean } = {}) => {
+  const loadScopedAuthStore = (options: { profileId?: string } = {}) => {
     params.assertCurrent?.();
-    return loadAuthProfileStoreForRuntime(agentDir, {
-      readOnly: options.readOnly ?? true,
+    return loadAuthProfileStoreForRuntimeAsync(agentDir, {
+      readOnly: true,
       profileId: options.profileId,
       externalCli: externalCliDiscoveryForProviderAuth({
         cfg: params.config,
@@ -378,12 +375,12 @@ async function prepareCliRunContextWithinReadFence(
     });
   };
   if (effectiveAuthProfileId) {
-    authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
+    authStore = await loadScopedAuthStore({ profileId: effectiveAuthProfileId });
   } else if (
     backendResolved.autoSelectAuthProfile !== false &&
     (backendResolved.authEpochMode === "profile-only" || backendResolved.prepareExecution)
   ) {
-    authStore = loadScopedAuthStore();
+    authStore = await loadScopedAuthStore();
     effectiveAuthProfileId =
       resolveAuthProfileOrder({
         cfg: params.config,
@@ -439,10 +436,10 @@ async function prepareCliRunContextWithinReadFence(
         agentDir,
       });
     };
-    const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
+    const selectedAuthStore = await loadScopedAuthStore({ profileId: authProfileId });
     const resolvedAuth = await resolveApiKeyForProfile({
       cfg: params.config,
-      store: writableAuthStore,
+      store: selectedAuthStore,
       profileId: authProfileId,
       agentDir,
       // Claude's selected profile is an account boundary. Never refresh or
@@ -453,13 +450,13 @@ async function prepareCliRunContextWithinReadFence(
     if (backendAuthPolicy.strictSelectedProfile && resolvedAuth?.profileId !== authProfileId) {
       throw profileResolutionError(
         resolvedAuth?.provider ??
-          writableAuthStore.profiles[authProfileId]?.provider ??
+          selectedAuthStore.profiles[authProfileId]?.provider ??
           params.provider,
         resolvedAuth?.profileId,
       );
     }
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
-    authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
+    authStore = await loadScopedAuthStore({ profileId: resolvedAuthProfileId });
     authCredential = resolvedAuth?.credential ?? authStore.profiles[resolvedAuthProfileId];
     if (
       backendAuthPolicy?.strictSelectedProfile &&
@@ -786,7 +783,7 @@ async function prepareCliRunContextWithinReadFence(
   const mcpToolAuth = mcpContextBase
     ? {
         ...(mcpToolAuthAgentDir ? { agentDir: mcpToolAuthAgentDir } : {}),
-        store: authStore ?? loadScopedAuthStore(),
+        store: authStore ?? (await loadScopedAuthStore()),
       }
     : undefined;
   params.assertCurrent?.();
@@ -902,6 +899,10 @@ async function prepareCliRunContextWithinReadFence(
       tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
     ),
   );
+  const sessionEventSourcePolicy = callerToolAuthority.finalizeSessionEventSourcePolicy(
+    params,
+    promptBuildToolsAllow,
+  );
   const { mcpGrant, projectNativeToolAuthority, exclusiveTools } = mcp.prepareCliMcpGrant(params, {
     context: mcpContextBase,
     tools: projectedTools,
@@ -932,6 +933,7 @@ async function prepareCliRunContextWithinReadFence(
       mcpLoopbackRuntime && mcpGrant
         ? mintMcpLoopbackClientGrant({
             ...mcpGrant,
+            sessionEventSourcePolicy,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
             bindQuestionAnswerAuthority: (assertActive) =>
               bindQuestionAnswerAuthorityForSession(mcpGrant.context.sessionKey, assertActive),
@@ -1465,11 +1467,11 @@ async function prepareCliRunContextWithinReadFence(
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined
         : await loadCliSessionPromptContext({
-            abortSignal: params.abortSignal,
-            sessionManager: params.sessionManager,
-            sessionTarget: params.sessionTarget,
+            ...params,
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
+            nativeSessionId: reusableCliSessionId,
+            tools: promptTools,
           });
     const effectiveReplyGuidance =
       skipsTurnPreparation || params.isolatedCompletion
@@ -1482,6 +1484,7 @@ async function prepareCliRunContextWithinReadFence(
     const finalizedTranscriptPrompt =
       (params.finalizePromptForResolvedTools ||
         sessionPromptContext?.durableContext ||
+        sessionPromptContext?.sessionGapContext ||
         effectiveReplyGuidance) &&
       params.transcriptPrompt === undefined
         ? params.prompt
@@ -1497,6 +1500,7 @@ async function prepareCliRunContextWithinReadFence(
     if (!isControlOperation && params.skillsSnapshot?.librarySelections?.length) {
       preparedPrompt = remapSkillReferencePaths(preparedPrompt, preparedSkills.usagePaths);
     }
+    let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
       ({
         prompt: preparedPrompt,
@@ -1534,10 +1538,8 @@ async function prepareCliRunContextWithinReadFence(
       }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();
-    }
-    let historyPromptCurrentTurn = preparedPrompt;
-    if (!skipsTurnPreparation) {
-      const renderCurrentPrompt = createCliCurrentPromptRenderer(params, reusableCliSession);
+      const gap = sessionPromptContext?.sessionGapContext;
+      const renderCurrentPrompt = createCliCurrentPromptRenderer(params, reusableCliSession, gap);
       const preferResumableText =
         params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId);
       historyPromptCurrentTurn = renderCurrentPrompt(preparedPrompt);
@@ -1605,11 +1607,7 @@ async function prepareCliRunContextWithinReadFence(
     const buildPreparedContext = (preparedParams: PreparedCliRunContext["params"]) => ({
       params: preparedParams,
       bindQuestionAnswerAuthority,
-      sessionEventSourcePolicy: finalizeCliSessionEventSourcePolicy(
-        callerToolAuthority.sessionEventSourcePolicy,
-        preparedParams,
-        promptBuildToolsAllow,
-      ),
+      sessionEventSourcePolicy,
       effectiveAuthProfileId,
       ...(authStore ? { authProfileStore: authStore } : {}),
       agentDir,

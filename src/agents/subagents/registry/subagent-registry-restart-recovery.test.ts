@@ -388,7 +388,7 @@ describe("interrupted requester-settle continuation ownership", () => {
   beforeEach(() => restartRecoveryTestHarness.reset());
   afterEach(() => subagentRuns.clear());
 
-  function cohort() {
+  function cohort(quiet = false) {
     const child = run({
       runId: "settled-leaf",
       childSessionKey: "agent:main:subagent:leaf",
@@ -396,21 +396,28 @@ describe("interrupted requester-settle continuation ownership", () => {
       requesterAgentId: "main",
       requesterStorePath: "/tmp/openclaw-subagent-recovery/agents/main/agent/openclaw-agent.sqlite",
       completionRequesterSessionId: "session-id",
-      expectsCompletionMessage: true,
-      execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
+      expectsCompletionMessage: !quiet,
+      completionTarget: quiet ? "parent" : undefined,
+      execution: {
+        status: "terminal",
+        endedAt: Date.now(),
+        outcome: { status: quiet ? "error" : "ok" },
+        interruptionReason: quiet ? "gateway-restart" : undefined,
+      },
       requesterSettleWake: {
         status: "dispatching",
         attemptCount: 1,
         batchRunIds: ["settled-leaf"],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
+        requesterYieldBatch: quiet ? undefined : true,
+        rearmGeneration: quiet ? undefined : 1,
       },
     });
     const { runId } = buildRequesterSettleWakeIdentity({
       requesterSessionKey: childSessionKey,
       requesterAgentId: "main",
       batchRunIds: [child.runId],
-      rearmGeneration: 1,
+      rearmGeneration: quiet ? undefined : 1,
+      sharedAttemptKey: quiet,
     });
     const worker = run({ runId, taskRunId: "original-task" });
     worker.execution.status = "interrupted";
@@ -431,14 +438,16 @@ describe("interrupted requester-settle continuation ownership", () => {
   }
 
   it.each([
-    { backoff: 0, privateCompletion: false, physicalLocator: false },
-    { backoff: 0, privateCompletion: false, physicalLocator: true },
-    { backoff: 120_000, privateCompletion: false, physicalLocator: false },
-    { backoff: 120_000, privateCompletion: true, physicalLocator: false },
+    { backoff: 0, privateCompletion: false, physicalLocator: false, quiet: false },
+    { backoff: 0, privateCompletion: false, physicalLocator: true, quiet: false },
+    { backoff: 120_000, privateCompletion: false, physicalLocator: false, quiet: false },
+    { backoff: 120_000, privateCompletion: true, physicalLocator: false, quiet: false },
+    { backoff: 0, privateCompletion: true, physicalLocator: true, quiet: true },
+    { backoff: 120_000, privateCompletion: true, physicalLocator: false, quiet: true },
   ])(
-    "keeps the exact saved wake owned before admission (backoff $backoff, private $privateCompletion, physical locator $physicalLocator)",
-    async ({ backoff, privateCompletion, physicalLocator }) => {
-      const { child, worker } = cohort();
+    "keeps the exact saved wake owned before admission (backoff $backoff, private $privateCompletion, physical locator $physicalLocator, quiet $quiet)",
+    async ({ backoff, privateCompletion, physicalLocator, quiet }) => {
+      const { child, worker } = cohort(quiet);
       if (physicalLocator) {
         mocks.storePath = child.requesterStorePath!;
       }
@@ -469,8 +478,11 @@ describe("interrupted requester-settle continuation ownership", () => {
     "cancelled custody",
     "suppressed delivery",
     "legacy launch receipt",
+    "quiet reset parent",
+    "quiet cancelled custody",
+    "quiet unstarted",
   ])("retains ordinary interruption recovery for %s", async (scenario) => {
-    const { child, worker, close } = cohort();
+    const { child, worker, close } = cohort(scenario.startsWith("quiet "));
     if (scenario === "non-yield batch") {
       child.requesterSettleWake!.requesterYieldBatch = undefined;
     }
@@ -480,7 +492,7 @@ describe("interrupted requester-settle continuation ownership", () => {
     if (scenario === "rearmed") {
       child.requesterSettleWake!.rearmGeneration!++;
     }
-    if (scenario === "unstarted") {
+    if (scenario === "unstarted" || scenario === "quiet unstarted") {
       child.requesterSettleWake!.attemptCount = 0;
     }
     if (scenario === "consumed") {
@@ -508,7 +520,7 @@ describe("interrupted requester-settle continuation ownership", () => {
     if (scenario === "closed gateway") {
       close();
     }
-    if (scenario === "cancelled custody") {
+    if (scenario === "cancelled custody" || scenario === "quiet cancelled custody") {
       child.killReconciliation = { killedAt: Date.now(), suppressTaskDelivery: true };
     }
     if (scenario === "suppressed delivery") {
@@ -521,6 +533,9 @@ describe("interrupted requester-settle continuation ownership", () => {
         sessionMarker: "session-id:1",
         idempotencyKey: "old-launch",
       };
+    }
+    if (scenario === "quiet reset parent") {
+      child.completionRequesterLifecycleRevision = "prior-parent-revision";
     }
     expect(await recover(worker)).toMatchObject({
       status: "terminal",

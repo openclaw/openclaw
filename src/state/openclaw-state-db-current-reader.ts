@@ -129,25 +129,13 @@ export async function prepareOpenClawStateCurrentReader(context: OpenClawStateWo
         unregister();
       },
     };
-    try {
-      unregister = registerOpenClawStateDatabaseAsyncResource({
-        async close(identity) {
-          if (!identity || identity.key === key || identity.canonicalPath === canonicalPath) {
-            opened.close();
-          }
-        },
-      });
-    } catch (error) {
-      try {
-        opened.close();
-      } catch (cleanupError) {
-        throwSqliteLifecycleErrors(
-          [error, cleanupError],
-          "Current shared-state reader registration and cleanup failed",
-        );
-      }
-      throw error;
-    }
+    unregister = registerOpenClawStateDatabaseAsyncResource({
+      async close(identity) {
+        if (!identity || identity.key === key || identity.canonicalPath === canonicalPath) {
+          opened.close();
+        }
+      },
+    });
     currentReaders.set(physicalKey, opened);
     reader = opened;
   }
@@ -209,9 +197,7 @@ export async function prepareOpenClawStateCurrentReader(context: OpenClawStateWo
     return {
       writeRevision() {
         assertCurrent();
-        const revision = readSqliteDatabaseWriteRevision(retained.connection.database.db);
-        assertCurrent();
-        return revision;
+        return readSqliteDatabaseWriteRevision(retained.connection.database.db);
       },
       read<T>(operation: (database: OpenClawStateReadOnlyDatabase) => T): T {
         assertCurrent();
@@ -230,11 +216,7 @@ export async function prepareOpenClawStateCurrentReader(context: OpenClawStateWo
               "require-proof",
             ),
           );
-        const result = context.runInCapturedSchemaScope
-          ? context.runInCapturedSchemaScope(read)
-          : read();
-        assertCurrent();
-        return result;
+        return context.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(read) : read();
       },
       dispose() {
         try {
@@ -340,7 +322,6 @@ export function createOpenClawStateCurrentWarmReader<T>(
               operation,
               openStateSchemaReadAdmission,
             );
-            assertCurrent();
             retained.observe();
             return result;
           },
@@ -430,8 +411,6 @@ function runOpenClawStateCurrentReadConnection<T>(
       }
       return value;
     });
-    // Local migration publication can replace the admitted facts during the read.
-    runSqliteReadOperationSync(db, admit);
   } catch (error) {
     errors.push(error);
   }

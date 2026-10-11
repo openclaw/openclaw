@@ -7,6 +7,7 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
+import { togglePinnedSession } from "../../app/bootstrap-navigation-preferences.ts";
 import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
 import type { SidebarSessionMutationScope } from "../../components/app-sidebar-session-types.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
@@ -29,6 +30,7 @@ import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   areUiSessionKeysEquivalent,
   canArchiveSessionRow,
+  isPinnableUiSessionRow,
   parseAgentSessionKey,
   isSubagentSessionKey,
   resolveUiConfiguredMainKey,
@@ -40,6 +42,7 @@ import { showToast } from "../../lib/toast.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
+import { headerSessionMetadataPatch } from "./chat-pane-session-metadata-patch.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -117,6 +120,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.state?.sessionsResult?.sessions ?? [],
     );
     const archiving = this.context.sessions.archiveVisibility(row.key) === "pending";
+    const pinned = this.context.navigation.snapshot.sidebarEntries.includes(
+      serializeSidebarEntry({ type: "session", key: row.key }),
+    );
     return this.headerSessionDataMemo.read(
       [
         label,
@@ -125,7 +131,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         row.sessionId,
         isChild,
         hasChildren,
-        row.pinned,
+        pinned,
         pinnable,
         row.snoozedUntil,
         row.unread,
@@ -144,7 +150,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         sessionId: row.sessionId ?? null,
         isChild,
         hasChildren,
-        pinned: row.pinned === true,
+        pinned,
         pinnable,
         snoozedUntil: row.snoozedUntil ?? null,
         unread: row.unread === true,
@@ -218,6 +224,19 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     }
     if (action.kind === "continue-in-terminal") {
       this.openContinueInTerminalDialog(row);
+      return;
+    }
+    if (action.kind === "toggle-pin") {
+      const current = this.state ? selectedChatSessionRow(this.state) : undefined;
+      if (
+        !current ||
+        !areUiSessionKeysEquivalent(current.key, row.key) ||
+        (row.sessionId && current.sessionId !== row.sessionId) ||
+        !isPinnableUiSessionRow(current)
+      ) {
+        return;
+      }
+      togglePinnedSession(this.context.navigation, current.key);
       return;
     }
     const scope = this.captureHeaderSessionActionScope();
@@ -327,7 +346,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         case "toggle-involving-me":
           await operations.setSessionInvolvement(host, session, !row.hiddenFromInvolvingMe, scope);
           break;
-        case "toggle-pin":
         case "toggle-unread":
         case "set-icon":
         case "set-color":
@@ -335,25 +353,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         case "reset-appearance": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
-            const patch =
-              action.kind === "toggle-pin"
-                ? { pinned: !currentSession.pinned }
-                : action.kind === "toggle-unread"
-                  ? { unread: !currentSession.unread }
-                  : action.kind === "set-icon"
-                    ? { icon: action.icon }
-                    : action.kind === "set-color"
-                      ? { color: action.color }
-                      : action.kind === "set-communication"
-                        ? { communication: action.communication }
-                        : { icon: null, color: null };
-            await operations.patchSession(
-              host,
-              currentSession,
-              patch,
-              scope,
-              action.kind === "toggle-pin" ? { sessionScope: true } : undefined,
-            );
+            const patch = headerSessionMetadataPatch(action, currentSession);
+            await operations.patchSession(host, currentSession, patch, scope);
           }
           break;
         }

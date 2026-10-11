@@ -322,13 +322,13 @@ async function persistQuarantinedJobs(
  * masquerade as a store-write failure — at startup that keeps the whole
  * scheduler down.
  */
-export function runPostPersistCronNotifications(
+export async function runPostPersistCronNotifications(
   state: CronServiceState,
   notifications: DeferredCronNotifications | undefined,
 ) {
   for (const notification of notifications ?? []) {
     try {
-      dispatchCronNotification(state, notification);
+      await dispatchCronNotification(state, notification);
     } catch (err) {
       state.deps.log.warn(
         { error: err instanceof Error ? err.message : String(err) },
@@ -442,6 +442,12 @@ export async function persistCronJobMutation(params: {
     source.assertCurrent();
     params.assertCurrent?.();
     source.assertCurrent();
+    if (
+      params.agentId !== undefined &&
+      state.deps.isAgentAvailable?.(params.agentId, undefined, { deletionBlocked: false }) === false
+    ) {
+      throw new Error(describeUnavailableCronAgent(params.agentId));
+    }
   };
   await runCronRuntimeMutation({
     context: source.context,
@@ -462,20 +468,8 @@ export async function persistCronJobMutation(params: {
           : undefined,
     }),
     assertCurrent,
-    prepare(facts) {
-      const assertAvailable = () => {
-        assertCurrent();
-        if (
-          params.agentId !== undefined &&
-          (facts.deletionBlocked ||
-            state.deps.isAgentAvailable?.(params.agentId, undefined, facts) === false)
-        ) {
-          throw new Error(describeUnavailableCronAgent(params.agentId));
-        }
-      };
-      assertAvailable();
-      return { value: { nowMs: state.deps.nowMs() }, assertCurrent: assertAvailable };
-    },
+    // Config availability may change after dispatch; deletion is checked against worker rows.
+    snapshot: { nowMs: state.deps.nowMs() },
     publish({
       store,
       names,
@@ -511,7 +505,6 @@ export async function persistCronJobMutation(params: {
             storeJobs: store.jobs,
             suppressScheduledJobId: params.suppressScheduledJobId,
           });
-          runPostPersistCronNotifications(state, params.postPersistNotifications);
         } finally {
           params.afterPublish?.();
         }
@@ -531,4 +524,5 @@ export async function persistCronJobMutation(params: {
         : new CronJobsStoreChangedError(source.storeKey);
     },
   });
+  await runPostPersistCronNotifications(state, params.postPersistNotifications);
 }
