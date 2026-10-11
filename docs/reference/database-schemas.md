@@ -23,6 +23,11 @@ CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
 
+Once Gateway startup holds exclusive state ownership, it inspects the previous
+Gateway lease directly in a read-only worker instead of copying the shared
+database. Fresh or unverifiable owners still prevent startup; Doctor's schema
+repair admission keeps its private snapshot.
+
 Borrowed worker transactions obtain their initial host grant before `BEGIN
 IMMEDIATE`; writes with domain or publication facts still revalidate those facts
 at commit. Transcript-index preflight and sweep instead admit one bounded derived

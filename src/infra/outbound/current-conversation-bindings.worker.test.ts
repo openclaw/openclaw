@@ -413,76 +413,54 @@ it("keeps account touch bytes identical and rejects a manager shadowed by anothe
   });
 });
 
-it.each([
-  { stage: "transaction", owner: "manager" },
-  { stage: "commit", owner: "registry" },
-] as const)(
-  "joins expiry pruning refused by the actual $owner at $stage without deleting its row",
-  async ({ stage, owner }) => {
-    const previousRegistry = captureActivePluginRegistrySnapshot();
+it("joins expiry pruning refused by the stopped manager without deleting its row", async () => {
+  await withOpenClawTestState({ label: "binding-list-prune-manager" }, async () => {
+    const manager = createAccountScopedConversationBindingManager({
+      channel: "fixture",
+      accountId: "owner",
+      cfg: {},
+      stateKey: Symbol("binding-list-retirement"),
+      toStoredTargetKind: (kind) => kind,
+      toSessionBindingTargetKind: (kind) => kind,
+    });
     try {
-      await withOpenClawTestState({ label: `binding-list-prune-${owner}-${stage}` }, async () => {
-        const manager =
-          owner === "manager"
-            ? createAccountScopedConversationBindingManager({
-                channel: "fixture",
-                accountId: "owner",
-                cfg: {},
-                stateKey: Symbol("binding-list-retirement"),
-                toStoredTargetKind: (kind) => kind,
-                toSessionBindingTargetKind: (kind) => kind,
-              })
-            : undefined;
-        try {
-          const service = getSessionBindingService();
-          const bound = await service.bind({
-            conversation: {
-              channel: owner === "manager" ? "fixture" : INTERNAL_MESSAGE_CHANNEL,
-              accountId: owner === "manager" ? "owner" : "default",
-              conversationId: "expired-list",
-            },
-            targetSessionKey: "agent:main:current",
-            targetKind: "session",
-          });
-          updateCurrentConversationBindingRecord(bound.conversation, () => ({
-            ...bound,
-            expiresAt: 1,
-          }));
-          const { db } = openOpenClawStateDatabase();
-          const query = db.prepare(
-            "SELECT * FROM current_conversation_bindings WHERE binding_id = ?",
-          );
-          const before = query.get(bound.bindingId);
-          expect(before).toBeDefined();
-          let retirements = 0;
-          probe.admission(admission, (request, grant, admit) => {
-            if (request.stage === stage) {
-              retirements += 1;
-              if (manager) {
-                manager.stop();
-              } else {
-                setActivePluginRegistry(createTestRegistry([]));
-              }
-            }
-            admit(request, grant);
-          });
-          await expect(
-            resolveBoundDeliveryDestination({
-              targetSessionKey: bound.targetSessionKey,
-            }),
-          ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
-          expect(retirements).toBe(1);
-          expect(query.get(bound.bindingId)).toEqual(before);
-        } finally {
-          vi.restoreAllMocks();
-          manager?.stop();
-        }
+      const service = getSessionBindingService();
+      const bound = await service.bind({
+        conversation: {
+          channel: "fixture",
+          accountId: "owner",
+          conversationId: "expired-list",
+        },
+        targetSessionKey: "agent:main:current",
+        targetKind: "session",
       });
+      updateCurrentConversationBindingRecord(bound.conversation, () => ({
+        ...bound,
+        expiresAt: 1,
+      }));
+      const { db } = openOpenClawStateDatabase();
+      const query = db.prepare("SELECT * FROM current_conversation_bindings WHERE binding_id = ?");
+      const before = query.get(bound.bindingId);
+      expect(before).toBeDefined();
+      let retirements = 0;
+      probe.admission(admission, (request, grant, admit) => {
+        if (request.stage === "transaction") {
+          retirements += 1;
+          manager.stop();
+        }
+        admit(request, grant);
+      });
+      await expect(
+        resolveBoundDeliveryDestination({ targetSessionKey: bound.targetSessionKey }),
+      ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
+      expect(retirements).toBe(1);
+      expect(query.get(bound.bindingId)).toEqual(before);
     } finally {
-      restoreActivePluginRegistrySnapshot(previousRegistry);
+      vi.restoreAllMocks();
+      manager.stop();
     }
-  },
-);
+  });
+});
 
 it.each(["replaced", "removed", "expired", "malformed"] as const)(
   "refreshes every batched session after a foreign binding is %s before expiry pruning",

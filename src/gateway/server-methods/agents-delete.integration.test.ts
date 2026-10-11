@@ -42,10 +42,7 @@ import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import * as agentDatabases from "../../state/openclaw-agent-db.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecutions from "../../state/openclaw-agent-execution.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
@@ -576,12 +573,16 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   });
                   expect(opened.manager, opened.error).not.toBeNull();
                   await withinTest(scanStarted.promise, signal);
-                  const database = getOpenClawAgentDatabaseIfOpen({
-                    agentId,
-                    path: databasePath,
-                    env: state.env,
-                  });
-                  expect(database?.db.isOpen).toBe(true);
+                  const readMemoryLeases = () => {
+                    using shared = new DatabaseSync(sharedDatabasePath, { readOnly: true });
+                    return shared
+                      .prepare(
+                        "SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id",
+                      )
+                      .all(databasePath);
+                  };
+                  const memoryLeases = readMemoryLeases();
+                  expect(memoryLeases.length).toBeGreaterThan(0);
                   deletingRecreated = client.request("agents.delete", {
                     agentId,
                     deleteFiles: true,
@@ -601,7 +602,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   );
                   // Accepted transcript discovery still owns its database until it settles.
                   expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
-                  expect(database?.db.isOpen).toBe(true);
+                  expect(readMemoryLeases()).toEqual(memoryLeases);
                   releaseScan.resolve();
                   await expect(deletingRecreated).resolves.toMatchObject({
                     ok: true,
@@ -610,6 +611,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   });
                   expect(await deletingRecreated).not.toHaveProperty("purgeFailed");
                   expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
+                  expect(readMemoryLeases()).toEqual([]);
                   for (const pathname of [
                     workspace,
                     state.agentDir(agentId),

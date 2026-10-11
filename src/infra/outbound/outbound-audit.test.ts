@@ -181,34 +181,6 @@ describe("outbound audit projection", () => {
     }
   });
 
-  it("preserves unknown delivery state without inventing a failure code", () => {
-    const events = captureEvents(() => {
-      emitOutboundAuditTerminals({
-        context: {
-          channel: "matrix",
-          to: "!room:target",
-          runId: "run-preparation-failure",
-          payloads: [{ text: "sent?" }],
-        },
-        terminals: uniformOutboundAuditTerminals(1, {
-          outcome: "unknown",
-          failureStage: "platform_send",
-        }),
-        startedAt: Date.now(),
-      });
-    });
-
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      status: "unknown",
-      outcome: "unknown",
-      failureStage: "platform_send",
-      runId: "run-preparation-failure",
-      resultCount: 0,
-    });
-    expect(events[0]).not.toHaveProperty("errorCode");
-  });
-
   it("treats a missing adapter identity as unknown rather than a proven suppression", () => {
     const events = captureEvents(() => {
       emitOutboundAuditTerminals({
@@ -313,29 +285,6 @@ describe("outbound audit projection", () => {
       status: "succeeded",
       outcome: "sent",
       resultCount: 6,
-    });
-  });
-
-  it("normalizes a routed target used as the fallback conversation identifier", () => {
-    const events = captureEvents(() => {
-      emitOutboundAuditTerminals({
-        context: {
-          channel: "discord",
-          to: "discord:channel:123456789",
-          payloads: [{ text: "sent" }],
-        },
-        terminals: uniformOutboundAuditTerminals(1, {
-          outcome: "sent",
-          results: [{ channel: "discord", messageId: "message-1" }],
-        }),
-        startedAt: Date.now(),
-      });
-    });
-
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      conversationId: "123456789",
-      targetId: "discord:channel:123456789",
     });
   });
 

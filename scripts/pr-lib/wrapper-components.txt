@@ -1185,7 +1185,6 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-census.ts
 src/infra/windows-process-start.ts
-src/infra/worker-ancestry.ts
 src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts

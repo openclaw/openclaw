@@ -580,7 +580,7 @@ export function registerIncognitoHistoryWiringTests(
   });
 
   it.each(["unchanged", "revoke", "abort", "append", "release"] as const)(
-    "revalidates async model context consumers after %s and joins their lifetime",
+    "settles async model context consumers after %s and joins their lifetime",
     async (mode) => {
       const { actor, env } = fixture;
       const session = await create(`async-model-context-${mode}`);
