@@ -51,17 +51,28 @@ describe("applyJobPatch schedule retention", () => {
   it.each([
     { kind: "every" as const, everyMs: 60_000 },
     { kind: "cron" as const, expr: "0 * * * *" },
-  ])("clears the at-only default when converting to $kind", (schedule) => {
-    const job = makeJob({
-      schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" },
-      deleteAfterRun: true,
-    });
+  ])(
+    "clears inherited one-shot cleanup but honors explicit policies when converting to $kind",
+    (schedule) => {
+      for (const previous of [
+        { kind: "at", at: "2026-07-19T09:00:00.000Z" },
+        { kind: "on-exit", command: "true" },
+      ] as const) {
+        for (const deleteAfterRun of [undefined, false, true]) {
+          const job = makeJob({ schedule: previous, deleteAfterRun: true });
 
-    applyJobPatch(job, { schedule });
+          applyJobPatch(job, {
+            schedule,
+            ...(deleteAfterRun === undefined ? {} : { deleteAfterRun }),
+          });
 
-    expect(job.schedule.kind).toBe(schedule.kind);
-    expect(Object.hasOwn(job, "deleteAfterRun")).toBe(false);
-  });
+          expect(job.schedule.kind).toBe(schedule.kind);
+          expect(job.deleteAfterRun, previous.kind).toBe(deleteAfterRun);
+          expect(Object.hasOwn(job, "deleteAfterRun")).toBe(deleteAfterRun !== undefined);
+        }
+      }
+    },
+  );
 
   it.each([
     {

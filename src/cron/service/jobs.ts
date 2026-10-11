@@ -337,7 +337,7 @@ export function applyJobPatch(
     // recurring job's ignored/stale flag defeat the one-shot cleanup default.
     job.deleteAfterRun = true;
   } else if (
-    previousScheduleKind === "at" &&
+    (previousScheduleKind === "at" || previousScheduleKind === "on-exit") &&
     (patch.schedule?.kind === "every" || patch.schedule?.kind === "cron")
   ) {
     delete job.deleteAfterRun;
