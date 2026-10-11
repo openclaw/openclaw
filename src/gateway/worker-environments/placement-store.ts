@@ -143,7 +143,14 @@ export function createWorkerSessionPlacementStore(
       return registerWorkerTurnClaimClosedHandler(path, handler);
     },
 
+    /** @deprecated Await getAsync for preparation; retain native reads only at final effect guards. */
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-readers",
+        method: "get",
+        replacement: "getAsync",
+        compatibility: "Synchronous reads retain their immediate current-row result.",
+      });
       return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));
     },
 
@@ -308,6 +315,12 @@ export function createWorkerSessionPlacementStore(
 
     /** @deprecated Await getManyAsync; retained through the next Plugin SDK major. */
     getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord> {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-readers",
+        method: "getMany",
+        replacement: "getManyAsync",
+        compatibility: "Synchronous reads retain their immediate current-row result.",
+      });
       const normalizedIds = [
         ...new Set(sessionIds.map((sessionId) => required(sessionId, "session id"))),
       ];
@@ -391,13 +404,27 @@ export function createWorkerSessionPlacementStore(
       return current;
     },
 
+    /** @deprecated Await listForReconcileAsync; retained through the next Plugin SDK major. */
     listForReconcile(sessionKey?: string): WorkerSessionPlacementRecord[] {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-readers",
+        method: "listForReconcile",
+        replacement: "listForReconcileAsync",
+        compatibility: "Synchronous reads retain their immediate current-row result.",
+      });
       return readWorkerPlacementsForReconcileInDatabase(read(), sessionKey).map((record) =>
         withWorkspaceResultConflict(record)!,
       );
     },
 
+    /** @deprecated Await listAsync; retained through the next Plugin SDK major. */
     list(): WorkerSessionPlacementRecord[] {
+      warnPluginSdkDeprecation({
+        family: "worker-placement-sync-readers",
+        method: "list",
+        replacement: "listAsync",
+        compatibility: "Synchronous reads retain their immediate current-row result.",
+      });
       return readWorkerPlacementsInDatabase(read()).map((record) =>
         withWorkspaceResultConflict(record)!,
       );

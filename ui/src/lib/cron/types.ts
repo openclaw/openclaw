@@ -132,6 +132,7 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronCloningJob: CronJob | null;
   cronRunsError: string | null;
   cronRunsJobId: string | null;
+  cronRunsRunId?: string | null;
   cronRunsLoadingMore: boolean;
   cronRuns: CronRunLogEntry[];
   cronRunsTotal: number;

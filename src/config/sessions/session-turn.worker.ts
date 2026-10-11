@@ -360,7 +360,7 @@ export function applySessionTurn<T>(
                     maintenancePlans: [],
                   },
                   database,
-                  { captureFullFacts: true },
+                  { captureFullFacts: true, postimages: committed.postimages },
                 )
               : undefined;
             const custodyEntry =

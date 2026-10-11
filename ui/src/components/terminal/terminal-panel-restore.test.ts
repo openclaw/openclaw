@@ -9,8 +9,10 @@ import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
+  terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
@@ -89,12 +91,13 @@ function mountPanel(
   client: TerminalGatewayClient,
   options: { page?: boolean; open?: boolean } = {},
 ) {
-  const panel = document.createElement(PANEL_TAG) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(PANEL_TAG);
   panel.client = client;
   panel.available = true;
   panel.page = panel.fullscreen = panel.embedded = options.page === true;
-  const sessions = (panel as unknown as { terminalSessions: TerminalPanelSessionController })
-    .terminalSessions;
+  // Initialize the bridge before observing restore writes made during mount.
+  panel.requestUpdate();
+  const sessions = terminalSessionsForTest(panel);
   const mountedPanel = { panel, sessions };
   mounted.push(mountedPanel);
   document.body.append(panel);
@@ -169,6 +172,7 @@ describe("terminal persisted restore", () => {
       sessions.cancelPendingActions();
     }
     document.body.replaceChildren();
+    await Promise.resolve();
     for (const reply of pendingAttaches) {
       reply.resolve(attachResult(reply.sessionId));
     }
@@ -260,10 +264,12 @@ describe("terminal persisted restore", () => {
       expect(JSON.parse(sessionStorage.getItem(storageKey) ?? "[]")).toEqual(
         keepSibling ? ["session-b"] : [],
       );
-      expect(gateway.requests.filter((request) => request.method === "terminal.close")).toEqual(
-        outcome === "resolve"
-          ? [{ method: "terminal.close", params: { sessionId: "session-a" } }]
-          : [],
+      await waitForFast(() =>
+        expect(gateway.requests.filter((request) => request.method === "terminal.close")).toEqual(
+          outcome === "resolve"
+            ? [{ method: "terminal.close", params: { sessionId: "session-a" } }]
+            : [],
+        ),
       );
     },
   );
@@ -309,10 +315,12 @@ describe("terminal persisted restore", () => {
       expect(current.panel.terminalPanelOpen).toBe(false);
       expect(current.panel.renderRoot.querySelector(".tp-error")).toBeNull();
       expect(gateway.requests.filter(({ method }) => method === "terminal.open")).toEqual([]);
-      expect(gateway.requests.filter(({ method }) => method === "terminal.close")).toEqual(
-        outcome === "resolve"
-          ? [{ method: "terminal.close", params: { sessionId: "session-a" } }]
-          : [],
+      await waitForFast(() =>
+        expect(gateway.requests.filter(({ method }) => method === "terminal.close")).toEqual(
+          outcome === "resolve"
+            ? [{ method: "terminal.close", params: { sessionId: "session-a" } }]
+            : [],
+        ),
       );
     },
   );
