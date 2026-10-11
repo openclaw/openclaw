@@ -63,6 +63,7 @@ export function ConfigFormStructuredDraftContent(props: {
     ) {
       return false;
     }
+    // SAFETY: Structured drafts have object/array schemas, and the checks above preserve that root kind.
     setDraftValue(candidate as Record<string, unknown> | unknown[]);
     setError("");
     if (!isSupportedConfigValueValid(currentProps.params.schema, candidate)) {

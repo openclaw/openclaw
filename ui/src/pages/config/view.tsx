@@ -171,9 +171,9 @@ export function Config(props: ConfigProps) {
           ),
         }
       : formSchema;
-    const topTabs = [
+    const topTabs: Array<{ key: string | null; label: string }> = [
       ...((props.showRootTab ?? true)
-        ? [{ key: null as string | null, label: props.navRootLabel ?? t("nav.settings") }]
+        ? [{ key: null, label: props.navRootLabel ?? t("nav.settings") }]
         : []),
       ...categories.flatMap((category) => category.sections),
     ];

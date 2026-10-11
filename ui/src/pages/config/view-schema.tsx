@@ -9,6 +9,7 @@ export function asConfigSchema(value: unknown): JsonSchema | null {
   if (!isRecord(value)) {
     return null;
   }
+  // SAFETY: The schema comes from config.schema; the boundary check excludes non-object payloads.
   return value as JsonSchema;
 }
 
@@ -66,6 +67,7 @@ export function configValueExistsAtPath(
     if (!segment || !Object.hasOwn(current, segment)) {
       return false;
     }
+    // SAFETY: The value is an object and the requested own property was checked above.
     return visit((current as Record<string, unknown>)[segment], index + 1);
   };
   return visit(value, 0);

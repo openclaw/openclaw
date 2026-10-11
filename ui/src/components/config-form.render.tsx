@@ -261,6 +261,11 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
         const path = [props.activeSection, props.activeSubsection];
         const hint = localizedHintForPath(path, props.uiHints);
         const sectionValue = value[props.activeSection];
+        let nodeValue: unknown;
+        if (sectionValue && typeof sectionValue === "object") {
+          // SAFETY: The value is a non-null object; absent subsection keys yield undefined.
+          nodeValue = (sectionValue as Record<string, unknown>)[props.activeSubsection];
+        }
         return [
           {
             id: `config-section-${path.join("-")}`,
@@ -268,10 +273,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
             description: hint?.help ?? node.description ?? "",
             node,
             path,
-            nodeValue:
-              sectionValue && typeof sectionValue === "object"
-                ? (sectionValue as Record<string, unknown>)[props.activeSubsection]
-                : undefined,
+            nodeValue,
           },
         ];
       }

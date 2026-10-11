@@ -358,6 +358,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
                     aria-label={t("chat.followUpMode")}
                     value={followUpSelection()}
                     onChange={(event: Event) => {
+                      // SAFETY: This change handler is bound directly to the native select.
                       const value = (event.currentTarget as HTMLSelectElement).value;
                       props.onAppearanceChange({
                         chatFollowUpMode:

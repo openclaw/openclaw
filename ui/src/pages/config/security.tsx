@@ -38,8 +38,8 @@ export type SecurityViewProps = {
 function SecurityOverviewSection(props: SecurityViewProps) {
   const profile = () => props.security.toolProfile.trim();
   const profileOptions = createMemo(() => {
-    const options = PROFILE_OPTIONS.map((item) => ({
-      value: item.id as string,
+    const options: Array<{ value: string; label: string }> = PROFILE_OPTIONS.map((item) => ({
+      value: item.id,
       label: t(item.labelKey),
     }));
     if (profile() && !options.some((option) => option.value === profile())) {
