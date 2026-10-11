@@ -29,10 +29,10 @@ import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-d
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
-  disconnectUserGitHubConnection,
+  mutateUserGitHubConnection,
   readUserGitHubConnection,
-  updateUserGitHubConnection,
 } from "../state/user-github-connections.js";
+import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -530,7 +530,7 @@ describe("personal publication authority and recovery", () => {
             client.connect.scopes = ["operator.read"];
           }
           if (race === "disconnect") {
-            disconnectUserGitHubConnection(owner, () => {});
+            await mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
           }
           if (race === "reconnect") {
             updateUserGitHubConnection(
@@ -570,7 +570,7 @@ describe("personal publication authority and recovery", () => {
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       const result = await fallback(argv, options);
       if (argv.includes("push")) {
-        disconnectUserGitHubConnection(owner, () => {});
+        await mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
       }
       return result;
     });

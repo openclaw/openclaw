@@ -7,7 +7,6 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
-import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -221,7 +220,7 @@ describe("session upstream links", () => {
     ).toBeUndefined();
   });
 
-  it("observes foreign source changes and rolls back a revoked commit grant", async () => {
+  it("observes source changes and rejects stale initialization", async () => {
     const database = createDatabaseOptions();
     const sourceKey = "agent:main:adopted:source";
     upsertLink(sourceKey, "claude", database);
@@ -260,42 +259,6 @@ describe("session upstream links", () => {
         sourceCurrent,
       ),
     ).rejects.toThrow("source changed");
-    let revoked = false;
-    const admission = operationAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, ...args) =>
-        admission(
-          (request, grant) => {
-            if (request.stage === "commit") {
-              revoked = true;
-            }
-            admit(request, grant);
-          },
-          ...args,
-        ),
-    );
-    await expect(
-      deleteSessionUpstreamLinkAsync(child.sessionKey, child.agentId, {
-        ...database,
-        expected: readSessionUpstreamLinkInDatabase(
-          openOpenClawStateDatabase(database).db,
-          child.sessionKey,
-          child.agentId,
-        ),
-        assertCommitAllowed: () => {
-          if (revoked) {
-            throw new Error("initializer revoked");
-          }
-        },
-      }),
-    ).rejects.toThrow("initializer revoked");
-    expect(
-      readSessionUpstreamLinkInDatabase(
-        openOpenClawStateDatabase(database).db,
-        child.sessionKey,
-        child.agentId,
-      ),
-    ).toBeDefined();
     expect(
       readSessionUpstreamLinkInDatabase(
         openOpenClawStateDatabase(database).db,

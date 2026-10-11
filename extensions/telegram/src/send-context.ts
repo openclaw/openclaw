@@ -114,10 +114,7 @@ const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
 export const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 type CachedTelegramClientOptions = {
-  activeLeases: number;
   clientOptions: ApiClientOptions & { fetch: NonNullable<ApiClientOptions["fetch"]> };
-  closeStarted: boolean;
-  retired: boolean;
   transport: TelegramTransport;
 };
 const telegramClientOptionsCache = new Map<string, CachedTelegramClientOptions>();
@@ -144,13 +141,7 @@ function createTelegramHttpLogger(cfg: OpenClawConfig) {
 }
 
 function closeCachedTelegramClientOptions(entry: CachedTelegramClientOptions): void {
-  // Eviction may retire a cache entry while a send still holds a lease; defer
-  // transport.close until the last op-level lease releases so mid-request sockets stay open.
-  entry.retired = true;
-  if (entry.activeLeases > 0 || entry.closeStarted) {
-    return;
-  }
-  entry.closeStarted = true;
+  // Cache churn beyond 64 account/network configurations may interrupt a send.
   void entry.transport.close().catch((err: unknown) => {
     diagLogger.warn(
       `telegram client options cache transport close failed: ${redactSensitiveText(
@@ -182,13 +173,10 @@ function resolveTelegramClientOptions(
     transport,
   });
   const entry: CachedTelegramClientOptions = {
-    activeLeases: 0,
     clientOptions: {
       fetch: asTelegramClientFetch(fetchImpl),
       ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
     },
-    closeStarted: false,
-    retired: false,
     transport,
   };
   telegramClientOptionsCache.set(cacheKey, entry);
@@ -314,21 +302,17 @@ export async function withTelegramApiContext<T>(
   try {
     ownerAgentId = resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId });
   } catch (error) {
-    // Ownership is local preflight, before a transport lease or Bot API operation.
+    // Ownership is local preflight, before a Bot API operation.
     throw new PlatformMessageNotDispatchedError(formatErrorMessage(error), {
       cause: error,
       retryable: false,
     });
   }
   let api: TelegramApi;
-  let client: CachedTelegramClientOptions | undefined;
   if (opts.api) {
     api = opts.api as TelegramApi;
   } else {
-    client = resolveTelegramClientOptions(account);
-    // One op-level lease covers the full send/action (including pre-request work
-    // and retries) so eviction cannot close the transport mid-operation.
-    client.activeLeases += 1;
+    const client = resolveTelegramClientOptions(account);
     const fetch = client.clientOptions.fetch;
     const clientOptions = opts.assertPlatformSendAuthorized
       ? {
@@ -368,17 +352,8 @@ export async function withTelegramApiContext<T>(
         opts.assertPlatformSendAuthorized?.();
       }
     : undefined;
-  try {
-    // A caller-supplied API has no authority transformer; flood waits re-check here.
-    return await runAuthorizedTelegramRequest(assertCurrent, () => operation(context));
-  } finally {
-    if (client) {
-      client.activeLeases -= 1;
-      if (client.retired) {
-        closeCachedTelegramClientOptions(client);
-      }
-    }
-  }
+  // A caller-supplied API has no authority transformer; flood waits re-check here.
+  return await runAuthorizedTelegramRequest(assertCurrent, () => operation(context));
 }
 
 type TelegramRequestWithDiag = <T>(

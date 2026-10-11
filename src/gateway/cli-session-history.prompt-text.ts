@@ -2,7 +2,7 @@
 import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import {
   LEGACY_REQUESTER_PROFILE_HINT,
-  stripLeadingInboundMetadata,
+  readLeadingInboundMetadataEnd,
 } from "../auto-reply/reply/strip-inbound-meta.js";
 import {
   normalizeInputProvenance,
@@ -43,26 +43,32 @@ const SYSTEM_EVENT_TIMESTAMP_LINE =
   /^System: \[(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?: [^\s\]]+)?|unknown-time)\] /u;
 
 function stripLeadingSystemEventLines(text: string, preserveRequesterGuidance: boolean): string {
-  // Queued events can follow the producer's fenced conversation metadata.
-  // Keep that context byte-identical while comparing only the event-free turn.
-  const context =
+  // Events follow generated inbound context, including recent chat history.
+  // Locate that prefix without applying display cleanup to later user text.
+  // Historical native rows may retain the old unmarked requester companion.
+  // This frame identifies attached hints; the shared parser owns its boundary.
+  const conversationFrame =
     text.match(
       /^(?:Conversation info: )?⟦openclaw:ctx⟧\r?\n```json\r?\n[^\n]*\r?\n```\r?\n\r?\n/u,
     )?.[0] ?? "";
-  // Historical native rows may retain the old unmarked requester companion.
-  // Metadata owns attached hints; only a complete leading frame is a bare CLI decoration.
-  const afterContext = text.slice(context.length);
-  const newline = afterContext.startsWith(`${LEGACY_REQUESTER_PROFILE_HINT}\r\n`) ? "\r\n" : "\n";
+  const label =
+    conversationFrame && !text.startsWith("Conversation info: ") ? "Conversation info: " : "";
+  const context = text.slice(
+    0,
+    readLeadingInboundMetadataEnd(label ? label + text : text) - label.length,
+  );
+  const afterFrame = text.slice(conversationFrame.length);
+  const newline = afterFrame.startsWith(`${LEGACY_REQUESTER_PROFILE_HINT}\r\n`) ? "\r\n" : "\n";
   const hint = `${LEGACY_REQUESTER_PROFILE_HINT}${newline}${newline}`;
   const body = context
-    ? stripLeadingInboundMetadata(
-        text.startsWith("Conversation info: ") ? text : `Conversation info: ${text}`,
-      )
+    ? text.slice(context.length)
     : !preserveRequesterGuidance && text.startsWith(hint)
       ? text.slice(hint.length)
       : text;
   const retainedContext =
-    context && afterContext.startsWith(hint) && body !== afterContext ? "" : context;
+    conversationFrame && afterFrame.startsWith(hint) && context.length > conversationFrame.length
+      ? ""
+      : context;
   const source = body.replace(/^(?:\r?\n)+/u, "");
   const lines = source.split("\n");
   let end = 0;
