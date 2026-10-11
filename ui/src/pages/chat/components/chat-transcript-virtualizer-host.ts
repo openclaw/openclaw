@@ -513,6 +513,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           layout: this.layout,
           headerHeight: this.headerHeight,
           presented: snapshot.presented,
+          initialPositionPending: this.implicitEndAnchorPending,
           onCommit: () => this.connected && this.didCommit(),
           rows,
           getContent: (index) => (rows[index] ? renderRow(rows[index]) : nothing),

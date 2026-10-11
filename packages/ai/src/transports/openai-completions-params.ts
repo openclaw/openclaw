@@ -25,6 +25,7 @@ import {
 } from "../providers/openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
+import { shortHash } from "../utils/hash.js";
 import { resolveProviderEndpoint } from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
@@ -248,12 +249,50 @@ type CompletionsRequest = Record<string, unknown> & {
   tools?: ReturnType<typeof convertTools>["tools"];
 };
 
+const contextOutputBudgets = new WeakMap<
+  CompletionsRequest,
+  {
+    model: string;
+    cap: number;
+    inputHash: string;
+  }
+>();
+
+function completionsInputHash(payload: CompletionsRequest): string {
+  return shortHash(JSON.stringify([payload.messages, payload.tools, payload.response_format]));
+}
+
+// Hooks may replace or mutate the payload. Only an unchanged automatic context
+// clamp can turn a provider's length finish into compaction recovery.
+export function resolveCompletionsContextOutputBudget(
+  request: CompletionsRequest,
+  payload: CompletionsRequest,
+): number | undefined {
+  const budget = contextOutputBudgets.get(request);
+  const limits = [payload.max_tokens, payload.max_completion_tokens].filter(
+    (value) => value !== undefined,
+  );
+  if (
+    !budget ||
+    payload.model !== budget.model ||
+    !Array.isArray(payload.messages) ||
+    (payload.tools !== undefined && !Array.isArray(payload.tools)) ||
+    limits.length === 0 ||
+    limits.some((value) => value !== budget.cap) ||
+    completionsInputHash(payload) !== budget.inputHash
+  ) {
+    return undefined;
+  }
+  return budget.cap;
+}
+
 export function buildOpenAICompletionsRequest(
   model: OpenAIModeModel,
   context: Context,
   options: OpenAICompletionsOptions | undefined,
   policy: CompletionsRequestPolicy,
 ): CompletionsRequest {
+  let contextOutputCap: number | undefined;
   const resolvedPolicy =
     policy.mode === "direct" ? policy : { ...policy, compat: getCompat(model) };
   const compat = resolvedPolicy.compat;
@@ -477,6 +516,7 @@ export function buildOpenAICompletionsRequest(
           );
         }
         clampedMaxTokens = remainingBudget;
+        contextOutputCap = remainingBudget;
         emitModelTransportDebug(
           log,
           `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
@@ -518,6 +558,13 @@ export function buildOpenAICompletionsRequest(
     } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
       delete params.reasoning_effort;
     }
+  }
+  if (contextOutputCap !== undefined) {
+    contextOutputBudgets.set(params, {
+      model: params.model,
+      cap: contextOutputCap,
+      inputHash: completionsInputHash(params),
+    });
   }
   return params;
 }
