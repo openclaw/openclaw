@@ -1,5 +1,6 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildCliMcpGrantContext as buildCronCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { applyJobPatch } from "../service/jobs.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
@@ -194,6 +195,55 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
             }
           : undefined,
       );
+    });
+
+    it("carries a CLI cron Telegram topic and account into its loopback tool grant", async () => {
+      mockCliAnnounce();
+      const destination = { channel: "telegram", accountId: "ops", to: "-100123", threadId: 47 };
+      getChannelPluginMock.mockImplementation((channelId: string) =>
+        channelId === "telegram"
+          ? {
+              threading: {
+                resolveCurrentChannelId: ({
+                  to,
+                  threadId,
+                }: {
+                  to: string;
+                  threadId?: string | number | null;
+                }) => (threadId == null ? to : to + ":topic:" + threadId),
+              },
+            }
+          : undefined,
+      );
+      mockAnnounce(destination);
+      resolveDeliveryTargetMock.mockResolvedValue(resolvedTarget(destination));
+      await runCronIsolatedAgentTurn(makeParams(makeJob({ mode: "announce", ...destination })));
+
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      const run = expectFields(
+        mockCall(runCliAgentMock)[0],
+        {
+          messageChannel: "telegram",
+          agentAccountId: "ops",
+          currentChannelId: "-100123:topic:47",
+          currentThreadTs: "47",
+        },
+        "CLI cron run",
+      );
+      const grant = buildCronCliMcpGrantContext({
+        run: run as never,
+        config: {},
+        requireExplicitMessageTarget: false,
+        agentId: "main",
+        modelProvider: "openai",
+        modelId: "test-model",
+      });
+      expect(grant).toMatchObject({
+        messageProvider: "telegram",
+        accountId: "ops",
+        currentChannelId: "-100123:topic:47",
+        currentThreadTs: "47",
+      });
     });
 
     it("binds the resolved delivery account to account-implicit CLI message sends", async () => {
