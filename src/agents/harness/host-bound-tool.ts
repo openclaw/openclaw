@@ -5,11 +5,13 @@ import {
 } from "../runtime/internal-hooks.js";
 import { registerTrustedToolNoStartError } from "../tool-result-error.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import type { AgentWorkspaceReadiness } from "../workspace-readiness.js";
 
 export function gateBoundTool(
   tool: AnyAgentTool,
   assertActive: () => void,
   observeResult: (result: unknown) => void,
+  workspaceReadiness?: AgentWorkspaceReadiness,
 ): AnyAgentTool {
   const execute = tool.execute;
   const sourcePreparer = getInternalToolExecutionPreparer(tool);
@@ -18,8 +20,18 @@ export function gateBoundTool(
   }
   const acceptResult = <T>(result: T): T => {
     assertActive();
+    workspaceReadiness?.assertCurrent();
     observeResult(result);
     return result;
+  };
+  const awaitWorkspace = async () => {
+    assertActive();
+    if (workspaceReadiness) {
+      workspaceReadiness.assertCurrent();
+      await workspaceReadiness.waitUntilReady();
+      assertActive();
+      workspaceReadiness.assertCurrent();
+    }
   };
   const gated: AnyAgentTool = {
     ...tool,
@@ -27,7 +39,11 @@ export function gateBoundTool(
       ? {
           execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) => {
             try {
-              assertActive();
+              if (workspaceReadiness) {
+                await awaitWorkspace();
+              } else {
+                assertActive();
+              }
             } catch (error) {
               // This gate precedes dispatch; a revoked owner must not look like
               // a tool that started and failed in downstream terminal evidence.
@@ -39,14 +55,19 @@ export function gateBoundTool(
       : {}),
   };
   copyAgentToolMetadata(tool, gated, (source) =>
-    gateBoundTool(source, assertActive, observeResult),
+    gateBoundTool(source, assertActive, observeResult, workspaceReadiness),
   );
   if (sourcePreparer) {
     attachInternalToolExecutionPreparer(gated, async (preparationParams) => {
-      assertActive();
+      if (workspaceReadiness) {
+        await awaitWorkspace();
+      } else {
+        assertActive();
+      }
       const prepared = await sourcePreparer(preparationParams);
       try {
         assertActive();
+        workspaceReadiness?.assertCurrent();
       } catch (error) {
         prepared.dispose();
         throw error;
@@ -60,7 +81,11 @@ export function gateBoundTool(
       return {
         ...prepared,
         execute: async (onImplementationStart) => {
-          assertActive();
+          if (workspaceReadiness) {
+            await awaitWorkspace();
+          } else {
+            assertActive();
+          }
           return acceptResult(await prepared.execute(onImplementationStart));
         },
       };

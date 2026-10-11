@@ -8,7 +8,6 @@ import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionsCreateParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
@@ -87,44 +86,6 @@ export async function resolveSessionProjectRoot(
       ),
     );
   }
-}
-
-export function validateSessionWorktreeSelection(
-  params: SessionsCreateParams,
-): ErrorShape | undefined {
-  if (
-    params.worktreeSource === "empty" &&
-    (params.worktree !== true ||
-      params.cwd ||
-      params.projectId ||
-      params.projectGitUrl ||
-      params.repository ||
-      params.catalogId ||
-      params.execNode ||
-      params.worktreeBaseRef)
-  ) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "sessions.create worktreeSource=empty requires worktree=true and cannot include another workspace source, catalog, execNode, or worktreeBaseRef",
-    );
-  }
-  if (normalizeOptionalString(params.execNode) && params.worktree === true) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "sessions.create worktree cannot target execNode",
-    );
-  }
-  if (
-    (normalizeOptionalString(params.worktreeBaseRef) ||
-      normalizeOptionalString(params.worktreeName)) &&
-    params.worktree !== true
-  ) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "sessions.create worktreeBaseRef/worktreeName require worktree=true",
-    );
-  }
-  return undefined;
 }
 
 type AcceptedWorktreeSource = NonNullable<
@@ -342,6 +303,7 @@ export async function prepareSessionWorktree(params: {
   acceptedSource?: AcceptedWorktreeSource;
   withRollback?: SpawnParentWorktreeSource["withRollback"];
   onProgress?: CreateManagedWorktreeParams["onProgress"];
+  onPromptReady?: (prepared: PreparedGatewaySessionLifecycle) => Promise<void>;
 }): ReturnType<PrepareGatewaySessionLifecycle> {
   const { target, commitGuard } = params;
   const context = captureWorktreeRunEndContext(process.env);
@@ -503,6 +465,28 @@ export async function prepareSessionWorktree(params: {
       withSource,
       withRollback,
       onProgress: params.onProgress,
+      // A nested cwd may discover additional ancestor instructions. Its complete
+      // checkout remains the prompt boundary until that selection is available.
+      ...(params.onPromptReady && repository && workspace === repository.sourceRoot
+        ? {
+            onPromptReady: async (
+              worktree: Parameters<NonNullable<CreateManagedWorktreeParams["onPromptReady"]>>[0],
+            ) => {
+              commitGuard?.();
+              await params.onPromptReady!({
+                spawnedCwd: worktree.path,
+                sessionRoot: worktree.path,
+                worktree: {
+                  id: worktree.id,
+                  branch: worktree.branch,
+                  repoRoot: worktree.repoRoot,
+                  canonicalWorkspaceDir: workspace,
+                },
+              });
+              commitGuard?.();
+            },
+          }
+        : {}),
     };
     const { record: worktree, materialized } = workspace
       ? await worktrees.createWithOutcome({

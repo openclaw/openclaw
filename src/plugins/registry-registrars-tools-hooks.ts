@@ -283,6 +283,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         ...(versioned ? { contextVersion: 2 as const } : {}),
         names: normalized,
         optional,
+        ...(opts?.workspaceAccess === true ? { workspaceAccess: true } : {}),
         origin: record.origin,
       }),
       // Host-owned membership must not re-enter the callable wrapper's graph walk.

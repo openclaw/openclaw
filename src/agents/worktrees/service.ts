@@ -610,6 +610,12 @@ export class ManagedWorktreeService {
             .stat(path.join(repository.sourceRoot, ".openclaw", "worktree-setup.sh"))
             .catch(() => undefined);
     const runRepositorySetup = setupStat?.isFile() === true && (setupStat.mode & 0o111) !== 0;
+    const onPromptReady =
+      params.onPromptReady &&
+      !runRepositorySetup &&
+      !(await worktreePathExists(path.join(repository.sourceRoot, ".worktreeinclude")))
+        ? params.onPromptReady
+        : undefined;
     const setupBytes = runRepositorySetup
       ? Math.max(
           WORKTREE_SETUP_HEADROOM_BYTES,
@@ -645,6 +651,18 @@ export class ManagedWorktreeService {
         branch,
         base: sourceProfile?.commit ?? gitBase,
         sourceProfile,
+        ...(onPromptReady
+          ? {
+              onPromptReady: async (commit: string) =>
+                onPromptReady({
+                  id: publication.id,
+                  path: worktreePath,
+                  branch,
+                  repoRoot: repository.repoRoot,
+                  commit,
+                }),
+            }
+          : {}),
         prepareCommit: async (commit) => {
           const guard = { signal: params.signal, assertCurrent: params.commitGuard };
           await logWorktreeBase(repository.repoRoot, base, commit, {

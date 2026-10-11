@@ -33,6 +33,7 @@ import {
   createOpenClawCodingToolsInternal,
   createOpenClawCodingToolsInternalAsync,
 } from "../agent-tools.js";
+import { isCodeModeExecToolKind } from "../code-mode-control-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
@@ -53,9 +54,15 @@ import {
   getCoreTtsToolResultMediaUrls,
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
+import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { gateBoundTool } from "./host-bound-tool.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
-import { captureRequiredWorkspaceToolFloor } from "./host-capability-workspace.js";
+import {
+  captureRequiredWorkspaceToolFloor,
+  isWorkspaceTool,
+  isWorkspaceToolName,
+  WORKSPACE_TOOL_NAMES,
+} from "./host-capability-workspace.js";
 import { normalizeNativeOperationCwd, prepareAgentHarnessEnvironment } from "./host-environment.js";
 import { bindHarnessMedia } from "./host-media.js";
 import {
@@ -111,6 +118,7 @@ export function createAgentHarnessHostCapabilities(params: {
   const attemptSignal = attempt.abortSignal;
   const installationTarget = getInstallationTarget();
   const { sessionKey, onAgentEvent } = attempt;
+  const workspaceReadiness = captureAgentWorkspaceReadiness(sessionKey);
   // Capture the selected harness declaration before plugin code can mutate it.
   // Full must not cover other commands merely because the same plugin owns them.
   const requiredNodeCommands = new Set(params.requiredNodeCommands);
@@ -329,6 +337,16 @@ export function createAgentHarnessHostCapabilities(params: {
     }: Parameters<AgentHarnessHostCapabilities["runBeforeToolCall"]>[0],
   ) => {
     assertCurrent();
+    if (
+      workspaceReadiness &&
+      !isCodeModeExecToolKind(request.toolKind) &&
+      isWorkspaceToolName(request.toolName)
+    ) {
+      workspaceReadiness.assertCurrent();
+      await workspaceReadiness.waitUntilReady();
+      assertCurrent();
+      workspaceReadiness.assertCurrent();
+    }
     const hostApprovalMode = approvalMode === "defer" ? "defer" : "request";
     const actionHookContext = hookContextForOperation(nativeOperation);
     const result = await runBeforeToolCallHook({
@@ -387,7 +405,14 @@ export function createAgentHarnessHostCapabilities(params: {
         callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
       )
       .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
-      .map((tool) => gateBoundTool(tool, assertActive, observeResult));
+      .map((tool) =>
+        gateBoundTool(
+          tool,
+          assertActive,
+          observeResult,
+          isWorkspaceTool(tool) ? workspaceReadiness : undefined,
+        ),
+      );
   };
   const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
     bindTools(tools, options, () => {});
@@ -456,6 +481,13 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    ...(workspaceReadiness
+      ? {
+          workspaceReadiness: Object.freeze({
+            toolNames: WORKSPACE_TOOL_NAMES,
+          }),
+        }
+      : {}),
     get assertNativeSubagentSpawnAllowed() {
       return bindHarnessNativeSpawnAuthority(personalToolParticipants, assertActive);
     },

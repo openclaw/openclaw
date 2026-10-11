@@ -109,6 +109,8 @@ export type OpenClawPluginToolOptions = {
   name?: string;
   names?: string[];
   optional?: boolean;
+  /** Wait for the session workspace before tool preparation or execution. */
+  workspaceAccess?: boolean;
 };
 
 export type OpenClawPluginHookOptions = {

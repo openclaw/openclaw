@@ -689,6 +689,7 @@ function resolvePluginToolsFromRegistry(
           pluginId: entry.pluginId,
           ...(manifestPlugin?.kind ? { kind: manifestPlugin.kind } : {}),
           optional: entry.optional || metadata?.optional === true,
+          ...(entry.workspaceAccess ? { workspaceAccess: true } : {}),
           replaySafe: metadata?.replaySafe === true,
           sideEffecting: metadata?.sideEffecting === true,
           trustedLocalMedia:

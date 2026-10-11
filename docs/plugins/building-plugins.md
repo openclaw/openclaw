@@ -314,6 +314,15 @@ calls reject invalid schemas before execution and validate the final value after
 tool hooks. Omit it for tools without a stable JSON result. See
 [Tool plugins](/plugins/tool-plugins#output-contracts) for the full contract.
 
+Tools that access the session's working files must register with
+`workspaceAccess: true`, for example
+`api.registerTool(factory, { name: "project_tool", workspaceAccess: true })`.
+OpenClaw waits for managed worktree preparation before preparing or executing
+these tools. The model can start responding and use tools that do not access
+the workspace while checkout finishes. Keep workspace reads inside tool execution
+or its execution preparer; tool factories must be able to build their definitions
+before the workspace is ready.
+
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:
 

@@ -30,6 +30,7 @@ type PluginToolMeta = {
   pluginId: string;
   kind?: PluginManifestRecord["kind"];
   optional: boolean;
+  workspaceAccess?: boolean;
   replaySafe?: boolean;
   sideEffecting?: boolean;
   trustedLocalMedia?: boolean;

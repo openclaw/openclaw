@@ -1,8 +1,53 @@
 import { isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { getAgentToolActionDescriptor } from "../agent-tool-metadata.js";
 import type { OpenClawCodingToolsOptions } from "../agent-tools.options.js";
+import { isCodeModeControlTool } from "../code-mode-control-tools.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { normalizeToolPolicyName } from "../tool-policy-shared.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
+
+export const WORKSPACE_TOOL_NAMES = Object.freeze([
+  "exec",
+  "process",
+  "read",
+  "write",
+  "edit",
+  "ls",
+  "grep",
+  "find",
+  "apply_patch",
+  "view_image",
+]);
+const workspaceToolNames = new Set(WORKSPACE_TOOL_NAMES);
+const nativeWorkspaceToolNames: Readonly<Record<string, string>> = {
+  exec_command: "exec",
+  write_stdin: "process",
+  read_file: "read",
+  list_dir: "ls",
+  grep_files: "grep",
+  glob: "find",
+};
+
+export function isWorkspaceToolName(name: string): boolean {
+  const normalized = normalizeToolPolicyName(name);
+  return workspaceToolNames.has(nativeWorkspaceToolNames[normalized] ?? normalized);
+}
+
+export function isWorkspaceTool(tool: AnyAgentTool): boolean {
+  if (isCodeModeControlTool(tool)) {
+    return false;
+  }
+  const operation = getAgentToolActionDescriptor(tool)?.operation;
+  return (
+    getPluginToolMeta(tool)?.workspaceAccess === true ||
+    operation === "filesystem" ||
+    operation === "process" ||
+    isWorkspaceToolName(tool.name)
+  );
+}
 
 export function captureRequiredWorkspaceToolFloor(
   attempt: Partial<EmbeddedRunAttemptParams>,
