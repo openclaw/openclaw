@@ -14,6 +14,14 @@ Import state from another agent system through a plugin-owned migration provider
 For user-facing walkthroughs, see [Migrating from Claude](/install/migrating-claude) and [Migrating from Hermes](/install/migrating-hermes). The [migration hub](/install/migrating) lists all paths.
 </Tip>
 
+Migration provider loading, preview, and import require exclusive local state
+ownership. Stop a running Gateway through its service manager or original
+terminal, wait for it to stop, then rerun the command. If the Gateway still owns
+the state directory, the command refuses before loading a provider or changing
+state. The command retains offline ownership through provider cleanup and any
+import rollback. Memory imports invoked inside the Gateway continue to use that
+Gateway's ownership.
+
 ## Commands
 
 ```bash
