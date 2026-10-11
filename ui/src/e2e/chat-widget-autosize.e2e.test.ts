@@ -70,7 +70,7 @@ suite.define(() => {
         sessionKey,
         authMethod: "trusted-proxy",
         authMode: "trusted-proxy",
-        heldMethods: ["canvas.document.view", "chat.startup", "chat.history"],
+        heldMethods: ["connect", "canvas.document.view"],
         methodResponses: { "canvas.document.view": canvasView(html) },
         historyMessages: [
           ...Array.from({ length: 12 }, (_, index) => ({
@@ -99,8 +99,8 @@ suite.define(() => {
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await gateway.waitForRequest("chat.startup");
-      await gateway.resolveDeferred("chat.startup");
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
       await gateway.waitForRequest("canvas.document.view");
       await gateway.resolveDeferred("canvas.document.view");
       const frame = page.locator(".chat-tool-card__preview-frame");
@@ -161,6 +161,9 @@ suite.define(() => {
         requestAnimationFrame(sample);
       });
       await page.reload();
+      await gateway.waitForRequest("connect");
+      await preview.waitFor();
+      await gateway.resolveDeferred("connect");
       await gateway.waitForRequest("canvas.document.view");
       await page.waitForFunction(() => (window.widgetReloadFrames?.length ?? 0) >= 20, undefined, {
         polling: "raf",
