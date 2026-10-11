@@ -27,7 +27,7 @@ export async function runDoctorStateSqliteCompact(options: { env?: NodeJS.Proces
     };
   }
   if (!stat.isFile()) {
-    throw new Error(`Canonical OpenClaw state database is not a regular file: ${sqlitePath}`);
+    throw new Error(`OpenClaw state database is not a regular file: ${sqlitePath}`);
   }
   return await withDoctorSqliteMaintenanceLock({
     env,

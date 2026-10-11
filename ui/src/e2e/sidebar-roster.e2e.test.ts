@@ -475,7 +475,8 @@ suite.define(() => {
         const drawerToggle = page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first();
-        await drawerToggle.click();
+        // Keep keyboard navigation free of hover tooltips while the drawer slides in.
+        await drawerToggle.press("Enter");
         for (const trigger of [chip, workspace]) {
           if (trigger === workspace) {
             await chip.press("Enter");

@@ -237,16 +237,16 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         expect(io.pluginStateWorkerReadOperations).toBe(100);
         expect(io.sessionEntryReads).toBe(0);
         expect(io.sessionPayloadReads).toBe(0);
-        // Fresh binding authority belongs to the worker, including its freshness probe.
+        // Binding authority stays in the worker; warm reads reuse process-owned admission.
         for (const work of workPerList) {
           expect(work).toEqual({
             sqliteReadCalls: 0,
             sqliteFreshnessReads: 0,
             bindingAuthorityReads: 0,
-            fileReadCalls: 1,
-            ownershipFileReadCalls: 1,
-            fileOpenCalls: 1,
-            ownershipFileOpenCalls: 1,
+            fileReadCalls: 0,
+            ownershipFileReadCalls: 0,
+            fileOpenCalls: 0,
+            ownershipFileOpenCalls: 0,
             pluginStateWorkerOperations: 1,
           });
         }

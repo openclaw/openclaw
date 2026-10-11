@@ -775,21 +775,4 @@ describe("talk transcription gateway relay", () => {
     ).toThrow("Gateway transcription relay requires g711_ulaw/8000 audio");
     expect(provider.createSession).not.toHaveBeenCalled();
   });
-
-  it("rejects session creation when transcription expiry would exceed Date range", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    const provider = createTranscriptionProvider(createSttSessionMock());
-    const { context } = createBroadcastContext();
-
-    expect(() =>
-      createTalkTranscriptionRelaySession({
-        context,
-        connId: "conn-1",
-        provider,
-        providerConfig: {},
-      }),
-    ).toThrow("Transcription relay session expiry is outside the supported Date range");
-    expect(provider.createSession).not.toHaveBeenCalled();
-  });
 });

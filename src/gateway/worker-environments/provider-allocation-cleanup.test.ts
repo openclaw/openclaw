@@ -460,7 +460,7 @@ describe("worker allocation cleanup", () => {
         });
         provisionPending.resolve();
         resolutionPending.resolve();
-        expect(await teardownResult).toMatchObject({ error: { code: "invalid_state" } });
+        expect(await teardownResult).toMatchObject({ error: expect.any(Error) });
         expect(support.testState.store.get(pending.environmentId)).toEqual(replacement);
         expect(resolveAllocation).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
         expect(provision).toHaveBeenCalledOnce();

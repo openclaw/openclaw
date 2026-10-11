@@ -52,9 +52,13 @@ import {
   AGENT_GIT_CONFIG_PARAMETERS,
   managedGitHubIdentityEnvironment,
 } from "./github-tool-identity-env.js";
-import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
+import type {
+  PreparedGitHubPublicationIdentity,
+  PreparedGitHubToolEnvironment,
+} from "./github-tool-identity.types.js";
 
 export { GitHubIdentityError } from "./github-read-identity.js";
+export type { PreparedGitHubPublicationIdentity } from "./github-tool-identity.types.js";
 
 const GITHUB_HOST = "github.com";
 const MANAGED_GITHUB_ROOT_SEGMENTS = ["credentials", "github"] as const;
@@ -407,14 +411,6 @@ async function resolveGitHubIdentityFacts(
     repositoryGrants: "unknown",
   };
 }
-
-export type PreparedGitHubPublicationIdentity = Readonly<{
-  source: "system-detected" | "system-configured" | "agent-override" | "personal";
-  profileId?: string;
-  host?: string;
-  account: GitHubToolAccount;
-  env: NodeJS.ProcessEnv;
-}>;
 
 /** Only the personal publication broker receives this environment; never agent execution. */
 export async function preparePersonalGitHubPublicationIdentity(params: {

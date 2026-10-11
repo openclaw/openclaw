@@ -339,10 +339,12 @@ test.each([
             waitForTurnClaimRelease: (
               ...args: Parameters<WorkerSessionPlacementStore["waitForTurnClaimRelease"]>
             ) => placementStore.waitForTurnClaimRelease(...args),
-            retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) => {
+            getManyAsync: (sessionIds: readonly string[]) =>
+              placementStore.getManyAsync(sessionIds),
+            retireSessionPlacementAsync: async (retirement: WorkerSessionPlacementRetirement) => {
               expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
               events.push("placement:retire");
-              placementStore.retireSessionPlacement(retirement);
+              await placementStore.retireSessionPlacementAsync(retirement);
             },
           },
         },
@@ -442,11 +444,13 @@ test.each([
           context: {
             workerSessionPlacementService: {
               getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
-              retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) => {
+              getManyAsync: (sessionIds: readonly string[]) =>
+                placementStore.getManyAsync(sessionIds),
+              retireSessionPlacementAsync: async (retirement: WorkerSessionPlacementRetirement) => {
                 expect(loadSessionEntry(testCase.sessionKey).entry?.sessionId).toBe(sessionId);
                 expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
                 events.push("placement:retire");
-                placementStore.retireSessionPlacement(retirement);
+                await placementStore.retireSessionPlacementAsync(retirement);
               },
             },
           },
@@ -518,36 +522,57 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
   }
 });
 
-test("sessions.reset retires a failed placement after proven bootstrap teardown", async () => {
-  await createSessionStoreDir();
-  const sessionKey = "discord:group:failed-worker-reset";
-  const sessionId = "sess-failed-worker-reset";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const placement = terminalPlacementRecord(sessionId, "failed");
-  const placementService = sequencedPlacementService([placement], () => {
-    expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
-  });
-
-  const reset = await directSessionReq(
-    "sessions.reset",
-    { key: sessionKey },
-    {
-      context: {
-        workerEnvironmentService: { get: () => ({ state: "failed", leaseId: null }) } as never,
-        workerSessionPlacementService: placementService,
+test.each(["released synchronous", "async"] as const)(
+  "sessions.reset preserves custom %s placement retirement after bootstrap teardown",
+  async (retirementMode) => {
+    await createSessionStoreDir();
+    const sessionKey = "discord:group:failed-worker-reset";
+    const sessionId = "sess-failed-worker-reset";
+    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    const placement = terminalPlacementRecord(sessionId, "failed");
+    const retired: WorkerSessionPlacementRetirement[] = [];
+    const placementService = {
+      ...sequencedPlacementReader([placement]),
+      retired,
+      retireSessionPlacement(input: WorkerSessionPlacementRetirement) {
+        expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
+        this.retired.push(input);
       },
-    },
-  );
+      ...(retirementMode === "async"
+        ? {
+            async retireSessionPlacementAsync(
+              this: WorkerSessionPlacementRetirementService,
+              input: WorkerSessionPlacementRetirement,
+            ) {
+              this.retireSessionPlacement(input);
+            },
+          }
+        : {}),
+    };
 
-  expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
-  expect(placementService.retireSessionPlacement).toHaveBeenCalledWith({
-    status: "retirement-required",
-    sessionId,
-    expectedState: "failed",
-    expectedGeneration: placement.generation,
-  });
-  expect(loadSessionEntry(sessionKey).entry).toBeDefined();
-});
+    const reset = await directSessionReq(
+      "sessions.reset",
+      { key: sessionKey },
+      {
+        context: {
+          workerEnvironmentService: { get: () => ({ state: "failed", leaseId: null }) } as never,
+          workerSessionPlacementService: placementService,
+        },
+      },
+    );
+
+    expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
+    expect(retired).toEqual([
+      {
+        status: "retirement-required",
+        sessionId,
+        expectedState: "failed",
+        expectedGeneration: placement.generation,
+      },
+    ]);
+    expect(loadSessionEntry(sessionKey).entry).toBeDefined();
+  },
+);
 
 test.each([
   {

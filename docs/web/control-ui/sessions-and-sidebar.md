@@ -208,6 +208,7 @@ Custom groups, Created sort, When filtering for empty groups, and message previe
 Display choices never add a filter dot. Tab moves between rows; Left and Right choose within a segmented
 status control. **Owners** opens a picker with owner avatars and a search field;
 type to filter owners by name, and Escape clears the search before closing.
+The selected owner keeps its known display name when a status filter leaves no sessions.
 **Group by**, **Sort by**, and **Hide empty groups** show their current choices
 and open submenus on hover or click. Right opens a submenu and Left closes it (reversed in RTL);
 Up and Down move between choices, and Enter selects. Automation, system sessions,
@@ -281,6 +282,8 @@ Choosing **Show all** defaults the shared page scope to **All agents**. Choosing
 Personal session shortcuts stay in the icon rail in both sidebar modes, mixed with page, dashboard, and person shortcuts in your saved order. They remain available when an agent’s group is collapsed. Rail shortcuts are flat icons: pinning a parent does not move or duplicate its child tree into the rail or Pages. Each agent group still contains its ordinary sessions, including those with personal rail shortcuts, with the usual session menus, unread badges, nested child sessions, section limits, and **Show more** controls. Selecting any session switches the active agent for chat while the workspace header keeps its neutral identity. The **Sessions** filters apply across all agent groups. Select the separate **Online** view in the rail to see who is online. Category, person, and project grouping controls remain in chip mode; team mode always groups by agent and keeps empty agent groups visible. The open conversation keeps its selected row, including an archived conversation opened directly under the default **Active** filter. The filter button in the sidebar header keeps the same session filters. Each agent header has a **New conversation** action and an options menu with **Open main chat**, **All sessions**, and **Collapse others**. **All sessions** opens the Sessions page and sets the shared agent filter to that agent. Agent-header metadata uses a wrapping second row, keeping the name and actions readable and the indicators visible on hover, keyboard focus, and touch. The expand control appears when the agent has other sessions or descendants to display. Session rows reserve space only for present indicators, so quiet titles can use the full row width.
 
 Groups share a window of at most 300 sessions across agents with [Agents home](/web/control-ui#agents-home). This bounds the session rows loaded for the groups, not the number of saved rail shortcuts; a personal pin does not reserve a place in that window. The open conversation can remain visible outside this window. **Involving me** loads the same bounded window filtered by the Gateway; the other filters apply to the loaded sessions across groups.
+
+A saved session shortcut whose title has not loaded is labeled **Open session**. Selecting it looks up that session on demand. A missing session shows **Session not found**; a failed lookup asks you to try again.
 
 The active session list applies Gateway lifecycle row snapshots to existing members without reloading the whole list. Membership changes, missing or incomplete row snapshots, and Gateway-owned filters still require an authoritative list read. Automatic roster refreshes collect events in a randomized four-to-five-second window that later events cannot postpone, spreading reads across browsers. After an automatic refresh completes, the next waits three times its duration, bounded between five and 15 seconds. Explicit refreshes, filter or agent changes, reconnects, and foreground replacements bypass that delay.
 
@@ -404,7 +407,7 @@ including while the team directory is loading or unavailable.
 
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
 2. Under **Public access**, select **Enable public access…**, review the warning, then select **Make public**.
-3. Select **Copy public link** to copy the normal thread URL. The **Public** badge in the chat header remains visible while the transcript is published.
+3. Select **Copy public link** to copy the normal thread URL. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
 4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user messages and assistant final answers become visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 

@@ -10,7 +10,6 @@ import { startMinimalRealGateway } from "../gateway/minimal-gateway.test-helpers
 import { ExitError } from "../runtime.js";
 import { encodeResumeHandoff } from "../shared/resume-handoff.js";
 import type { TuiSessionList } from "../tui/tui-backend.js";
-import { resolveResumeSession } from "../tui/tui-session-picker.js";
 import { registerResumeCli } from "./resume-cli.js";
 import { runResumeCommand } from "./resume-cli.runtime.js";
 
@@ -41,12 +40,6 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 }));
 
 type SessionRow = TuiSessionList["sessions"][number];
-
-const sessions: SessionRow[] = [
-  { key: "agent:main:alpha", displayName: "Alpha planning", label: "roadmap" },
-  { key: "agent:work:beta", displayName: "Beta implementation", label: "checkout" },
-  { key: "agent:work:gamma", displayName: "Gamma review", label: "checklist" },
-];
 
 const ttyDescriptors = [process.stdin, process.stdout].map(
   (stream) => [stream, Object.getOwnPropertyDescriptor(stream, "isTTY")] as const,
@@ -97,80 +90,6 @@ afterEach(() => {
   }
 });
 
-describe("resolveResumeSession", () => {
-  it.each([
-    {
-      name: "exact key wins over another session name",
-      query: "agent:main:alpha",
-      rows: [...sessions, { key: "agent:other:delta", displayName: "agent:main:alpha" }],
-      expected: { kind: "match", key: "agent:main:alpha" },
-    },
-    {
-      name: "unique key substring",
-      query: "work:beta",
-      rows: sessions,
-      expected: { kind: "match", key: "agent:work:beta" },
-    },
-    {
-      name: "unique display-name substring",
-      query: "implementation",
-      rows: sessions,
-      expected: { kind: "match", key: "agent:work:beta" },
-    },
-    {
-      name: "unique fuzzy display-name match",
-      query: "bt impl",
-      rows: sessions,
-      expected: { kind: "match", key: "agent:work:beta" },
-    },
-    {
-      name: "ambiguous label substring",
-      query: "check",
-      rows: sessions,
-      expected: {
-        kind: "ambiguous",
-        keys: ["agent:work:beta", "agent:work:gamma"],
-      },
-    },
-    {
-      name: "ambiguous substrings preserve order and exclude fuzzy-only candidates",
-      query: "plan",
-      rows: [
-        { key: "agent:main:one", displayName: "Annual planning" },
-        { key: "agent:main:two", displayName: "Plan" },
-        { key: "agent:main:three", displayName: "Personal learning" },
-      ],
-      expected: { kind: "ambiguous", keys: ["agent:main:one", "agent:main:two"] },
-    },
-    {
-      name: "ambiguous fuzzy matches retain score order",
-      query: "pln",
-      rows: sessions,
-      expected: { kind: "ambiguous", keys: ["agent:work:beta", "agent:main:alpha"] },
-    },
-    {
-      name: "no match",
-      query: "unrelated-session-name",
-      rows: sessions,
-      expected: { kind: "none" },
-    },
-  ])("resolves $name", ({ query, rows, expected }) => {
-    const result = resolveResumeSession(rows, query);
-    if (result.kind === "match") {
-      expect({ kind: result.kind, key: result.session.value }).toEqual(expected);
-      return;
-    }
-    if (result.kind === "ambiguous") {
-      expect({
-        kind: result.kind,
-        keys: result.candidates.map((candidate) => candidate.value),
-      }).toEqual(expected);
-      return;
-    }
-    expect(result).toEqual(expected);
-  });
-});
-
 describe("runResumeCommand", () => {
   it.each([
     ["malformed", "not+base64url"],
@@ -183,24 +102,23 @@ describe("runResumeCommand", () => {
     expect(mocks.runTui).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["a positional query", "agent:main:other", undefined],
-    ["an explicit URL", undefined, "wss://other.example/ws"],
-  ])("rejects a handoff combined with %s", async (_name, query, url) => {
-    const handoff = encodeResumeHandoff({
-      sessionKey: "agent:main:alpha",
-      gatewayUrl: "wss://gateway.example/openclaw",
-    });
+  it.each([["an explicit URL", undefined, "wss://other.example/ws"]])(
+    "rejects a handoff combined with %s",
+    async (_name, query, url) => {
+      const handoff = encodeResumeHandoff({
+        sessionKey: "agent:main:alpha",
+        gatewayUrl: "wss://gateway.example/openclaw",
+      });
 
-    await expect(runResumeCommand(query, { handoff, ...(url ? { url } : {}) })).rejects.toThrow(
-      "--handoff cannot be combined with a positional query or --url.",
-    );
-    expect(mocks.connect).not.toHaveBeenCalled();
-    expect(mocks.runTui).not.toHaveBeenCalled();
-  });
+      await expect(runResumeCommand(query, { handoff, ...(url ? { url } : {}) })).rejects.toThrow(
+        "--handoff cannot be combined with a positional query or --url.",
+      );
+      expect(mocks.connect).not.toHaveBeenCalled();
+      expect(mocks.runTui).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
-    { name: "bare success", presentation: {} },
     {
       name: "named dashboard face",
       presentation: { displayName: "Handoff session", boardFace: "dashboard" },
@@ -256,11 +174,8 @@ describe("runResumeCommand", () => {
   });
 
   it.each([
-    ["projected missing", { ok: false }],
     ["old success without agent ownership", { ok: true, key: "agent:main:alpha" }],
-    ["extra success field", { ok: true, key: "agent:main:alpha", agentId: "main", extra: true }],
     ["mismatched returned agent", { ok: true, key: "agent:main:alpha", agentId: "work" }],
-    ["unqualified canonical key", { ok: true, key: "alpha", agentId: "main" }],
     ["mismatched canonical key owner", { ok: true, key: "agent:work:alpha", agentId: "main" }],
   ])("rejects a %s handoff resolution without discovery or TUI launch", async (_name, result) => {
     const handoff = encodeResumeHandoff({

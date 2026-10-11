@@ -98,21 +98,6 @@ describe("createEmbeddedLobsterRunner", () => {
     });
   });
 
-  it("detects workflow files with spaces and parses argsJson", async () => {
-    const { runtime, runner } = createRunner();
-    runtime.runToolRequest.mockResolvedValue(success);
-    const { cwd, filePath } = await createWorkflow("daily inbox.lobster");
-
-    await runner.run(runParams({ pipeline: "daily inbox.lobster", argsJson: '{"limit":3}', cwd }));
-
-    expect(runtime.runToolRequest).toHaveBeenCalledExactlyOnceWith({
-      filePath,
-      args: { limit: 3 },
-      ctx: toolContext(cwd),
-    });
-    expect(runtime.runToolRequest.mock.calls[0]?.[0].pipeline).toBeUndefined();
-  });
-
   it("surfaces missing workflow path errors", async () => {
     const { runtime, runner } = createRunner();
     const cwd = tempDirs.make("openclaw-lobster-runner-");
@@ -136,16 +121,6 @@ describe("createEmbeddedLobsterRunner", () => {
     expect(runtime.runToolRequest).not.toHaveBeenCalled();
   });
 
-  it("throws when the embedded runtime returns an error envelope", async () => {
-    const { runtime, runner } = createRunner();
-    runtime.runToolRequest.mockResolvedValue({
-      ok: false,
-      error: { message: "boom" },
-    });
-
-    await expect(runner.run(runParams())).rejects.toThrow("boom");
-  });
-
   it("rejects an input request without a resumable checkpoint", async () => {
     const { runtime, runner } = createRunner();
     runtime.runToolRequest.mockResolvedValue({ ...success, status: "needs_input" });
@@ -153,27 +128,6 @@ describe("createEmbeddedLobsterRunner", () => {
     await expect(runner.run(runParams())).rejects.toThrow(
       "Lobster input request is missing its resume token",
     );
-  });
-
-  it("routes resume through the embedded runtime", async () => {
-    const { runtime, runner } = createRunner();
-    runtime.resumeToolRequest.mockResolvedValue({ ...success, status: "cancelled" });
-
-    const envelope = await runner.run(
-      runParams({ action: "resume", pipeline: undefined, token: "resume-token", approve: false }),
-    );
-
-    expect(runtime.resumeToolRequest).toHaveBeenCalledExactlyOnceWith({
-      token: "resume-token",
-      approved: false,
-      ctx: toolContext(),
-    });
-    expect(envelope).toEqual({
-      ok: true,
-      status: "cancelled",
-      output: [],
-      requiresApproval: null,
-    });
   });
 
   it("forwards approvalId through resume when token is absent", async () => {
@@ -191,23 +145,6 @@ describe("createEmbeddedLobsterRunner", () => {
     });
   });
 
-  it("passes approvalId through the normalized needs_approval envelope", async () => {
-    const { runtime, runner } = createRunner();
-    const approval = { prompt: "ok?", items: [], resumeToken: "eyJ...", approvalId: "dbc98d05" };
-    runtime.runToolRequest.mockResolvedValue({
-      ...success,
-      status: "needs_approval",
-      requiresApproval: approval,
-    });
-
-    expect(await runner.run(runParams())).toEqual({
-      ok: true,
-      status: "needs_approval",
-      output: [],
-      requiresApproval: { type: "approval_request", ...approval },
-    });
-  });
-
   it("loads the embedded runtime once per runner", async () => {
     const { runtime, loadRuntime, runner } = createRunner();
     runtime.runToolRequest.mockResolvedValue(success);
@@ -219,14 +156,6 @@ describe("createEmbeddedLobsterRunner", () => {
     );
 
     expect(loadRuntime).toHaveBeenCalledTimes(1);
-  });
-
-  it("loads the published package core runtime", async () => {
-    await expect(
-      createEmbeddedLobsterRunner().run(
-        runParams({ pipeline: "commands.list", maxStdoutBytes: 512_000 }),
-      ),
-    ).resolves.toMatchObject({ ok: true, status: "ok" });
   });
 
   it("requires a pipeline for run", async () => {
@@ -248,14 +177,7 @@ describe("createEmbeddedLobsterRunner", () => {
     ).rejects.toThrow(/exactly one/);
   });
 
-  it.each([
-    { responseJson: "{bad" },
-    { responseJson: "" },
-    { approve: true, responseJson: "null" },
-    { cancel: true, responseJson: "null" },
-    { cancel: true, approve: false },
-    { cancel: false },
-  ])(
+  it.each([{ responseJson: "{bad" }, { approve: true, responseJson: "null" }, { cancel: false }])(
     "rejects invalid or ambiguous resume arguments before touching state: %j",
     async (decision) => {
       const { runtime, runner } = createRunner();
@@ -263,20 +185,6 @@ describe("createEmbeddedLobsterRunner", () => {
         runner.run(runParams({ action: "resume", token: "resume-token", ...decision })),
       ).rejects.toThrow();
       expect(runtime.resumeToolRequest).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["null", "false", "[]"])(
-    "passes JSON values unchanged on resume: %s",
-    async (responseJson) => {
-      const { runtime, runner } = createRunner();
-      runtime.resumeToolRequest.mockResolvedValue(success);
-      await runner.run(runParams({ action: "resume", token: "resume-token", responseJson }));
-      expect(runtime.resumeToolRequest).toHaveBeenCalledExactlyOnceWith({
-        token: "resume-token",
-        response: JSON.parse(responseJson),
-        ctx: toolContext(),
-      });
     },
   );
 

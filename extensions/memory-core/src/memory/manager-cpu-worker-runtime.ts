@@ -109,7 +109,6 @@ export async function runMemoryOriginRead<Kind extends MemoryOriginReadInput["ki
       "origin-rows": "origin rows",
       "session-tombstones": "tombstone rows",
       "origin-exists": "origin existence",
-      "origin-index-keys": "indexed origin keys",
     }[request.kind],
   );
 }
@@ -122,6 +121,15 @@ export async function prewarmMemorySearchWorker(): Promise<void> {
 export async function runMemoryIndexState(target: MemoryReadTarget, signal?: AbortSignal) {
   const result = await runRetrieval({ ...target, kind: "index-state" }, { signal }, "index state");
   return result.state;
+}
+
+export async function runMemoryDatabaseFacts(databasePath: string, agentId: string) {
+  const result = await runRetrieval(
+    { databasePath, agentId, kind: "index-facts" },
+    {},
+    "index facts",
+  );
+  return result.facts;
 }
 
 export async function runMemoryRecallMetadata(
