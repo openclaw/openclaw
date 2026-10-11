@@ -11,6 +11,7 @@ import { deferred } from "./deferred.test-helpers.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
+import { lintMemoryWikiVault } from "./lint.js";
 import { searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { resolveMemoryWikiStatus } from "./status.js";
@@ -364,9 +365,27 @@ describe("memory-wiki gateway methods", () => {
     expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
       config,
       appConfig: undefined,
+      deferIndexRefresh: true,
       signal,
     });
     expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, { signal });
+  });
+
+  it("leaves the compile to wiki.lint after importing sources", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-lint-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = requireGatewayHandler(registerGatewayMethod, "wiki.lint");
+
+    await handler({ params: {}, respond: vi.fn() });
+
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
+      config,
+      appConfig: undefined,
+      deferIndexRefresh: true,
+    });
+    expect(lintMemoryWikiVault).toHaveBeenCalledWith(config, undefined);
   });
 
   it("keeps global vault requests on the shared base config", async () => {

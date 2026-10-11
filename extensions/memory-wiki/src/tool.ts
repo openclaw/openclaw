@@ -212,7 +212,7 @@ export function createWikiLintTool(
       "Lint the wiki vault and surface structural issues, provenance gaps, contradictions, and open questions.",
     parameters: WikiStatusSchema,
     execute: async () => {
-      await syncMemoryWikiImportedSources({ config, appConfig, signal });
+      await syncMemoryWikiImportedSources({ config, appConfig, signal, deferIndexRefresh: true });
       const result = await lintMemoryWikiVault(config, signal ? { signal } : undefined);
       const contradictions = result.issuesByCategory.contradictions.length;
       const openQuestions = result.issuesByCategory["open-questions"].length;
