@@ -20,7 +20,6 @@ import {
   readPreparedGatewayModelMetadata,
 } from "./server-model-catalog-view.js";
 import {
-  loadGatewayModelCatalog,
   loadGatewayModelCatalogSnapshot,
   loadPreparedGatewayModelCatalogSnapshot,
   type GatewayModelCatalogSnapshot,
