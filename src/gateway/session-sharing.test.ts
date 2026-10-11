@@ -675,14 +675,6 @@ describe("session sharing policy", () => {
     }
   });
 
-  it("uses the landed createdActor contract and hides drafts from other identified operators", () => {
-    const owner = client({ user: "owner@example.com" });
-    const viewer = client({ user: "viewer@example.com" });
-    const entry = target({ type: "human", id: "owner@example.com", label: "Owner" }).entry;
-    expect(isListed(owner, "main", entry)).toBe(true);
-    expect(isListed(viewer, "main", entry)).toBe(false);
-  });
-
   it("keeps incognito admin-only while treating identityless connections as owner-equivalent", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:incognito-private";

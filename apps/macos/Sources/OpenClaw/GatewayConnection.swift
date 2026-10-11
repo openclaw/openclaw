@@ -1436,20 +1436,9 @@ extension GatewayConnection {
             continuation.yield(delivery)
         }
         if case .event = push, let socketGeneration = self.socketGenerationState.activeGeneration {
-            var terminatedSubscriberIDs: [UUID] = []
             for (id, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
-                switch continuation.yield(delivery) {
-                case .enqueued:
-                    break
-                case .dropped, .terminated:
-                    continuation.finish()
-                    terminatedSubscriberIDs.append(id)
-                @unknown default:
-                    continuation.finish()
-                    terminatedSubscriberIDs.append(id)
-                }
-            }
-            for id in terminatedSubscriberIDs {
+                if case .enqueued = continuation.yield(delivery) { continue }
+                continuation.finish()
                 self.removeRealtimeTalkSubscriber(id, socketGeneration: socketGeneration)
             }
         }

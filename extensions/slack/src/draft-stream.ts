@@ -12,19 +12,6 @@ import { sendMessageSlack } from "./send.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
 
-type SlackDraftStream = {
-  update: (update: SlackDraftStreamUpdate) => void;
-  flush: () => Promise<void>;
-  clear: (options?: { preserveHumanReplies?: boolean }) => Promise<void>;
-  discardPending: () => Promise<void>;
-  seal: () => Promise<void>;
-  forceNewMessage: () => void;
-  dropDetachedMessages: () => Promise<void>;
-  finalizeMessage: (messageId: string, editFinal: () => Promise<void>) => Promise<boolean>;
-  messageId: () => string | undefined;
-  channelId: () => string | undefined;
-};
-
 type SlackDraftStreamUpdate =
   | string
   | {
@@ -60,7 +47,7 @@ export function createSlackDraftStream(params: {
   send?: typeof sendMessageSlack;
   edit?: typeof editSlackMessage;
   remove?: typeof deleteSlackMessage;
-}): SlackDraftStream {
+}) {
   const maxChars = Math.min(params.maxChars ?? SLACK_TEXT_LIMIT, SLACK_TEXT_LIMIT);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const send = params.send ?? sendMessageSlack;
@@ -82,6 +69,14 @@ export function createSlackDraftStream(params: {
     lastVisibleUpdate = undefined;
     lastSentKey = "";
   };
+  const editPreview = (message: SlackDraftMessage, text: string, blocks?: (Block | KnownBlock)[]) =>
+    edit(message.channelId, message.messageId, text, {
+      cfg: params.cfg,
+      token: params.token,
+      accountId: params.accountId,
+      ...(params.eventScope ? { client: params.eventScope.client } : {}),
+      ...(blocks ? { blocks } : {}),
+    });
 
   const sendOrEditStreamMessage = async (pending: SlackDraftStreamUpdate) => {
     const update = normalizeUpdate(pending);
@@ -107,13 +102,7 @@ export function createSlackDraftStream(params: {
     try {
       if (streamMessage) {
         const message = streamMessage;
-        await edit(streamMessage.channelId, streamMessage.messageId, trimmed, {
-          cfg: params.cfg,
-          token: params.token,
-          accountId: params.accountId,
-          ...(params.eventScope ? { client: params.eventScope.client } : {}),
-          ...(blocks ? { blocks } : {}),
-        });
+        await editPreview(message, trimmed, blocks);
         if (streamMessage === message) {
           lastVisibleUpdate = { text: trimmed, ...(blocks ? { blocks } : {}) };
         }
@@ -294,13 +283,7 @@ export function createSlackDraftStream(params: {
     // A human spoke while the final edit was in flight. Preserve the earlier
     // progress they responded to and let the final answer land below them.
     try {
-      await edit(channelId, messageId, previousUpdate.text, {
-        cfg: params.cfg,
-        token: params.token,
-        accountId: params.accountId,
-        ...(params.eventScope ? { client: params.eventScope.client } : {}),
-        ...(previousUpdate.blocks ? { blocks: previousUpdate.blocks } : {}),
-      });
+      await editPreview(currentMessage, previousUpdate.text, previousUpdate.blocks);
     } catch (err) {
       params.warn?.(`slack stream preview restore failed: ${formatSlackError(err)}`);
     }

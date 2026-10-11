@@ -11,6 +11,7 @@ import { configureMockSubagentRegistryPersistence } from "../../agents/subagent-
 import * as controlScope from "../../agents/subagents/registry/subagent-control-scope.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
 import { captureSubagentListReadContext } from "../../agents/subagents/registry/subagent-list.js";
+import { SubagentLifecycleController } from "../../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { buildSubagentRunReadIndexFromRuns } from "../../agents/subagents/registry/subagent-registry-queries.js";
 import {
@@ -453,52 +454,69 @@ describe("subagents info", () => {
     expect(result.reply?.text).toContain("/subagents info <id|#>");
   });
 
-  it.each([false, true])("returns info for a subagent with task missing=%s", (taskMissing) => {
-    const now = Date.now();
-    const runId = "commands-subagents-info-run";
-    const childSessionKey = "agent:main:subagent:commands-info";
-    const run: SubagentRunRecord = {
-      runId,
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "do thing",
-      completion: { required: true, resultText: "Completed the requested task" },
-      cleanup: "keep",
-      createdAt: now - 20_000,
-      execution: {
-        status: "terminal",
-        startedAt: now - 20_000,
-        endedAt: now - 1_000,
-        outcome: { status: "ok" },
-      },
-    } satisfies SubagentRunRecord;
-    if (taskMissing) {
-      run.delivery = {
-        status: "discarded",
-        disposition: "permanent_failure",
-        discardReason: "task-missing",
-        discardedAt: now,
-      };
-    }
-    seedSubagentRunForReadTest(run);
-    const cfg = buildCommandTestConfig();
-    const result = handleSubagentsInfoAction(
-      buildInfoContext({ cfg, runs: [run], restTokens: [runId] }),
-    );
-    const text = requireReplyText(result.reply);
-    expect(result.shouldContinue).toBe(false);
-    expect(text).toContain("Subagent info");
-    expect(text).toContain(`Run: ${runId}`);
-    expect(text).toContain("Status: done");
-    expect(text).toContain("Outcome: ok");
-    expect(text).toContain("Progress: Completed the requested task");
-    if (taskMissing) {
-      expect(text).toContain("Delivery: discarded");
-      expect(text).toContain("Delivery disposition: task-missing");
-      expect(text).toContain(`Delivery retired: ${new Date(now).toISOString()}`);
-    }
-  });
+  it.each([undefined, "task-missing", "expired"] as const)(
+    "returns info for a subagent with discard reason=%s",
+    (discardReason) => {
+      const now = Date.now();
+      const runId = "commands-subagents-info-run";
+      const childSessionKey = "agent:main:subagent:commands-info";
+      const run: SubagentRunRecord = {
+        runId,
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "do thing",
+        completion: { required: true, resultText: "Completed the requested task" },
+        cleanup: "keep",
+        createdAt: now - 20_000,
+        execution: {
+          status: "terminal",
+          startedAt: now - 20_000,
+          endedAt: now - 1_000,
+          outcome: { status: "ok" },
+        },
+      } satisfies SubagentRunRecord;
+      if (discardReason === "task-missing") {
+        run.delivery = {
+          status: "discarded",
+          disposition: "permanent_failure",
+          discardReason: "task-missing",
+          discardedAt: now,
+        };
+      }
+      if (discardReason === "expired") {
+        run.execution.endedAt = now - 8 * 24 * 60 * 60_000;
+        run.delivery = {
+          status: "suspended",
+          suspendedAt: now - 7 * 24 * 60 * 60_000,
+          suspendedReason: "permanent_failure",
+          lastError: "requester unavailable\ntry retained result",
+        };
+        SubagentLifecycleController.discardTerminalDelivery(run, now, "expired");
+        expect(run.delivery.lastError).toBeUndefined();
+      }
+      seedSubagentRunForReadTest(run);
+      const cfg = buildCommandTestConfig();
+      const result = handleSubagentsInfoAction(
+        buildInfoContext({ cfg, runs: [run], restTokens: [runId] }),
+      );
+      const text = requireReplyText(result.reply);
+      expect(result.shouldContinue).toBe(false);
+      expect(text).toContain("Subagent info");
+      expect(text).toContain(`Run: ${runId}`);
+      expect(text).toContain("Status: done");
+      expect(text).toContain("Outcome: ok");
+      expect(text).toContain("Progress: Completed the requested task");
+      if (discardReason) {
+        expect(text).toContain("Delivery: discarded");
+        expect(text).toContain(`Delivery disposition: ${discardReason}`);
+        expect(text).toContain(`Delivery retired: ${new Date(now).toISOString()}`);
+      }
+      if (discardReason === "expired") {
+        expect(text).toContain("Task summary: requester unavailable try retained result");
+      }
+    },
+  );
 
   it("uses displayed indices for info and log when stale unended runs exist", async () => {
     const now = Date.now();

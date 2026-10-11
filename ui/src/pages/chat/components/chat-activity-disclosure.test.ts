@@ -2,6 +2,11 @@
 
 import { render } from "lit";
 import { expect, it, vi } from "vitest";
+import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.ts";
+import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
+import { attachHistoryActivity } from "../chat-history-request.ts";
+import { buildChatItems } from "../chat-thread-build.ts";
+import { createProps } from "../chat-thread.test-support.ts";
 import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
 import { renderWorkGroupSummary } from "./chat-message-stream.ts";
 import {
@@ -340,4 +345,92 @@ it.each([
   },
 ])("summarizes work outcomes: $name", ({ messages, expected }) => {
   expect(workSummaryText(messages)).toBe(expected);
+});
+
+it.each([
+  { outcome: "completed", isError: false },
+  { outcome: "failed", isError: true },
+])("draws a settled $outcome step whose nested calls are all routine", ({ isError }) => {
+  const runId = "step-run";
+  const title = "Check the release checklist";
+  const history = attachHistoryActivity(
+    prepareChatHistoryFixture([
+      {
+        role: "assistant",
+        runId,
+        timestamp: 2_000,
+        content: [
+          {
+            type: "toolCall",
+            id: "step",
+            name: "exec",
+            runId,
+            arguments: { title, code: "await tools.progress_card({ plan });" },
+          },
+        ],
+      },
+      {
+        ...createNestedToolActivity({
+          runId,
+          scopeId: "step-scope",
+          afterEntryId: "step-call",
+          startOrder: 1,
+          parentToolCallId: "step",
+          toolCallId: "plan",
+          toolName: "progress_card",
+          input: { plan: [{ step: title, status: "in_progress" }] },
+          result: { content: [{ type: "text", text: "Updated" }] },
+          isError: false,
+          startedAt: 2_100,
+          timestamp: 2_200,
+        }),
+        runId,
+        __openclaw: { runId },
+      },
+      {
+        role: "toolResult",
+        runId,
+        toolCallId: "step",
+        toolName: "exec",
+        isError,
+        content: [{ type: "text", text: "Checked" }],
+        timestamp: 3_000,
+      },
+    ]),
+  );
+  const group = buildChatItems(createProps({ messages: history.messages })).find(
+    (item) => item.kind === "group",
+  );
+  if (group?.kind !== "group") {
+    throw new Error("expected the step's tool group");
+  }
+  const container = document.createElement("div");
+  const draw = (expanded: boolean) =>
+    render(
+      renderMessageGroup(group, {
+        showToolCalls: true,
+        showReasoning: false,
+        isToolExpanded: () => expanded,
+      }),
+      container,
+    );
+  draw(false);
+  if (isError) {
+    // A step that did not complete keeps the counted row that carries its status.
+    const summary = container.querySelector(".chat-activity-group__summary");
+    expect(summary?.textContent).toContain("1 command");
+    expect(summary?.textContent).toContain("1 failed");
+    expect(container.querySelector(".chat-tool-row__title")).toBeNull();
+    return;
+  }
+  expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
+  expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(title);
+  expect(container.querySelector(".chat-progress-card-receipt")).toBeNull();
+  draw(true);
+  expect(
+    container.querySelectorAll(".chat-tool-children .chat-progress-card-receipt"),
+  ).toHaveLength(1);
+  expect(container.querySelectorAll(".chat-tool-children .chat-tool-wrapper-details")).toHaveLength(
+    1,
+  );
 });

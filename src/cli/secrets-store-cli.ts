@@ -266,9 +266,7 @@ export function registerSecretStoreCli(secrets: Command): void {
             ? options.value
             : await (
                 await import("./secrets-store-input.js")
-              ).readSecretStoreInput({
-                valueFile: options.valueFile,
-              });
+              ).readSecretStoreInput(options.valueFile);
         if (isRedactedSecretValue(value)) {
           const current = await storeModule.readSecretStoreValue({ scope, name });
           if (current.ok && !isRedactedSecretValue(current.value)) {

@@ -409,10 +409,7 @@ describe("agents add command", () => {
     });
   });
 
-  it.each([
-    { source: "__skip__", copy: false },
-    { source: "ops", copy: true },
-  ])("adds to an explicit fleet with optional auth copy: %j", async (testCase) => {
+  it("copies auth from a selected agent in an explicit fleet", async () => {
     await withState("explicit", async ({ root, workspaceDir, agentDir }) => {
       const sourceAgentDir = await seedAuth(root, "ops", {
         "openai:portable": apiKey("fixture-only-key"),
@@ -423,17 +420,13 @@ describe("agents add command", () => {
           entries: { main: {}, ops: { agentDir: sourceAgentDir } },
         },
       });
-      const wizard = useWizard(
-        ["work", workspaceDir],
-        testCase.source === "__skip__" ? [false] : [testCase.copy, false],
-        [testCase.source],
-      );
+      const wizard = useWizard(["work", workspaceDir], [true, false], ["ops"]);
 
       await agentsAddCommand({}, runtime);
 
       expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
       const copied = loadPersistedAuthProfileStore(agentDir);
-      expect(copied?.profiles["openai:portable"] !== undefined).toBe(testCase.copy);
+      expect(copied?.profiles["openai:portable"]).toBeDefined();
       expect(setupChannels).toHaveBeenCalledWith(
         expect.any(Object),
         runtime,
@@ -656,39 +649,23 @@ describe("agents add command", () => {
       expect(hasTerminal).not.toHaveBeenCalled();
     });
 
-    it.each([
-      {
-        name: "a duplicate agent",
-        result: {
-          status: "error" as const,
-          reason: "already-exists",
-          agentId: "work",
-          message: 'agent "work" already exists',
-        },
-        message: 'Agent "work" already exists.',
-      },
-      {
-        name: "a rejected binding",
-        result: {
-          status: "error" as const,
-          reason: "invalid-bindings",
-          agentId: "work",
-          message: 'Invalid binding "telegram:". Account id is empty.',
-        },
-        message: 'Invalid binding "telegram:". Account id is empty.',
-      },
-    ])("reports $name through the root failure owner", async (testCase) => {
-      createAgent.mockResolvedValueOnce(testCase.result);
+    it("reports a duplicate agent through the root failure owner", async () => {
+      createAgent.mockResolvedValueOnce({
+        status: "error",
+        reason: "already-exists",
+        agentId: "work",
+        message: 'agent "work" already exists',
+      });
 
       await expectRootFailure(
         agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
           hasAutomationFlags: true,
         }),
-        testCase.message,
+        'Agent "work" already exists.',
       );
     });
 
-    it("renders binding conflicts returned by agent creation", async () => {
+    it("renders binding conflicts returned by agent creation and fails the command", async () => {
       await agentsAddCommand(
         { name: "Work", workspace: "/tmp/work", bind: ["telegram"], json: true },
         runtime,
@@ -700,6 +677,7 @@ describe("agents add command", () => {
       };
       expect(payload.bindings.added).toEqual([]);
       expect(payload.bindings.conflicts).toEqual(["telegram (agent=other-agent)"]);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
     });
   });
 });

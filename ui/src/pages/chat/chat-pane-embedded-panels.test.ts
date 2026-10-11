@@ -31,6 +31,8 @@ import {
 } from "./components/chat-message-media.ts";
 import {
   clearSessionWorkspacePreviews,
+  getSessionWorkspace,
+  loadSessionWorkspace,
   openSessionWorkspacePreview,
 } from "./components/chat-session-workspace-state.ts";
 import {
@@ -478,7 +480,7 @@ describe("chat pane embedded panels", () => {
 
   it("opens the requested file when an unrelated directory listing completes first", async () => {
     const { file, list, mount, preview, renderPanels, state } = createReviewFixture();
-    createSessionWorkspaceProps(state).onRefresh();
+    loadSessionWorkspace(state, getSessionWorkspace(state), true);
     openSessionWorkspaceFile(state, { path: preview.file.path });
     await renderPanels();
     expect(mount.querySelector('[data-panel-skeleton="files"]')).not.toBeNull();

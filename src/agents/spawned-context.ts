@@ -32,6 +32,8 @@ export type SpawnedToolContext = {
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  /** Restrictive requester policy originated at trusted sender/channel ingress. */
+  inheritedToolPolicySource?: "sender";
 };
 
 type NormalizedSpawnedRunMetadata = {

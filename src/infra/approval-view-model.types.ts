@@ -1,8 +1,7 @@
-// Defines view-model shapes for approval prompts and resolutions.
 import type { ApprovalScope } from "./approval-scope.js";
 import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
-import type { ExecApprovalActionDescriptor } from "./exec-approval-reply.js";
+import type { ExecApprovalActionDescriptor } from "./exec-approval-action.types.js";
 import type { ExecApprovalDecision, ExecApprovalResolved } from "./exec-approvals-core.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
 import type {
@@ -12,12 +11,10 @@ import type {
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
-/** Button or command action shown with a pending approval prompt. */
 export type ApprovalActionView = ExecApprovalActionDescriptor & {
   kind?: "command" | "decision";
 };
 
-/** Label/value metadata row rendered with an approval prompt. */
 export type ApprovalMetadataView = {
   label: string;
   value: string;
@@ -32,7 +29,6 @@ type ApprovalViewBase = {
   metadata: ApprovalMetadataView[];
 };
 
-/** Shared presentation fields for exec approval views across all phases. */
 export type ExecApprovalViewBase = ApprovalViewBase & {
   approvalKind: "exec";
   ask?: string | null;
@@ -55,22 +51,18 @@ type PendingApprovalState = {
   expiresAtMs: number;
 };
 
-/** Pending exec approval view, including executable reply actions. */
 export type ExecApprovalPendingView = ExecApprovalViewBase & PendingApprovalState;
 
-/** Resolved exec approval view with the recorded decision. */
 export type ExecApprovalResolvedView = ExecApprovalViewBase & {
   phase: "resolved";
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
 };
 
-/** Expired exec approval view without reply actions. */
 export type ExecApprovalExpiredView = ExecApprovalViewBase & {
   phase: "expired";
 };
 
-/** Shared presentation fields for plugin approval views across all phases. */
 export type PluginApprovalViewBase = ApprovalViewBase & {
   approvalKind: "plugin";
   agentId?: string | null;
@@ -80,22 +72,18 @@ export type PluginApprovalViewBase = ApprovalViewBase & {
   severity: "info" | "warning" | "critical";
 };
 
-/** Pending plugin approval view, including executable reply actions. */
 export type PluginApprovalPendingView = PluginApprovalViewBase & PendingApprovalState;
 
-/** Resolved plugin approval view with the recorded decision. */
 export type PluginApprovalResolvedView = PluginApprovalViewBase & {
   phase: "resolved";
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
 };
 
-/** Expired plugin approval view without reply actions. */
 export type PluginApprovalExpiredView = PluginApprovalViewBase & {
   phase: "expired";
 };
 
-/** Shared presentation fields for OpenClaw system change approvals. */
 export type SystemAgentApprovalViewBase = ApprovalViewBase & {
   approvalKind: "system-agent";
   agentId?: string | null;
@@ -111,10 +99,8 @@ export type SystemAgentApprovalViewBase = ApprovalViewBase & {
   operationSummary: string;
 };
 
-/** Pending system change approval view, including executable reply actions. */
 type SystemAgentApprovalPendingView = SystemAgentApprovalViewBase & PendingApprovalState;
 
-/** Resolved system change approval view with the recorded decision. */
 type SystemAgentApprovalResolvedView = SystemAgentApprovalViewBase & {
   phase: "resolved";
   decision: ExecApprovalDecision;
@@ -123,32 +109,25 @@ type SystemAgentApprovalResolvedView = SystemAgentApprovalViewBase & {
   terminalStatus?: "expired" | "cancelled";
 };
 
-/** Expired system change approval view without reply actions. */
 type SystemAgentApprovalExpiredView = SystemAgentApprovalViewBase & {
   phase: "expired";
 };
 
-/** Any pending approval view that still accepts a user decision. */
 export type PendingApprovalView =
   | ExecApprovalPendingView
   | PluginApprovalPendingView
   | SystemAgentApprovalPendingView;
-/** Any approval view after a decision was recorded. */
 export type ResolvedApprovalView =
   | ExecApprovalResolvedView
   | PluginApprovalResolvedView
   | SystemAgentApprovalResolvedView;
-/** Any approval view after it can no longer be acted on. */
 export type ExpiredApprovalView =
   | ExecApprovalExpiredView
   | PluginApprovalExpiredView
   | SystemAgentApprovalExpiredView;
-/** Discriminated approval presentation model consumed by channel/UI renderers. */
 export type ApprovalViewModel = PendingApprovalView | ResolvedApprovalView | ExpiredApprovalView;
 
-/** Stored approval request variants accepted by the view-model builders. */
 export type ApprovalRequest = ApprovalRequestInput;
-/** Stored approval resolution variants accepted by resolved view builders. */
 export type ApprovalResolved =
   | (ExecApprovalResolved & { applicationStatus?: never; terminalStatus?: never })
   | (PluginApprovalResolved & { applicationStatus?: never; terminalStatus?: never })

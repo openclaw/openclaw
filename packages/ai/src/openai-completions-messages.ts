@@ -15,7 +15,6 @@ import {
   extractToolResultText,
 } from "./providers/tool-result-text.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
-import { sanitizeNonEmptyTransportPayloadText } from "./transports/transport-stream-shared.js";
 import {
   hasRuntimeContextMarker,
   isRuntimeContextMessage,
@@ -119,7 +118,7 @@ export function convertMessages(
 
     if (isRuntimeContextMessage(msg)) {
       params.push({
-        role: model.reasoning && compat.supportsDeveloperRole ? "developer" : "system",
+        role: compat.supportsDeveloperRole ? "developer" : "user",
         content: sanitizeSurrogates(runtimeContextContentToText(msg.content)),
       });
       options.cacheOptOutIndexes?.add(params.length - 1);
@@ -261,7 +260,7 @@ export function convertMessages(
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const images = toolMsg.content.filter(isImageWithMediaPayload);
-        const content = sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder);
+        const content = textResult.trim() ? textResult : (mediaPlaceholder ?? "(no output)");
         const toolResultMsg: ChatCompletionToolMessageParam = {
           role: "tool",
           content,

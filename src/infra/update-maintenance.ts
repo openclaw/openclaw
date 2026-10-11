@@ -44,6 +44,7 @@ export async function cleanupUpdateTemporaryDirectory(params: {
   );
   let canRemove = false;
   let expired = false;
+  const hasExpired = () => expired || performance.now() >= monotonicDeadline;
   let failure: string | undefined;
   try {
     expired =
@@ -51,17 +52,13 @@ export async function cleanupUpdateTemporaryDirectory(params: {
         async () => {
           const owned = !params.canRemove || (await params.canRemove());
           // A late custody result cannot start deletion after this owner stopped waiting.
-          if (!owned || expired || performance.now() >= monotonicDeadline) {
+          if (!owned || hasExpired()) {
             return;
           }
           canRemove = true;
           if (params.canRemove) {
             await recordProgress("waiting for filesystem removal");
-            if (expired || performance.now() >= monotonicDeadline || !(await params.canRemove())) {
-              canRemove = false;
-              return;
-            }
-            if (expired || performance.now() >= monotonicDeadline) {
+            if (hasExpired() || !(await params.canRemove()) || hasExpired()) {
               canRemove = false;
               return;
             }

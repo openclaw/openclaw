@@ -178,22 +178,17 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       (params.shouldDebounce?.(item) ?? true),
     );
   };
-  const untrackBuffer = (key: string, buffer: DebounceBuffer<T>) => {
-    const pending = pendingBuffers.get(key);
-    pending?.delete(buffer);
-    if (pending?.size === 0) {
-      pendingBuffers.delete(key);
-    }
-  };
 
-  const reportFlushError = (err: unknown, items: T[]) => {
+  const notifyObserver = (notify: () => void) => {
     try {
-      params.onError?.(err, items);
+      notify();
     } catch {
-      // Flush failures are reported via onError, but this helper stays
-      // non-throwing so keyed chains can continue processing later items.
+      // Observer failures must not strand cancellation resources or keyed flushes.
     }
   };
+  const reportFlushError = (error: unknown, items: T[]) =>
+    notifyObserver(() => params.onError?.(error, items));
+  const cancelItems = (items: T[]) => notifyObserver(() => params.onCancel?.(items));
 
   const runFlush = async (items: T[]) => {
     let flush: InboundDebounceFlush;
@@ -214,18 +209,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const admission = flush.admission.catch(reportOnce);
     const completion = flush.completion.catch(reportOnce);
     activeCompletions.add(completion);
-    const cleanup = () => activeCompletions.delete(completion);
-    void completion.then(cleanup, cleanup);
+    void completion.then(() => activeCompletions.delete(completion));
     await Promise.race([admission, completion]);
-  };
-
-  const cancelItems = (items: T[]) => {
-    try {
-      params.onCancel?.(items);
-    } catch {
-      // Cancellation observers release caller-owned resources; debounce state
-      // must still drain even if an observer fails.
-    }
   };
 
   const resolveKeyGeneration = (key: string) => keyGenerations.get(key) ?? 0;
@@ -249,11 +234,10 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   const enqueueKeyTask = (key: string, task: () => Promise<void>) => {
     const previous = keyChains.get(key) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(task);
+    const next = previous.then(task);
     const settled = next.catch(() => undefined);
     keyChains.set(key, settled);
-    const cleanup = () => untrackKeyTask(key, settled);
-    settled.then(cleanup, cleanup);
+    void settled.then(() => untrackKeyTask(key, settled));
     return next;
   };
 
@@ -268,7 +252,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     };
   };
 
-  const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
+  const detachBuffer = (key: string, buffer: DebounceBuffer<T>) => {
     if (buffers.get(key) === buffer) {
       buffers.delete(key);
     }
@@ -276,6 +260,10 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       clearTimeout(buffer.timeout);
       buffer.timeout = null;
     }
+  };
+
+  const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
+    detachBuffer(key, buffer);
     // Reserve each key's execution slot as soon as the first buffered item
     // arrives, so later same-key work cannot overtake a timer-backed flush.
     buffer.releaseReady();
@@ -299,13 +287,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     // The active task has already crossed this check and remains caller-owned.
     keyGenerations.set(key, resolveKeyGeneration(key) + 1);
     for (const buffer of pending ?? []) {
-      if (buffers.get(key) === buffer) {
-        buffers.delete(key);
-      }
-      if (buffer.timeout) {
-        clearTimeout(buffer.timeout);
-        buffer.timeout = null;
-      }
+      detachBuffer(key, buffer);
       const canceledItems = buffer.items;
       buffer.items = [];
       cancelItems(canceledItems);
@@ -438,7 +420,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     }
     const generation = resolveKeyGeneration(key);
     const reservedTask = enqueueReservedKeyTask(key, async () => {
-      untrackBuffer(key, buffer);
+      const pending = pendingBuffers.get(key);
+      pending?.delete(buffer);
+      if (pending?.size === 0) {
+        pendingBuffers.delete(key);
+      }
       if (buffer.items.length === 0) {
         return;
       }

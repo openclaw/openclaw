@@ -33,6 +33,7 @@ export type {
 /** @deprecated Shipped in v2026.9.4; use readAcpSessionEntryAsync for runtime reads. */
 export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
+export { prepareAcpSessionEntryRead } from "../acp/runtime/session-meta-read.js";
 export type {
   AcpSessionEntryPreparer,
   PreparedAcpSessionEntryRead,

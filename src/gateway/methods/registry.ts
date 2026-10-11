@@ -1,6 +1,6 @@
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
-import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
+import type { OperatorScope } from "../operator-scopes.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   type GatewayMethodDescriptor,
@@ -15,7 +15,9 @@ export {
   isCoreGatewayMethodClassified,
 } from "./core-method-policy.js";
 
-export type GatewayMethodRegistry = GatewayMethodRegistryView;
+export type GatewayMethodRegistry = GatewayMethodRegistryView & {
+  pluginRegistry?: PluginRegistry;
+};
 
 function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethodDescriptor {
   const name = input.name.trim();
@@ -68,7 +70,6 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
   };
 }
 
-/** Creates a read-only registry for gateway method lookup, listing, and policy metadata. */
 export function createGatewayMethodRegistry(
   inputs: readonly GatewayMethodDescriptorInput[],
   pluginRegistry?: PluginRegistry,
@@ -111,7 +112,6 @@ export function createGatewayMethodRegistry(
   };
 }
 
-/** Converts a plain handler map into scoped descriptors owned by one gateway surface. */
 export function createGatewayMethodDescriptorsFromHandlers(params: {
   handlers: Record<string, GatewayMethodHandler>;
   owner: GatewayMethodOwner;
@@ -129,23 +129,5 @@ export function createGatewayMethodDescriptorsFromHandlers(params: {
       owner: params.owner,
       scope,
     };
-  });
-}
-
-/** Resolves plugin method descriptors, including the legacy handler-only registry shape. */
-export function createPluginGatewayMethodDescriptors(
-  registry: Pick<PluginRegistry, "gatewayHandlers"> &
-    Partial<Pick<PluginRegistry, "gatewayMethodDescriptors">>,
-): GatewayMethodDescriptorInput[] {
-  const descriptors = registry.gatewayMethodDescriptors ?? [];
-  if (descriptors.length > 0) {
-    return [...descriptors];
-  }
-  // Older plugin registries only carried handlers, so keep them callable but assign admin scope
-  // until the plugin can provide explicit descriptor metadata.
-  return createGatewayMethodDescriptorsFromHandlers({
-    handlers: registry.gatewayHandlers,
-    owner: { kind: "plugin", pluginId: "unknown" },
-    defaultScope: ADMIN_SCOPE,
   });
 }

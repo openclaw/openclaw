@@ -550,7 +550,7 @@ describe("Gateway GitHub publication boundaries", () => {
       id: "worktree-2",
       path: "/repo/other-worktree",
     };
-    insertRegistryWorktree(process.env, {
+    await insertRegistryWorktree(process.env, {
       ...otherWorktree,
       name: "other",
       createdAt: 1,

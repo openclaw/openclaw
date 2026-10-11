@@ -15,6 +15,17 @@ import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
 
 type InlineAuthProfileCredential = z.infer<typeof inlineAuthProfileCredentialSchema>;
 
+export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
+
+/** Internal prepared ownership, carried through commit publication and compensation. */
+export type AuthProfileStoreOwner = {
+  databasePath: string;
+  sharedDatabasePath: string;
+  location: SharedAuthStoreOwnership["location"];
+};
+
+export type PreparedAuthProfileStoreOwner = AuthProfileStoreOwner & { env: NodeJS.ProcessEnv };
+
 /** Provider identifier recorded on auth profile credentials. */
 export type OAuthProvider = string;
 
@@ -27,7 +38,6 @@ export type OAuthCredentials = OAuthCredentialMetadata & {
   email?: string;
 };
 
-/** API-key credential with optional secret reference indirection. */
 export type ApiKeyCredential = SchemaContract<
   Omit<Extract<InlineAuthProfileCredential, { type: "api_key" }>, "key">
 > & {
@@ -66,7 +76,6 @@ export type SavedSetupCredential = {
   pluginId?: string;
 };
 
-/** Credential variants supported by auth profiles. */
 export type AuthProfileCredential = (ApiKeyCredential | TokenCredential | OAuthCredential) & {
   /** Replacement credentials stay unavailable until their verified connection is activated. */
   setup?: SavedSetupCredential;
@@ -93,7 +102,6 @@ export type AuthProfileCooldownClassification = "wham_token_expired" | "wham_acc
 
 /** Profile-wide blocked reason reported by provider usage probes. */
 export type AuthProfileBlockedReason = "subscription_limit";
-/** Source that marked a profile as blocked. */
 export type AuthProfileBlockedSource = "codex_rate_limits" | "wham";
 
 /** Per-profile usage statistics for round-robin and cooldown tracking */
@@ -152,7 +160,6 @@ export type AuthProfileSecretsStore = {
   profiles: Record<string, AuthProfileCredential>;
 };
 
-/** Persisted runtime-state payload with a schema version. */
 export type AuthProfileStateStore = {
   version: number;
 } & AuthProfileState;
@@ -181,12 +188,13 @@ export type RuntimeAuthProfileStore = AuthProfileStore & {
   /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
   runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
+  /** Canonical local OAuth rows may be hidden by shared-store reconciliation. */
+  runtimeHasLocalOAuthProfiles?: boolean;
   /** Provider orders stored by this owner; [] means no local override, even with inherited priority. */
   runtimeLocalOrderProviderIds?: string[];
   runtimeInheritsMainState?: boolean;
 };
 
-/** Result returned by config/store auth profile id repair. */
 export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;
   changes: string[];

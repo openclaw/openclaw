@@ -29,7 +29,6 @@ export type SubscriptionBinding = {
   updatedAt: number;
 };
 
-/** Shape agreed with Cron's durable event admission owner. */
 export type QueuedEvent = {
   jobId: string;
   sourceIdentity: string;

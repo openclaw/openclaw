@@ -16,7 +16,6 @@ import type {
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import {
   createConfigReadError,
-  formatInvalidConfigDetails,
   isConfigReadFailure,
   isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
@@ -34,11 +33,11 @@ import {
 } from "../../gateway/net.js";
 import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
+import { isChannelStartupSuppressedByEnvironment } from "../../gateway/server-sidecar-startup-mode.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { isTruthyEnvValue } from "../../infra/env.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -48,7 +47,6 @@ import {
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
-  recordGatewayCrashLoopRecovery,
   type GatewayCrashLoopBreakerDecision,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
@@ -67,15 +65,16 @@ import { parseTcpPort } from "../../infra/tcp-port.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { sleep as defaultSleep } from "../../utils/sleep.js";
 import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
-import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 import { withProgress } from "../progress.js";
 import {
   isTerminalInteractive,
   NON_INTERACTIVE_GATEWAY_RUN_FORCE_MESSAGE,
 } from "../terminal-interactivity.js";
+import { createGatewayCrashLoopRecovery } from "./crash-loop-recovery.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
 import { runGatewayLoop } from "./run-loop.js";
@@ -174,7 +173,7 @@ async function readGatewayStartupConfig(params: {
   );
   const { snapshot } = snapshotRead;
   if (!snapshot.valid && isConfigReadFailure(snapshot)) {
-    throw createConfigReadError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+    throw createConfigReadError(snapshot);
   }
   return {
     cfg: snapshot.config,
@@ -373,12 +372,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
   }
 
   const now = params.now ?? performance.now.bind(performance);
-  const sleep =
-    params.sleep ??
-    (async (ms: number) =>
-      await new Promise((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleep = params.sleep ?? defaultSleep;
   const retryMs = params.retryMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_MS;
   const timeoutMs = params.timeoutMs ?? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS;
   const startedAt = now();
@@ -860,14 +854,12 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   let startupConfigSnapshotReadForNextStart:
     | ReadConfigFileSnapshotWithPluginMetadataResult
     | undefined = startupConfigSnapshotRead;
-  const envSidecarStartupMode =
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
-      ? "defer"
-      : "start";
+  const envSidecarStartupMode = isChannelStartupSuppressedByEnvironment() ? "defer" : "start";
   let crashLoopDecision: GatewayCrashLoopBreakerDecision | undefined;
   let channelAutostartSuppression: { reason: "crash-loop-breaker"; message: string } | undefined;
-  let tryRecoverChannelAutostartSuppression: (() => boolean) | undefined;
+  let tryRecoverChannelAutostartSuppression:
+    | ((signal: AbortSignal) => Promise<number | undefined>)
+    | undefined;
   let activeBootId: string | undefined;
   let bootRecorded = false;
   let triageAttempted = false;
@@ -926,26 +918,14 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       `gateway restart-loop breaker tripped: ${crashLoopDecision.uncleanBoots} unclean boot(s) within ${crashLoopDecision.windowMs}ms; ` +
       `suppressing channel/provider account auto-start. Inspect the stability bundle and fix the startup crash before restarting the service. ${formatGatewayCrashLoopManualChannelStartHint()}`;
     channelAutostartSuppression = { reason: "crash-loop-breaker", message };
-    const suppressedBootId = activeBootId;
-    tryRecoverChannelAutostartSuppression = () => {
-      if (!suppressedBootId || activeBootId !== suppressedBootId) {
-        return false;
-      }
-      const decision = inspectGatewayCrashLoopBreaker(process.env);
-      // The current safe-mode boot remains an open row until the full window has
-      // drained. Requiring zero prevents a near-expiry history from restoring
-      // channels before this process itself has proven stable for the whole window.
-      if (!decision.recovered || decision.uncleanBoots !== 0) {
-        return false;
-      }
-      const recoveredBootId = recordGatewayCrashLoopRecovery(suppressedBootId, process.env);
-      if (!recoveredBootId || activeBootId !== suppressedBootId) {
-        return false;
-      }
-      activeBootId = recoveredBootId;
-      gatewayLog.info("gateway restart-loop breaker recovered; channel auto-start restored");
-      return true;
-    };
+    tryRecoverChannelAutostartSuppression = createGatewayCrashLoopRecovery({
+      bootId: activeBootId,
+      getActiveBootId: () => activeBootId,
+      onRecovered: (bootId) => {
+        activeBootId = bootId;
+        gatewayLog.info("gateway restart-loop breaker recovered; channel auto-start restored");
+      },
+    });
     gatewayLog.error(message);
     if (crashLoopDecision.shouldWriteStabilityBundle) {
       await maybeWriteGatewayStartupFailureBundle(
@@ -1042,11 +1022,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
 }
 
 /** Run foreground Gateway startup with one consent-gated invalid-config repair attempt. */
-export async function runGatewayCommand(
-  opts: GatewayRunOpts,
-  hooks: GatewayRunRuntimeHooks = {},
-  recoveryDeps?: InvalidConfigRecoveryDeps,
-) {
+export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
   if (opts.taskSupervisor) {
     const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
     await runWindowsGatewayTaskSupervisor();
@@ -1066,7 +1042,6 @@ export async function runGatewayCommand(
     const { offerInvalidConfigRecovery } = await import("../invalid-config-recovery.js");
     const recovery = await offerInvalidConfigRecovery({
       runtime: defaultRuntime,
-      deps: recoveryDeps,
       retry: async () => await runGatewayCommandOnce(opts, hooks),
     });
     if (recovery.status === "recovered") {

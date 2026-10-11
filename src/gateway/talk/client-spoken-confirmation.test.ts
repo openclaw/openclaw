@@ -9,7 +9,10 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type {
+  ReplyBackendMessageInjectionV2,
+  ReplyToolAuthorityOverlay,
+} from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
@@ -38,16 +41,24 @@ const mocks = vi.hoisted(() => ({
   beforeAppend: vi.fn(async () => {}),
 }));
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.runEmbeddedAgent }));
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
-  return {
-    ...actual,
-    appendTranscriptMessage: async (...args: Parameters<typeof actual.appendTranscriptMessage>) => {
-      await mocks.beforeAppend();
-      return actual.appendTranscriptMessage(...args);
-    },
-  };
-});
+vi.mock(
+  "../../config/sessions/session-accessor.sqlite-transcript-turn.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../config/sessions/session-accessor.sqlite-transcript-turn.js")
+      >();
+    return {
+      ...actual,
+      appendExpectedSessionTranscriptTurn: async (
+        ...args: Parameters<typeof actual.appendExpectedSessionTranscriptTurn>
+      ) => {
+        await mocks.beforeAppend();
+        return actual.appendExpectedSessionTranscriptTurn(...args);
+      },
+    };
+  },
+);
 
 import { createTalkClientAgentConsultRunner } from "./client-agent-consult.js";
 import { createTalkClientGatewayControlOwner } from "./client-gateway-control.js";
@@ -106,7 +117,7 @@ describe("native Talk spoken confirmation handoff", () => {
       { sessionId, updatedAt: Date.now() },
     );
     const sessionTarget = { agentId: "main", sessionKey, canonicalKey: sessionKey, storePath };
-    const voiceSessionId = createOrResumeClientVoiceSession({
+    const voiceSessionId = await createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey,
       origin: "client",
@@ -138,6 +149,7 @@ describe("native Talk spoken confirmation handoff", () => {
       if (!operationalRunInstance) {
         throw new Error("expected admitted Talk run");
       }
+      const project = (_overlay: ReplyToolAuthorityOverlay) => "authority";
       await withGatewayToolCallerIdentity(
         {
           agentId: "main",
@@ -145,7 +157,8 @@ describe("native Talk spoken confirmation handoff", () => {
           operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
             source: "attempt",
-            project: () => "authority",
+            project,
+            projectAsync: async (overlay) => project(overlay),
             assertActive: () => {},
           }),
         },

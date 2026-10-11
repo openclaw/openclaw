@@ -307,7 +307,8 @@ it.for([false, true])(
           .toBe(true);
         expect((await list()).models).toContainEqual(modelRow(provider, "harness-host-row"));
         if (!withProviderCredentials) {
-          expect(requests).toEqual(["/native/models"]);
+          // Cold startup discovers the full catalog, as an explicit refresh would.
+          expect(requests.toSorted()).toEqual(["/native/models", "/provider/models"]);
           // Gateway refresh can return a pending snapshot before discovery publishes.
           const refresh = () =>
             waitForCatalogPublication({

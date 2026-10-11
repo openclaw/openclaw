@@ -163,28 +163,24 @@ class SessionDiffMenu extends OpenClawLightDomElement {
   }
 
   private renderViewMenu(menu: Extract<SessionDiffMenuData, { kind: "view" }>) {
-    const item = (value: string, label: Parameters<typeof t>[0]) =>
-      html`<wa-dropdown-item class="session-menu__item" value=${value}>
-        <span class="session-menu__text">${t(label)}</span>
-      </wa-dropdown-item>`;
     return html`
-      ${item("collapse-all", "chat.sessionDiff.collapseAll")}
-      ${item("expand-all", "chat.sessionDiff.expandAll")}
+      ${this.renderMenuItem("collapse-all", t("chat.sessionDiff.collapseAll"))}
+      ${this.renderMenuItem("expand-all", t("chat.sessionDiff.expandAll"))}
       <div class="session-menu__separator" role="separator"></div>
-      ${item("toggle-wrap", menu.wrap ? "chat.sessionDiff.disableWrapping" : "chat.sessionDiff.enableWrapping")}
-      ${item("toggle-split", menu.split ? "chat.sessionDiff.switchUnified" : "chat.sessionDiff.switchSplit")}
+      ${this.renderMenuItem("toggle-wrap", t(menu.wrap ? "chat.sessionDiff.disableWrapping" : "chat.sessionDiff.enableWrapping"))}
+      ${this.renderMenuItem("toggle-split", t(menu.split ? "chat.sessionDiff.switchUnified" : "chat.sessionDiff.switchSplit"))}
     `;
   }
 
   private renderScopeMenu(menu: Extract<SessionDiffMenuData, { kind: "scope" }>) {
     const activeCommit = menu.active.scope === "commit" ? menu.active.commit : null;
     return html`
-      ${this.renderScopeItem(
+      ${this.renderMenuItem(
         "scope:all",
         t("chat.sessionDiff.allChanges"),
         menu.active.scope === "all",
       )}
-      ${this.renderScopeItem(
+      ${this.renderMenuItem(
         "scope:uncommitted",
         t("chat.sessionDiff.uncommitted"),
         menu.active.scope === "uncommitted",
@@ -193,7 +189,7 @@ class SessionDiffMenu extends OpenClawLightDomElement {
         menu.result.commits?.length
           ? html`<div class="session-menu__separator" role="separator"></div>
               ${menu.result.commits.map((commit, index) =>
-                this.renderScopeItem(
+                this.renderMenuItem(
                   `scope:commit:${commit.sha}`,
                   html`<span class="session-diff-menu__sha">${commit.sha}</span>
                     <span class="session-diff-menu__subject">${commit.subject}</span>
@@ -222,12 +218,12 @@ class SessionDiffMenu extends OpenClawLightDomElement {
     `;
   }
 
-  private renderScopeItem(value: string, label: unknown, checked: boolean) {
+  private renderMenuItem(value: string, label: unknown, checked?: boolean) {
     return html`<wa-dropdown-item
-      class="session-menu__item session-diff-menu__scope-item"
+      class=${checked === undefined ? "session-menu__item" : "session-menu__item session-diff-menu__scope-item"}
       value=${value}
-      role="menuitemradio"
-      aria-checked=${String(checked)}
+      role=${checked === undefined ? nothing : "menuitemradio"}
+      aria-checked=${checked === undefined ? nothing : String(checked)}
     >
       <span class="session-menu__text">${label}</span>
       ${

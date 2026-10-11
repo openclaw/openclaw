@@ -36,6 +36,7 @@ function renderControls(
       gatewayAvailable: true,
       loading: false,
       modelCatalog: models,
+      modelCatalogState: { hasSnapshot: true, status: "ready" },
       modelSwitching: false,
       sending: false,
       sessionKey: "main",

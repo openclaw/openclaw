@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import { currentThemeBranding } from "../app/theme-branding.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
@@ -45,7 +46,7 @@ const sidebarMenuTypeahead = new WeakMap<
 function sidebarMenuItems(dropdown: Element | null) {
   return [
     ...(dropdown?.querySelectorAll<HTMLElement & { active: boolean }>(
-      ":scope > wa-dropdown-item:not([disabled]), :scope > .sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+      ":scope > wa-dropdown-item:not([disabled]), :scope > .sidebar-agent-menu__agent-list > wa-dropdown-item:not([disabled])",
     ) ?? []),
   ];
 }
@@ -103,11 +104,16 @@ export function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
   const dropdown = (event.currentTarget as HTMLElement).closest("wa-dropdown");
   const items = sidebarMenuItems(dropdown);
   const footer = dropdown?.querySelector<HTMLElement>(".sidebar-identity-menu__footer");
+  const search = dropdown?.querySelector<HTMLInputElement>(".sidebar-agent-menu__filter");
   const controls = [
+    ...(search ? [search] : []),
     ...items,
     ...(footer?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? []),
   ];
-  const current = event.target instanceof HTMLElement ? event.target : null;
+  const current =
+    event.target instanceof HTMLElement
+      ? (event.target.closest<HTMLElement>("wa-dropdown-item") ?? event.target)
+      : null;
   const index = current ? controls.indexOf(current) : -1;
   if (footer && index < 0) {
     return false;
@@ -177,6 +183,7 @@ type SidebarAgentMenuParams = Omit<SidebarAgentMenuSwitcherParams, "allAgentsSco
   rosterMode: boolean;
   activeName: string;
   connected: boolean;
+  onQueryChange: (query: string) => void;
   onToggleRoster: () => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
@@ -219,6 +226,9 @@ function renderIdentityMenuHelpSubmenu() {
 }
 
 export function renderSidebarHelpMenu() {
+  if (!currentThemeBranding().communityLinks) {
+    return nothing;
+  }
   return html`
     <wa-dropdown-item
       class="sidebar-customize-menu__item sidebar-identity-menu__help"
@@ -282,6 +292,35 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       }}
       @wa-after-show=${params.onAfterShow}
       @keydown=${(event: KeyboardEvent) => {
+        const target = event.target;
+        const row =
+          target instanceof HTMLElement
+            ? target.closest<HTMLElement>(".sidebar-agent-menu__agent-switch")
+            : null;
+        const pin = row?.querySelector<HTMLButtonElement>(".sidebar-agent-menu__pin");
+        if (pin && target === pin && (event.key === "Enter" || event.key === " ")) {
+          // Let the native button click without selecting its enclosing agent.
+          event.stopPropagation();
+          return;
+        }
+        if (
+          event.key === "Tab" &&
+          row &&
+          pin &&
+          ((target === row && !event.shiftKey) || (target === pin && event.shiftKey))
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          (event.shiftKey ? row : pin).focus();
+          return;
+        }
+        if (
+          event.target instanceof HTMLInputElement &&
+          (event.isComposing || !["ArrowDown", "ArrowUp", "Escape", "Tab"].includes(event.key))
+        ) {
+          event.stopPropagation();
+          return;
+        }
         if (moveSidebarMenuFocus(event)) {
           return;
         }
@@ -291,7 +330,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         const item =
           event.target instanceof HTMLElement
             ? event.target.closest<HTMLElement>(
-                ".sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+                ".sidebar-agent-menu__agent-list > wa-dropdown-item:not([disabled])",
               )
             : null;
         if ((event.key === "Enter" || event.key === " ") && item) {
@@ -309,6 +348,25 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
       ${renderSidebarMenuTrigger({ x: position.x, y: position.top }, menuLabel)}
+      ${params.agents.length > 0 ? html`<div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>` : nothing}
+      ${
+        params.agents.length > 6
+          ? html`
+              <input
+                class="sidebar-agent-menu__filter"
+                type="search"
+                aria-label=${t("agentChip.search")}
+                placeholder=${t("agentChip.search")}
+                .value=${params.query}
+                @input=${(event: InputEvent) => {
+                  // SAFETY: This handler is attached directly to the native search input.
+                  const input = event.currentTarget as HTMLInputElement;
+                  params.onQueryChange(input.value);
+                }}
+              />
+            `
+          : nothing
+      }
       ${renderSidebarAgentMenuSwitcher({ ...params, allAgentsScope: params.rosterMode && params.agents.length > 1 })}
       ${params.agents.length > 0 ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>` : nothing}
       ${renderSidebarMenuAction("command:new-agent", t("custodian.newAgent"), "userPlus")}

@@ -38,6 +38,9 @@ working.
   `workspace-directory`, and marketplace manifests in the current repository.
   Plugins remain unavailable until an owner or `operator.admin` explicitly
   installs or enables their marketplace-qualified identity.
+- OpenClaw excludes the `visualize@openai-bundled` skill from Codex threads.
+  That skill emits Codex-specific inline visualization directives, while
+  OpenClaw visualizations use the `show_widget` tool on supported surfaces.
 
 `codexPlugins` has no effect on OpenClaw-provider runs, ACP conversation
 bindings, or other harnesses, because those paths never create Codex

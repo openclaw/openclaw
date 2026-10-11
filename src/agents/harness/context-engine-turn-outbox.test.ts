@@ -1,25 +1,45 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { StatementSync } from "node:sqlite";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
+  replaceTranscriptEvents,
   upsertSessionEntryCore,
+  waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import type {
   TranscriptTurnAdmission,
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import {
+  completedTurnMessageAnchor,
+  captureCompletedTurnMessageAnchor,
+  sessionManagerReadMessageAnchor,
+} from "../sessions/session-manager-message-anchor.js";
+import { SessionManager } from "../sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { finalizeHarnessContextEngineTurn } from "./context-engine-lifecycle.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
+import {
+  drainPendingContextEngineTurnsBeforeRun,
+  finalizeAcceptedContextEngineTurn,
+  type ContextEngineTurnAttemptFacts,
+} from "./context-engine-turn-attempt.js";
 import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
 import {
   acceptContextEngineTurnIntent,
@@ -125,10 +145,12 @@ function createLease(engine: ContextEngine) {
     effectiveEngineId: "test",
     effectiveEnginePluginId: undefined,
     degraded: false,
+    disposed: false,
     degradedReason: undefined,
     selectForHost: vi.fn(),
     degradeBeforeStart: vi.fn(),
     begin: vi.fn(),
+    onDispose: vi.fn(),
     deferDisposalUntil: vi.fn(),
     dispose: vi.fn(async () => undefined),
   } satisfies ContextEngineLogicalTurnLease;
@@ -160,6 +182,125 @@ async function createTranscript(sessionId: string, content = "current") {
 }
 
 describe("context-engine turn outbox", () => {
+  it.each(["unchanged", "rewrite", "branch", "reset"] as const)(
+    "validates the committed terminal receipt at consumption after %s without pre-reading it",
+    async (change) => {
+      const { target, admission } = await createTranscript(`terminal-receipt-${change}`);
+      const manager = await SessionManager.openAsync(target);
+      const message = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "committed reply" }],
+      });
+      const appended = await manager.appendMessageWithTranscriptAnchorAsync(message);
+      const completed = captureCompletedTurnMessageAnchor(manager, appended.entryId);
+      const terminal = completed?.anchor;
+      expect(terminal).toEqual(appended.anchor);
+      expect(Object.isFrozen(terminal)).toBe(true);
+      await manager.appendCustomEntryAsync("openclaw.cache-ttl", { timestamp: 1 });
+      expect(manager[sessionManagerReadMessageAnchor](appended.entryId)).toEqual(terminal);
+
+      if (change === "rewrite") {
+        await replaceTranscriptEvents(
+          target,
+          manager.getPersistedEntries().map((entry) =>
+            asOptionalRecord(entry)?.id === appended.entryId
+              ? Object.assign({}, entry, {
+                  message: { ...message, content: [{ type: "text", text: "rewritten" }] },
+                })
+              : entry,
+          ),
+        );
+        await manager.reloadPersistedTranscriptAsync();
+        expect(manager[sessionManagerReadMessageAnchor](appended.entryId)).toBeUndefined();
+      } else if (change === "branch") {
+        await manager.appendLeafControlAsync({
+          targetId: admission.entryId,
+          appendParentId: admission.entryId,
+        });
+        await waitForSessionTranscriptProjection(target);
+      } else if (change === "reset") {
+        // Append-only resets keep closed historical turns; later messages must not replace the receipt.
+        await manager.appendResetBoundaryAsync("reset");
+        await manager.appendMessageAsync({ role: "user", content: "next turn", timestamp: 2 });
+        await manager.appendMessageAsync(
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "next reply" }] }),
+        );
+        expect(manager[sessionManagerReadMessageAnchor](appended.entryId)).toBeUndefined();
+      }
+
+      const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
+        status: "committed",
+      }));
+      const lease = createLease(createEngine(commitTurn));
+      const record = vi.fn<(facts: ContextEngineTurnAttemptFacts) => void>();
+      const prepareRead = vi.spyOn(transcriptHydration, "prepareSessionTranscriptHydration");
+      const finalization = {
+        contextEngine: lease.engine,
+        sessionIdUsed: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionFile: target.storePath,
+        messagesSnapshot: [],
+        prePromptMessageCount: 0,
+        promptError: false,
+        aborted: false,
+        yieldAborted: false,
+        turnCandidate: {
+          admission,
+          terminalEntryId: appended.entryId,
+          [completedTurnMessageAnchor]: completed,
+          record,
+        },
+        warn: vi.fn(),
+      } satisfies Parameters<typeof finalizeHarnessContextEngineTurn>[0];
+      try {
+        await finalizeHarnessContextEngineTurn(finalization);
+        expect(prepareRead).not.toHaveBeenCalled();
+      } finally {
+        prepareRead.mockRestore();
+      }
+      expect(record).toHaveBeenCalledOnce();
+      const facts = record.mock.calls[0]![0];
+      expect(facts.boundary.terminal).toEqual(terminal);
+      const warn = vi.fn();
+      await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+      if (change === "unchanged" || change === "reset") {
+        expect(commitTurn).toHaveBeenCalledOnce();
+        expect(commitTurn.mock.calls[0]![0].messages).toEqual([
+          { role: "user", content: "current" },
+          message,
+        ]);
+        expect(warn).not.toHaveBeenCalled();
+      } else {
+        expect(commitTurn).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript range is stale"));
+      }
+      if (change === "unchanged") {
+        let active = true;
+        await withSessionTranscriptWriteAssertion(
+          target,
+          () => {
+            if (!active) {
+              throw new Error("writer revoked");
+            }
+          },
+          async () => {
+            const receipt = captureCompletedTurnMessageAnchor(manager, appended.entryId);
+            active = false;
+            await expect(
+              finalizeHarnessContextEngineTurn({
+                ...finalization,
+                turnCandidate: {
+                  ...finalization.turnCandidate,
+                  [completedTurnMessageAnchor]: receipt,
+                },
+              }),
+            ).rejects.toThrow("writer revoked");
+          },
+        );
+        expect(record).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("retries only transcript failures that can make progress", () => {
     expect(isRetryableContextEngineTurnReadFailure("projection-unavailable")).toBe(true);
     expect(isRetryableContextEngineTurnReadFailure("too-large")).toBe(false);
@@ -289,10 +430,12 @@ describe("context-engine turn outbox", () => {
         status: "committed",
       }));
       const lease = createLease(createEngine(commitTurn));
+      const warn = vi.fn();
       await drainPendingContextEngineTurnsBeforeRun({
         admission: accepted ? undefined : currentAdmission,
         isHeartbeat: false,
         lease,
+        warn,
         ...(accepted ? { recorder, sessionTarget: target } : {}),
       });
       if (accepted) {
@@ -323,6 +466,9 @@ describe("context-engine turn outbox", () => {
         await recorder.waitForRuntimePersistence();
       } else {
         expect(commitTurn).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          `[context-engine] discarded unaccepted turn advancement: ${admission.logicalTurnId}: recovery found no host acceptance`,
+        );
       }
       const queued = database.db
         .prepare("SELECT advancement_key, payload_json FROM context_engine_turn_outbox")
@@ -620,7 +766,7 @@ describe("context-engine turn outbox", () => {
       { agentId: otherDatabase.agentId, path: otherDatabase.path },
       () => undefined,
     );
-    const databaseAccess = vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseAsync");
+    const databaseAccess = vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseRuntime");
     const accessesToTarget = () =>
       databaseAccess.mock.calls.filter(([options]) => options.path === database.path);
     try {
@@ -665,30 +811,50 @@ describe("context-engine turn outbox", () => {
     await expect(recorder.waitForRuntimePersistence()).rejects.toThrow("admission write failed");
   });
 
-  it("installs the outbox schema once per worker connection, not per command", async () => {
+  it("reuses admitted outbox schema across worker commands without DDL or catalog reads", async () => {
     const { target, database } = await createTranscript("schema-turn");
     const databasePath = database.path;
-    // A fresh connection has not ensured the lazy outbox DDL yet, as in a new worker.
-    const connection = new DatabaseSync(databasePath);
-    try {
-      const exec = vi.spyOn(connection, "exec");
-      const backend = bindSqliteWorkerBackend(undefined, {
-        databasePath,
-        database: connection,
-        admit: () => undefined,
-      });
-      const command = {
-        type: "hasPending" as const,
-        input: { engineId: "test", sessionId: target.sessionId },
-      };
-      expect(backend.execute(command)).toBe(false);
-      expect(backend.execute(command)).toBe(false);
-      const outboxDdl = exec.mock.calls.filter(([sql]) =>
-        sql.includes("CREATE TABLE IF NOT EXISTS context_engine_turn_outbox"),
-      );
-      expect(outboxDdl).toHaveLength(1);
-    } finally {
-      connection.close();
+    for (const firstUse of [false, true]) {
+      const connection = openNodeSqliteDatabase(databasePath);
+      try {
+        if (firstUse) {
+          connection.exec("DROP TABLE context_engine_turn_outbox");
+        }
+        admitSqliteSchema(connection);
+        const backend = bindSqliteWorkerBackend(undefined, {
+          databasePath,
+          database: connection,
+          admit: () => undefined,
+        });
+        const command = {
+          type: "hasPending" as const,
+          input: { engineId: "test", sessionId: target.sessionId },
+        };
+        if (firstUse) {
+          expect(backend.execute(command)).toBe(false);
+          // Consume the schema revision invalidated by the committed first-use DDL.
+          expect(backend.execute(command)).toBe(false);
+        }
+        const exec = vi.spyOn(connection, "exec");
+        const observation = observeSqliteReadSql(StatementSync.prototype);
+        try {
+          expect(backend.execute(command)).toBe(false);
+          expect(backend.execute(command)).toBe(false);
+          expect(
+            exec.mock.calls.filter(([sql]) =>
+              sql.includes("CREATE TABLE IF NOT EXISTS context_engine_turn_outbox"),
+            ),
+          ).toHaveLength(0);
+          expect(
+            observation.queries.filter((sql) => /sqlite_(?:schema|master)/iu.test(sql)),
+          ).toEqual([]);
+        } finally {
+          observation.restore();
+          exec.mockRestore();
+        }
+      } finally {
+        connection.close();
+      }
     }
   });
 });

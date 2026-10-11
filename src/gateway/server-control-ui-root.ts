@@ -109,8 +109,7 @@ export function readControlUiRootAsset(
   }
   const pool = (runtime.pool ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeProcessEntrypointUrl("controlUiFile"),
-    maxWorkers: 2,
-    sharedCompute: true,
+    workerClass: "file-reader",
     maxPendingTasks: 2_048,
     maxPendingBytes: 8 * 1024 * 1024,
   }));

@@ -30,6 +30,7 @@ import {
   publicationTranscriptMessages,
   root,
   seedLocalPublication,
+  withPublicationWorktreeSqlBoundary,
 } from "./github-publication.test-support.js";
 import {
   REQUEST,
@@ -744,50 +745,45 @@ describe("Gateway GitHub publication", () => {
     );
   });
 
-  it("fails closed when worktree authority changes during an awaited publication step", async () => {
-    mocks.resolveRepository.mockImplementationOnce(async () => {
-      mocks.findWorktree.mockImplementation((_ownerKind, ownerId: string) => ({
-        id: "worktree-1",
-        repoRoot: "/repo",
-        repoFingerprint: "replacement-fingerprint",
-        path: "/repo/worktree",
-        branch: BRANCH,
-        baseRef: "origin/main",
-        ownerKind: "session",
-        ownerId,
-      }));
-      return {
-        checkoutRoot: "/repo/worktree",
-        repoRoot: "/repo",
-        originUrl: "git@github.com:openclaw/openclaw.git",
-        fingerprint: "fingerprint-1",
-      };
-    });
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const coordinator = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database }),
-    });
-
-    await expect(
-      coordinator.requestForSession({
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        idempotencyKey: "publish-stale-worktree-await",
-        title: "Publish safely",
-      }),
-    ).resolves.toEqual({
-      requestId: expect.any(String),
-      publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
-      status: "failed",
-      code: "workspace_changed",
-      message: "GitHub publication failed.",
-      nextAction:
-        "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
-    });
-    expect(commands.some((argv) => argv.includes("commit-tree"))).toBe(false);
-    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
-    expect(commands.some((argv) => argv.includes("POST"))).toBe(false);
-  });
+  it.each(["repository identity", "newer same-owner row", "restored same-owner row"] as const)(
+    "fences publication after %s changes without caller-thread worktree SQL",
+    async (change) => {
+      await withPublicationWorktreeSqlBoundary(change, async (changeWorktree) => {
+        mocks.resolveRepository.mockImplementationOnce(async () => {
+          await changeWorktree();
+          return {
+            checkoutRoot: "/repo/worktree",
+            repoRoot: "/repo",
+            originUrl: "git@github.com:openclaw/openclaw.git",
+            fingerprint: "fingerprint-1",
+          };
+        });
+        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+        const coordinator = createGitHubPublicationCoordinator({
+          placements: createWorkerSessionPlacementStore({ database }),
+        });
+        await expect(
+          coordinator.requestForSession({
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            idempotencyKey: "publish-stale-worktree-await",
+            title: "Publish safely",
+          }),
+        ).resolves.toEqual({
+          requestId: expect.any(String),
+          publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
+          status: "failed",
+          code: "workspace_changed",
+          message: "GitHub publication failed.",
+          nextAction:
+            "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
+        });
+        expect(commands.some((argv) => argv.includes("commit-tree"))).toBe(false);
+        expect(commands.some((argv) => argv.includes("push"))).toBe(false);
+        expect(commands.some((argv) => argv.includes("POST"))).toBe(false);
+      });
+    },
+  );
 
   it.each([
     { phase: "commit", remoteInitiallyPublished: false, pullRequestExists: false },

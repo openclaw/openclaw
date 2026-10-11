@@ -42,9 +42,10 @@ const openAIModel = {
 function createSession(
   sessionModel: Model = model,
   providerReplay?: AssistantMessage["providerReplay"],
+  userText = "remember copper",
 ) {
   const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
+  sessionManager.appendMessage({ role: "user", content: userText, timestamp: 1 });
   sessionManager.appendMessage({
     role: "assistant",
     content: [{ type: "text", text: "remembered" }],
@@ -282,6 +283,70 @@ describe("attemptServerEndpointCompaction", () => {
     expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
     expect(onCompactionCommitted).not.toHaveBeenCalled();
     expect(session.sessionManager.getBranch()).toEqual(before);
+  });
+
+  it.each(["fixedTokens", "pendingTokens", "reserveTokens"] as const)(
+    "leaves an oversized retained-user window to client compaction after charging %s",
+    async (reservedField) => {
+      const userText = "source text ".repeat(400);
+      const session = createSession(openAIModel, undefined, userText);
+      const before = structuredClone(session.sessionManager.getBranch());
+      const response = createCompactionResponse(openAIModel);
+      response.output[0] = {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: userText }],
+      };
+      requestPreparedCompactionMock.mockResolvedValueOnce(response);
+      const onUsage = vi.fn();
+      const onCompactionCommitted = vi.fn();
+      const { result } = attempt({
+        trigger: "budget",
+        model: openAIModel,
+        sessionManager: session.sessionManager,
+        context: { systemPrompt: "system", messages: session.messages },
+        requestBudget: {
+          contextWindow: 2_000,
+          fixedTokens: 0,
+          pendingTokens: 0,
+          reserveTokens: 0,
+          [reservedField]: 1_000,
+        },
+        onUsage,
+        onCompactionCommitted,
+      });
+
+      await expect(result).resolves.toBeUndefined();
+      expect(onUsage).toHaveBeenCalledOnce();
+      expect(onCompactionCommitted).not.toHaveBeenCalled();
+      expect(session.sessionManager.getBranch()).toEqual(before);
+    },
+  );
+
+  it("admits the returned window without recharging its covered transcript or fixed prompt", async () => {
+    const session = createSession(openAIModel, undefined, "old history ".repeat(4_000));
+    requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(openAIModel));
+    const onCompactionCommitted = vi.fn();
+    const { result } = attempt({
+      trigger: "budget",
+      model: openAIModel,
+      sessionManager: session.sessionManager,
+      context: { systemPrompt: "system ".repeat(400), messages: session.messages },
+      requestBudget: {
+        contextWindow: 2_000,
+        fixedTokens: 1_000,
+        pendingTokens: 400,
+        reserveTokens: 400,
+      },
+      onCompactionCommitted,
+    });
+
+    await expect(result).resolves.toBeDefined();
+    expect(onCompactionCommitted).toHaveBeenCalledOnce();
+    expect(session.sessionManager.getLeafEntry()).toMatchObject({
+      type: "message",
+      message: { providerReplay: { data: "opaque" } },
+    });
   });
 
   it("preserves custom instructions by falling back to client compaction", async () => {

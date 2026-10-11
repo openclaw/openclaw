@@ -447,11 +447,8 @@ function normalizePersistedDeliveryChannel(
   options: { preserveLast?: boolean } = {},
 ) {
   const channel = value.trim();
-  if (!channel) {
+  if (!channel || (channel === CRON_CHANNEL_LAST && !options.preserveLast)) {
     return undefined;
-  }
-  if (channel === CRON_CHANNEL_LAST) {
-    return options.preserveLast ? CRON_CHANNEL_LAST : undefined;
   }
   return channel;
 }
@@ -555,39 +552,37 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       selectedDeliveryMode === "announce"
         ? normalizedDeliveryAccountId || (editingJob?.delivery?.accountId ? null : undefined)
         : undefined;
-    const delivery =
-      selectedDeliveryMode && selectedDeliveryMode !== "none"
-        ? {
-            mode: selectedDeliveryMode,
-            channel:
-              selectedDeliveryMode === "announce"
-                ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
-                    preserveLast: Boolean(editingJob?.delivery?.channel),
-                  })
-                : undefined,
-            to:
-              form.deliveryTo.trim() ||
-              (selectedDeliveryMode === "announce" && editingJob?.delivery?.to ? null : undefined),
-            accountId: deliveryAccountId,
-            bestEffort: form.deliveryBestEffort,
-            ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
-            ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
-              ? { completionDestination: form.deliveryCompletionDestination }
-              : {}),
-            ...(form.deliveryFailureDestination
-              ? { failureDestination: form.deliveryFailureDestination }
-              : {}),
-          }
-        : selectedDeliveryMode === "none"
-          ? ({
-              mode: "none",
-              ...(form.deliveryBestEffort ? { bestEffort: true } : {}),
-              ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
-              ...(form.deliveryFailureDestination
-                ? { failureDestination: form.deliveryFailureDestination }
-                : {}),
-            } as const)
-          : undefined;
+    const delivery = selectedDeliveryMode
+      ? {
+          mode: selectedDeliveryMode,
+          ...(selectedDeliveryMode === "none"
+            ? form.deliveryBestEffort
+              ? { bestEffort: true }
+              : {}
+            : {
+                channel:
+                  selectedDeliveryMode === "announce"
+                    ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
+                        preserveLast: Boolean(editingJob?.delivery?.channel),
+                      })
+                    : undefined,
+                to:
+                  form.deliveryTo.trim() ||
+                  (selectedDeliveryMode === "announce" && editingJob?.delivery?.to
+                    ? null
+                    : undefined),
+                accountId: deliveryAccountId,
+                bestEffort: form.deliveryBestEffort,
+              }),
+          ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+          ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
+            ? { completionDestination: form.deliveryCompletionDestination }
+            : {}),
+          ...(form.deliveryFailureDestination
+            ? { failureDestination: form.deliveryFailureDestination }
+            : {}),
+        }
+      : undefined;
     const failureAlert = buildFailureAlert(form, sourceJob?.failureAlert, Boolean(editingJob));
     const triggerScript = form.triggerScript.trim();
     const trigger = form.triggerEnabled
@@ -782,17 +777,11 @@ export function startCronEdit(state: CronState, job: CronJob) {
 
 function buildCloneName(name: string, existingNames: Set<string>) {
   const base = name.trim() || "Job";
-  const first = `${base} copy`;
-  if (!existingNames.has(normalizeLowercaseStringOrEmpty(first))) {
-    return first;
-  }
-  let index = 2;
-  while (index < 1000) {
-    const next = `${base} copy ${index}`;
+  for (let index = 1; index < 1000; index += 1) {
+    const next = index === 1 ? `${base} copy` : `${base} copy ${index}`;
     if (!existingNames.has(normalizeLowercaseStringOrEmpty(next))) {
       return next;
     }
-    index += 1;
   }
   return `${base} copy ${Date.now()}`;
 }

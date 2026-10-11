@@ -1,7 +1,6 @@
 import type { JsonValue, RpcRequest } from "./protocol.js";
-export type CodexAppServerServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
-  params?: JsonValue;
-};
+export type CodexAppServerServerRequest = Required<Pick<RpcRequest, "id" | "method">> &
+  Pick<RpcRequest, "params">;
 export type CodexThreadRouteScope = {
   threadId: string;
   turnId?: string;

@@ -216,7 +216,7 @@ beforeEach(() => {
     childSessionKey: "agent:main:subagent:1",
   });
   swarmMocks.emitSessionLifecycleEvent.mockReset();
-  swarmMocks.getSwarmRunByLaunchReplayKey.mockReset().mockReturnValue(undefined);
+  swarmMocks.getSwarmRunByLaunchReplayKey.mockReset().mockResolvedValue(undefined);
   swarmMocks.initSubagentRegistry.mockReset();
   swarmMocks.waitForCollectorCompletion.mockReset().mockResolvedValue({
     runId: "collector-1",
@@ -758,7 +758,7 @@ describe("Code Mode swarm host bridge", () => {
         swarmLaunchRequestFingerprint: String(requestFingerprint),
       });
     });
-    swarmMocks.getSwarmRunByLaunchReplayKey.mockImplementation(() => persisted);
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockImplementation(async () => persisted);
     const code = 'return await agents.run("Research");';
 
     const first = await runSwarmCode(harness, code);
@@ -772,7 +772,7 @@ describe("Code Mode swarm host bridge", () => {
   });
 
   it("rejects a persisted collector whose request fingerprint does not match", async () => {
-    swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockResolvedValue(
       collectorRecord({ swarmLaunchRequestFingerprint: collectorFingerprint("Different task") }),
     );
     const harness = createSwarmHarness();
@@ -785,7 +785,7 @@ describe("Code Mode swarm host bridge", () => {
   });
 
   it("rejects a pending reservation without durable launch state", async () => {
-    swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockResolvedValue(
       collectorRecord({
         swarmLaunchPending: true,
         swarmLaunchRequestFingerprint: collectorFingerprint(),
@@ -802,7 +802,7 @@ describe("Code Mode swarm host bridge", () => {
   });
 
   it("re-enqueues a durable pending reservation before returning its handle", async () => {
-    swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockResolvedValue(
       collectorRecord({
         swarmLaunchPending: true,
         swarmLaunchRequestFingerprint: collectorFingerprint(),

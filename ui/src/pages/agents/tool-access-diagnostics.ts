@@ -1,9 +1,9 @@
 import { html, nothing } from "lit";
-import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerToolDiagnosticsEnglish } from "../../i18n/locales/en-tool-diagnostics.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { renderAgentPanelFacts } from "./panel-ui.ts";
 
 type ToolAccessDiagnostics = NonNullable<ToolsEffectiveResult["toolAccess"]>;
 type ToolAccessEntry = ToolAccessDiagnostics["tools"][number];
@@ -36,17 +36,10 @@ function renderProfileInheritance(profiles: ToolAccessDiagnostics["profiles"]) {
         if (!root) {
           return nothing;
         }
-        const globalLabel = t(
-          index === 0 ? "agentTools.profileGlobal" : "agentTools.profileGlobalProvider",
-        );
-        const agentLabel = t(
-          index === 0 ? "agentTools.profileAgent" : "agentTools.profileAgentProvider",
-        );
-        const overrideLabel = t(
-          index === 0
-            ? "agentTools.profileAgentOverride"
-            : "agentTools.profileAgentProviderOverride",
-        );
+        const suffix = index === 0 ? "" : "Provider";
+        const globalLabel = t(`agentTools.profileGlobal${suffix}`);
+        const agentLabel = t(`agentTools.profileAgent${suffix}`);
+        const overrideLabel = t(`agentTools.profileAgent${suffix}Override`);
         return html`
           <li class=${global && agent ? "agent-profile-tree__branch" : ""}>
             ${renderEntry(root, global ? globalLabel : agentLabel)}
@@ -64,34 +57,12 @@ function renderProfileInheritance(profiles: ToolAccessDiagnostics["profiles"]) {
   `;
 }
 
-function formatToolRuntimeSummary(
-  diagnostic: ToolAccessEntry | null,
-  activeEntry: ToolsEffectiveEntry | null,
-  unverifiedReason: string | null,
-  previewStatus: string | null,
-) {
-  if (previewStatus) {
-    return previewStatus;
-  }
-  if (unverifiedReason) {
-    return t("agentTools.unverified");
-  }
-  if (activeEntry?.deniedBySession) {
-    return t("agentTools.off");
-  }
-  switch (diagnostic?.status) {
-    case "excluded":
-      return t("agentTools.off");
-    case "allowed":
-      return t("agentTools.allowedByConfig");
-    case "unavailable":
-      return t("agentTools.notListed");
-    case "available":
-      return t("agentTools.inPreview");
-    default:
-      return activeEntry ? t("agentTools.inPreview") : t("agentTools.notListed");
-  }
-}
+const TOOL_STATUS_LABELS = new Map([
+  ["excluded", "agentTools.off"],
+  ["allowed", "agentTools.allowedByConfig"],
+  ["unavailable", "agentTools.notListed"],
+  ["available", "agentTools.inPreview"],
+]);
 
 export function resolveToolAvailability(
   diagnostic: ToolAccessEntry | null,
@@ -100,7 +71,16 @@ export function resolveToolAvailability(
   previewStatus: string | null,
 ) {
   return {
-    summary: formatToolRuntimeSummary(diagnostic, activeEntry, unverifiedReason, previewStatus),
+    summary:
+      previewStatus ||
+      t(
+        unverifiedReason
+          ? "agentTools.unverified"
+          : activeEntry?.deniedBySession
+            ? "agentTools.off"
+            : ((diagnostic && TOOL_STATUS_LABELS.get(diagnostic.status)) ??
+              (activeEntry ? "agentTools.inPreview" : "agentTools.notListed")),
+      ),
     reason: previewStatus
       ? undefined
       : (unverifiedReason ??
@@ -119,64 +99,33 @@ export function renderToolPolicyDetails(
   }
   return html`
     <div class="agent-tool-policy">
-      <dl class="settings-kv">
-        <dt>${t("agentTools.checked")}</dt>
-        <dd>
-          ${t(toolAccess.checked === "live-session" ? "agentTools.checkedLive" : "agentTools.checkedLocal")}
-        </dd>
-        ${
-          diagnostic.reasons.length > 0
-            ? html`
-                <dt>${t("agentTools.policySources")}</dt>
-                <dd>
-                  ${diagnostic.reasons.map(
-                    (reason) => html`
-                      <div>
-                        ${formatUiExternalText(reason.label)}${reason.source ? html` · <code>${reason.source}</code>` : nothing}
-                      </div>
-                    `,
-                  )}
-                </dd>
-              `
-            : nothing
-        }
-        ${
-          toolAccess.profiles.length > 0
-            ? html`
-                <dt>${t("agentTools.profileInheritance")}</dt>
-                <dd>${renderProfileInheritance(toolAccess.profiles)}</dd>
-              `
-            : nothing
-        }
-      </dl>
+      ${renderAgentPanelFacts([
+        [
+          "agentTools.checked",
+          t(
+            toolAccess.checked === "live-session"
+              ? "agentTools.checkedLive"
+              : "agentTools.checkedLocal",
+          ),
+        ],
+        diagnostic.reasons.length > 0
+          ? [
+              "agentTools.policySources",
+              html`${diagnostic.reasons.map(
+                (reason) => html`
+                  <div>
+                    ${formatUiExternalText(reason.label)}${reason.source ? html` · <code>${reason.source}</code>` : nothing}
+                  </div>
+                `,
+              )}`,
+            ]
+          : null,
+        toolAccess.profiles.length > 0
+          ? ["agentTools.profileInheritance", renderProfileInheritance(toolAccess.profiles)]
+          : null,
+      ])}
     </div>
   `;
-}
-
-export function resolveToolAccessView(params: {
-  configDirty: boolean;
-  runtimeSessionMatchesSelectedAgent: boolean;
-  toolsEffectiveLoading: boolean;
-  toolsEffectiveError: string | null;
-  toolsEffectiveResult: ToolsEffectiveResult | null;
-}) {
-  const previewStatus = !params.runtimeSessionMatchesSelectedAgent
-    ? t("agentTools.otherAgent")
-    : params.toolsEffectiveLoading
-      ? t("agentTools.previewLoading")
-      : params.toolsEffectiveError
-        ? t("agentTools.previewUnavailable")
-        : !params.toolsEffectiveResult
-          ? t("agentTools.previewNotLoaded")
-          : null;
-  const previewResult = previewStatus ? null : params.toolsEffectiveResult;
-  const unverifiedReason =
-    previewStatus ?? (params.configDirty ? t("agentTools.unsavedAvailability") : null);
-  const toolAccess = unverifiedReason ? null : (previewResult?.toolAccess ?? null);
-  const diagnosticMap = new Map(
-    toolAccess?.tools.map((tool) => [normalizeToolPolicyName(tool.id), tool] as const),
-  );
-  return { previewStatus, previewResult, unverifiedReason, toolAccess, diagnosticMap };
 }
 
 registerToolDiagnosticsEnglish();

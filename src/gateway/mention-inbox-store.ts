@@ -81,7 +81,6 @@ export function readMentionStoreSnapshot(
   }
   const ids = new Set<string>();
   const sequences = new Set<number>();
-  let itemCount = 0;
   const sources = rows.map((row) => {
     // Reject unreadable state instead of overwriting it with an empty Inbox.
     if (row.value_json.length > 32_768) {
@@ -105,7 +104,6 @@ export function readMentionStoreSnapshot(
         throw new Error("Invalid retained mention");
       }
       ids.add(id);
-      itemCount++;
     }
     if (
       source.message &&
@@ -115,7 +113,7 @@ export function readMentionStoreSnapshot(
     }
     return source;
   });
-  if (itemCount > MAX_MENTION_SOURCES) {
+  if (ids.size > MAX_MENTION_SOURCES) {
     throw new Error("Mention retention exceeds its item budget");
   }
   return { head, sources: sources.toSorted((left, right) => left.sequence - right.sequence) };
@@ -133,6 +131,19 @@ export function writeMentionStoreChanges(
   const next = headSchema.parse({ ...head, revision: head.revision + 1 });
   const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database);
   const updatedAtMs = Date.now();
+  const writeValue = (stateKey: string, valueJson: string) =>
+    executeSqliteQuerySync(
+      database,
+      db
+        .insertInto("config_machine_state")
+        .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: updatedAtMs })
+        .onConflict((conflict) =>
+          conflict.column("state_key").doUpdateSet({
+            value_json: valueJson,
+            updated_at_ms: updatedAtMs,
+          }),
+        ),
+    );
   const deletedKeys: string[] = [];
   const flushDeletes = () => {
     if (deletedKeys.length === 0) {
@@ -154,32 +165,9 @@ export function writeMentionStoreChanges(
       continue;
     }
     flushDeletes();
-    const valueJson = JSON.stringify(source);
-    executeSqliteQuerySync(
-      database,
-      db
-        .insertInto("config_machine_state")
-        .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: updatedAtMs })
-        .onConflict((conflict) =>
-          conflict.column("state_key").doUpdateSet({
-            value_json: valueJson,
-            updated_at_ms: updatedAtMs,
-          }),
-        ),
-    );
+    writeValue(stateKey, JSON.stringify(source));
   }
   flushDeletes();
-  executeSqliteQuerySync(
-    database,
-    db
-      .insertInto("config_machine_state")
-      .values({ state_key: HEAD_KEY, value_json: JSON.stringify(next), updated_at_ms: updatedAtMs })
-      .onConflict((conflict) =>
-        conflict.column("state_key").doUpdateSet({
-          value_json: JSON.stringify(next),
-          updated_at_ms: updatedAtMs,
-        }),
-      ),
-  );
+  writeValue(HEAD_KEY, JSON.stringify(next));
   return next;
 }

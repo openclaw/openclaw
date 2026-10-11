@@ -12,12 +12,16 @@ import {
 } from "./accounts.js";
 import { normalizeXUserId } from "./allowlist.js";
 import { XConfigSchema } from "./config-schema.js";
+import { resolveXGuestToolPolicy, resolveXSenderTier } from "./guest-policy.js";
+import { getXRuntime } from "./runtime.js";
 import { channelSecrets } from "./secret-contract.js";
 import type { sendXDelivery } from "./send.js";
 import { normalizeXReplyTarget } from "./target.js";
 
 const send = async (params: Parameters<typeof sendXDelivery>[0]) =>
   (await import("./send.js")).sendXDelivery(params);
+const senderGuidance =
+  "X turns come from verified users and guests. Every turn starts with a host-generated sender line. Verified users may request work sessions; guests receive repository answers only.";
 const message = defineChannelMessageAdapter({ id: "x", send: { text: send } });
 
 export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
@@ -69,16 +73,31 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
       allowFrom.flatMap((entry) => normalizeXUserId(String(entry)) ?? []),
   },
   secrets: channelSecrets,
-  groups: { resolveRequireMention: () => true },
+  agentPrompt: {
+    messageToolHints: () => [senderGuidance],
+    inboundFormattingHints: () => ({
+      text_markup: "plain_text",
+      rules: [senderGuidance, "Replies are public plain text; documentation URLs may be cited."],
+    }),
+  },
+  groups: {
+    resolveRequireMention: () => true,
+    resolveToolPolicy: ({ cfg, accountId, senderId }) => {
+      const account = resolveXAccount(cfg, accountId);
+      return resolveXSenderTier(account, senderId) === "maintainer"
+        ? undefined
+        : resolveXGuestToolPolicy(account);
+    },
+  },
   security: {
     collectWarnings: ({ account }) =>
-      account.config.groupPolicy === "open"
+      account.config.groupPolicy === "open" && !account.config.guests?.enabled
         ? [
             buildOpenGroupPolicyWarning({
               surface: "X public replies",
-              openBehavior: "any account that mentions the bot can trigger a public reply",
+              openBehavior: "does not admit guests while guest mode is off",
               remediation:
-                'Set channels.x.groupPolicy="allowlist" and add trusted numeric user IDs.',
+                'Use channels.x.guests.enabled=true for repository-only guest answers, or set channels.x.groupPolicy="allowlist" for maintainers only.',
             }),
           ]
         : [],
@@ -140,13 +159,17 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
   status: {
     defaultRuntime: { accountId: "default", running: false },
     buildChannelSummary: ({ snapshot }) => ({ ...snapshot }),
-    buildAccountSnapshot: ({ account, runtime }) => ({
+    buildAccountSnapshot: async ({ account, runtime, cfg }) => ({
       ...runtime,
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
       configured: account.configured,
       dmPolicy: "disabled",
+      guests: await (await import("./guests.js")).getXGuestStatus(getXRuntime(), account, cfg),
+      verifiedFromGitHub: await (
+        await import("./verified-github.js")
+      ).getXGitHubStatus(getXRuntime(), account),
     }),
   },
   gateway: { startAccount: async (ctx) => (await import("./monitor.js")).startXAccount(ctx) },

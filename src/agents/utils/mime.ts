@@ -1,12 +1,5 @@
-/**
- * Lightweight MIME sniffing helpers for agent image inputs.
- *
- * The checks here avoid trusting file extensions and reject unsupported image
- * variants before provider upload paths try to process them.
- */
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
-/** Detects supported image MIME types from leading file bytes. */
 export function detectSupportedImageMimeType(buffer: Uint8Array): string | null {
   if (startsWith(buffer, [0xff, 0xd8, 0xff])) {
     return buffer[3] === 0xf7 ? null : "image/jpeg";

@@ -9,7 +9,6 @@ import {
   scanDoctorSessionEntriesTolerant,
 } from "../config/sessions/session-accessor.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveGoalSessionTitle } from "../gateway/derive-goal-session-title.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
@@ -24,23 +23,9 @@ import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
-type SessionTitleRepairScope = {
-  agentId: string;
-  storePath: string;
-  sessionKey: string;
-  sessionId: string;
-  sessionEntry: SessionEntry;
-  env: NodeJS.ProcessEnv;
-};
-
-export type SessionTitleRepairReport = {
-  found: number;
-  repaired: number;
-  scannedStores: number;
-  warnings: string[];
-};
-
-function readLegacySessionTitle(scope: SessionTitleRepairScope) {
+function readLegacySessionTitle(
+  scope: Parameters<typeof readSessionTranscriptBoundedMessageTailPage>[0],
+) {
   try {
     const { totalMessages } = readSessionTranscriptMessageEventPage(scope, {
       maxMessages: 0,
@@ -87,7 +72,7 @@ export async function repairLegacySessionTitles(params: {
   apply: boolean;
   authority?: DoctorSqliteMaintenanceAuthority;
   targets?: readonly ExistingAgentDatabaseTarget[];
-}): Promise<SessionTitleRepairReport> {
+}) {
   const authority = params.authority;
   const assertRepairAuthority = () => {
     if (!authority) {
@@ -98,11 +83,12 @@ export async function repairLegacySessionTitles(params: {
   if (params.apply) {
     assertRepairAuthority();
   }
-  const report: SessionTitleRepairReport = {
+  const warnings: string[] = [];
+  const report = {
     found: 0,
     repaired: 0,
     scannedStores: 0,
-    warnings: [],
+    warnings,
   };
   for (const target of params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env)) {
     if (params.apply) {
@@ -122,7 +108,6 @@ export async function repairLegacySessionTitles(params: {
               !recoveredFromProjections &&
               !entry.incognito &&
               !isIncognitoSessionKey(sessionKey) &&
-              entry.status !== "running" &&
               !hasExplicitSessionName(entry)
             ) {
               keys.push(sessionKey);
@@ -141,12 +126,7 @@ export async function repairLegacySessionTitles(params: {
       }
       try {
         const entry = loadSessionEntry({ ...scope, sessionKey });
-        if (
-          !entry ||
-          entry.incognito ||
-          entry.status === "running" ||
-          hasExplicitSessionName(entry)
-        ) {
+        if (!entry || entry.incognito || hasExplicitSessionName(entry)) {
           continue;
         }
         const session = { ...scope, sessionKey, sessionId: entry.sessionId, sessionEntry: entry };
@@ -166,7 +146,6 @@ export async function repairLegacySessionTitles(params: {
           (current) =>
             current.sessionId === entry.sessionId &&
             current.lifecycleRevision === entry.lifecycleRevision &&
-            current.status !== "running" &&
             !current.incognito &&
             !hasExplicitSessionName(current)
               ? { displayName: Buffer.from(title.displayName, "utf16le").toString("utf16le") }

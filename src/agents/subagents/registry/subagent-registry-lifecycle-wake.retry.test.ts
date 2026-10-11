@@ -13,8 +13,7 @@ import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const completionDeliveryMocks = vi.hoisted(() => ({
   blockSubagentCompletionDelivery: vi.fn(),
-  settleRequesterCompletionBatch: vi.fn(),
-  mutateRequesterSettleWakeBatch: vi.fn(),
+  mutateRequesterCompletionBatch: vi.fn(),
   ownersByEntry: new Map<object, Pick<SubagentLifecycleOptions, "runs">>(),
 }));
 
@@ -26,7 +25,8 @@ vi.mock("./subagent-registry-lifecycle-announce-cleanup.js", () => ({
   resumeAncestorCleanup: vi.fn(),
   startSubagentAnnounceCleanupFlow: vi.fn(),
 }));
-vi.mock("./subagent-registry-lifecycle-give-up.js", () => ({
+vi.mock("./subagent-registry-lifecycle-finalize-cleanup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-registry-lifecycle-finalize-cleanup.js")>()),
   finalizeResumedAnnounceGiveUp: vi.fn(),
 }));
 vi.mock("./subagent-registry-requester-yield.js", () => ({
@@ -41,10 +41,12 @@ vi.mock("./subagent-registry-lifecycle-log.js", () => ({
   }),
   maskLifecycleIdentifier: () => "synthetic",
 }));
-vi.mock("../completion/subagent-completion-admission.store.js", () => ({
+vi.mock("../completion/subagent-completion-admission.store.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../completion/subagent-completion-admission.store.js")
+  >()),
   blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
-  settleRequesterCompletionBatch: completionDeliveryMocks.settleRequesterCompletionBatch,
-  mutateRequesterSettleWakeBatch: completionDeliveryMocks.mutateRequesterSettleWakeBatch,
+  mutateRequesterCompletionBatch: completionDeliveryMocks.mutateRequesterCompletionBatch,
 }));
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntimeForSessionKey: vi.fn(),

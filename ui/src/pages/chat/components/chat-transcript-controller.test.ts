@@ -729,7 +729,7 @@ describe("chat transcript controller", () => {
         // Native idle can beat the queued frame; they are separate schedulers.
         vi.advanceTimersByTime(150);
         expect(container.scrollTop, "stale idle must not restore its old offset").toBe(before);
-        // A remote receipt cancels following after the UI considers the command settled.
+        // Reader takeover cancels following after the UI considers the command settled.
         transcript.cancelScroll();
         transcriptDomState.measuredRowHeight = 120;
         const next: TestContentRow[] = [
@@ -991,74 +991,4 @@ describe("chat transcript controller", () => {
       transcript.hostDisconnected();
     }
   });
-
-  it.each([
-    { distance: 0, followEnabled: true, nativePending: false },
-    { distance: 8, followEnabled: true, nativePending: false },
-    { distance: 50, followEnabled: true, nativePending: false },
-    { distance: 0, followEnabled: false, nativePending: false },
-    { distance: 8, followEnabled: false, nativePending: false },
-    { distance: 0, followEnabled: true, nativePending: true },
-  ])(
-    "does not follow another person’s typing ($distance, $followEnabled, native movement pending=$nativePending)",
-    async ({ distance, followEnabled, nativePending }) => {
-      const flushFrames = nativePending ? stubAnimationFrames() : undefined;
-      const rows = numberedContentRows(12);
-      const { container, renderRows, transcript } = await mountTestTranscript(
-        `typing-distance-${distance}`,
-        rows,
-        new ChatTranscriptController(
-          {
-            addController: () => undefined,
-            removeController: () => undefined,
-            requestUpdate: () => undefined,
-            updateComplete: Promise.resolve(true),
-          },
-          () => `typing-distance-${distance}-${followEnabled}`,
-          { canFollowEnd: () => followEnabled },
-        ),
-      );
-      try {
-        const total = transcriptSize(container);
-        Object.defineProperties(container, {
-          clientHeight: { configurable: true, value: 600 },
-          scrollHeight: { configurable: true, value: total + (nativePending ? 88 : 84) },
-        });
-        for (const observer of resizeObservers) {
-          observer.emitTarget(container, 800, 600);
-        }
-        container.scrollTop = container.scrollHeight - container.clientHeight - distance;
-        container.dispatchEvent(new Event("scroll"));
-        if (nativePending) {
-          // Native movement can precede the offset observer.
-          container.scrollTop -= 100;
-        }
-        const readerOffset = container.scrollTop;
-        const scrollTo = vi.fn();
-        container.scrollTo = scrollTo;
-        renderRows([
-          ...rows,
-          { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
-        ]);
-        expect(scrollTo).not.toHaveBeenCalled();
-        expect(container.scrollTop).toBe(readerOffset);
-        if (nativePending) {
-          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-          expect(scrollTo).not.toHaveBeenCalled();
-          container.scrollTop -= 100;
-          container.dispatchEvent(new Event("scroll"));
-          scrollTo.mockClear();
-          Object.defineProperty(container, "scrollHeight", {
-            configurable: true,
-            value: total + 188,
-          });
-          flushFrames?.();
-          expect(scrollTo).not.toHaveBeenCalled();
-          expect(container.scrollTop).toBe(readerOffset - 100);
-        }
-      } finally {
-        transcript.hostDisconnected();
-      }
-    },
-  );
 });

@@ -167,8 +167,7 @@ type ParsedSize = {
 };
 
 function resolveCurrentDefaultProviderId(cfg?: OpenClawConfig): string {
-  const configured = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.model);
-  const trimmed = normalizeOptionalString(configured);
+  const trimmed = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.model);
   if (!trimmed) {
     return DEFAULT_PROVIDER;
   }
@@ -228,7 +227,6 @@ function resolveAutoCapabilityFallbackRefs(params: {
   });
 }
 
-/** Builds ordered provider/model candidates for one media capability request. */
 export function resolveCapabilityModelCandidates(params: {
   cfg: OpenClawConfig;
   modelConfig: AgentModelConfig | undefined;
@@ -393,7 +391,6 @@ function deriveAspectRatioFromSize(size?: string): string | undefined {
   return `${parsed.width / divisor}:${parsed.height / divisor}`;
 }
 
-/** Chooses the closest supported aspect ratio for a request. */
 export function resolveClosestAspectRatio(params: {
   requestedAspectRatio?: string;
   requestedSize?: string;
@@ -523,7 +520,6 @@ export function normalizeDurationToClosestMax(
   return Math.min(rounded, Math.max(1, Math.round(maxDurationSeconds)));
 }
 
-/** Builds user-visible metadata describing provider normalization decisions. */
 export function buildMediaGenerationNormalizationMetadata(params: {
   normalization?: MediaGenerationNormalizationMetadataInput;
   requestedSizeForDerivedAspectRatio?: string;
@@ -614,7 +610,6 @@ function formatCapabilityFailureAttempts(attempts: FallbackAttempt[]): string {
   return failures.join(" | ");
 }
 
-/** Formats setup guidance when no model is configured for a media capability. */
 export function buildNoCapabilityModelConfiguredMessage(params: {
   capabilityLabel: string;
   modelConfigKey: string;

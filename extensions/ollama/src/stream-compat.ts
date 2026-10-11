@@ -26,6 +26,7 @@ export type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max";
 const loadProviderStreamRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/provider-stream-shared"),
 );
+const loadToolNameAliases = createLazyRuntimeModule(() => import("./tool-name-aliases.js"));
 
 function createLazyPayloadPatchStreamWrapper(
   baseFn: StreamFn | undefined,
@@ -261,5 +262,17 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = createMoonshotThinkingWrapper(streamFn, thinkingType);
   }
 
+  if (model?.api === "openai-completions" && isOllamaCompatProvider(model)) {
+    const underlying = streamFn;
+    const loadStream = createLazyRuntimeSurface(loadToolNameAliases, (runtime) =>
+      runtime.wrapOllamaToolNames(underlying),
+    );
+    return async (selectedModel, context, options) => {
+      options?.signal?.throwIfAborted();
+      const stream = await loadStream();
+      options?.signal?.throwIfAborted();
+      return stream(selectedModel, context, options);
+    };
+  }
   return streamFn;
 }

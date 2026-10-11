@@ -419,8 +419,7 @@ class ProgressDisclosureController {
         : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
           ? this.limit()
           : 1;
-    const extent = this.extent();
-    const next = Math.max(0, Math.min(this.limit(), extent - event.deltaY * unit));
+    const next = this.extent() - event.deltaY * unit;
     // The header is the only wheel target. Body and transcript scrolling stay native.
     event.preventDefault();
     // Accepted input owns the panel even when its extent is already clamped.

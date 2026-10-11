@@ -4,7 +4,6 @@ import {
   type MemorySource,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
-  type MemoryVectorIndexState,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
@@ -15,10 +14,7 @@ import {
 
 export const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
-export function readMemoryIndexMetadata(db: DatabaseSync): {
-  meta: MemoryIndexMeta | null;
-  serialized: string | null;
-} {
+export function readMemoryIndexMetadata(db: DatabaseSync) {
   const row = db
     .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
     .get(MEMORY_INDEX_META_KEY);
@@ -33,14 +29,9 @@ export function readMemoryIndexMetadata(db: DatabaseSync): {
   }
 }
 
-export type MemoryRetrievalIndexState = {
-  meta: MemoryIndexMeta | null;
-  hasIndexedChunks: boolean;
-  hasFtsContent: boolean;
-  vectorState: MemoryVectorIndexState;
-};
+export type MemoryRetrievalIndexState = ReturnType<typeof readMemoryRetrievalIndexState>;
 
-export function readMemoryRetrievalIndexState(db: DatabaseSync): MemoryRetrievalIndexState {
+export function readMemoryRetrievalIndexState(db: DatabaseSync) {
   const { meta } = readMemoryIndexMetadata(db);
   const hasIndexedChunks =
     db.prepare("SELECT 1 FROM memory_index_chunks LIMIT 1").get() !== undefined;
@@ -96,3 +87,5 @@ export function readMemoryRecallData(db: DatabaseSync, request: MemoryRecallQuer
   }
   return { rows, sourceMtimes };
 }
+
+export type MemoryRecallData = ReturnType<typeof readMemoryRecallData>;

@@ -992,9 +992,7 @@ function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
       hits.add(`${scope}.dmPolicy`);
     }
     for (const [key, nested] of Object.entries(record)) {
-      if (asNullableRecord(nested)) {
-        visit(nested, `${scope}.${key}`);
-      }
+      visit(nested, `${scope}.${key}`);
     }
   };
   for (const [channelId, channelValue] of Object.entries(channels)) {

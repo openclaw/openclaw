@@ -49,6 +49,20 @@ export function resolveSubagentRunDeadlineMs(
     : undefined;
 }
 
+export function resolveCompletionAfterHardRunDeadline(params: {
+  entry: SubagentRunRecord;
+  observedStartedAt?: number;
+  observedEndedAt?: number;
+  now: number;
+}): number | undefined {
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry, params.observedStartedAt);
+  if (deadlineMs === undefined) {
+    return undefined;
+  }
+  const observedEndedAt = asFiniteNumber(params.observedEndedAt) ?? params.now;
+  return observedEndedAt > deadlineMs ? deadlineMs : undefined;
+}
+
 export function resolveSubagentRunEffectiveEndedAt(
   entry: SubagentRunDeadlineRecord,
   endedAt: number,

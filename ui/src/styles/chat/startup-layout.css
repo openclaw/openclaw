@@ -59,7 +59,6 @@
   }
 }
 
-/* Chat thread - scrollable middle section, transparent */
 .chat-thread-viewport,
 .chat-thread {
   --chat-thread-padding-top: clamp(20px, 3vh, 28px);
@@ -229,7 +228,6 @@
   padding-inline-end: var(--chat-avatar-gutter);
 }
 
-/* User messages on right */
 .chat-group.user {
   --chat-user-content-align: end;
   flex-direction: row-reverse;
@@ -272,7 +270,6 @@
   border: 1px solid var(--border);
 }
 
-/* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;
   display: block;
@@ -403,7 +400,7 @@
 }
 
 /* The title hugs its text so the segments after it stay adjacent (the trail's
-   shared 8px gap provides the spacing); it may shrink with ellipsis
+   shared gap provides the spacing); it may shrink with ellipsis
    when space runs out, and the action row pushes itself to the right edge. */
 .chat-pane__session-title {
   display: inline-flex;
@@ -520,12 +517,9 @@
     max-width: none;
   }
 
-  .chat-pane__workspace-chip span {
-    display: none;
-  }
-
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
+  .chat-pane__workspace-chip span,
   .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
     display: none;
   }
@@ -617,35 +611,6 @@ openclaw-chat-sidebar-region,
   min-width: 0;
 }
 
-.chat-session-accessories {
-  display: flow-root;
-  /* An inset separator takes no space when plugins render nothing or hide their content. */
-  box-shadow: inset 0 -1px 0 var(--border);
-}
-
-.plugin-session-header-link {
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
-  gap: 0.35rem;
-  margin: 0 12px 8px;
-  padding: 0.3rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 0.45rem;
-  color: var(--text);
-  background: var(--bg);
-  font: 500 12px/1.4 var(--font-body, system-ui);
-  text-decoration: none;
-}
-.plugin-session-header-link:hover {
-  background: var(--bg-hover);
-  border-color: var(--accent);
-}
-.plugin-session-header-link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .sidebar-region__primary {
   display: flex;
   flex: 1 1 0;
@@ -695,7 +660,7 @@ openclaw-chat-sidebar-region,
 .sidebar-region__primary[hidden],
 .sidebar-region:not(.sidebar-region--open) [data-region-header="side"],
 .sidebar-region--expanded:not(.sidebar-region--expanded-side) [data-region-header="side"],
-.sidebar-region--expanded-side .sidebar-region__header {
+.sidebar-region--expanded-side > .sidebar-region__header {
   display: none;
 }
 
@@ -751,10 +716,7 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region:not(.sidebar-region--open) .side-panel__empty-body,
-.sidebar-region--expanded .side-panel__empty-body {
-  display: none;
-}
-
+.sidebar-region--expanded .side-panel__empty-body,
 .side-panel__panel[hidden] {
   display: none;
 }

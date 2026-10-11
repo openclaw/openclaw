@@ -51,7 +51,6 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
     const agentId = this.options.agentId(row, scope);
     // Registration may notify before the observation handle is returned.
     let observation: SessionRowObservation | null = null;
-    let pending = false;
     const binding = {
       matches: () => {
         const selected = this.options.row();
@@ -66,10 +65,9 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
     };
     const current = () => this.binding === binding && binding.matches();
     const refresh = async () => {
-      if (pending || !current()) {
+      if (this.loading || !current()) {
         return;
       }
-      pending = true;
       this.loading = true;
       this.error = null;
       this.host.requestUpdate();
@@ -86,7 +84,6 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
           this.error = formatUiError(error);
         }
       } finally {
-        pending = false;
         if (current()) {
           this.loading = false;
           this.host.requestUpdate();

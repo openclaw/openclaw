@@ -66,7 +66,6 @@ type SlashCommandContext = {
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   isCurrent?: () => boolean;
   chatModelCatalog?: ModelCatalogEntry[];
-  modelCatalog?: ModelCatalogEntry[];
   defaultAgentId?: string;
   agentId?: string;
   ownsModelOverride?: () => boolean;
@@ -127,22 +126,22 @@ export async function executeSlashCommand(
     case "help":
       return executeHelp();
     case "compact":
-      return await executeCompact(sessionKey, context);
+      return executeCompact(sessionKey, context);
     case "model":
-      return await executeModel(client, sessionKey, args, context);
+      return executeModel(client, sessionKey, args, context);
     case "think":
-      return await executeThink(client, sessionKey, args, context);
+      return executeThink(client, sessionKey, args, context);
     case "fast":
-      return await executeFast(sessionKey, args, context);
+      return executeFast(sessionKey, args, context);
     case "verbose":
-      return await executeVerbose(sessionKey, args, context);
+      return executeVerbose(sessionKey, args, context);
     case "usage":
-      return await executeUsage(sessionKey, context);
+      return executeUsage(sessionKey, context);
     case "agents":
-      return await executeAgents(client);
+      return executeAgents(client);
     case "steer":
     case "redirect":
-      return await executeRunCommand(client, sessionKey, args, context, commandName);
+      return executeRunCommand(client, sessionKey, args, context, commandName);
     default:
       return {
         content: t("chat.commandResults.unknownCommand", { command: `/${commandName}` }),
@@ -303,19 +302,14 @@ async function executeThink(
 
   try {
     const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
-    const modelCatalog = context.chatModelCatalog ?? context.modelCatalog ?? [];
+    const modelCatalog = context.chatModelCatalog ?? [];
     const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
-    if (!level) {
+    if (
+      !level ||
+      isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false
+    ) {
       return {
-        content: t("chat.commandResults.thinking.unrecognized", {
-          level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
-        }),
-      };
-    }
-    if (isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false) {
-      return {
-        content: t("chat.commandResults.thinking.unsupported", {
+        content: t(`chat.commandResults.thinking.${level ? "unsupported" : "unrecognized"}`, {
           level: rawLevel,
           options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
@@ -395,17 +389,9 @@ async function executeFast(
     }
   }
 
-  if (isSessionDefaultDirectiveValue(rawMode)) {
-    return patchSession(
-      context,
-      sessionKey,
-      { fastMode: null },
-      () => ({ content: t("chat.commandResults.fast.reset") }),
-      "chat.commandResults.fast.resetFailed",
-    );
-  }
-
-  const nextMode = normalizeChatFastModeInput(rawMode);
+  const nextMode = isSessionDefaultDirectiveValue(rawMode)
+    ? null
+    : normalizeChatFastModeInput(rawMode);
   if (nextMode === undefined) {
     return {
       content: t("chat.commandResults.fast.unrecognized", { mode: args.trim() }),
@@ -418,11 +404,17 @@ async function executeFast(
     { fastMode: nextMode },
     () => ({
       content:
-        nextMode === "auto"
-          ? t("chat.commandResults.fast.setAuto")
-          : t(nextMode ? "chat.commandResults.fast.enabled" : "chat.commandResults.fast.disabled"),
+        nextMode === null
+          ? t("chat.commandResults.fast.reset")
+          : nextMode === "auto"
+            ? t("chat.commandResults.fast.setAuto")
+            : t(
+                nextMode ? "chat.commandResults.fast.enabled" : "chat.commandResults.fast.disabled",
+              ),
     }),
-    "chat.commandResults.fast.setFailed",
+    nextMode === null
+      ? "chat.commandResults.fast.resetFailed"
+      : "chat.commandResults.fast.setFailed",
   );
 }
 
@@ -560,7 +552,7 @@ async function loadModelCommandState(
   context: SlashCommandContext,
   sessionKey: string,
 ) {
-  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const modelCatalog = context.chatModelCatalog;
   const agentId = resolveSelectedAgentId(sessionKey, context);
   const [state, models] = await Promise.all([
     loadCurrentSessionState(context, sessionKey),

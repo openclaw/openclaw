@@ -1,8 +1,3 @@
-/**
- * Exec tool display summaries.
- *
- * Turns common shell commands into short redacted labels for tool timelines and transcripts.
- */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";

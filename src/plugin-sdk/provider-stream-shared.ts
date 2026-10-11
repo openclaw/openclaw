@@ -61,20 +61,6 @@ export function composeProviderStreamWrappers(
   );
 }
 
-function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> {
-  const tools = (context as { tools?: unknown }).tools;
-  if (!Array.isArray(tools)) {
-    return new Set();
-  }
-  const names = tools
-    .map((tool) => {
-      const record = asOptionalObjectRecord(tool);
-      return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
-    })
-    .filter((name): name is string => Boolean(name));
-  return new Set(names);
-}
-
 function promotePlainTextToolCalls(
   message: unknown,
   toolNames: Set<string>,
@@ -140,7 +126,9 @@ function wrapPlainTextToolCallStream(
   context: Parameters<StreamFn>[1],
   model: Model,
 ): ReturnType<StreamFn> {
-  const toolNames = resolveContextToolNames(context);
+  const toolNames = new Set(
+    (context.tools ?? []).map((tool) => tool.name).filter((name) => name.trim()),
+  );
   if (toolNames.size === 0) {
     return source;
   }

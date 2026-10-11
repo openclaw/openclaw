@@ -677,7 +677,7 @@ describe("repository workspace result ownership", () => {
       const owned = await f.beginTurn("interrupted", !materialized);
       const destination = path.join(root, "materialized-worktree");
       if (materialized) {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId: SESSION_ID,
           source: {
             generation: owned.placement.generation,

@@ -10,19 +10,17 @@ import {
   peekStoredDeviceIdentityId,
   storeDeviceAuthToken,
 } from "./index.ts";
-import { rotateDeviceToken } from "./page-operations.ts";
+import { createInitialDevicesState, rotateDeviceToken } from "./page-operations.ts";
 
 function createState(request: (method: string, params?: unknown) => Promise<unknown>) {
   return {
-    client: {
-      request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
-    },
-    connected: true,
+    ...createInitialDevicesState({
+      client: {
+        request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
+      },
+      connected: true,
+    }),
     requestGeneration: 1,
-    devicesLoading: false,
-    devicesQueuedRefresh: "none" as const,
-    devicesError: null as string | null,
-    devicesList: null,
   };
 }
 

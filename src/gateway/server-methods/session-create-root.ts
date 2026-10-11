@@ -113,24 +113,18 @@ export function prepareSessionForkFilesystemRoot(params: {
     return ok({});
   }
   const roots = resolveSessionWorkspaceRoots(params.cfg, params.targetAgentId, parent);
-  const cwd = prepareSessionCreateFilesystemRoot({
-    ...params,
-    enforceSandboxContainment: true,
-    requestedProjectId: parent.projectId,
-    sessionCwd: roots.diffCwd,
-  });
+  const prepareRoot = (sessionCwd: string | undefined) =>
+    prepareSessionCreateFilesystemRoot({
+      ...params,
+      enforceSandboxContainment: true,
+      requestedProjectId: parent.projectId,
+      sessionCwd,
+    });
+  const cwd = prepareRoot(roots.diffCwd);
   if (!cwd.ok) {
     return cwd;
   }
-  const root =
-    roots.root === roots.diffCwd
-      ? cwd
-      : prepareSessionCreateFilesystemRoot({
-          ...params,
-          enforceSandboxContainment: true,
-          requestedProjectId: parent.projectId,
-          sessionCwd: roots.root,
-        });
+  const root = roots.root === roots.diffCwd ? cwd : prepareRoot(roots.root);
   if (!root.ok) {
     return root;
   }

@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html } from "lit";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { t } from "../i18n/index.ts";
 import { createDockPanelLayout } from "./dock-panel-layout.ts";
@@ -30,24 +30,6 @@ export const linkReaderViewStyles = [
 
 export function readerIcon(name: string | undefined) {
   return Object.entries(icons).find(([key]) => key === name)?.[1] ?? icons.link;
-}
-
-export function renderReaderButton(
-  label: string,
-  icon: TemplateResult,
-  action: () => void,
-  disabled = false,
-) {
-  return html`<button
-    class="rail-header__action bp-icon"
-    type="button"
-    title=${label}
-    aria-label=${label}
-    ?disabled=${disabled}
-    @click=${action}
-  >
-    ${icon}
-  </button>`;
 }
 
 type PanelView =

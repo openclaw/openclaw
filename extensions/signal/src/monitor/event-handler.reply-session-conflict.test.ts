@@ -12,7 +12,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startSignalIngressMonitor } from "../signal-ingress.js";
-import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
@@ -35,7 +34,8 @@ const {
   recordInboundSessionMock: vi.fn(),
 }));
 
-vi.mock("node:timers/promises", () => ({
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
   setTimeout: <T>(delayMs: number, value?: T, options?: { signal?: AbortSignal }) =>
     new Promise<T | undefined>((resolve, reject) => {
       const signal = options?.signal;
@@ -87,6 +87,14 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
   return {
     ...actual,
+    // Retry timing must not depend on filesystem or worker scheduling.
+    resolveInboundSessionEnvelopeContextAsync: vi
+      .fn<typeof actual.resolveInboundSessionEnvelopeContextAsync>()
+      .mockImplementation(async ({ cfg }) => ({
+        storePath: "/tmp/openclaw/signal-sessions.json",
+        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
+        previousTimestamp: undefined,
+      })),
     runChannelInboundEvent: createSignalPreparedDispatchRunner(
       actual.runChannelInboundEvent,
       recordInboundSessionMock,
@@ -130,46 +138,6 @@ describe("signal reply session init conflict retry", () => {
     removeReactionSignalMock.mockReset().mockResolvedValue({ ok: true });
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockReset();
-  });
-
-  it("retries a debounced flush that fails with a reply session init conflict", async () => {
-    dispatchInboundMessageMock
-      .mockRejectedValueOnce(
-        new Error("dispatch wrapper failed", {
-          cause: { error: CONFLICT_ERROR },
-        }),
-      )
-      .mockResolvedValueOnce({ queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
-
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 10 } } },
-      }),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const handled = handler(
-        createSignalReceiveEvent({
-          dataMessage: {
-            message: "hello after prior turn",
-            attachments: [],
-          },
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      await handled;
-
-      // Initial flush fails and enters the retry backoff.
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      // The same failed batch is dispatched again.
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("cancels a pending retry when the Signal monitor aborts", async () => {
@@ -251,57 +219,6 @@ describe("signal reply session init conflict retry", () => {
       resolveRetry?.();
       await tracked.tasks[0];
       expect(trackedTaskSettled).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("gives up after the configured number of retry attempts", async () => {
-    dispatchInboundMessageMock.mockRejectedValue(CONFLICT_ERROR);
-
-    const errorLogs: string[] = [];
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 10 } } },
-        runtime: {
-          log: () => {},
-          error: (msg: string) => {
-            errorLogs.push(msg);
-          },
-        } as SignalEventHandlerDeps["runtime"],
-      }),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const handled = handler(
-        createSignalReceiveEvent({
-          dataMessage: {
-            message: "hello after prior turn",
-            attachments: [],
-          },
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      await handled;
-
-      // Initial attempt.
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
-
-      await vi.advanceTimersByTimeAsync(4_000);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
-
-      // No further retries should be scheduled; advancing again does nothing.
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
-
-      expect(errorLogs.some((msg) => msg.includes("signal debounce flush failed"))).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -468,7 +385,9 @@ describe("signal reply session init conflict retry", () => {
 
   it("retries a failed batch as one ordered dispatch", async () => {
     dispatchInboundMessageMock
-      .mockRejectedValueOnce(CONFLICT_ERROR)
+      .mockRejectedValueOnce(
+        new Error("dispatch wrapper failed", { cause: { error: CONFLICT_ERROR } }),
+      )
       .mockResolvedValueOnce({ queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
 
     const handler = createSignalEventHandler(

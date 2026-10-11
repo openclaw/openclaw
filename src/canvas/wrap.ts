@@ -164,15 +164,18 @@ export function buildWidgetDocument(
     "<script>(()=>{if(!window.parent||window.parent===window)return;" +
     "const post=window.parent.postMessage.bind(window.parent);const listen=window.addEventListener.bind(window);" +
     "const stringify=String;const slice=Function.prototype.call.bind(String.prototype.slice);" +
+    "const charCodeAt=Function.prototype.call.bind(String.prototype.charCodeAt);" +
+    "const clip=(text,max)=>{const last=charCodeAt(text,max-1);const next=charCodeAt(text,max);" +
+    "return slice(text,0,last>=0xd800&&last<=0xdbff&&next>=0xdc00&&next<=0xdfff?max-1:max);};" +
     "const replace=Function.prototype.call.bind(String.prototype.replace);const integer=Number.isInteger;" +
     "const seen=new Set();const has=seen.has.bind(seen);const add=seen.add.bind(seen);let count=0;" +
     "const report=(event,rejection)=>{try{if(count>=3)return;" +
     'if(!rejection&&typeof event.message!=="string"&&!event.error)return;' +
     "const reason=rejection?event.reason:undefined;" +
-    "const message=slice(stringify(rejection?(reason?.message??reason):(event.error?.message??event.message)),0,500);" +
+    "const message=clip(stringify(rejection?(reason?.message??reason):(event.error?.message??event.message)),500);" +
     "if(has(message))return;" +
     'const data={type:"openclaw:widget-runtime-error",message};' +
-    'if(typeof event.filename==="string"){const source=slice(replace(replace(event.filename,/[?#].*$/,""),/^.*[\\\\/]/,""),0,200);if(source)data.source=source;}' +
+    'if(typeof event.filename==="string"){const source=clip(replace(replace(event.filename,/[?#].*$/,""),/^.*[\\\\/]/,""),200);if(source)data.source=source;}' +
     "if(integer(event.lineno))data.line=event.lineno;if(integer(event.colno))data.column=event.colno;" +
     'add(message);count++;post(data,"*");}catch{}};' +
     'listen("error",event=>report(event,false),true);listen("unhandledrejection",event=>report(event,true),true);})();</script>';

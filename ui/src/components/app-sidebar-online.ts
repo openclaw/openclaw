@@ -107,21 +107,25 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                 : nothing
             }
           </button>
-          <button
-            type="button"
-            class="sidebar-session-toolbar__button sidebar-online__filter-toggle sidebar-session-sort ${filtered ? "sidebar-session-sort--filtered" : ""}"
-            aria-label=${t("presence.filters.label")}
-            title=${t("presence.filters.label")}
-            aria-haspopup="dialog"
-            aria-expanded=${String(host.sidebarMenus.peopleFilterMenuPosition !== null)}
-            @click=${(event: MouseEvent) => {
-              if (event.currentTarget instanceof HTMLElement) {
-                host.sidebarMenus.togglePeopleFilterMenu(event.currentTarget);
-              }
-            }}
-          >
-            ${icons.listFilter}
-          </button>
+          ${
+            collapsed
+              ? nothing
+              : html`<button
+                  type="button"
+                  class="sidebar-session-toolbar__button sidebar-online__filter-toggle sidebar-session-sort ${filtered ? "sidebar-session-sort--filtered" : ""}"
+                  aria-label=${t("presence.filters.label")}
+                  title=${t("presence.filters.label")}
+                  aria-haspopup="dialog"
+                  aria-expanded=${String(host.sidebarMenus.peopleFilterMenuPosition !== null)}
+                  @click=${(event: MouseEvent) => {
+                    if (event.currentTarget instanceof HTMLElement) {
+                      host.sidebarMenus.togglePositionedMenu("peopleFilter", event.currentTarget);
+                    }
+                  }}
+                >
+                  ${icons.listFilter}
+                </button>`
+          }
         `,
       })}
       ${

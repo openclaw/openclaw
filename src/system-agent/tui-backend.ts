@@ -68,17 +68,8 @@ export type SystemAgentTuiOptions = Pick<
   ) => Promise<void>;
 };
 
-type SystemAgentHistoryMessage = {
-  role: "assistant" | "user";
-  content: Array<{ type: "text"; text: string }>;
-  timestamp: number;
-};
-
-type SystemAgentTuiRoute = {
-  model?: string;
-  modelProvider?: string;
-  thinkingLevel: string;
-};
+type SystemAgentHistoryMessage = ReturnType<typeof message>;
+type SystemAgentTuiRoute = Awaited<ReturnType<typeof requireTuiVerifiedInference>>;
 
 const SYSTEM_AGENT_SESSION_KEY = buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID });
 const SYSTEM_AGENT_HISTORY_LIMIT = 200;
@@ -92,10 +83,10 @@ function createChatEngine(opts: SystemAgentTuiOptions): SystemAgentChatEngine {
   });
 }
 
-function message(role: "assistant" | "user", text: string): SystemAgentHistoryMessage {
+function message(role: "assistant" | "user", text: string) {
   return {
     role,
-    content: [{ type: "text", text }],
+    content: [{ type: "text" as const, text }],
     timestamp: Date.now(),
   };
 }
@@ -165,12 +156,7 @@ class SystemAgentTuiBackend implements TuiBackend {
     return { ok: true, aborted: false };
   }
 
-  async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }): Promise<{
-    sessionId: string;
-    messages: SystemAgentHistoryMessage[];
-    thinkingLevel: string;
-    verboseLevel: string;
-  }> {
+  async loadHistory(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
     const limit = Math.min(opts.limit ?? SYSTEM_AGENT_HISTORY_LIMIT, SYSTEM_AGENT_HISTORY_LIMIT);
     return {
       sessionId: "openclaw",
@@ -405,9 +391,9 @@ async function runSetupHandoff(
       if (isSystemAgentInferenceUnavailableError(error)) {
         throw error;
       }
-      throw new SystemAgentInferenceUnavailableError("conversation", [error]);
+      throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
     }
-    throw new SystemAgentInferenceUnavailableError("conversation");
+    throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
   };
   if (handoff.target === "gateway" || handoff.target === "search") {
     const run =
@@ -513,9 +499,7 @@ export async function runSystemAgentTui(
   }
 }
 
-async function requireTuiVerifiedInference(
-  opts: SystemAgentTuiOptions,
-): Promise<SystemAgentTuiRoute> {
+async function requireTuiVerifiedInference(opts: SystemAgentTuiOptions) {
   const binding = opts?.verifiedInference;
   if (!binding) {
     throw new SystemAgentInferenceUnavailableError("conversation");
@@ -550,7 +534,7 @@ async function requireTuiVerifiedInference(
       };
     }
   } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("conversation", [error]);
+    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
   }
-  throw new SystemAgentInferenceUnavailableError("conversation");
+  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
 }

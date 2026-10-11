@@ -192,6 +192,8 @@ The receipt can also include cleanup warnings. Modules and native libraries may
 remain loaded after their registrations are removed.
 
 Bundled plugins can reload while preserving their enabled or disabled policy.
+Reload follows the selected bundled copy even when a dormant registry install
+record remains after a source update; that record stays unchanged.
 Bundled plugins, including TypeScript source entries, reuse their process-loaded
 code when their registrations reload. If the plugin's files changed while its
 original module remains loaded,

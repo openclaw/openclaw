@@ -8,17 +8,11 @@
 
 import fs from "node:fs";
 import { dirname } from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withFileLock } from "../../infra/file-lock.js";
-import type {
-  OAuthCredentials,
-  OAuthLoginCallbacks,
-  OAuthProviderId,
-} from "../../llm/utils/oauth/types.js";
+import type { OAuthLoginCallbacks, OAuthProviderId } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
+import { AUTH_STORE_VERSION } from "../auth-profiles/constants.js";
 import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
@@ -36,7 +30,6 @@ import {
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
   type AuthProfileDatabase,
-  type PreparedAuthProfileStoreOwner,
 } from "../auth-profiles/sqlite.js";
 import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
 import {
@@ -78,27 +71,9 @@ export type {
   AuthCredential,
   AuthStorageBackend,
   AuthStorageData,
-  OAuthCredential,
-  TokenCredential,
 } from "./auth-storage-types.js";
 export { OAuthProviderConfiguredUnavailableError };
-export const AUTH_STORAGE_CREATE_DEPRECATION_CODE = "AUTH_STORAGE_CREATE_DEPRECATED" as const;
-export const FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE =
-  "FILE_AUTH_STORAGE_BACKEND_DEPRECATED" as const;
-const emittedAuthStorageWarnings = new Set<string>();
-
-function emitAuthStorageDeprecationWarning(params: {
-  message: string;
-  code:
-    | typeof AUTH_STORAGE_CREATE_DEPRECATION_CODE
-    | typeof FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE;
-}): void {
-  if (emittedAuthStorageWarnings.has(params.code)) {
-    return;
-  }
-  emittedAuthStorageWarnings.add(params.code);
-  process.emitWarning(params.message, { code: params.code, type: "DeprecationWarning" });
-}
+let emittedAuthStorageWarning = false;
 
 class AuthStorageLegacyPathMigrationRequiredError extends Error {
   readonly code = "AUTH_PROFILE_MIGRATION_REQUIRED" as const;
@@ -131,6 +106,8 @@ export type AuthStatus = {
     | "models_json_command";
   label?: string;
 };
+
+type StorageBackend = Omit<AuthStorageBackend, "withLockAsync">;
 
 function collectStateOnlyAuthProfileIds(store: AuthProfileStore): string[] {
   const referenced = new Set([
@@ -168,7 +145,7 @@ function loadSqliteAuthStorageStore(
   return store;
 }
 
-class SqliteAuthStorageBackend implements AuthStorageBackend {
+class SqliteAuthStorageBackend implements StorageBackend {
   private credentialSources = new Map<string, AuthProfileCredentialSource>();
 
   constructor(
@@ -229,37 +206,6 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
     return current.length > 0 ? current : [this.preparedStore];
   }
 
-  private readRaw(): AuthProfileStore {
-    assertAuthProfileMigrationReady(this.agentDir);
-    return loadSqliteAuthStorageStore(this.agentDir);
-  }
-
-  private persistData(
-    store: AuthProfileStore,
-    next: string,
-    materializedData: AuthStorageData,
-    database: AuthProfileDatabase,
-    owner: PreparedAuthProfileStoreOwner,
-  ): AuthProfileStore {
-    const nextStore = applyAuthStorageData(
-      store,
-      JSON.parse(next) as AuthStorageData,
-      materializedData,
-    );
-    saveAuthProfileStoreWithPreparedOwner(
-      nextStore,
-      this.agentDir,
-      {
-        filterExternalAuthProfiles: false,
-        preserveStateProfileIds: collectStateOnlyAuthProfileIds(store),
-        syncExternalCli: false,
-      },
-      database,
-      owner,
-    );
-    return nextStore;
-  }
-
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
     assertAuthProfileMigrationReady(this.agentDir);
     const snapshots = this.resolveMaterializedRuntimeStores();
@@ -268,122 +214,37 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
       const store = loadSqliteAuthStorageStore(this.agentDir, database);
       const materializedData = projectAuthoritativeAuthStorageData(store, snapshots);
       const { result, next } = fn(JSON.stringify(materializedData));
-      const selectedStore =
-        next === undefined
-          ? store
-          : this.persistData(store, next, materializedData, database, owner);
+      let selectedStore = store;
+      if (next !== undefined) {
+        selectedStore = applyAuthStorageData(
+          store,
+          JSON.parse(next) as AuthStorageData,
+          materializedData,
+        );
+        saveAuthProfileStoreWithPreparedOwner(
+          selectedStore,
+          this.agentDir,
+          {
+            filterExternalAuthProfiles: false,
+            preserveStateProfileIds: collectStateOnlyAuthProfileIds(store),
+            syncExternalCli: false,
+          },
+          database,
+          owner,
+        );
+      }
       return { result, store: selectedStore, databasePath: owner.databasePath };
     });
     this.captureCredentialSources(selected.store, selected.databasePath);
     return selected.result;
   }
-
-  async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    assertAuthProfileMigrationReady(this.agentDir);
-    return await withFileLock(
-      resolveAuthProfileDatabasePath(this.agentDir),
-      OAUTH_REFRESH_LOCK_OPTIONS,
-      async () => {
-        const initialRaw = this.readRaw();
-        const initialData = projectAuthoritativeAuthStorageData(
-          initialRaw,
-          this.resolveMaterializedRuntimeStores(),
-        );
-        const { result, next } = await fn(JSON.stringify(initialData));
-        if (next === undefined) {
-          this.captureCredentialSources(initialRaw, resolveAuthProfileDatabasePath(this.agentDir));
-          return result;
-        }
-        assertAuthProfileMigrationReady(this.agentDir);
-        const selected = runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
-          const authoritative = loadSqliteAuthStorageStore(this.agentDir, database);
-          if (!isDeepStrictEqual(authoritative.profiles, initialRaw.profiles)) {
-            throw new AuthStoragePersistenceError(
-              "Cannot update auth storage because its SQLite credentials changed concurrently.",
-              undefined,
-            );
-          }
-          const nextStore = this.persistData(authoritative, next, initialData, database, owner);
-          return { store: nextStore, databasePath: owner.databasePath };
-        });
-        this.captureCredentialSources(selected.store, selected.databasePath);
-        return result;
-      },
-    );
-  }
 }
 
-function createSqliteAuthStorageBackend(
-  agentDir: string,
-  config: OpenClawConfig | undefined,
-): SqliteAuthStorageBackend {
-  const scope = createAuthProfileStoreReadScope(agentDir, config);
-  const preparedStore = materializeAuthStorageStore(scope.store, scope.getRuntimeSnapshots());
-  assertAuthStorageSecretRefsMaterialized(preparedStore);
-  return new SqliteAuthStorageBackend(scope, preparedStore);
-}
-
-/**
- * @deprecated Use AuthStorage.forAgent(agentDir). This compatibility adapter
- * derives the owning agent directory from the old path and persists only to SQLite.
- * It is eligible for removal after 2026-10-01 and a clean published-plugin sweep.
- */
-export class FileAuthStorageBackend implements AuthStorageBackend {
-  private delegate?: SqliteAuthStorageBackend;
-  private readonly agentDir: string;
-
-  constructor(authPath?: string) {
-    emitAuthStorageDeprecationWarning({
-      code: FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE,
-      message:
-        "FileAuthStorageBackend(path) is deprecated; use AuthStorage.forAgent(agentDir). The compatibility adapter persists to SQLite and never reads or writes auth.json.",
-    });
-    assertDeprecatedAuthStoragePathAbsent(authPath);
-    this.agentDir = authPath ? dirname(authPath) : getAgentDir();
-  }
-
-  private getDelegate(): SqliteAuthStorageBackend {
-    return (this.delegate ??= createSqliteAuthStorageBackend(this.agentDir, undefined));
-  }
-
-  read(): string {
-    return this.getDelegate().read();
-  }
-
-  assertProviderReady(provider?: string, baseUrl?: string): void {
-    this.getDelegate().assertProviderReady(provider, baseUrl);
-  }
-
-  getCredentialSource(provider: string): AuthProfileCredentialSource | undefined {
-    return this.getDelegate().getCredentialSource(provider);
-  }
-
-  assertCredentialReady(source: AuthProfileCredentialSource, baseUrl?: string): void {
-    this.getDelegate().assertCredentialReady(source, baseUrl);
-  }
-
-  withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
-    return this.getDelegate().withLock(fn);
-  }
-
-  async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    return await this.getDelegate().withLockAsync(fn);
-  }
-}
-
-export class InMemoryAuthStorageBackend implements AuthStorageBackend {
+class InMemoryAuthStorageBackend implements StorageBackend {
   private value: string | undefined;
 
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
     const { result, next } = fn(this.value);
-    if (next !== undefined) {
-      this.value = next;
-    }
-    return result;
-  }
-
-  async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    const { result, next } = await fn(this.value);
     if (next !== undefined) {
       this.value = next;
     }
@@ -401,14 +262,17 @@ export class AuthStorage {
   private fallbackResolver?: (provider: string) => string | undefined;
   private loadError: Error | null = null;
   private errors: Error[] = [];
-  private storage: AuthStorageBackend;
-  private constructor(storage: AuthStorageBackend) {
+  private storage: StorageBackend;
+  private constructor(storage: StorageBackend) {
     this.storage = storage;
     this.reload();
   }
 
   static forAgent(agentDir: string = getAgentDir(), config?: OpenClawConfig): AuthStorage {
-    return new AuthStorage(createSqliteAuthStorageBackend(agentDir, config));
+    const scope = createAuthProfileStoreReadScope(agentDir, config);
+    const preparedStore = materializeAuthStorageStore(scope.store, scope.getRuntimeSnapshots());
+    assertAuthStorageSecretRefsMaterialized(preparedStore);
+    return new AuthStorage(new SqliteAuthStorageBackend(scope, preparedStore));
   }
 
   /**
@@ -417,11 +281,13 @@ export class AuthStorage {
    * reader sweep; it no longer reads or writes JSON.
    */
   static create(authPath?: string): AuthStorage {
-    emitAuthStorageDeprecationWarning({
-      code: AUTH_STORAGE_CREATE_DEPRECATION_CODE,
-      message:
+    if (!emittedAuthStorageWarning) {
+      emittedAuthStorageWarning = true;
+      process.emitWarning(
         "AuthStorage.create(path) is deprecated; use AuthStorage.forAgent(agentDir). The compatibility adapter persists to SQLite and never reads or writes auth.json.",
-    });
+        { code: "AUTH_STORAGE_CREATE_DEPRECATED", type: "DeprecationWarning" },
+      );
+    }
     assertDeprecatedAuthStoragePathAbsent(authPath);
     return AuthStorage.forAgent(authPath ? dirname(authPath) : getAgentDir(), undefined);
   }
@@ -433,7 +299,7 @@ export class AuthStorage {
   static inMemory(data: AuthStorageData = {}): AuthStorage {
     const storage = new InMemoryAuthStorageBackend();
     storage.withLock(() => ({ result: undefined, next: JSON.stringify(data, null, 2) }));
-    return AuthStorage.fromStorage(storage);
+    return new AuthStorage(storage);
   }
 
   /**
@@ -470,6 +336,15 @@ export class AuthStorage {
       this.loadError instanceof AuthProfileStoreUnreadableError
       ? this.loadError
       : null;
+  }
+
+  private assertProviderReady(providerId: string, options?: { baseUrl?: string }): void {
+    this.storage.assertProviderReady?.(providerId, options?.baseUrl);
+    const error = this.getCanonicalLoadError();
+    if (error) {
+      // Canonical-store ownership blocks implicit env/config fallback.
+      throw error;
+    }
   }
 
   private parseStorageData(content: string | undefined): AuthStorageData {
@@ -634,7 +509,6 @@ export class AuthStorage {
    */
   private async refreshOAuthTokenWithLock(providerId: OAuthProviderId): Promise<{
     apiKey: string;
-    newCredentials: OAuthCredentials;
     source?: AuthProfileCredentialSource;
   } | null> {
     let source: AuthProfileCredentialSource | undefined;
@@ -674,21 +548,9 @@ export class AuthStorage {
       return runtimeKey;
     }
 
-    this.storage.assertProviderReady?.(providerId, options?.baseUrl);
-
-    const canonicalLoadError = this.getCanonicalLoadError();
-    if (canonicalLoadError) {
-      // Canonical-store ownership blocks implicit env/config fallback. An
-      // explicit runtime override above remains the only caller-owned escape.
-      throw canonicalLoadError;
-    }
-
+    this.assertProviderReady(providerId, options);
     const { apiKey, source } = await this.resolveStoredOrFallbackApiKey(providerId, options);
-    this.storage.assertProviderReady?.(providerId, options?.baseUrl);
-    const reloadedError = this.getCanonicalLoadError();
-    if (reloadedError) {
-      throw reloadedError;
-    }
+    this.assertProviderReady(providerId, options);
     if (source) {
       this.storage.assertCredentialReady?.(source, options?.baseUrl);
     }

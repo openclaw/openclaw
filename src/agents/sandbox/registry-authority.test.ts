@@ -45,7 +45,7 @@ it("retains local-workspace authority through browser transaction and commit gra
     createdAt: 1,
     lastActiveAt: 1,
   };
-  insertRegistryWorktree(process.env, worktree);
+  await insertRegistryWorktree(process.env, worktree);
   const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   replaceSessionEntrySync(
     { agentId: "main", sessionKey, storePath },
@@ -60,7 +60,7 @@ it("retains local-workspace authority through browser transaction and commit gra
   const refusal = new WorkspaceRevokedError("Browser workspace authority revoked");
   let stage: SqliteWorkerAdmissionRequest["stage"] | undefined;
   let revokeAt: SqliteWorkerAdmissionRequest["stage"] | undefined;
-  const owner = resolveLocalWorkspaceOwner({
+  const owner = await resolveLocalWorkspaceOwner({
     cfg: { session: { store: storePath } },
     agentId: "main",
     sessionKey,

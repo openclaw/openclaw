@@ -20,7 +20,6 @@ function createCheckerFixture(files: Record<string, string>, config: object = {}
     "scripts/lib/import-cycle-graph.ts",
     "scripts/lib/native-typescript.mts",
     "scripts/lib/native-typescript-diagnostics.mts",
-    "scripts/lib/ts-guard-utils.mts",
   ]) {
     fs.copyFileSync(path.resolve(file), path.join(root, file));
   }
@@ -87,6 +86,48 @@ describe("Madge import-cycle CLI", () => {
       status: 1,
       stdout: "Madge import cycle check: 1 cycle(s).\n",
       stderr: "# cycle 1\n  src/a.ts\n  -> src/b.ts\n",
+    },
+    {
+      name: "package export cycle",
+      files: {
+        "package.json": JSON.stringify({
+          type: "module",
+          name: "fixture-package",
+          exports: { "./b": "./src/b.ts" },
+        }),
+        "src/a.ts": 'export { value } from "fixture-package/b";',
+        "src/b.ts": 'import "./a.js"; export const value = 1;',
+      },
+      status: 1,
+      stdout: "Madge import cycle check: 1 cycle(s).\n",
+      stderr: "# cycle 1\n  src/a.ts\n  -> src/b.ts\n",
+    },
+    {
+      name: "ambient declarations do not hide a physical source cycle",
+      files: {
+        "src/a.ts": 'export { value } from "@fixture/b";',
+        "src/b.ts": 'import "./a.js"; export const value = 1;',
+        "src/ambient.d.ts": 'declare module "@fixture/b" { export const value: number; }',
+      },
+      status: 1,
+      stdout: "Madge import cycle check: 1 cycle(s).\n",
+      stderr: "# cycle 1\n  src/a.ts\n  -> src/b.ts\n",
+    },
+    {
+      name: "type-only cycle across a large source inventory",
+      files: {
+        "src/a.ts": 'export type { Value } from "@fixture/z"; export type Alias = string;',
+        ...Object.fromEntries(
+          Array.from({ length: 255 }, (_, index) => [
+            `src/filler-${String(index).padStart(3, "0")}.ts`,
+            "export {};",
+          ]),
+        ),
+        "src/z.ts": 'import type { Alias } from "./a.js"; export type Value = Alias;',
+      },
+      status: 1,
+      stdout: "Madge import cycle check: 1 cycle(s).\n",
+      stderr: "# cycle 1\n  src/a.ts\n  -> src/z.ts\n",
     },
     {
       name: "invalid project configuration",

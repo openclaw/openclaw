@@ -116,14 +116,10 @@ export function createSqliteSnapshotStagingRuntime(
         let directory: string;
         try {
           // Once dispatched, join the shared child without aborting sibling tokens.
-          const result = await current.run(root, {
+          directory = await current.run(root, {
             mode: allowLegacyWorker ? "staging-create-legacy" : "staging-create",
             preparationId,
           });
-          if (typeof result !== "string") {
-            throw new Error("SQLite snapshot staging owner returned an invalid directory");
-          }
-          directory = result;
           activeLaunch ??= launch;
           directories++;
         } catch (error) {

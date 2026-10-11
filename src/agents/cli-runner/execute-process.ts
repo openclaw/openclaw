@@ -1,21 +1,24 @@
 import crypto from "node:crypto";
+import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
 import { shouldLogVerbose } from "../../globals.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
-  scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
-import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-model-stream-progress.js";
 import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
+import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
@@ -90,6 +93,41 @@ export async function executeCliProcess(params: {
   const resumeAtArg =
     params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
   const hasJsonlOutput = params.outputMode === "jsonl";
+  const eventDelivery =
+    runParams.sourceReplyDeliveryMode === "message_tool_only" ||
+    getAgentRunContext(runParams.runId)?.sessionEventDelivery === false
+      ? false
+      : undefined;
+  const eventSessionKey = runParams.sessionKey
+    ? resolveEventSessionKeyForPolicy(
+        runParams.sessionKey,
+        resolveEventSessionRoutingPolicy({
+          cfg: runParams.config,
+          sessionKey: runParams.sessionKey,
+          channel: runParams.messageProvider,
+          accountId: runParams.agentAccountId,
+        }),
+      )
+    : undefined;
+  const eventAgentId = eventSessionKey
+    ? resolveSessionAgentId({
+        config: runParams.config ?? {},
+        sessionKey: eventSessionKey,
+        agentId: runParams.agentId,
+      })
+    : undefined;
+  let eventTarget: SessionEventTarget | undefined;
+  if (eventSessionKey && eventAgentId && params.events.emitLiveEvents) {
+    try {
+      eventTarget = await params.deps.captureSessionEventTarget(eventAgentId, eventSessionKey, {
+        producerPolicy: context.sessionEventSourcePolicy,
+        assertCaptureCurrent: params.assertCurrent,
+      });
+    } catch (error) {
+      cliBackendLog.warn(`CLI watchdog follow-up unavailable: ${formatErrorMessage(error)}`);
+    }
+    params.assertCurrent();
+  }
 
   const streamingParser = hasJsonlOutput
     ? createCliJsonlStreamingParser({
@@ -244,6 +282,11 @@ export async function executeCliProcess(params: {
         onInterrupted: (reason) => {
           streamingParser?.finish();
           const partialOutput = streamingParser?.getOutput();
+          if (partialOutput?.partialOutputRejected && partialOutput.errorText) {
+            throw createCliFailoverError(partialOutput.errorText, "format", failoverContext, {
+              code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
+            });
+          }
           if (
             !partialOutput?.text.trim() ||
             partialOutput.errorText ||
@@ -389,35 +432,31 @@ export async function executeCliProcess(params: {
     stderrHash: stderrHash.digest("hex").slice(0, 12),
     useResume: params.useResume,
   };
-  if (params.logOutputText) {
-    if (stdoutDiagnostic) {
-      cliBackendLog.info(`cli stdout:\n${stdoutDiagnostic}`);
-    }
-    if (stderrDiagnostic) {
-      cliBackendLog.info(`cli stderr:\n${stderrDiagnostic}`);
-    }
-  }
-  if (shouldLogVerbose()) {
-    if (stdoutDiagnostic) {
-      cliBackendLog.debug(`cli stdout:\n${stdoutDiagnostic}`);
-    }
-    if (stderrDiagnostic) {
-      cliBackendLog.debug(`cli stderr:\n${stderrDiagnostic}`);
+  for (const level of ["info", "debug"] as const) {
+    if (level === "info" ? params.logOutputText : shouldLogVerbose()) {
+      for (const [stream, diagnostic] of [
+        ["stdout", stdoutDiagnostic],
+        ["stderr", stderrDiagnostic],
+      ]) {
+        if (diagnostic) {
+          cliBackendLog[level](`cli ${stream}:\n${diagnostic}`);
+        }
+      }
     }
   }
 
   const streamedJsonlOutput = streamingParser?.getOutput();
+  const parseOutput = () =>
+    parseCliOutput({
+      raw: readStdout(),
+      backend: params.backend,
+      providerId: context.backendResolved.id,
+      outputMode: params.outputMode,
+      fallbackSessionId: params.resolvedSessionId,
+    });
   const parsedStructuredOutput =
     streamedJsonlOutput ??
-    (params.outputMode === "json" && stdoutCapture.truncatedBytes === 0
-      ? parseCliOutput({
-          raw: readStdout(),
-          backend: params.backend,
-          providerId: context.backendResolved.id,
-          outputMode: params.outputMode,
-          fallbackSessionId: params.resolvedSessionId,
-        })
-      : null);
+    (params.outputMode === "json" && stdoutCapture.truncatedBytes === 0 ? parseOutput() : null);
   // A completed terminal record is authoritative even if the CLI hangs
   // afterward. Reclassifying it as a timeout could replay completed tools.
   if (parsedStructuredOutput?.terminalFailure) {
@@ -470,25 +509,24 @@ export async function executeCliProcess(params: {
           "It may have been waiting for interactive input or an approval prompt.",
           "Check CLI permission settings and OpenClaw approval prompts.",
         ].join(" ");
-        const routing = resolveEventSessionRoutingPolicy({
-          cfg: runParams.config,
-          sessionKey: runParams.sessionKey,
-          channel: runParams.messageProvider,
-          accountId: runParams.agentAccountId,
-        });
-        params.deps.enqueueSystemEvent(stallNotice, {
-          sessionKey: resolveSystemEventQueueKey(
-            resolveEventSessionKeyForPolicy(runParams.sessionKey, routing),
-            runParams.agentId,
-          ),
-        });
-        params.deps.requestHeartbeat(
-          scopedHeartbeatWakeOptionsForPolicy(
-            runParams.sessionKey,
-            { source: "cli-watchdog", intent: "event", reason: "cli:watchdog:stall" },
-            routing,
-          ),
-        );
+        if (eventSessionKey && eventAgentId && eventTarget) {
+          try {
+            const receipt = params.deps.enqueueSessionEvent(stallNotice, {
+              agentId: eventAgentId,
+              sessionKey: eventSessionKey,
+              source: "exec",
+              expectedTarget: eventTarget,
+              deliver: eventDelivery,
+            });
+            void receipt.settled.then((outcome) => {
+              if (outcome.status === "failed") {
+                cliBackendLog.warn(`CLI watchdog follow-up failed: ${outcome.error}`);
+              }
+            });
+          } catch (error) {
+            cliBackendLog.warn(`CLI watchdog follow-up rejected: ${formatErrorMessage(error)}`);
+          }
+        }
       }
       throw timeoutDecision.error;
     }
@@ -542,15 +580,7 @@ export async function executeCliProcess(params: {
       finalPromptText: params.prompt,
     };
   }
-  const parsed =
-    parsedStructuredOutput ??
-    parseCliOutput({
-      raw: readStdout(),
-      backend: params.backend,
-      providerId: context.backendResolved.id,
-      outputMode: params.outputMode,
-      fallbackSessionId: params.resolvedSessionId,
-    });
+  const parsed = parsedStructuredOutput ?? parseOutput();
   const parsedError = createCliOutputFailoverError({
     output: parsed,
     ...outputErrorContext,

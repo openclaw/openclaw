@@ -116,21 +116,12 @@ export type PairedDevicePendingNodeSurface = {
 };
 
 /** Persisted approved device record, including durable approval and active role tokens. */
-export type PairedDevice = {
-  deviceId: string;
-  publicKey: string;
-  displayName?: string;
+export type PairedDevice = Omit<
+  DevicePairingPendingRequest,
+  "requestId" | "silent" | "isRepair" | "ts"
+> & {
   operatorLabel?: string;
-  platform?: string;
-  deviceFamily?: string;
-  clientId?: string;
-  clientMode?: string;
-  browserOrigin?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
   approvedScopes?: string[];
-  remoteIp?: string;
   tokens?: Record<string, DeviceAuthToken>;
   approvedVia?: PairedDeviceApprovalKind;
   nodeSurface?: PairedDeviceNodeSurface;

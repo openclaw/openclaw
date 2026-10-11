@@ -1,5 +1,9 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  encodeSqliteStringSet,
+  executeSqliteQuerySync,
+  sqliteStringSetEntries,
+} from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   conversationIdentityFromSessionEntry,
@@ -11,6 +15,11 @@ import {
   serializeStoredConversationRouteContext,
   type ConversationRouteContext,
 } from "./conversation-route-context.js";
+import {
+  conversationPublication,
+  type ConversationAssociationRow,
+  type ConversationPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "./types.js";
 
@@ -124,43 +133,103 @@ export function prepareSessionConversationForWrite(params: {
   };
 }
 
-/** Upserts the address before the session row so its primary-conversation FK is always valid. */
-export function upsertConversationIdentity(
+export function prepareConversationIdentities(
+  identities: readonly ConversationIdentity[],
+): string | undefined {
+  if (!identities.length) {
+    return undefined;
+  }
+  // RETURNING order is unspecified; each address must have only its final postimage.
+  const current = new Map(identities.map((identity) => [identity.conversationRef, identity]));
+  return encodeSqliteStringSet(
+    [...current.values()].flatMap((identity) => [
+      identity.conversationRef,
+      identity.channel,
+      identity.accountId,
+      identity.kind,
+      identity.peerId,
+      identity.deliveryTarget,
+      identity.parentConversationRef ?? null,
+      identity.threadId ?? null,
+      identity.nativeChannelId ?? null,
+      identity.nativeDirectUserId ?? null,
+      identity.label ?? null,
+      identity.metadata ? JSON.stringify(identity.metadata) : null,
+    ]),
+  );
+}
+
+/** Upserts addresses before session rows so their primary-conversation FKs remain valid. */
+export function upsertConversationIdentities(
   database: OpenClawAgentDatabase,
-  identity: ConversationIdentity,
+  encoded: string | undefined,
   updatedAt: number,
-): void {
+): ConversationPublication | undefined {
+  if (encoded === undefined) {
+    return undefined;
+  }
   const db = getSessionKysely(database.db);
-  const identityColumns = () => ({
-    channel: identity.channel,
-    account_id: identity.accountId,
-    kind: identity.kind,
-    peer_id: identity.peerId,
-    delivery_target: identity.deliveryTarget,
-    parent_conversation_id: identity.parentConversationRef ?? null,
-    thread_id: identity.threadId ?? null,
-    native_channel_id: identity.nativeChannelId ?? null,
-    native_direct_user_id: identity.nativeDirectUserId ?? null,
-    label: identity.label ?? null,
-    metadata_json: identity.metadata ? JSON.stringify(identity.metadata) : null,
-  });
-  executeSqliteQuerySync(
+  const columns = [
+    "conversation_id",
+    "channel",
+    "account_id",
+    "kind",
+    "peer_id",
+    "delivery_target",
+    "parent_conversation_id",
+    "thread_id",
+    "native_channel_id",
+    "native_direct_user_id",
+    "label",
+    "metadata_json",
+  ] as const;
+  const fields = sqliteStringSetEntries(encoded).as("field");
+  const rows = executeSqliteQuerySync(
     database.db,
     db
       .insertInto("conversations")
-      .values({
-        conversation_id: identity.conversationRef,
-        ...identityColumns(),
-        created_at: updatedAt,
-        updated_at: updatedAt,
-      })
+      .columns([...columns, "created_at", "updated_at"])
+      .expression((query) =>
+        query
+          .selectFrom(fields)
+          .select((eb) => [
+            ...columns.map((column, index) =>
+              eb.fn
+                .max<string>(
+                  eb
+                    .case()
+                    .when(eb("field.key", "%", columns.length), "=", index)
+                    .then(eb.ref("field.value"))
+                    .end(),
+                )
+                .as(column),
+            ),
+            eb.val(updatedAt).as("created_at"),
+            eb.val(updatedAt).as("updated_at"),
+          ])
+          .where("field.key", ">=", 0)
+          .groupBy((eb) => eb.cast<number>(eb("field.key", "/", columns.length), "integer"))
+          .orderBy((eb) => eb.cast<number>(eb("field.key", "/", columns.length), "integer")),
+      )
       .onConflict((conflict) =>
-        conflict.column("conversation_id").doUpdateSet({
-          ...identityColumns(),
+        conflict.column("conversation_id").doUpdateSet((eb) => ({
+          channel: eb.ref("excluded.channel"),
+          account_id: eb.ref("excluded.account_id"),
+          kind: eb.ref("excluded.kind"),
+          peer_id: eb.ref("excluded.peer_id"),
+          delivery_target: eb.ref("excluded.delivery_target"),
+          parent_conversation_id: eb.ref("excluded.parent_conversation_id"),
+          thread_id: eb.ref("excluded.thread_id"),
+          native_channel_id: eb.ref("excluded.native_channel_id"),
+          native_direct_user_id: eb.ref("excluded.native_direct_user_id"),
+          label: eb.ref("excluded.label"),
+          metadata_json: eb.ref("excluded.metadata_json"),
           updated_at: updatedAt,
-        }),
-      ),
-  );
+        })),
+      )
+      .returningAll(),
+  ).rows;
+  return conversationPublication.stageRows(database, { catalogues: rows });
 }
 
 /** Links one external address to its local context without conflating the two identities. */
@@ -199,6 +268,8 @@ export function linkSessionConversation(params: {
           )
         : null
       : serializeStoredConversationRouteContext(conversation.routeContext, updatedAt);
+  const associations: ConversationAssociationRow[] = [];
+  const removedAssociations: ConversationAssociationRow[] = [];
   if (conversation.role === "primary") {
     const stalePrimaryRows = executeSqliteQuerySync(
       database.db,
@@ -210,7 +281,7 @@ export function linkSessionConversation(params: {
         .where("conversation_id", "!=", conversation.identity.conversationRef),
     ).rows;
     if (stalePrimaryRows.length > 0) {
-      executeSqliteQuerySync(
+      const related = executeSqliteQuerySync(
         database.db,
         db
           .insertInto("session_conversations")
@@ -233,30 +304,36 @@ export function linkSessionConversation(params: {
               route_context_json: eb.ref("excluded.route_context_json"),
               last_seen_at: updatedAt,
             })),
-          ),
-      );
-      executeSqliteQuerySync(
+          )
+          .returningAll(),
+      ).rows;
+      associations.push(...related);
+      const removed = executeSqliteQuerySync(
         database.db,
         db
           .deleteFrom("session_conversations")
           .where("session_id", "=", sessionId)
           .where("role", "=", "primary")
-          .where("conversation_id", "!=", conversation.identity.conversationRef),
-      );
+          .where("conversation_id", "!=", conversation.identity.conversationRef)
+          .returningAll(),
+      ).rows;
+      removedAssociations.push(...removed);
     }
   }
 
   // A conversation has exactly one role within a session. Remove stale role rows
   // before inserting the current one because role participates in the table PK.
-  executeSqliteQuerySync(
+  const removed = executeSqliteQuerySync(
     database.db,
     db
       .deleteFrom("session_conversations")
       .where("session_id", "=", sessionId)
       .where("conversation_id", "=", conversation.identity.conversationRef)
-      .where("role", "!=", conversation.role),
-  );
-  executeSqliteQuerySync(
+      .where("role", "!=", conversation.role)
+      .returningAll(),
+  ).rows;
+  removedAssociations.push(...removed);
+  const linked = executeSqliteQuerySync(
     database.db,
     db
       .insertInto("session_conversations")
@@ -273,6 +350,9 @@ export function linkSessionConversation(params: {
           route_context_json: routeContextJson,
           last_seen_at: updatedAt,
         }),
-      ),
-  );
+      )
+      .returningAll(),
+  ).rows;
+  associations.push(...linked);
+  conversationPublication.stageRows(database, { associations, removedAssociations });
 }

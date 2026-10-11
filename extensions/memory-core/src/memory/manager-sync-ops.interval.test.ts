@@ -20,6 +20,14 @@ type MemoryIndexEntry = {
 };
 
 class IntervalSyncHarness extends MemorySyncTestHarness {
+  private accepting = true;
+  protected override readonly runInBackgroundContext = <T>(run: () => T): T => {
+    if (!this.accepting) {
+      throw new Error("Plugin was reloaded or disabled");
+    }
+    return run();
+  };
+  readonly sync = vi.fn(async () => {});
   protected readonly createProvider = (): never => {
     throw new Error("Interval harness does not acquire embedding providers");
   };
@@ -59,6 +67,10 @@ class IntervalSyncHarness extends MemorySyncTestHarness {
     this.ensureIntervalSync();
   }
 
+  quiesce(): void {
+    this.accepting = false;
+  }
+
   stop(): void {
     if (this.intervalTimer) {
       clearInterval(this.intervalTimer);
@@ -78,8 +90,6 @@ class IntervalSyncHarness extends MemorySyncTestHarness {
     return [];
   }
 
-  protected async sync(): Promise<void> {}
-
   protected async withTimeout<T>(promise: Promise<T>): Promise<T> {
     return await promise;
   }
@@ -94,10 +104,7 @@ class IntervalSyncHarness extends MemorySyncTestHarness {
 
   protected assertRequiredProviderAvailable(): void {}
 
-  protected async indexFile(
-    _entry: MemoryIndexEntry,
-    _options: { source: MemorySource; content?: string },
-  ): Promise<void> {}
+  protected async indexFile(_entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {}
 }
 
 describe("MemoryManagerSyncOps interval sync", () => {
@@ -122,5 +129,18 @@ describe("MemoryManagerSyncOps interval sync", () => {
     });
 
     expect(harness.batchConfig().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("contains refused background admission before interval cleanup", async () => {
+    vi.useFakeTimers();
+    const harness = new IntervalSyncHarness({ intervalMinutes: 1 });
+    harness.arm();
+    harness.quiesce();
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(harness.sync).not.toHaveBeenCalled();
+    } finally {
+      harness.stop();
+    }
   });
 });

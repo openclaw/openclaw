@@ -23,6 +23,11 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
+import {
+  readIncognitoSessionHistory,
+  type IncognitoSessionHistoryBinding,
+} from "./session-incognito-history-read.js";
 import type { SessionTranscriptEventMatchRequest } from "./session-transcript-worker-read.types.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -63,7 +68,16 @@ export function findTranscriptEventMatchingInDatabase(
 export async function findTranscriptEvent(
   scope: SessionTranscriptReadScope,
   match: SessionTranscriptEventMatch,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<{ event: TranscriptEvent } | undefined> {
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
+  if (incognito) {
+    const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
+      type: "session.history.match",
+      input: { ...target, match },
+    }));
+    return result.result;
+  }
   const captured = {
     ...scope,
     ...(scope.storePath ? { storePath: path.resolve(scope.storePath) } : {}),

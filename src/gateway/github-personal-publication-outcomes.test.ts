@@ -1,3 +1,16 @@
+// Register the shared Git transport before any publication or run-lease consumer.
+// oxfmt-ignore
+import {
+  BRANCH,
+  SESSION_ID,
+  SESSION_KEY,
+  commandResult,
+  commands,
+  createRealPublicationWorkspace,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
+} from "./github-publication.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
@@ -15,33 +28,12 @@ import {
   createGitHubPublicationExecutionStore,
   readGitHubPublicationRequest,
 } from "./github-publication-store.js";
-import {
-  BRANCH,
-  SESSION_ID,
-  SESSION_KEY,
-  commandResult,
-  commands,
-  createRealPublicationWorkspace,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-  persistPublicationTestSession,
-} from "./github-publication.test-support.js";
 import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 
 const mocks = githubPublicationTestMocks();
 const table = "github_personal_publication_requests";
-vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
-  lockWorktreeForProcess: vi.fn(async () => undefined),
-  unlockWorktree: vi.fn(async () => undefined),
-}));
-vi.mock("../process/exec.js", () => ({
-  runCommandBuffered: (
-    ...args: Parameters<typeof import("../process/exec.js").runCommandBuffered>
-  ) => mocks.runCommand(...args),
-}));
 
 describe("personal publication definitive outcomes", () => {
   installGitHubPublicationTestHarness();

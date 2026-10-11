@@ -28,10 +28,7 @@ type SettlementRead = {
   bind(
     command: SettlementReadCommand,
     settlement: Promise<SqliteWorkerOperationSettlement>,
-    publish: (
-      profile: ProfileDisplayRow | undefined,
-      bindings?: readonly UserProfileEmailBinding[],
-    ) => void,
+    publish: SettlementRead["acknowledge"],
     release: () => void,
   ): void;
   acknowledge(
@@ -59,10 +56,7 @@ export async function withOpenClawStateSettlementRead<T>(
     | {
         command: SettlementReadCommand;
         settlement: Promise<SqliteWorkerOperationSettlement>;
-        publish: (
-          profile: ProfileDisplayRow | undefined,
-          bindings?: readonly UserProfileEmailBinding[],
-        ) => void;
+        publish: SettlementRead["acknowledge"];
         release: () => void;
       }
     | undefined;

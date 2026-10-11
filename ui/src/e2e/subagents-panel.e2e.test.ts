@@ -1,8 +1,10 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
@@ -139,6 +141,60 @@ function scenario() {
 }
 
 suite.define(() => {
+  it("keeps a child waiting on descendants in Running until its work settles", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const { parent, child, finished } = scenario();
+      const waiting = {
+        ...finished,
+        key: "agent:main:subagent:coordinator-review",
+        sessionId: "coordinator-session",
+        label: "Coordinate the remaining review",
+        hasActiveSubagentRun: true,
+      } satisfies GatewaySessionRow;
+      const gateway = await installMockGateway(page, {
+        ...previewModel,
+        sessionKey: parent.key,
+        communityInvite: false,
+        sessions: [parent, child, waiting, finished],
+        historyMessages: [
+          { role: "assistant", content: "The delegated review is still underway." },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+      await openChatSidePanelType(page, "Subagents");
+      const panel = page.locator("openclaw-chat-subagents-panel");
+      const waitingRow = panel.locator(`[data-session-key="${waiting.key}"]`);
+      await waitingRow.waitFor();
+      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+        const frame = await takeControlUiScreenshotFrame(page, panel, [waitingRow], {
+          animations: "disabled",
+        });
+        await writeFile(
+          path.join(suite.artifactDir, "subagent-waiting-on-descendants.png"),
+          frame.png,
+        );
+      }
+      expect(await panel.locator(".chat-subagents__running").getByText(waiting.label).count()).toBe(
+        1,
+      );
+      expect(await waitingRow.getByRole("button", { name: `Stop ${waiting.label}` }).count()).toBe(
+        0,
+      );
+      await panel.locator(".chat-subagents__finished").getByText(finished.label).waitFor();
+      const settled = { ...waiting, hasActiveSubagentRun: false, updatedAt: Date.now() + 1 };
+      await gateway.setSessionsListResponse({ sessions: [parent, child, settled, finished] });
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: settled.key,
+        reason: "run-end",
+        ts: settled.updatedAt,
+        session: settled,
+        ancestorSessions: [parent],
+      });
+      await panel.locator(".chat-subagents__finished").getByText(waiting.label).waitFor();
+      expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
+    });
+  });
+
   it("opens ordinary subagents beside the parent and keeps activity, drafts and Stop scoped", async () => {
     const viewport = { width: 1440, height: 900 };
     await suite.withPage(

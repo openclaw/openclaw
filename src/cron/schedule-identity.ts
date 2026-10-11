@@ -1,10 +1,13 @@
-import { stableStringify } from "@openclaw/normalization-core";
 /** Builds stable identities for cron scheduling inputs. */
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { parseCronPacingBounds } from "./pacing.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import { isCronEventSchedule } from "./source-schedule.js";
@@ -63,7 +66,7 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
     return { kind: "cron", expr, tz, staggerMs };
   }
   if (kind === "on-exit") {
-    const command = normalizeOptionalString(schedule.command);
+    const command = readNonBlankString(schedule.command);
     return command
       ? { kind: "on-exit", command, cwd: normalizeOptionalString(schedule.cwd) }
       : undefined;

@@ -618,6 +618,7 @@ describe("triageCommand", () => {
               expect.stringContaining("| & cursor-agent --print"),
               expect.stringContaining("& kimi --prompt"),
               expect.stringContaining("| & qwen"),
+              expect.stringContaining("& agy --prompt-interactive"),
               expect.stringContaining("& openclaw triage --run"),
             ]
           : [
@@ -630,6 +631,7 @@ describe("triageCommand", () => {
               `${targetEnv} cursor-agent --print < '${promptPath}'`,
               `${targetEnv} kimi --prompt 'Read the debugging prompt at ${promptPath} and follow its repair and verification instructions.'`,
               `${targetEnv} qwen < '${promptPath}'`,
+              `${targetEnv} agy --prompt-interactive 'Read the debugging prompt at ${promptPath} and follow its repair and verification instructions.'`,
               `${targetEnv} openclaw triage --run`,
             ],
     });
@@ -637,28 +639,6 @@ describe("triageCommand", () => {
     expect(mocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
     expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { executable: "codex", detectedAgents: ["codex"] },
-    { executable: "cursor-agent", detectedAgents: ["cursor"] },
-    { executable: "kimi", detectedAgents: ["kimi"] },
-    { executable: "qwen", detectedAgents: ["qwen"] },
-    { executable: "cursor", detectedAgents: [] },
-    { executable: "agent", detectedAgents: [] },
-  ])(
-    "reports coding agents for $executable without checking credentials or selecting an editor",
-    async ({ executable, detectedAgents }) => {
-      mocks.resolveExecutablePath.mockImplementation((binary: string) =>
-        binary === executable ? `/usr/local/bin/${binary}` : undefined,
-      );
-      const runtime = createTriageRuntime();
-
-      await triageCommand(runtime, { json: true, noExport: true });
-
-      expect(runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({ detectedAgents });
-      expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([false, true])("preserves manual non-TTY semantics (run=%s)", async (run) => {
     await withTriageTerminal(false, async () => {

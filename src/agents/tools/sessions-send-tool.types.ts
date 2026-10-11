@@ -8,6 +8,7 @@ export type SessionsSendToolOptions = {
   agentSessionKey?: string;
   agentSessionId?: string;
   requesterTurnRunId?: string;
+  inheritedToolPolicySource?: "sender";
   agentChannel?: string;
   requesterOrigin?: DeliveryContext;
   sandboxed?: boolean;

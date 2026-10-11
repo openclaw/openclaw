@@ -43,11 +43,6 @@ export function trackSessionCheckoutSidebar(content: SidebarSelection) {
   checkoutSidebarContents.add(content);
 }
 
-export function openSessionCheckoutSidebar(state: SessionWorkspaceHost, content: SidebarSelection) {
-  trackSessionCheckoutSidebar(content);
-  state.handleOpenSidebar(content);
-}
-
 function clearSessionCheckoutSidebar(state: SessionWorkspaceHost) {
   if (state.sidebarContent && checkoutSidebarContents.has(state.sidebarContent)) {
     state.sidebarContent = null;
@@ -193,11 +188,7 @@ export function refreshSessionWorkspaceState(
   const diffOpen =
     workspace.diffContent !== undefined && state.sidebarContent === workspace.diffContent;
   delete workspace.diffContent;
-  if (!refreshFiles) {
-    workspace.pendingReload = true;
-    return diffOpen;
-  }
-  if (workspace.loading) {
+  if (!refreshFiles || workspace.loading) {
     workspace.pendingReload = true;
   } else {
     loadSessionWorkspace(state, workspace);

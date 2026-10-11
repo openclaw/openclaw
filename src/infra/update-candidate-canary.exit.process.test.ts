@@ -26,7 +26,6 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 it.each([
   "doctor",
   "doctor-signal",
-  "lint",
   "policy",
   "missing",
   "failed",

@@ -60,7 +60,7 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
   <Tab title="Command output">
     ```bash
     openclaw automations create "*/15 * * * *" \
-      --name "Queue depth probe" \
+      --name "Queue depth check" \
       --command "scripts/check-queue.sh" \
       --command-cwd "/srv/app" \
       --announce \
@@ -228,6 +228,11 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
   </Accordion>
   <Accordion title="Maintenance">
     `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
+
+    Gateway retention waits for deferred agent database startup preparation before its first sweep, logging the wait as an intentional deferral. Retention continues even when scheduled execution is disabled.
+
+    Session retention skips agents with pending or completed deletion while continuing maintenance for healthy agents. Pending deletion cleanup remains owned by the agent deletion operation.
+
   </Accordion>
   <Accordion title="Legacy store migration">
     `openclaw doctor --fix` imports supported `jobs-quarantine.json` sidecars into SQLite and archives the originals with a `.migrated` suffix. Retired `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` inputs remain unchanged: install OpenClaw `2026.9.7`, run its Doctor, then upgrade to the latest version. See the [retention policy](/gateway/doctor/config-migrations#retention-policy). Malformed SQLite job rows remain recoverable in quarantine while valid jobs keep running.

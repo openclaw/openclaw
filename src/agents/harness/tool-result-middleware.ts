@@ -1,6 +1,3 @@
-/**
- * Runs native harness tool-result middleware around tool execution results.
- */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -199,6 +196,7 @@ function coerceMiddlewareContentArray(
   content: unknown[],
   state: MiddlewareContentCoerceState,
   sanitize = false,
+  level: "result" | "nested" = "nested",
 ): MiddlewareContentBlock[] {
   const blocks: MiddlewareContentBlock[] = [];
   for (const entry of content.slice(0, MAX_MIDDLEWARE_CONTENT_BLOCKS)) {
@@ -206,6 +204,10 @@ function coerceMiddlewareContentArray(
       break;
     }
     const coerced = coerceMiddlewareContentBlocks(entry, state, sanitize);
+    if (level === "result") {
+      blocks.push(...coerced.slice(0, MAX_MIDDLEWARE_CONTENT_BLOCKS - blocks.length));
+      continue;
+    }
     const text = coerced.length === 0 ? coerceMiddlewareText(entry, state, sanitize) : undefined;
     for (const block of text
       ? [{ type: "text" as const, text: truncateUtf16Safe(text, MAX_MIDDLEWARE_TEXT_CHARS) }]
@@ -266,18 +268,7 @@ function coerceMiddlewareToolResult(
     return undefined;
   }
   const state: MiddlewareContentCoerceState = { depth: 0, seen: new Set() };
-  const content: OpenClawAgentToolResult["content"] = [];
-  for (const block of value.content.slice(0, MAX_MIDDLEWARE_CONTENT_BLOCKS)) {
-    for (const coerced of coerceMiddlewareContentBlocks(block, state, sanitize)) {
-      if (content.length >= MAX_MIDDLEWARE_CONTENT_BLOCKS) {
-        break;
-      }
-      content.push(coerced);
-    }
-    if (content.length >= MAX_MIDDLEWARE_CONTENT_BLOCKS) {
-      break;
-    }
-  }
+  const content = coerceMiddlewareContentArray(value.content, state, sanitize, "result");
   if (content.length === 0) {
     return undefined;
   }
@@ -442,6 +433,13 @@ export function createAgentToolResultMiddlewareRunner(
         event,
         event.result,
       );
+      const fail = (message: string) => {
+        log.warn(`[${ctx.runtime}] ${message} for ${truncateUtf16Safe(event.toolName, 120)}`);
+        return reconcileDeliveredMessagingFailure(
+          buildMiddlewareFailureResult(),
+          deliveredMessagingFallback,
+        );
+      };
       let current = sanitizeToolResultForMiddleware(event.result);
       for (const handler of handlersForRun) {
         // An earlier handler can await while a later handler's plugin is removed.
@@ -458,28 +456,10 @@ export function createAgentToolResultMiddlewareRunner(
           if (coercedCandidate) {
             current = coercedCandidate;
           } else {
-            log.warn(
-              `[${ctx.runtime}] discarded invalid tool result middleware output for ${truncateUtf16Safe(
-                event.toolName,
-                120,
-              )}`,
-            );
-            return reconcileDeliveredMessagingFailure(
-              buildMiddlewareFailureResult(),
-              deliveredMessagingFallback,
-            );
+            return fail("discarded invalid tool result middleware output");
           }
         } catch {
-          log.warn(
-            `[${ctx.runtime}] tool result middleware failed for ${truncateUtf16Safe(
-              event.toolName,
-              120,
-            )}`,
-          );
-          return reconcileDeliveredMessagingFailure(
-            buildMiddlewareFailureResult(),
-            deliveredMessagingFallback,
-          );
+          return fail("tool result middleware failed");
         }
       }
       return reconcileDeliveredMessagingFailure(current, deliveredMessagingFallback);

@@ -2,10 +2,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
-  type MemoryWikiOverviewCluster,
   type MemoryWikiOverviewItem,
   type MemoryWikiOverviewPageCounts,
-  type MemoryWikiOverviewStatus,
 } from "./compiled-cache.js";
 import type { WikiPageKind, WikiPageSummary } from "./markdown.js";
 
@@ -46,19 +44,12 @@ function capOverviewItem(item: MemoryWikiOverviewItem): MemoryWikiOverviewItem {
 }
 
 function extractSnippet(body: string): string | undefined {
+  const prefixes = ["#", "```", "<!--", "- ", "* "];
   for (const rawLine of body.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (
-      !line ||
-      line.startsWith("#") ||
-      line.startsWith("```") ||
-      line.startsWith("<!--") ||
-      line.startsWith("- ") ||
-      line.startsWith("* ")
-    ) {
-      continue;
+    if (line && !prefixes.some((prefix) => line.startsWith(prefix))) {
+      return line;
     }
-    return line;
   }
   return undefined;
 }
@@ -75,10 +66,7 @@ function compareOverviewItems(left: MemoryWikiOverviewItem, right: MemoryWikiOve
   return left.title.localeCompare(right.title);
 }
 
-export function projectMemoryWikiOverviewItem(
-  page: WikiPageSummary,
-  body: string,
-): MemoryWikiOverviewItem {
+export function projectMemoryWikiOverviewItem(page: WikiPageSummary, body: string) {
   const updatedAt = normalizeOptionalString(page.updatedAt);
   const sourceType = normalizeOptionalString(page.sourceType);
   const snippet = extractSnippet(body);
@@ -102,7 +90,7 @@ export function projectMemoryWikiOverviewItem(
 export function buildMemoryWikiOverview(
   pages: WikiPageSummary[],
   projectedItems: MemoryWikiOverviewItem[],
-): MemoryWikiOverviewStatus {
+) {
   const pageCounts = pages.reduce<MemoryWikiOverviewPageCounts>(
     (counts, page) => {
       counts[page.kind] += 1;
@@ -141,8 +129,8 @@ export function buildMemoryWikiOverview(
       },
       clusterItems[0]?.updatedAt ? { updatedAt: clusterItems[0].updatedAt } : {},
       { items: clusterItems },
-    ) satisfies MemoryWikiOverviewCluster;
-  }).filter((entry): entry is MemoryWikiOverviewCluster => entry !== null);
+    );
+  }).filter((entry) => entry !== null);
 
   return {
     totalItems: allItems.length,

@@ -50,6 +50,7 @@ export function assertControlUiE2eOwnership(
         if (
           inSuiteServer &&
           (node.expression.text === "createOpenClawTestInstance" ||
+            node.expression.text === "createBackgroundWorkInstance" ||
             node.expression.text === "startBuiltControlUiE2eServer" ||
             node.expression.text === "startProductionControlUiE2eServer" ||
             node.expression.text === "startProviderBrowserLoginFixture" ||
@@ -118,6 +119,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",

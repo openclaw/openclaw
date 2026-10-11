@@ -26,7 +26,7 @@ import {
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { WorkerInferenceSessionDrainBusyError } from "../worker-environments/inference-control-internal.js";
 import {
-  prepareSessionWorkerPlacementArchiveCheck,
+  prepareSessionWorkerPlacementArchiveCheckAsync,
   prepareSessionWorkerPlacementMutationCheck,
   SessionWorkerPlacementStopError,
 } from "../worker-environments/session-placement-lifecycle.js";
@@ -42,6 +42,7 @@ import {
 import {
   resolveProtectedSessionVisibilityError,
   resolveSessionWorkerPlacementPatchError,
+  prepareSessionWorkerPlacementPatchError,
   sessionLog,
 } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -218,7 +219,7 @@ export async function prepareSessionPatchArchive(params: {
   if (!preview.ok) {
     return err(preview.error);
   }
-  const previewPlacementError = resolveSessionWorkerPlacementPatchError({
+  const previewPlacementError = await prepareSessionWorkerPlacementPatchError({
     agentId: freshResolved.agentId,
     cfg,
     context: params.context,
@@ -336,7 +337,7 @@ export async function prepareSessionPatchArchiveTransition(params: {
     context: params.context,
     sessionId: params.entry.sessionId,
   };
-  const placement = prepareSessionWorkerPlacementArchiveCheck(placementTarget);
+  const placement = await prepareSessionWorkerPlacementArchiveCheckAsync(placementTarget);
   let assertWorktreeMutationAllowed: (() => void) | undefined;
   const commitGuard = () => {
     const authorizationError = params.authorize();

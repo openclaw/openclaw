@@ -6,9 +6,17 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { DeviceBootstrapBoundContextInput } from "./device-bootstrap.worker-types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
-import type { DevicePairingReadCommand } from "./device-pairing-read.types.js";
+import type {
+  DevicePairingNodeSnapshot,
+  DevicePairingReadCommand,
+} from "./device-pairing-read.types.js";
 
-async function readPairing(command: DevicePairingReadCommand, baseDir?: string, current = false) {
+async function readPairing(
+  command: DevicePairingReadCommand,
+  baseDir?: string,
+  current = false,
+  prepareNodes = false,
+) {
   const options = baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
   const context = captureOpenClawStateWorkerContext(options);
   const selected = { path: context.admission.databasePath, env: context.environment };
@@ -32,7 +40,7 @@ async function readPairing(command: DevicePairingReadCommand, baseDir?: string, 
     }
     context.admission.assertCurrent();
     if (snapshot) {
-      return { reply };
+      return { reply, nodes: undefined };
     }
     if (!publication.isCurrent()) {
       return undefined;
@@ -42,11 +50,15 @@ async function readPairing(command: DevicePairingReadCommand, baseDir?: string, 
     } else if (!reply) {
       publication.publish("missing", [], true);
     }
-    return { reply };
+    const nodes =
+      prepareNodes && (!reply || (reply.ok && reply.type === "devicePairing.list"))
+        ? publication.prepareNodes(reply?.revision ?? "missing", reply?.list.paired ?? [])
+        : undefined;
+    return { reply, nodes };
   };
   const observed = await read();
   if (observed) {
-    return observed.reply;
+    return observed;
   }
   // Only a superseded read joins writer admission; unrelated queued history must not block auth.
   return withDevicePairingLock(async () => {
@@ -54,13 +66,29 @@ async function readPairing(command: DevicePairingReadCommand, baseDir?: string, 
     if (!refreshed) {
       throw new Error("Device pairing read publication was replaced");
     }
-    return refreshed.reply;
+    return refreshed;
   });
+}
+
+/** Current paired rows and prepared node bindings share the publication's revision and lifetime. */
+export async function readDevicePairingNodeSnapshot(
+  baseDir?: string,
+): Promise<DevicePairingNodeSnapshot> {
+  const { nodes } = await readPairing(
+    { type: "devicePairing.list", nowMs: Date.now() },
+    baseDir,
+    true,
+    true,
+  );
+  if (!nodes) {
+    throw new Error("Unexpected pairing node snapshot reply");
+  }
+  return nodes;
 }
 
 /** Readers never create, migrate, or synchronously open the shared database. */
 export async function listDevicePairingStoreRecordsReadOnly(baseDir?: string, current = false) {
-  const reply = await readPairing(
+  const { reply } = await readPairing(
     { type: "devicePairing.list", nowMs: Date.now() },
     baseDir,
     current,
@@ -78,7 +106,7 @@ export async function loadPairedDevicePairingStoreRecordReadOnly(
   deviceId: string,
   baseDir?: string,
 ) {
-  const reply = await readPairing(
+  const { reply } = await readPairing(
     { type: "devicePairing.lookup", deviceId: deviceId.trim() },
     baseDir,
     true,
@@ -96,7 +124,7 @@ export async function loadPendingDevicePairingStoreRecordReadOnly(
   requestId: string,
   baseDir?: string,
 ) {
-  const reply = await readPairing(
+  const { reply } = await readPairing(
     { type: "devicePairing.pending", requestId, nowMs: Date.now() },
     baseDir,
     true,
@@ -114,7 +142,11 @@ export async function loadBoundDeviceBootstrapContextReadOnly(
   input: DeviceBootstrapBoundContextInput,
   baseDir?: string,
 ) {
-  const reply = await readPairing({ type: "devicePairing.bootstrapContext", input }, baseDir, true);
+  const { reply } = await readPairing(
+    { type: "devicePairing.bootstrapContext", input },
+    baseDir,
+    true,
+  );
   if (!reply) {
     return null;
   }

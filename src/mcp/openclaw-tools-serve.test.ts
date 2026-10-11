@@ -26,6 +26,8 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-mcp-subagent-pol
 
 vi.mock("../system-agent/overview.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../system-agent/overview.js")>();
+  const { withSystemAgentOverviewSources } =
+    await import("../system-agent/overview.test-support.js");
   const config = {
     agents: {
       ownership: "explicit" as const,
@@ -39,27 +41,23 @@ vi.mock("../system-agent/overview.js", async (importOriginal) => {
   return {
     ...actual,
     loadSystemAgentOverview: (options?: Parameters<typeof actual.loadSystemAgentOverview>[0]) =>
-      actual.loadSystemAgentOverview({
-        ...options,
-        deps: {
-          readConfigFileSnapshot: async () => ({
-            path: "/tmp/openclaw-mcp-owner.json",
-            exists: true,
-            valid: true,
-            raw: null,
-            parsed: config,
-            sourceConfig: config,
-            resolved: config,
-            runtimeConfig: config,
-            config,
-            issues: [],
-            warnings: [],
-            legacyIssues: [],
-          }),
-          probeLocalCommand: async (command) => ({ command, found: false }),
-          probeGatewayUrl: async (url) => ({ url, reachable: false }),
+      withSystemAgentOverviewSources(
+        {
+          path: "/tmp/openclaw-mcp-owner.json",
+          exists: true,
+          valid: true,
+          raw: null,
+          parsed: config,
+          sourceConfig: config,
+          resolved: config,
+          runtimeConfig: config,
+          config,
+          issues: [],
+          warnings: [],
+          legacyIssues: [],
         },
-      }),
+        () => actual.loadSystemAgentOverview(options),
+      ),
   };
 });
 

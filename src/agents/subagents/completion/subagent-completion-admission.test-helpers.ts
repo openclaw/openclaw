@@ -16,10 +16,10 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 /** Admit the actual worker before tests add deliberate runtime write-failure triggers. */
@@ -166,14 +166,17 @@ export async function observeRequesterOutcomePublication(
   originalStateDir: string,
 ) {
   const completionStore = await import("./subagent-completion-admission.store.js");
-  const settle = completionStore.settleRequesterCompletionBatch;
+  const settle = completionStore.mutateRequesterCompletionBatch;
   const reconciledBatches: string[][] = [];
   let retainedBeforePublication = false;
   const observed = vi
-    .spyOn(completionStore, "settleRequesterCompletionBatch")
+    .spyOn(completionStore, "mutateRequesterCompletionBatch")
     .mockImplementation((params) => {
+      if (params.operation.kind !== "settle") {
+        return settle(params);
+      }
       if (params.committed) {
-        reconciledBatches.push(params.entries.map(({ subagent }) => subagent.runId));
+        reconciledBatches.push(params.entries.map((subagent) => subagent.runId));
       }
       return settle({
         ...params,

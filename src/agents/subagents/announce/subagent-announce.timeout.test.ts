@@ -2,9 +2,10 @@
 // resolution when completion delivery cannot finish immediately.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  captureSubagentCompletionReplyUsing,
-  readLatestSubagentOutputWithRetryUsing,
-} from "./subagent-announce-capture.js";
+  captureSubagentCompletionReply,
+  readLatestSubagentOutputWithRetry,
+} from "./subagent-announce-output.js";
+import * as announceRuntime from "./subagent-announce.runtime.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
@@ -464,67 +465,70 @@ describe("subagent announce timeout config", () => {
 
 describe("captureSubagentCompletionReply", () => {
   const sessionKey = "agent:main:subagent:child";
-  const readSubagentOutput = vi.fn<() => Promise<string | undefined>>();
-  const capture = (
-    overrides: Partial<Parameters<typeof captureSubagentCompletionReplyUsing>[0]> = {},
-  ) =>
-    captureSubagentCompletionReplyUsing({
-      sessionKey,
-      maxWaitMs: 5,
-      retryIntervalMs: 5,
-      readSubagentOutput,
-      ...overrides,
-    });
+  const sessionTarget = {
+    agentId: "main",
+    sessionKey,
+    sessionId: "child",
+    storePath: "/tmp/sessions-main.json",
+  };
+  const readMessages = vi.mocked(announceRuntime.readSessionMessagesAsync);
+  const capture = () => captureSubagentCompletionReply(sessionKey, { sessionTarget });
 
   beforeEach(() => {
     vi.useFakeTimers();
-    readSubagentOutput.mockReset().mockResolvedValue(undefined);
+    readMessages.mockReset().mockResolvedValue([]);
   });
   afterEach(() => vi.useRealTimers());
 
   it("returns immediate assistant output without polling", async () => {
-    readSubagentOutput.mockResolvedValue("Immediate completion");
+    readMessages.mockResolvedValue([textAssistant("Immediate completion")]);
     await expect(capture()).resolves.toBe("Immediate completion");
-    expect(readSubagentOutput).toHaveBeenCalledOnce();
+    expect(readMessages).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it("captures the final assistant reply at the deadline", async () => {
-    readSubagentOutput
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce("Requester-visible final result");
+    const startedAt = performance.now();
+    readMessages.mockImplementation(async () =>
+      performance.now() - startedAt >= 50 ? [textAssistant("Requester-visible final result")] : [],
+    );
     const pending = capture();
     await vi.runAllTimersAsync();
     await expect(pending).resolves.toBe("Requester-visible final result");
-    expect(readSubagentOutput).toHaveBeenCalledTimes(3);
+    expect(performance.now() - startedAt).toBe(50);
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it("charges slow output reads against the bounded retry deadline", async () => {
     const startedAt = performance.now();
-    readSubagentOutput.mockImplementation(async () => {
+    readMessages.mockImplementation(async () => {
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, 15);
+        setTimeout(resolve, 30);
       });
-      return undefined;
+      return [];
     });
-    const pending = readLatestSubagentOutputWithRetryUsing({
-      sessionKey,
-      maxWaitMs: 25,
-      retryIntervalMs: 10,
-      readSubagentOutput,
-    });
+    const pending = capture();
     await vi.runAllTimersAsync();
     await expect(pending).resolves.toBeUndefined();
-    expect(readSubagentOutput).toHaveBeenCalledTimes(2);
-    expect(performance.now() - startedAt).toBe(40);
+    expect(readMessages).toHaveBeenCalledTimes(3);
+    expect(performance.now() - startedAt).toBe(98);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([{ maxWaitMs: 0 }, { waitForReply: false }])("does not poll with %j", async (options) => {
-    await expect(capture(options)).resolves.toBeUndefined();
-    expect(readSubagentOutput).toHaveBeenCalledOnce();
+  it("does not poll when waiting is disabled", async () => {
+    await expect(
+      captureSubagentCompletionReply(sessionKey, { sessionTarget, waitForReply: false }),
+    ).resolves.toBeUndefined();
+    expect(readMessages).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not read output with an exhausted retry budget", async () => {
+    const readHistory = vi.mocked(announceRuntime.callSubagentLifecycleGateway).mockClear();
+    await expect(
+      readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs: 0 }),
+    ).resolves.toBeUndefined();
+    expect(readHistory).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 });

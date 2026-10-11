@@ -37,7 +37,7 @@ By default it runs:
 
 Custom `--denied-url` targets are fail-closed: both HTTP responses and ambiguous transport failures count as failures unless you can independently verify a deployment-specific denial signal. The built-in loopback canary is the only target where a transport error is treated as proof of blocking.
 
-Add `--apns-reachable` to also open an APNs HTTP/2 CONNECT tunnel through the proxy and confirm sandbox APNs responds. The probe sends an intentionally invalid provider token, so an APNs `403 InvalidProviderToken` response counts as a successful reachability signal (not a failure).
+Add `--apns-reachable` to also open an APNs HTTP/2 CONNECT tunnel through the proxy and confirm sandbox APNs responds. The check sends an intentionally invalid provider token, so an APNs `403 InvalidProviderToken` response counts as a successful reachability signal (not a failure).
 
 ### Options
 
@@ -49,7 +49,7 @@ Add `--apns-reachable` to also open an APNs HTTP/2 CONNECT tunnel through the pr
 | `--allowed-url <url>`    | destination expected to succeed through the proxy (repeatable)                                                     |
 | `--denied-url <url>`     | destination expected to be blocked by the proxy (repeatable)                                                       |
 | `--apns-reachable`       | also verify sandbox APNs HTTP/2 is reachable through the proxy                                                     |
-| `--apns-authority <url>` | APNs authority to probe (default `https://api.sandbox.push.apple.com`; production is `https://api.push.apple.com`) |
+| `--apns-authority <url>` | APNs authority to check (default `https://api.sandbox.push.apple.com`; production is `https://api.push.apple.com`) |
 | `--timeout-ms <ms>`      | per-request timeout                                                                                                |
 
 Exits with code 1 when proxy config or destination checks fail.

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, realpathSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -192,10 +192,24 @@ export function registerWorkerBackgroundExecLifecycleTests({
         placementGeneration: 1,
       } satisfies NodeWorkerLaunchInput;
       let capacity = { total: 1, available: 0 };
+      // After anchor loss, ps stalls past its census timeout. Lifetime cleanup must
+      // reach the exec relays without waiting for a process census.
+      const censusBin = path.join(workspaceDir, "census-bin");
+      const censusStalled = path.join(workspaceDir, "census-stalled");
+      await mkdir(censusBin);
+      await writeFile(
+        path.join(censusBin, "ps"),
+        [
+          "#!/bin/sh",
+          `if [ -e '${censusStalled}' ]; then trap '' TERM; sleep 12; fi`,
+          'exec /bin/ps "$@"',
+        ].join("\n"),
+      );
+      await chmod(path.join(censusBin, "ps"), 0o755);
       const supervisorOptions = {
         bundleRoot: root,
         env: {
-          PATH: process.env.PATH,
+          PATH: `${censusBin}${path.delimiter}${process.env.PATH ?? ""}`,
           HOME: home,
           OPENCLAW_STATE_DIR: path.join(workspaceDir, "node-state"),
         },
@@ -318,6 +332,7 @@ export function registerWorkerBackgroundExecLifecycleTests({
           await supervisor.initialize();
         } else {
           if (crashed === "anchor") {
+            await writeFile(censusStalled, "");
             process.kill(runtime!.pid, "SIGSTOP");
             runtimeStopped = true;
           }

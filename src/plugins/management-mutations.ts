@@ -10,6 +10,7 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
+import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -78,11 +79,11 @@ function withManagedPluginMutation<T>(
   return withPluginLifecycleLease(
     { env: params.env ?? process.env, signal: params.signal },
     (lease) => {
-      const beforePersistentApply = () => {
-        params.signal?.throwIfAborted();
-        lease.assertOwned();
-        params.beforePersistentApply?.();
-      };
+      const beforePersistentApply = composeConfigWriteAssertions(
+        () => params.signal?.throwIfAborted(),
+        lease.assertOwned,
+        params.beforePersistentApply,
+      );
       beforePersistentApply();
       return run(beforePersistentApply);
     },
@@ -238,7 +239,11 @@ export async function installManagedPlugin(
           warnings.push(workspace.diagnostic.message);
         }
         // Management inspects the committed candidate; the Gateway keeps its boot inventory.
-        const installedMetadata = refreshManagedPluginMetadata({ config: installed.config, env });
+        const installedMetadata = await refreshManagedPluginMetadata({
+          config: installed.config,
+          env,
+          assertCurrent: beforePersistentApply,
+        });
         const catalog = await listManagedPlugins({
           config: installed.config,
           env,
@@ -320,7 +325,7 @@ export async function mutateManagedPluginEnabled(
           writeOptions: selectInstallMutationWriteOptions(writeOptions),
         }))
       : await readPluginMutationSnapshot(env, beforePersistentApply);
-    const metadata = loadFreshManagedPluginMetadata(snapshot.config, env);
+    const metadata = await loadFreshManagedPluginMetadata(snapshot.config, env);
     const pluginId = metadata.normalizePluginId(
       cli ? normalizePluginId(params.pluginId) : params.pluginId.trim(),
     );
@@ -342,7 +347,7 @@ export async function mutateManagedPluginEnabled(
           pluginId,
           acknowledge: params.acknowledgeCapabilities,
           onCapabilityConsent: params.onCapabilityConsent,
-          beforePersistentApply,
+          beforePersistentApply: params.beforePersistentApply,
           metadata,
         });
       }
@@ -435,7 +440,11 @@ export async function setManagedPluginEnabled(params: ManagedPluginEnableRequest
           : `plugin "${result.pluginId}" could not be enabled (${result.reason ?? "unknown reason"})`,
       );
     }
-    const metadata = refreshManagedPluginMetadata({ config: result.config, env });
+    const metadata = await refreshManagedPluginMetadata({
+      config: result.config,
+      env,
+      assertCurrent: beforePersistentApply,
+    });
     const application = await params.applyRuntime?.({
       config: result.config,
       write: result.write,
@@ -469,7 +478,7 @@ export async function reloadManagedPlugin(
   const env = params.env ?? process.env;
   return await withManagedPluginMutation(params, async (beforePersistentApply) => {
     const config = await readPluginRuntimeConfig();
-    const metadata = loadFreshManagedPluginMetadata(config, env);
+    const metadata = await loadFreshManagedPluginMetadata(config, env);
     const targets = params.plugins;
     const hasInstallPreconditions = targets.some((target) => target.installHash !== undefined);
     const resolveTargets = () => {
@@ -524,7 +533,7 @@ export async function reloadManagedPlugin(
         pluginId,
         metadata,
         acknowledge: params.acknowledgeCapabilities,
-        beforePersistentApply,
+        beforePersistentApply: params.beforePersistentApply,
       });
     }
     const resolved = resolveTargets();
@@ -569,7 +578,7 @@ export async function refreshManagedPlugins(
   return await withManagedPluginMutation(params, async (beforePersistentApply) => {
     const config = await readPluginRuntimeConfig();
     beforePersistentApply();
-    refreshManagedPluginMetadata({ config, env });
+    await refreshManagedPluginMetadata({ config, env, assertCurrent: beforePersistentApply });
     return {
       application: await params.applyRuntime({
         config,

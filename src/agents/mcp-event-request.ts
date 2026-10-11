@@ -69,8 +69,7 @@ export async function requestMcpEvent(params: {
   const response = createDeferredCore<unknown>();
   // start/authority can fail before the response is awaited.
   void response.promise.catch(() => undefined);
-  // The transport contract uses callback properties, not EventTarget listeners.
-  // oxlint-disable-next-line unicorn/prefer-add-event-listener
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Transport callback contract.
   transport.onmessage = (message) => {
     if (!("id" in message) || message.id !== id) {
       return;

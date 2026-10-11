@@ -82,6 +82,7 @@ export function readAdmittedHarnessCompletionInput(params: {
 export function readHarnessCompletionSourceInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   claim: HarnessCompletionRecovery,
+  mode: "admission" | "committed" = "admission",
 ): HarnessCompletionSourceSnapshot {
   return runSqliteDeferredTransactionSync(database.db, () => {
     const entry = readExactSessionEntryRow(
@@ -90,7 +91,10 @@ export function readHarnessCompletionSourceInDatabase(
       "full",
       "canonical",
     )?.entry;
-    if (!entry || entry.restartRecoveryDeliveryRunId === claim.sourceRunId) {
+    if (
+      !entry ||
+      (mode === "admission" && entry.restartRecoveryDeliveryRunId === claim.sourceRunId)
+    ) {
       return { entry, validInput: true };
     }
     const resolved = {

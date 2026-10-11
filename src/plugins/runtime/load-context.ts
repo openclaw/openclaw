@@ -1,4 +1,3 @@
-// Prepared plugin runtime load facts and registry-owned context access.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
@@ -21,7 +20,6 @@ import {
 
 const log = createSubsystemLogger("plugins");
 
-/** Resolved plugin runtime load context shared by runtime loader callers. */
 export type PluginRuntimeLoadContext = {
   rawConfig: OpenClawConfig;
   config: OpenClawConfig;
@@ -156,7 +154,6 @@ export function getReusablePluginRuntimeActivation(
   };
 }
 
-/** Runtime load option values that can be passed directly to plugin loading. */
 type PluginRuntimeResolvedLoadValues = Pick<
   PluginLoadOptions,
   | "config"
@@ -171,7 +168,6 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "expectedSourceDigests"
 >;
 
-/** Creates the default plugin runtime loader logger. */
 export function createPluginRuntimeLoaderLogger(): PluginLogger {
   return {
     info: (message) => log.info(message),
@@ -181,7 +177,6 @@ export function createPluginRuntimeLoaderLogger(): PluginLogger {
   };
 }
 
-/** Projects explicit runtime load fields from prepared contexts or resolved values. */
 export function buildPluginRuntimeLoadOptions(
   values: PluginRuntimeResolvedLoadValues,
   overrides?: Partial<PluginLoadOptions>,

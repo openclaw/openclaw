@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { isAvatarWorkspacePath } from "../shared/avatar-policy.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "./path-guards.js";
 
@@ -131,4 +132,30 @@ export function resolveUpdateCandidatePluginSourcePath(
   return resolveUpdateCandidatePluginPath(rehearsalRoot, rehearsalRoot, source) === copiedPath
     ? source
     : undefined;
+}
+
+/**
+ * Validation confines workspace-path avatars to the agent workspace, which the
+ * candidate relocates. Rebase them against the source workspace so the
+ * candidate accepts exactly the avatars the source did.
+ */
+export function resolveUpdateCandidateAvatar(sourceWorkspaceDir: string, avatar: string): string {
+  const value = avatar.trim();
+  if (!isAvatarWorkspacePath(value)) {
+    return avatar;
+  }
+  // Resolve against the workspace like validation does: a drive-less Windows
+  // root takes the workspace drive, not the process drive.
+  const workspaceRoot = path.resolve(sourceWorkspaceDir);
+  const resolved = path.resolve(workspaceRoot, value);
+  if (!isPathInside(workspaceRoot, resolved)) {
+    // A ../ spelling could land back inside the relocated workspace; the
+    // resolved source path stays outside it.
+    return resolved;
+  }
+  // path.relative cannot see across a \\?\ namespace prefix.
+  const plain = (input: string) =>
+    process.platform === "win32" ? normalizeWindowsPathPreservingCase(input) : input;
+  // The ./ prefix keeps a "~x" or "x:" basename local.
+  return `.${path.sep}${path.relative(plain(workspaceRoot), plain(resolved))}`;
 }

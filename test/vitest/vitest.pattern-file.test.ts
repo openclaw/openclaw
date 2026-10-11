@@ -199,30 +199,27 @@ describe("batch file selection", () => {
     ).toEqual(expected);
   });
 
-  it.skipIf(Boolean(process.versions.bun))(
-    "keeps a large exclusion inventory within Node's compiled-pattern cache budget",
-    () => {
-      const candidates = Array.from({ length: 12 }, (_, index) => `src/keep-${index}.test.ts`);
-      const exclude = Array.from({ length: 260 }, (_, index) => `src/excluded-${index}.test.ts`);
-      // Node's matcher cache evicts the oldest entry when its size reaches 250.
-      const cache = new Set<string>();
-      let compilations = 0;
-      const matcher = (file: string, pattern: string) => {
-        if (!cache.has(pattern)) {
-          compilations += 1;
-          cache.add(pattern);
-          if (cache.size >= 250) {
-            cache.delete(cache.values().next().value!);
-          }
+  it("keeps a large exclusion inventory within Node's compiled-pattern cache budget", () => {
+    const candidates = Array.from({ length: 12 }, (_, index) => `src/keep-${index}.test.ts`);
+    const exclude = Array.from({ length: 260 }, (_, index) => `src/excluded-${index}.test.ts`);
+    // Node's matcher cache evicts the oldest entry when its size reaches 250.
+    const cache = new Set<string>();
+    let compilations = 0;
+    const matcher = (file: string, pattern: string) => {
+      if (!cache.has(pattern)) {
+        compilations += 1;
+        cache.add(pattern);
+        if (cache.size >= 250) {
+          cache.delete(cache.values().next().value!);
         }
-        return path.matchesGlob(file, pattern);
-      };
-      expect(filterFilesByPatterns(candidates, ["src/**/*.test.ts"], exclude, matcher)).toEqual(
-        candidates,
-      );
-      expect(compilations).toBeLessThanOrEqual(exclude.length + 1);
-    },
-  );
+      }
+      return path.matchesGlob(file, pattern);
+    };
+    expect(filterFilesByPatterns(candidates, ["src/**/*.test.ts"], exclude, matcher)).toEqual(
+      candidates,
+    );
+    expect(compilations).toBeLessThanOrEqual(exclude.length + 1);
+  });
 });
 
 describe("intersectIncludePatterns", () => {

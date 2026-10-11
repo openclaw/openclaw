@@ -47,6 +47,7 @@ describe("unreleased Claude generations", () => {
       "claude-opus-5",
       "claude-opus-4-8",
       "claude-sonnet-5-5",
+      "claude-haiku-5-5",
       "claude-sonnet-5",
       "claude-fable-5",
       "claude-fable-5-1",
@@ -93,11 +94,14 @@ describe("unreleased Claude generations", () => {
       "claude-opus-5-5",
       "claude-opus-5",
       "claude-sonnet-5-5",
+      "claude-haiku-5-5",
       "claude-sonnet-5",
       "claude-fable-5",
       "claude-fable-5-1",
     ]) {
-      expect(resolveModel(id)?.compat, id).toEqual({ codeMode: "preferred" });
+      expect(resolveModel(id)?.compat, id).toEqual({
+        codeMode: id === "claude-haiku-5-5" ? "capable" : "preferred",
+      });
     }
     // The Claude CLI provider rows are intentionally unflagged: those runs use
     // the CLI harness where OpenClaw code mode does not apply.

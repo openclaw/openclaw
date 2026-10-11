@@ -1,8 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
-import { renderPluginsHubTabs, type PluginsHubTab } from "./plugins-hub.ts";
+import { t } from "../../i18n/index.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
+
+registerPluginManagementEnglish();
 
 const HUB_DOCS_URLS = {
   plugins: "https://docs.openclaw.ai/plugins/manage-plugins",
@@ -33,7 +38,19 @@ export function renderPluginsHubHeader(props: PluginsHubHeaderProps): TemplateRe
         </div>
       </div>
       <div class="hub-page-header__tabs">
-        ${renderPluginsHubTabs({ active: props.active, onSelect: props.onSelect })}
+        ${renderHubTabs({
+          id: "plugins",
+          active: props.active,
+          tabs: [
+            { value: "plugins", label: t("tabs.plugins") },
+            { value: "skills", label: t("tabs.skills") },
+            { value: "skill-workshop", label: t("tabs.skillWorkshop") },
+          ],
+          ariaLabel: t("pluginsPage.hubTablistLabel"),
+          panelId: PLUGINS_HUB_PANEL_ID,
+          className: "plugins-tabs",
+          onSelect: props.onSelect,
+        })}
       </div>
       <div class="hub-page-header__actions">
         ${

@@ -1,56 +1,32 @@
-import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import {
+  resolveWorkerPoolSize,
+  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
+} from "../../infra/worker-pool-sizing.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
-import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
 import type {
-  SessionBranchSummaryWorkerInput,
   SessionEntryWorkerInput,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
-  SessionTranscriptWorkerInput,
-  SessionTranscriptWorkerReply,
 } from "./session-transcript-worker.types.js";
 
-const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-
-function createTranscriptReadPool<Input extends SessionTranscriptWorkerInput>(
-  sharedCompute?: boolean,
-) {
-  return new WorkerTaskPool<Input, SessionTranscriptWorkerReply<Input["kind"]>>({
-    workerUrl,
-    prepareWorker: () => {
-      // Bun loads one SQLite library per process; workers inherit the parent's selection.
-      ensureSqliteLibrarySelected();
-      return { options: {} };
-    },
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers: 1,
-    ...(sharedCompute === undefined ? {} : { sharedCompute }),
-  });
-}
-
-// Preserve context-read admission order and avoid multiplying large SQLite scans.
-const modelContextReads = createTranscriptReadPool<
+// Callers retain writer admission and validate snapshots before consuming parallel reads.
+const modelContextReads = createSessionTranscriptReadPool<
   | SessionModelContextWorkerInput
   | SessionSqliteTargetWorkerInput
   | SessionContextMessagesWorkerInput
->();
+>(SESSION_TRANSCRIPT_FOREGROUND_WORKERS);
 
 // Background transcript exports cannot occupy the foreground context worker.
-const sessionEntries = createTranscriptReadPool<
+const sessionEntries = createSessionTranscriptReadPool<
   SessionEntryWorkerInput | SessionResetRecallWorkerInput
->(true);
-
-// Branch scans share background compute admission without delaying foreground history or context.
-const branchSummaries = createTranscriptReadPool<SessionBranchSummaryWorkerInput>(true);
+>(resolveWorkerPoolSize("singleton"), true);
 
 export async function readSessionTranscriptModelContextInWorker(
   target: SessionTranscriptRuntimeTarget,
@@ -160,27 +136,4 @@ export async function readSessionResetRecallCutoffInWorker(
     throw new Error("Session transcript worker returned an export instead of reset metadata");
   }
   return result.cutoff;
-}
-
-export async function runSessionBranchSummaryWorkerRequest(
-  request: SessionBranchSummaryReadRequest,
-  signal: AbortSignal,
-) {
-  return unwrapSessionTranscriptWorkerReply<"branch-summaries">(
-    await branchSummaries.run(
-      { kind: "branch-summaries", request },
-      {
-        inputBytes:
-          2 *
-          (request.database.agentId.length +
-            request.database.path.length +
-            request.databaseIdentity.length +
-            request.sessionKey.length +
-            request.sessionId.length +
-            (request.lifecycleRevision?.length ?? 0)),
-        timeoutMs: 60_000,
-        signal,
-      },
-    ),
-  );
 }

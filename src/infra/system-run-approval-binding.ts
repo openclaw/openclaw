@@ -119,39 +119,6 @@ function requestMismatch(details?: Record<string, unknown>): SystemRunApprovalMa
   };
 }
 
-function matchSystemRunApprovalEnvHash(params: {
-  expectedEnvHash: string | null;
-  actualEnvHash: string | null;
-  actualEnvKeys: string[];
-}): SystemRunApprovalMatchResult {
-  // Fail closed if callers provide inconsistent hash/key state. This guards against
-  // normalization drift between approval and execution paths.
-  if (!params.expectedEnvHash) {
-    if (params.actualEnvHash || params.actualEnvKeys.length > 0) {
-      return {
-        ok: false,
-        code: "APPROVAL_ENV_BINDING_MISSING",
-        message: "approval id missing env binding for requested env overrides",
-        details: { envKeys: params.actualEnvKeys },
-      };
-    }
-    return { ok: true };
-  }
-  if (params.expectedEnvHash !== params.actualEnvHash) {
-    return {
-      ok: false,
-      code: "APPROVAL_ENV_MISMATCH",
-      message: "approval id env binding mismatch",
-      details: {
-        envKeys: params.actualEnvKeys,
-        expectedEnvHash: params.expectedEnvHash,
-        actualEnvHash: params.actualEnvHash,
-      },
-    };
-  }
-  return { ok: true };
-}
-
 export function matchSystemRunApprovalBinding(params: {
   expected: SystemRunApprovalBinding;
   actual: SystemRunApprovalBinding;
@@ -165,11 +132,32 @@ export function matchSystemRunApprovalBinding(params: {
   ) {
     return requestMismatch();
   }
-  return matchSystemRunApprovalEnvHash({
-    expectedEnvHash: params.expected.envHash,
-    actualEnvHash: params.actual.envHash,
-    actualEnvKeys: params.actualEnvKeys,
-  });
+  // Fail closed if callers provide inconsistent hash/key state. This guards against
+  // normalization drift between approval and execution paths.
+  if (!params.expected.envHash) {
+    if (params.actual.envHash || params.actualEnvKeys.length > 0) {
+      return {
+        ok: false,
+        code: "APPROVAL_ENV_BINDING_MISSING",
+        message: "approval id missing env binding for requested env overrides",
+        details: { envKeys: params.actualEnvKeys },
+      };
+    }
+    return { ok: true };
+  }
+  if (params.expected.envHash !== params.actual.envHash) {
+    return {
+      ok: false,
+      code: "APPROVAL_ENV_MISMATCH",
+      message: "approval id env binding mismatch",
+      details: {
+        envKeys: params.actualEnvKeys,
+        expectedEnvHash: params.expected.envHash,
+        actualEnvHash: params.actual.envHash,
+      },
+    };
+  }
+  return { ok: true };
 }
 
 export function missingSystemRunApprovalBinding(params: {

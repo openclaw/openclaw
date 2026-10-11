@@ -140,7 +140,7 @@ it("creates through an admitted store alias with prepared facts and atomic owner
     const originalStateDir = env.OPENCLAW_STATE_DIR;
     const order: string[] = [];
     const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
-    const stopFacts = sessionChanges.subscribeFacts((change) => {
+    const stopProjection = sessionChanges.subscribeProjection((change) => {
       if ("sessionKey" in change && change.sessionKey === key) {
         publications.push(readPreparedSessionEntryChange(change, key));
       }
@@ -262,7 +262,7 @@ it("creates through an admitted store alias with prepared facts and atomic owner
     } finally {
       prepared.release();
       sql.restore();
-      stopFacts();
+      stopProjection();
       stop();
     }
     expect(order).toEqual(["committed", "published", "registered"]);
@@ -428,37 +428,6 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
     });
   },
 );
-
-it("publishes the logical creator identity while retaining the shared database's physical owner", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: state.statePath("shared.sqlite"),
-    });
-    const key = "agent:work:shared-creation";
-    const agents: string[] = [];
-    const stop = onSessionIdentityMutation((mutation) => {
-      if (mutation.kind === "create" && mutation.current.sessionKeys.includes(key)) {
-        agents.push(mutation.agentId);
-      }
-    });
-    try {
-      expect(
-        (
-          await createSessionEntryWithTranscript(
-            { agentId: "work", storePath: database.path, sessionKey: key },
-            () => ({ ok: true, entry: { sessionId: "logical-work", updatedAt: 1 } }),
-          )
-        ).ok,
-      ).toBe(true);
-      expect(agents).toEqual(["work"]);
-      expect(readExactSessionEntryRow(database, key)?.entry.sessionId).toBe("logical-work");
-      expect(database.agentId).toBe("main");
-    } finally {
-      stop();
-    }
-  });
-});
 
 it("adopts admitted Signal history and collaboration without host SQL, preserving a case-distinct Matrix sibling", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

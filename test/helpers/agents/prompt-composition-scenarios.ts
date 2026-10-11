@@ -13,7 +13,7 @@ import { buildConfiguredAgentSystemPrompt } from "../../../src/agents/system-pro
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/agent-tool-stubs.js";
 import {
-  buildDirectChatContext,
+  buildSourceConversationContext,
   buildGroupChatContext,
   buildGroupIntro,
 } from "../../../src/auto-reply/reply/groups.js";
@@ -147,7 +147,7 @@ function buildAutoReplySystemPrompt(params: {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx, {}),
     params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
-      ? buildDirectChatContext({
+      ? buildSourceConversationContext({
           sessionCtx: params.sessionCtx,
         })
       : "",

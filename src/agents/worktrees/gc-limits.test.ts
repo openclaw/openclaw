@@ -9,6 +9,10 @@ vi.mock("./registry-read.js", () => ({
   readRegistryWorktrees: async () => inventory.records,
   readLiveRegistryWorktreeIds: async () => inventory.records.map((item) => item.id),
 }));
+// mock-isolation: This ranking fixture has only live records and never admits SQLite.
+vi.mock("./pending-slots.js", () => ({
+  readWorktreeSlotCount: async () => inventory.records.length,
+}));
 
 function record(
   id: string,

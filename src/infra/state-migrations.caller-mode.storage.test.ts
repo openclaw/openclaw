@@ -313,9 +313,7 @@ describe("legacy state migration caller storage", () => {
                 "SDK settings",
               );
               expect(detected.agentDir.targetDir).toBe(targetDir);
-              await expect(ensureTool("fd", true)).resolves.toBe(
-                path.join(activeDir, "bin", binary),
-              );
+              await expect(ensureTool("fd")).resolves.toBe(path.join(activeDir, "bin", binary));
               expect(fs.readFileSync(path.join(targetDir, "bin", binary), "utf8")).toBe(
                 targetDir === legacyDir ? "legacy binary" : "current binary",
               );

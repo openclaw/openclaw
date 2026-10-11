@@ -44,8 +44,9 @@ internal interface TalkSpeechSynthesizing {
 /** Gateway RPC client for talk.speak with local-TTS fallback classification. */
 internal class TalkSpeakClient(
   private val requestDetailed: suspend (String, String, Long) -> GatewaySession.RpcResult,
-  private val json: Json = Json { ignoreUnknownKeys = true },
 ) : TalkSpeechSynthesizing {
+  private val json = Json { ignoreUnknownKeys = true }
+
   override suspend fun synthesize(
     text: String,
     directive: TalkDirective?,

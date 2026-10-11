@@ -16,7 +16,7 @@ import {
   beginDraftQueuedFollowup,
   cleanupDrafts,
   enqueueDraftEvent,
-  handleBeforeDeliverCancelled,
+  dropQueuedAnswerBlockRotation,
   ingestDraftLaneSegments,
   prepareQueuedAnswerBlock,
   repositionLaneForNewMessage,
@@ -51,13 +51,10 @@ const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 export async function runTelegramDispatchTurn(turn: Turn) {
   const { context } = turn;
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
+  // Quiet drafts do not disable explicit /verbose diagnostics; only configured opt-outs do.
   const toolProgressEnabled =
     turn.streamMode !== "off" &&
-    resolveChannelStreamingPreviewToolProgress(
-      turn.telegramCfg,
-      turn.streamMode !== "progress",
-      turn.streamMode,
-    );
+    resolveChannelStreamingPreviewToolProgress(turn.telegramCfg, true, turn.streamMode);
   const beginDeliveryCorrelation = () =>
     telegramInboundEventDelivery.begin(
       context.ctxPayload.SessionKey,
@@ -147,7 +144,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             humanDelay: resolveHumanDelayConfig(turn.cfg, context.route.agentId),
             beforeDeliver: async (payload) => payload,
             onBeforeDeliverCancelled: (payload, info) =>
-              handleBeforeDeliverCancelled(turn, payload, info),
+              info.kind === "block"
+                ? enqueueDraftEvent(turn, async () => {
+                    dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+                  })
+                : undefined,
             onSkip: (payload, info) => handleReplySkip(turn, payload, info),
           },
           replyOptions: {
@@ -268,10 +269,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             },
             suppressDefaultToolProgressMessages:
               !turn.streamDeliveryEnabled || Boolean(turn.answerLane.stream),
+            progressRequiresReply: turn.streamMode === "progress" ? true : undefined,
             suppressToolProgressMessages: !toolProgressEnabled,
             allowProgressCallbacksWhenSourceDeliverySuppressed:
               !isRoomEvent && Boolean(turn.answerLane.stream),
-            onVerboseProgressVisibility: (isActive) => {
+            onVerboseProgressVisibilityAsync: (isActive) => {
               turn.verboseProgressActive = isActive;
             },
             commentaryProgressEnabled:
@@ -288,7 +290,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onItemEvent: (payload) => handleItemEvent(turn, payload),
             onPlanUpdate: (payload) => handlePlanUpdate(turn, payload),
             onApprovalEvent: async (payload) =>
-              canPushToolProgress(turn)
+              (await canPushToolProgress(turn))
                 ? await turn.progressCompositor.pushApprovalEvent(payload)
                 : false,
             onToolResult: async (payload) => {
@@ -304,7 +306,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               if (updatedDraft) {
                 return true;
               }
-              if (isFastModeAutoProgressPayload(payload) && !canPushToolProgress(turn)) {
+              if (isFastModeAutoProgressPayload(payload) && !(await canPushToolProgress(turn))) {
                 return (await sendPayload(turn, payload)).visibleReplySent;
               }
               return false;

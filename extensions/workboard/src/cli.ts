@@ -71,19 +71,6 @@ function writeCard(card: WorkboardCard, options: JsonOptions): void {
   }
 }
 
-async function callWorkboardGateway(
-  method: string,
-  options: GatewayOptions,
-  params?: unknown,
-): Promise<unknown> {
-  return await callGatewayFromCli(method, options, params, {
-    mode: "cli",
-    scopes: options.admin
-      ? ["operator.admin", "operator.write", "operator.read"]
-      : ["operator.write", "operator.read"],
-  });
-}
-
 function isGatewayUnavailableError(error: unknown): boolean {
   const message = formatErrorMessage(error).toLowerCase();
   if (
@@ -126,7 +113,11 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .command("list")
     .description("List Workboard cards")
     .option("--board <id>", "Board id")
-    .option("--status <status>", "Filter by status")
+    .addOption(
+      workboard
+        .createOption("--status <status>", "Filter by status")
+        .choices([...WORKBOARD_STATUSES]),
+    )
     .option("--include-archived", "Include archived cards (default false)")
     .option("--json", "Print JSON", false)
     .action(
@@ -241,17 +232,36 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         options.maxStarts === undefined
           ? "workboard.cards.dispatch"
           : "workboard.cards.dispatchWithOptions";
-      const result = await callWorkboardGateway(method, options, {
-        boardId: options.board,
-        ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
-      });
+      const result = await callGatewayFromCli(
+        method,
+        options,
+        {
+          boardId: options.board,
+          ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
+        },
+        {
+          mode: "cli",
+          scopes: options.admin
+            ? ["operator.admin", "operator.write", "operator.read"]
+            : ["operator.write", "operator.read"],
+        },
+      );
       if (options.json) {
         writeJson(result);
       } else {
         const record = isRecord(result) ? result : {};
         const started = Array.isArray(record.started) ? record.started.length : 0;
-        const failures = Array.isArray(record.startFailures) ? record.startFailures.length : 0;
-        writeLine(`dispatch complete: started=${started} failures=${failures}`);
+        const failures = Array.isArray(record.startFailures) ? record.startFailures : [];
+        writeLine(`dispatch complete: started=${started} failures=${failures.length}`);
+        for (const failure of failures) {
+          if (
+            isRecord(failure) &&
+            typeof failure.cardId === "string" &&
+            typeof failure.error === "string"
+          ) {
+            writeLine(`${failure.cardId.slice(0, 8)}: ${failure.error}`);
+          }
+        }
       }
     } catch (error) {
       if (

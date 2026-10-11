@@ -18,7 +18,9 @@ function postWorkerTaskInput<Input, Output>(
     {
       input,
       taskId: task.id,
-      interactive: Boolean(task.options.onRequest || task.options.onRequestSync),
+      interactive: Boolean(
+        task.options.onRequest || task.options.onRequestSync || task.options.onNotification,
+      ),
       nativeSections: slot.nativeSections.buffer,
       taskContext,
       sampleMemory: true,

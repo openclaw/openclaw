@@ -60,11 +60,8 @@ import {
   type SkillsWatchChange,
   type SkillsWatchOwner,
 } from "./refresh-watch-registry.js";
-import {
-  compareSkillsWatchTargets,
-  resolveSkillsWatchTargets,
-  type WatchTarget,
-} from "./refresh-watch-targets.js";
+import { compareSkillsWatchTargets, resolveSkillsWatchTargets } from "./refresh-watch-targets.js";
+import type { WatchTarget } from "./refresh-watch-targets.types.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
 
 const log = createSubsystemLogger("gateway/skills");
@@ -332,6 +329,10 @@ function createSkillsPathWatcher(
         return;
       }
       const { mode, pollIntervalMs, reportHealth } = skillsObservationTransport(target.path);
+      // Watch entries use the admitted scope's root-relative spelling, including
+      // its ancestors. Keep exclusion math in that namespace for this lifetime.
+      const targetRelative = path.relative(authority.rootDir, target.path);
+      const targetPrefix = targetRelative ? targetRelative + path.sep : "";
       subscription = watch(authority, {
         scopes: [scope],
         mode,
@@ -341,11 +342,8 @@ function createSkillsPathWatcher(
           if (plannedScope?.kind === "entry" && entry.path === plannedScope.path) {
             entryDirectoryObserved = entry.kind === "directory";
           }
-          const absolute = path.resolve(authority.rootDir, entry.path);
-          // Ancestors belong to observation plumbing. An explicitly admitted
-          // source under .cache (or another ignored parent) still needs coverage.
-          const inside = isPathInside(target.path, absolute);
-          const ignored = inside && isIgnoredSkillsWatchPath(path.relative(target.path, absolute));
+          const inside = entry.path === targetRelative || entry.path.startsWith(targetPrefix);
+          const ignored = inside && isIgnoredSkillsWatchPath(entry.path.slice(targetPrefix.length));
           if (inside && !ignored && scannedKinds) {
             if (
               !scannedKinds.has(entry.path) &&

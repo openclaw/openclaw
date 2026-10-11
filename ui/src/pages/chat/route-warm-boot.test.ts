@@ -59,6 +59,36 @@ function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "wor
 }
 
 describe("cached session route startup", () => {
+  it("settles the cached roster before presenting an exact dashboard route", async () => {
+    const { context, cache, request } = warmRoute();
+    const row = createSessionRouteRow({
+      key: "agent:roboclaw:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+      displayName: "Cached dashboard",
+    });
+    const complete = vi.fn();
+    const pending = loadChatRoute(
+      context,
+      {
+        pathname: "/chat/roboclaw/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+        search: "",
+        hash: "",
+      },
+      "chat",
+      new AbortController().signal,
+    ).then(complete);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(complete).not.toHaveBeenCalled();
+    context.sessions.state.result = sessionRouteListResult([row]);
+    context.sessions.state.resultCached = true;
+    cache.resolve();
+    await pending;
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "session", sessionKey: row.key }),
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("waits for live routing defaults before resolving a shorthand main route", async () => {
     const { context, request, connect, waiting } = warmRoute();
     const completed = vi.fn();

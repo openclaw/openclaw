@@ -21,11 +21,7 @@ import {
 } from "./evidence-summary.js";
 import { sanitizeQaProgressValue } from "./progress-format.js";
 import type { QaProviderMode } from "./providers/index.js";
-import type {
-  QaSeedScenarioWithSource,
-  QaTestFileExecutionKind,
-  QaTestFileScenario,
-} from "./scenario-catalog.js";
+import type { QaSeedScenarioWithSource, QaTestFileScenario } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
 import {
@@ -111,13 +107,7 @@ type QaTestFileExecutionUnit =
       timeoutMs: number;
     };
 
-export type QaTestFileScenarioRunResult = {
-  evidence: QaEvidenceSummaryV3Json;
-  evidencePath: string;
-  executionKind: QaTestFileExecutionKind;
-  outputDir: string;
-  results: QaTestFileScenarioResult[];
-};
+export type QaTestFileScenarioRunResult = Awaited<ReturnType<typeof runQaTestFileScenarios>>;
 
 const DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS = 30 * 60_000;
 export function isQaTestFileScenario(
@@ -164,14 +154,23 @@ function withScenarioCoverage<T extends QaEvidenceSummaryJson["entries"][number]
   };
 }
 
-async function runScenarioCommandSteps(
-  params: QaScenarioCommandRunParams & { steps: readonly QaScenarioCommandStep[] },
-): Promise<QaTestFileScenarioResult> {
+async function runQaTestFileScenario(params: QaScenarioCommandRunParams) {
+  const requiresProducerEvidence =
+    params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario);
+  if (requiresProducerEvidence) {
+    const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
+    // The enclosing attempt root is exclusive, so old runs remain untouched.
+    await fs.mkdir(scenarioOutputDir);
+  }
+  const steps = buildQaScenarioCommandSteps(params.scenario, {
+    outputDir: params.outputDir,
+    repoRoot: params.repoRoot,
+  });
   const startedAt = Date.now();
   const logPath = path.join(params.outputDir, `${params.scenario.id}.log`);
   const logChunks: string[] = [];
   let failureMessage: string | undefined;
-  for (const step of params.steps) {
+  for (const step of steps) {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
       const isNativeVitestStep =
@@ -217,30 +216,13 @@ async function runScenarioCommandSteps(
   }
   await fs.writeFile(logPath, logChunks.join(""), "utf8");
   const durationMs = Math.max(1, Date.now() - startedAt);
-  return {
+  const result: QaTestFileScenarioResult = {
     scenario: params.scenario,
     status: failureMessage ? "fail" : "pass",
     durationMs,
     logPath,
     ...(failureMessage ? { failureMessage } : {}),
   };
-}
-
-async function runQaTestFileScenario(params: QaScenarioCommandRunParams) {
-  const requiresProducerEvidence =
-    params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario);
-  if (requiresProducerEvidence) {
-    const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
-    // The enclosing attempt root is exclusive, so old runs remain untouched.
-    await fs.mkdir(scenarioOutputDir);
-  }
-  const result = await runScenarioCommandSteps({
-    ...params,
-    steps: buildQaScenarioCommandSteps(params.scenario, {
-      outputDir: params.outputDir,
-      repoRoot: params.repoRoot,
-    }),
-  });
   if (params.scenario.execution.kind !== "script") {
     return result;
   }
@@ -356,9 +338,7 @@ function resolveTestFileExecutionKind(scenarios: readonly QaTestFileScenario[]) 
   return kind;
 }
 
-export async function runQaTestFileScenarios(
-  params: QaTestFileScenarioRunParams,
-): Promise<QaTestFileScenarioRunResult> {
+export async function runQaTestFileScenarios(params: QaTestFileScenarioRunParams) {
   // Each scheduled instance owns its own object identity, even for repeated ids.
   const scenarios = params.scenarios
     .filter(isQaTestFileScenario)

@@ -38,42 +38,6 @@ type QaGatewayProcessCommand = {
   envKeys: string[];
 };
 
-type QaGatewayProcessHandoff = {
-  version: 1;
-  generation: string;
-  pid: number;
-  uid: number;
-  gid: number;
-  procStartTicks: string;
-  pgrp: number;
-  commandFile: {
-    path: string;
-    sha256: string;
-  };
-};
-
-type QaGatewayProcessSandboxProof = {
-  version: 1;
-  generation: string;
-  status: "pass";
-  envKeys: string[];
-};
-
-type QaGatewayProcessRuntimeProof = {
-  version: 1;
-  generation: string;
-  status: "pass";
-  pid: number;
-  uid: number;
-  gid: number;
-  procStartTicks: string;
-  pgrp: number;
-  state: string;
-  cwd: string;
-  executablePath: string;
-  cmdlineSha256: string;
-};
-
 export type QaGatewayVerifiedProcessIdentity = {
   generation: string;
   pid: number;
@@ -136,15 +100,8 @@ function normalizeEnvKeys(keys: readonly string[]) {
   return normalized.toSorted();
 }
 
-function parsePositiveInteger(value: unknown, label: string) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 1) {
-    throw new Error(`invalid ${label}`);
-  }
-  return value;
-}
-
-function parseNonNegativeInteger(value: unknown, label: string) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+function parseInteger(value: unknown, label: string, minimum: number) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`invalid ${label}`);
   }
   return value;
@@ -165,7 +122,7 @@ function parseSha256(value: unknown, label: string) {
   return digest;
 }
 
-function parseQaGatewayProcessHandoff(value: unknown): QaGatewayProcessHandoff {
+function parseQaGatewayProcessHandoff(value: unknown) {
   if (!isRecord(value) || value.version !== PROCESS_BOUNDARY_VERSION) {
     throw new Error("invalid process-boundary identity");
   }
@@ -176,14 +133,14 @@ function parseQaGatewayProcessHandoff(value: unknown): QaGatewayProcessHandoff {
   return {
     version: PROCESS_BOUNDARY_VERSION,
     generation: parseNonEmptyString(value.generation, "process-boundary generation"),
-    pid: parsePositiveInteger(value.pid, "process-boundary pid"),
-    uid: parseNonNegativeInteger(value.uid, "process-boundary uid"),
-    gid: parseNonNegativeInteger(value.gid, "process-boundary gid"),
+    pid: parseInteger(value.pid, "process-boundary pid", 2),
+    uid: parseInteger(value.uid, "process-boundary uid", 0),
+    gid: parseInteger(value.gid, "process-boundary gid", 0),
     procStartTicks: parseNonEmptyString(
       value.procStartTicks,
       "process-boundary process start ticks",
     ),
-    pgrp: parsePositiveInteger(value.pgrp, "process-boundary process group"),
+    pgrp: parseInteger(value.pgrp, "process-boundary process group", 2),
     commandFile: {
       path: parseNonEmptyString(commandFile.path, "process-boundary command path"),
       sha256: parseSha256(commandFile.sha256, "process-boundary command digest"),
@@ -191,7 +148,7 @@ function parseQaGatewayProcessHandoff(value: unknown): QaGatewayProcessHandoff {
   };
 }
 
-function parseQaGatewayProcessSandboxProof(value: unknown): QaGatewayProcessSandboxProof {
+function parseQaGatewayProcessSandboxProof(value: unknown) {
   if (
     !isRecord(value) ||
     value.version !== PROCESS_BOUNDARY_VERSION ||
@@ -209,7 +166,7 @@ function parseQaGatewayProcessSandboxProof(value: unknown): QaGatewayProcessSand
   };
 }
 
-function parseQaGatewayProcessRuntimeProof(value: unknown): QaGatewayProcessRuntimeProof {
+function parseQaGatewayProcessRuntimeProof(value: unknown) {
   if (!isRecord(value) || value.version !== PROCESS_BOUNDARY_VERSION || value.status !== "pass") {
     throw new Error("invalid process-boundary runtime proof");
   }
@@ -221,11 +178,11 @@ function parseQaGatewayProcessRuntimeProof(value: unknown): QaGatewayProcessRunt
     version: PROCESS_BOUNDARY_VERSION,
     generation: parseNonEmptyString(value.generation, "runtime generation"),
     status: "pass",
-    pid: parsePositiveInteger(value.pid, "runtime pid"),
-    uid: parseNonNegativeInteger(value.uid, "runtime uid"),
-    gid: parseNonNegativeInteger(value.gid, "runtime gid"),
+    pid: parseInteger(value.pid, "runtime pid", 2),
+    uid: parseInteger(value.uid, "runtime uid", 0),
+    gid: parseInteger(value.gid, "runtime gid", 0),
     procStartTicks: parseNonEmptyString(value.procStartTicks, "runtime process start ticks"),
-    pgrp: parsePositiveInteger(value.pgrp, "runtime process group"),
+    pgrp: parseInteger(value.pgrp, "runtime process group", 2),
     state,
     cwd: parseNonEmptyString(value.cwd, "runtime cwd"),
     executablePath: parseNonEmptyString(value.executablePath, "runtime executable path"),
@@ -781,5 +738,3 @@ export async function shouldRetainQaGatewayCredentialLease(env: NodeJS.ProcessEn
     return true;
   }
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

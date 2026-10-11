@@ -27,37 +27,27 @@ const log = createSubsystemLogger("auto-reply/memory-flush");
 // A flush-specific model is exact: it never inherits the source fallback chain.
 function resolveMemoryFlushModelFallbackOptions(
   run: FollowupRun["run"],
-  model?: string,
-  configOverride: FollowupRun["run"]["config"] = run.config,
+  model: string | undefined,
+  config: FollowupRun["run"]["config"],
 ) {
-  const options = resolveModelFallbackOptions(run, configOverride);
+  const options = resolveModelFallbackOptions(run, config);
   const override = normalizeOptionalString(model);
   if (!override) {
     return options;
   }
   const slashIdx = override.indexOf("/");
-  if (slashIdx > 0) {
-    const overrideProvider = override.slice(0, slashIdx).trim();
-    const overrideModel = override.slice(slashIdx + 1).trim();
-    if (overrideProvider && overrideModel) {
-      return {
-        ...options,
-        provider: overrideProvider,
-        model: overrideModel,
-        requestedRouteResolution: "raw" as const,
-        fallbacksOverride: [],
-      };
-    }
-  }
+  const overrideProvider = override.slice(0, slashIdx).trim();
+  const overrideModel = override.slice(slashIdx + 1).trim();
   return {
     ...options,
-    model: override,
+    ...(slashIdx > 0 && overrideProvider && overrideModel
+      ? { provider: overrideProvider, model: overrideModel }
+      : { model: override }),
     requestedRouteResolution: "raw" as const,
     fallbacksOverride: [],
   };
 }
 
-/** Prepare one detached flush, source delegation, and persistence target before model fallback. */
 export async function prepareMemoryFlushAttempt(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
@@ -110,12 +100,14 @@ export async function prepareMemoryFlushAttempt(params: {
           sessionEntry,
         )
       : undefined;
+  // The source turn's own attempt resolves the same lineage and owns the operator warning.
   if (sourceAudience?.status === "denied") {
     log.debug("memory flush skipped: source turn has no memory audience", {
       event: "memory_flush_no_audience",
       sourceSessionKey: sessionKey,
       sourceSessionId: sessionEntry.sessionId,
       pluginId: resolution.pluginId,
+      kind: sourceAudience.kind,
       reason: sourceAudience.reason,
     });
     return null;

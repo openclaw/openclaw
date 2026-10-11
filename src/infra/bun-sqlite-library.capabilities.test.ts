@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { SqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import {
   captureSqliteWorkerClosePolicy,
   getSqliteRuntimeCapabilities,
   initializeSqliteRuntimeCapabilities,
-  type SqliteRuntimeCapabilities,
-} from "./bun-sqlite-library.js";
-
-vi.mock("./bun-sqlite-close-probe.js", () => ({ probeSqliteNativeClose: vi.fn() }));
+  mockBunSqliteNativeBoundary,
+  sqliteCapabilitiesKey,
+  sqliteSelectionKey,
+} from "./bun-sqlite-library.test-support.js";
 
 const positive = {
   explicitSqliteCloseReleasesNativeResources: true,
@@ -15,83 +16,99 @@ const positive = {
   reason: "probe passed",
 };
 function fixture(
-  overrides: Partial<
-    NonNullable<Parameters<typeof initializeSqliteRuntimeCapabilities>[0]>["internals"]
-  > = {},
+  overrides: {
+    isBun?: boolean;
+    platform?: string;
+    isMainThread?: boolean;
+    inherited?: SqliteRuntimeCapabilities;
+    forceConservative?: boolean;
+    select?: () => unknown;
+    probe?: () => Promise<SqliteRuntimeCapabilities>;
+  } = {},
 ) {
+  const native = mockBunSqliteNativeBoundary({
+    isBun: overrides.isBun,
+    isMainThread: overrides.isMainThread,
+    platform: overrides.platform ?? "linux",
+    env: overrides.forceConservative ? { OPENCLAW_DIAGNOSTICS: "sqlite.close.conservative" } : {},
+  });
+  native.environment.set(sqliteCapabilitiesKey, overrides.inherited);
+  const select = vi.fn(overrides.select ?? (() => ({ source: "runtime" })));
+  Object.defineProperty(globalThis, sqliteSelectionKey, { configurable: true, value: select });
+  native.closeProbe.mockImplementation(overrides.probe ?? (async () => positive));
   return {
-    internals: {
-      isBun: true,
-      platform: "linux",
-      isMainThread: true,
-      select: vi.fn(),
-      probe: vi.fn(async () => positive),
-      publish: vi.fn(),
-      warn: vi.fn(),
-      ...overrides,
-    },
+    select,
+    probe: native.closeProbe,
+    publish: native.publish,
+    warn: vi.spyOn(process, "emitWarning").mockImplementation(() => {}),
+    inherit: (value: SqliteRuntimeCapabilities) =>
+      native.environment.set(sqliteCapabilitiesKey, value),
   };
 }
 
 describe("SQLite native-close admission", () => {
   it.each([false, true])("publishes one late decision (early topology: %s)", async (topology) => {
     const pending = createDeferredCore<SqliteRuntimeCapabilities>();
+    const probeStarted = createDeferredCore();
     const order: string[] = [];
     const options = fixture({
       select: vi.fn(() => order.push("select")),
       probe: vi.fn(() => {
         order.push("probe");
+        probeStarted.resolve();
         return pending.promise;
       }),
     });
-    const chosen = getSqliteRuntimeCapabilities(options);
-    expect(getSqliteRuntimeCapabilities(options)).toBe(chosen);
+    const chosen = getSqliteRuntimeCapabilities();
+    expect(getSqliteRuntimeCapabilities()).toBe(chosen);
     expect(chosen).toMatchObject({
       explicitSqliteCloseReleasesNativeResources: false,
       decided: false,
     });
-    expect(options.internals.select).not.toHaveBeenCalled();
-    expect(options.internals.probe).not.toHaveBeenCalled();
-    expect(options.internals.publish).not.toHaveBeenCalled();
-    const early = topology ? captureSqliteWorkerClosePolicy(options) : undefined;
+    expect(options.select).not.toHaveBeenCalled();
+    expect(options.probe).not.toHaveBeenCalled();
+    expect(options.publish).not.toHaveBeenCalled();
+    const early = topology ? captureSqliteWorkerClosePolicy() : undefined;
     if (topology) {
-      expect(captureSqliteWorkerClosePolicy(options)).toBe(false);
+      expect(captureSqliteWorkerClosePolicy()).toBe(false);
     }
-    const first = initializeSqliteRuntimeCapabilities(options);
-    expect(initializeSqliteRuntimeCapabilities(options)).toBe(first);
+    const first = initializeSqliteRuntimeCapabilities();
+    expect(initializeSqliteRuntimeCapabilities()).toBe(first);
+    await probeStarted.promise;
     expect(order).toEqual(["select", "probe"]);
-    expect(getSqliteRuntimeCapabilities(options)).toBe(chosen);
-    expect(options.internals.publish).not.toHaveBeenCalled();
+    expect(getSqliteRuntimeCapabilities()).toBe(chosen);
+    expect(options.publish).not.toHaveBeenCalled();
     pending.resolve({ ...positive });
     const decision = await first;
     expect(decision).toEqual(positive);
     expect(Object.isFrozen(decision)).toBe(true);
-    expect(options.internals.publish).toHaveBeenCalledExactlyOnceWith(decision);
-    expect(getSqliteRuntimeCapabilities(options)).toBe(decision);
-    expect(initializeSqliteRuntimeCapabilities(options)).toBe(first);
+    expect(options.publish).toHaveBeenCalledExactlyOnceWith(sqliteCapabilitiesKey, decision);
+    expect(getSqliteRuntimeCapabilities()).toBe(decision);
+    expect(initializeSqliteRuntimeCapabilities()).toBe(first);
     expect(chosen.explicitSqliteCloseReleasesNativeResources).toBe(false);
-    expect(captureSqliteWorkerClosePolicy(options)).toBe(true);
+    expect(captureSqliteWorkerClosePolicy()).toBe(true);
     if (topology) {
       expect(early).toBe(false);
-      expect(options.internals.warn).toHaveBeenCalledExactlyOnceWith(
+      expect(options.warn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("2 topology owners"),
+        { code: "SQLITE_EARLY_TOPOLOGY" },
       );
     } else {
-      expect(options.internals.warn).not.toHaveBeenCalled();
+      expect(options.warn).not.toHaveBeenCalled();
     }
   });
 
   it("keeps a worker with missing parent admission conservative for its lifetime", async () => {
     const options = fixture({ isMainThread: false });
-    const initial = getSqliteRuntimeCapabilities(options);
+    const initial = getSqliteRuntimeCapabilities();
     expect(initial).toMatchObject({
       explicitSqliteCloseReleasesNativeResources: false,
       reason: expect.stringContaining("Parent"),
     });
-    options.internals.inherited = positive;
-    expect(await initializeSqliteRuntimeCapabilities(options)).toBe(initial);
-    expect(getSqliteRuntimeCapabilities(options)).toBe(initial);
-    expect(options.internals.probe).not.toHaveBeenCalled();
+    options.inherit(positive);
+    expect(await initializeSqliteRuntimeCapabilities()).toBe(initial);
+    expect(getSqliteRuntimeCapabilities()).toBe(initial);
+    expect(options.probe).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -127,19 +144,19 @@ describe("SQLite native-close admission", () => {
         });
       }
       if (name === "selection error") {
-        await expect(initializeSqliteRuntimeCapabilities(options)).rejects.toThrow(reason);
-        expect(options.internals.publish).not.toHaveBeenCalled();
+        await expect(initializeSqliteRuntimeCapabilities()).rejects.toThrow(reason);
+        expect(options.publish).not.toHaveBeenCalled();
       } else {
-        const decision = await initializeSqliteRuntimeCapabilities(options);
+        const decision = await initializeSqliteRuntimeCapabilities();
         expect(decision).toEqual({
           explicitSqliteCloseReleasesNativeResources: capable,
           decided: true,
           reason:
             name === "Node" || name === "negative probe" ? reason : expect.stringContaining(reason),
         });
-        expect(getSqliteRuntimeCapabilities(options)).toBe(decision);
+        expect(getSqliteRuntimeCapabilities()).toBe(decision);
       }
-      expect(options.internals.probe).toHaveBeenCalledTimes(probes);
+      expect(options.probe).toHaveBeenCalledTimes(probes);
     },
   );
 });

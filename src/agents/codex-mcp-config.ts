@@ -10,11 +10,8 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import { loadMcpToolGrants, type McpToolGrant } from "../infra/exec-approvals-mcp.js";
-import {
-  loadEnabledBundleMcpConfig,
-  type BundleMcpConfig,
-  type BundleMcpServerConfig,
-} from "../plugins/bundle-mcp.js";
+import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { isRecord } from "../utils.js";
 import {
   decodeHeaderEnvPlaceholder,

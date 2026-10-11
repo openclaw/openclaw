@@ -21,6 +21,7 @@ import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
+import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { getTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import {
@@ -78,18 +79,10 @@ type GatewayPortalOpenParams = {
   path?: string;
 };
 
-export type GatewayPortalService = {
-  open: (params: GatewayPortalOpenParams) => Promise<PortalOpenResult>;
-  list: () => PortalSummary[];
-  listWorkerPortals: (
-    environmentId: string,
-    ownerEpoch: number,
-    resourceOwnerKey?: string,
-  ) => PortalSummary[];
-  close: (id: string, assertCurrent?: () => void) => Promise<void>;
-  closeWorkerPortals: (environmentId: string, ownerEpoch?: number) => Promise<void>;
-  closeAll: () => Promise<void>;
-};
+export type GatewayPortalService = Omit<
+  ReturnType<typeof createGatewayPortalService>,
+  "startIngress"
+>;
 
 type PortalOperationOwner = {
   environmentId: string;
@@ -232,7 +225,12 @@ function createPortalProxyHandlers(
     upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => {
       const runtime = resolveRuntime(req);
       if (!runtime) {
-        socket.destroy();
+        // HTTP relinquishes upgraded sockets; own errors while the 404 flushes.
+        socket.once("error", () => socket.destroy());
+        rejectWebSocketUpgrade(socket, {
+          status: 404,
+          body: { contentType: "text/plain; charset=utf-8", text: "Unknown portal" },
+        });
         return;
       }
       handlePortalProxyUpgrade({
@@ -255,7 +253,7 @@ export function createGatewayPortalService(params: {
   ingress?: GatewayPortalIngressConfig;
   managedTailscale?: boolean;
   gatewayOrigins?: readonly string[];
-}): GatewayPortalService & { startIngress: () => Promise<void> } {
+}) {
   const entries = new Map<string, PortalRuntimeEntry>();
   const operations = new Map<string, Promise<void>>();
   let closed = false;
@@ -361,7 +359,7 @@ export function createGatewayPortalService(params: {
     startIngress: async () => {
       await ingress?.start();
     },
-    open: async (input) => {
+    open: async (input: GatewayPortalOpenParams) => {
       const target: PortalTarget = input.target ?? { kind: "local", port: input.targetPort };
       const targetPort = target.kind === "local" ? target.port : target.remotePort;
       const resourceOwnerSuffix =
@@ -609,7 +607,7 @@ export function createGatewayPortalService(params: {
       });
     },
     list: () => summarizeEntries(entries.values()),
-    listWorkerPortals: (environmentId, ownerEpoch, resourceOwnerKey) =>
+    listWorkerPortals: (environmentId: string, ownerEpoch: number, resourceOwnerKey?: string) =>
       summarizeEntries(
         [...entries.values()].filter(
           ({ portal }) =>
@@ -619,13 +617,13 @@ export function createGatewayPortalService(params: {
             (resourceOwnerKey === undefined || portal.resourceOwnerKey === resourceOwnerKey),
         ),
       ),
-    close: async (id, assertCurrent) => {
+    close: async (id: string, assertCurrent?: () => void) => {
       await serialize(id, () => {
         assertCurrent?.();
         return closeEntry(id);
       });
     },
-    closeWorkerPortals: async (environmentId, ownerEpoch) => {
+    closeWorkerPortals: async (environmentId: string, ownerEpoch?: number) => {
       const environmentSuffix = `-worker-${sha256HexPrefixCore(environmentId, 32)}-`;
       // Include in-flight opens so teardown fences a listener still awaiting its bind.
       const ids = [...new Set([...entries.keys(), ...operations.keys()])].filter((id) => {

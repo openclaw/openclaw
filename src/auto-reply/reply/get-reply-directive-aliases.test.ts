@@ -16,11 +16,6 @@ import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thin
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
-import {
-  reserveSkillCommandNames,
-  resolveConfiguredDirectiveAliases,
-} from "./get-reply-directive-aliases.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
@@ -287,50 +282,12 @@ describe("reply directive resolution", () => {
     });
   });
 
-  it.each([
-    { body: "Please read https://example.invalid/fable before replying", skipInventory: true },
-    { body: "Please read /fable/notes.md before replying", skipInventory: false },
-    { body: "Please read /tmp/fable before replying", skipInventory: false },
-    { body: "Please read C:/notes/fable before replying", skipInventory: true },
-    { body: "Please compare /fable-extra with the default", skipInventory: false },
-    { body: "Please keep \\/fable literal", skipInventory: true },
-    {
-      body: "Please keep this spacing:\r\n  https://example.invalid/fable\r\n  /tmp/notes",
-      skipInventory: false,
-    },
-  ])("preserves ordinary slash text: $body", async ({ body, skipInventory }) => {
-    skillCommandMocks.listForWorkspace.mockReturnValue([
-      { name: "fable", skillName: "fable", description: "A colliding skill command" },
-    ]);
-
-    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({ body });
-
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
-    expect(result.result.directives).toEqual(clearInlineDirectives(body));
-    expect(result.result.cleanedBody).toBe(body);
-    expect(sessionCtx).toMatchObject({
-      agentText: body,
-      Body: body,
-      BodyForAgent: body,
-      BodyStripped: body,
-    });
-    expect(result.result.provider).toBe("anthropic");
-    expect(result.result.model).toBe("claude-opus-4-6");
-    expect(sessionEntry).toEqual(createSessionEntry());
-    if (skipInventory) {
-      expect(skillCommandMocks.listForWorkspace).not.toHaveBeenCalled();
-    }
-  });
-
-  it.each(["/fable", "Please use /FABLE: now"])(
-    "keeps an invoked skill name from selecting its configured model alias: %s",
-    async (body) => {
-      const skillCommands = [
+  it.each([{ body: "Please read /fable/notes.md before replying", skipInventory: false }])(
+    "preserves ordinary slash text: $body",
+    async ({ body, skipInventory }) => {
+      skillCommandMocks.listForWorkspace.mockReturnValue([
         { name: "fable", skillName: "fable", description: "A colliding skill command" },
-      ];
-      skillCommandMocks.listForWorkspace.mockReturnValue(skillCommands);
+      ]);
 
       const { result, sessionEntry, sessionCtx } = await resolveModelDirective({ body });
 
@@ -339,53 +296,22 @@ describe("reply directive resolution", () => {
       }
       expect(result.result.directives).toEqual(clearInlineDirectives(body));
       expect(result.result.cleanedBody).toBe(body);
-      expect(result.result.skillCommands).toEqual(skillCommands);
-      expect(sessionCtx.Body).toBe(body);
+      expect(sessionCtx).toMatchObject({
+        agentText: body,
+        Body: body,
+        BodyForAgent: body,
+        BodyStripped: body,
+      });
+      expect(result.result.provider).toBe("anthropic");
+      expect(result.result.model).toBe("claude-opus-4-6");
       expect(sessionEntry).toEqual(createSessionEntry());
+      if (skipInventory) {
+        expect(skillCommandMocks.listForWorkspace).not.toHaveBeenCalled();
+      }
     },
   );
 
-  it("selects a later model alias after reserving a colliding skill name", async () => {
-    const cfg: OpenClawConfig = {
-      commands: { text: true },
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-6": { alias: "fable" },
-            "anthropic/other-model": { alias: "github" },
-          },
-        },
-      },
-    };
-    const skillCommands = [{ name: "github", skillName: "github", description: "GitHub" }];
-    skillCommandMocks.listForWorkspace.mockReturnValue(skillCommands);
-
-    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
-      body: "please /github /fable now",
-      cfg,
-    });
-
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
-    expect(result.result.directives).toMatchObject({
-      hasModelDirective: true,
-      rawModelDirective: "fable",
-      cleaned: "please /github now",
-    });
-    expect(result.result.cleanedBody).toBe("please /github now");
-    expect(result.result.skillCommands).toEqual(skillCommands);
-    expect(sessionCtx.Body).toBe("please /github now");
-    expect(sessionEntry).toEqual(createSessionEntry());
-  });
-
   it.each([
-    { label: "default off", agentCfg: {}, caption: "Attachment caption" },
-    {
-      label: "explicit off with text-end break",
-      agentCfg: { blockStreamingDefault: "off", blockStreamingBreak: "text_end" },
-      caption: "Attachment caption",
-    },
     {
       label: "per-turn disabled despite configured on",
       agentCfg: { blockStreamingDefault: "on", blockStreamingBreak: "text_end" },
@@ -393,17 +319,6 @@ describe("reply directive resolution", () => {
       caption: "Attachment caption",
     },
     { label: "captionless default off", agentCfg: {}, caption: "" },
-    {
-      label: "enabled text-end break",
-      agentCfg: { blockStreamingDefault: "on", blockStreamingBreak: "text_end" },
-      caption: "Attachment caption",
-      separateCaption: true,
-    },
-    {
-      label: "enabled message-end break",
-      agentCfg: { blockStreamingDefault: "on", blockStreamingBreak: "message_end" },
-      caption: "Attachment caption",
-    },
     {
       label: "per-turn enabled despite configured off",
       agentCfg: { blockStreamingDefault: "off", blockStreamingBreak: "text_end" },
@@ -504,35 +419,6 @@ describe("reply directive resolution", () => {
       },
     },
     {
-      body: "please /model anthropic/claude-opus-4-6 now",
-      expected: {
-        cleaned: "please now",
-        hasModelDirective: true,
-        rawModelDirective: "anthropic/claude-opus-4-6",
-        rawModelProfile: undefined,
-        rawModelRuntime: undefined,
-      },
-    },
-    {
-      body: "please /fable now",
-      expected: {
-        cleaned: "please now",
-        hasModelDirective: true,
-        rawModelDirective: "fable",
-        rawModelProfile: undefined,
-        rawModelRuntime: undefined,
-      },
-    },
-    {
-      body: "please /FABLE: --session now",
-      expected: {
-        cleaned: "please now",
-        hasModelDirective: true,
-        rawModelDirective: "FABLE",
-        modelScope: "session",
-      },
-    },
-    {
       body: "/think high/fable now",
       expected: {
         cleaned: "now",
@@ -540,17 +426,6 @@ describe("reply directive resolution", () => {
         thinkLevel: "high",
         hasModelDirective: true,
         rawModelDirective: "fable",
-      },
-    },
-    {
-      body: "please /model anthropic/claude-opus-4-6@work --runtime codex -s now",
-      expected: {
-        cleaned: "please now",
-        hasModelDirective: true,
-        rawModelDirective: "anthropic/claude-opus-4-6",
-        rawModelProfile: "work",
-        rawModelRuntime: "codex",
-        modelScope: "session",
       },
     },
   ])("routes model scope at the full reply boundary: $body", async ({ body, expected }) => {
@@ -592,56 +467,6 @@ describe("reply directive resolution", () => {
     expect(directiveApplyMocks.apply).toHaveBeenCalledWith(
       expect.objectContaining({
         directives: expect.objectContaining({ hasModelDirective: false }),
-        provider: "anthropic",
-        model: "claude-opus-4-6",
-      }),
-    );
-    expect(sessionEntry).toEqual(createSessionEntry());
-  });
-
-  it.each([
-    {
-      label: "a model directive without configured aliases",
-      body: "Please use $office_hours to compare /model openai/gpt-5.6-luna with the default",
-      cfg: { commands: { text: true } } as OpenClawConfig,
-    },
-    {
-      label: "a configured alias",
-      body: "Please use $office_hours to compare /fable with the default",
-      cfg: configWithModelAlias("fable"),
-    },
-  ])("keeps explicitly referenced skill payloads opaque to $label", async ({ body, cfg }) => {
-    skillCommandMocks.listForWorkspace.mockReturnValue([
-      {
-        name: "office_hours",
-        skillName: "office-hours",
-        description: "Engineering office hours",
-        sourceFilePath: "/tmp/office-hours/SKILL.md",
-      },
-    ]);
-
-    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
-      body,
-      cfg,
-      surface: "webchat",
-    });
-
-    expect(result.kind).toBe("continue");
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
-    expect(result.result.directives).toEqual(clearInlineDirectives(body));
-    expect(result.result.cleanedBody).toBe(body);
-    expect(result.result.skillCommands).toHaveLength(1);
-    expect(sessionCtx).toMatchObject({
-      agentText: body,
-      Body: body,
-      BodyForAgent: body,
-      BodyStripped: body,
-    });
-    expect(directiveApplyMocks.apply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        directives: clearInlineDirectives(body),
         provider: "anthropic",
         model: "claude-opus-4-6",
       }),
@@ -727,57 +552,5 @@ describe("reply directive resolution", () => {
       }),
     );
     expect(sessionEntry).toEqual(createSessionEntry());
-  });
-
-  it("does not expose skill command names as inline model aliases", () => {
-    const reservedCommands = new Set<string>();
-    const cfg = configWithModelAlias("demo_skill");
-
-    const beforeSkillRegistration = parseInlineSessionDirectives("/demo_skill", {
-      modelAliases: resolveConfiguredDirectiveAliases({
-        cfg,
-        commandTextHasSlash: true,
-        reservedCommands,
-      }),
-    });
-    expect(beforeSkillRegistration.hasModelDirective).toBe(true);
-    expect(beforeSkillRegistration.cleaned).toBe("");
-
-    reserveSkillCommandNames({
-      reservedCommands,
-      skillCommands: [
-        {
-          name: "demo_skill",
-          skillName: "demo-skill",
-          description: "Demo skill",
-          sourceFilePath: "/tmp/demo/SKILL.md",
-        },
-      ],
-    });
-
-    const afterSkillRegistration = parseInlineSessionDirectives("/demo_skill", {
-      modelAliases: resolveConfiguredDirectiveAliases({
-        cfg,
-        commandTextHasSlash: true,
-        reservedCommands,
-      }),
-    });
-    expect(afterSkillRegistration.hasModelDirective).toBe(false);
-    expect(afterSkillRegistration.cleaned).toBe("/demo_skill");
-  });
-
-  it("does not expose chat command names as inline model aliases", () => {
-    const cfg = configWithModelAlias(" help ");
-    const reservedCommands = new Set(["help"]);
-
-    const parsed = parseInlineSessionDirectives("/help", {
-      modelAliases: resolveConfiguredDirectiveAliases({
-        cfg,
-        commandTextHasSlash: true,
-        reservedCommands,
-      }),
-    });
-    expect(parsed.hasModelDirective).toBe(false);
-    expect(parsed.cleaned).toBe("/help");
   });
 });

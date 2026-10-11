@@ -104,7 +104,7 @@ Core implementations can import
 from `src/agents/decision-assistance.ts`. Supply prepared config and the trusted
 owning agent ID, not a model-provided ID. The helper returns exactly
 `decisionAssistance === true && resolveDecisionModelSetting(config, agentId) !== undefined`.
-It performs no provider probes, secret resolution, file reads, network requests,
+It performs no provider checks, secret resolution, file reads, network requests,
 model loading, or inference, and returns no provider-readiness diagnostics.
 This is an internal foundation boundary, not a new plugin SDK surface.
 
@@ -194,7 +194,7 @@ remain errors rather than starting fallback work. Cold model loading may exceed
 the budget. Classifier estimates are not guarantees that every action request
 will retain its optional tools.
 
-Filtering skips raw probes, continuations, internal events, queued steering,
+Filtering skips raw checks, continuations, internal events, queued steering,
 orphan repair, pending tool work, hook-set `toolsAllow` restrictions, and
 authority-dependent prompt-build hooks that require finalized tools. Ordinary
 prompt-build hooks run normally and their resolved fields can inform the Decision

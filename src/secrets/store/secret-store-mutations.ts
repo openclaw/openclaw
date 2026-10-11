@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { assertSecretStoreValue } from "./secret-store-validation.js";
 import type {
   SecretStoreBatchWriteParams as KernelBatchParams,
   SecretStoreWriteParams as KernelWriteParams,
@@ -140,4 +142,37 @@ export async function writeSecretStoreEntryWithRollback(params: SecretStoreWrite
       ));
     },
   };
+}
+
+/**
+ * Saves a secret for one config key in a fresh team-store entry through the
+ * state worker and returns the entry name. `assertCurrent` is the requester's
+ * live authority; the worker checks it again at transaction and commit
+ * admission, so a revoked request writes nothing.
+ */
+export async function writeSecretStoreEntryForConfigRef(params: {
+  baseName: string;
+  value: string;
+  updatedBy: string;
+  assertCurrent?: () => void;
+  database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+}): Promise<string> {
+  registerSecretValueForRedaction(params.value);
+  assertSecretStoreValue(params.value, "secret", params.baseName);
+  const context = captureOpenClawStateWorkerContext(params.database);
+  const { name } = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "secrets.writeForConfigRef",
+        input: {
+          baseName: params.baseName,
+          value: params.value,
+          writer: params.updatedBy,
+          now: Date.now(),
+        },
+      }),
+    admission(context, () => params.assertCurrent?.()),
+  );
+  return name;
 }

@@ -1,4 +1,3 @@
-import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -16,15 +15,6 @@ import {
   resolveTrustedChannelCatalogInput,
 } from "./trusted-catalog.js";
 
-type ResolveInstallableChannelPluginResult = {
-  cfg: OpenClawConfig;
-  channelId?: ChannelId;
-  plugin?: ChannelPlugin;
-  catalogEntry?: ChannelPluginCatalogEntry;
-  configChanged: boolean;
-  pluginInstalled: boolean;
-};
-
 /** Resolve an existing channel plugin, scoped setup plugin, or installable catalog entry. */
 export async function resolveInstallableChannelPlugin(params: {
   cfg: OpenClawConfig;
@@ -36,7 +26,7 @@ export async function resolveInstallableChannelPlugin(params: {
   preferRegisteredPlugin?: boolean;
   prompter?: WizardPrompter;
   supports?: (plugin: ChannelPlugin) => boolean;
-}): Promise<ResolveInstallableChannelPluginResult> {
+}) {
   const supports = params.supports ?? (() => true);
   let nextCfg = params.cfg;
   const directChannelId = params.channelId ?? normalizeChannelId(params.rawChannel);

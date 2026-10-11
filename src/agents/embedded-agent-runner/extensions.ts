@@ -10,8 +10,6 @@ import {
   finalizeToolTerminalPresentation,
   peekAdjustedParamsForToolCall,
 } from "../agent-tools.before-tool-call.js";
-import { resolveContextWindowInfo } from "../context-window-guard.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ToolResultEvent } from "../sessions/extensions/types.js";
@@ -23,10 +21,7 @@ export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
   workspaceDir?: string;
-  provider: string;
-  modelId: string;
   model: ProviderRuntimeModel | undefined;
-  contextTokenBudget?: number;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -36,20 +31,7 @@ export function buildEmbeddedExtensionFactories(params: {
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
-    // Prepared runs carry the canonical policy budget; fallback resolution is
-    // only for callers that do not own a prepared attempt.
-    const contextWindowTokens =
-      params.contextTokenBudget ??
-      resolveContextWindowInfo({
-        cfg: params.cfg,
-        provider: params.provider,
-        modelId: params.modelId,
-        modelContextTokens: params.model?.contextTokens,
-        modelContextWindow: params.model?.contextWindow,
-        defaultTokens: DEFAULT_CONTEXT_TOKENS,
-      }).tokens;
     setCompactionSafeguardRuntime(params.sessionManager, {
-      contextWindowTokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,

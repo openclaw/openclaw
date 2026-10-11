@@ -42,9 +42,11 @@ vi.mock("./host-hook-cleanup-timeout.js", async (importOriginal) => {
   };
 });
 
-const { memoryRuntime } = await vi.importActual<{ memoryRuntime: MemoryPluginRuntime }>(
-  "../../extensions/memory-core/runtime-api.js",
-);
+const { createMemoryRuntime } = await vi.importActual<{
+  createMemoryRuntime: (host: {
+    runInBackgroundContext: <T>(run: () => T) => T;
+  }) => MemoryPluginRuntime;
+}>("../../extensions/memory-core/runtime-api.js");
 
 it("keeps persistent managers isolated between memory runtime instances with the same agent", async () => {
   const state = await createOpenClawTestState({
@@ -80,10 +82,7 @@ it("keeps persistent managers isolated between memory runtime instances with the
   }
 });
 
-function registerMemoryOwner(
-  config: OpenClawConfig,
-  runtimeImplementation: MemoryPluginRuntime = memoryRuntime,
-) {
+function registerMemoryOwner(config: OpenClawConfig, options: { legacy?: boolean } = {}) {
   const owner = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "memory-fixture",
@@ -96,6 +95,13 @@ function registerMemoryOwner(
   record.memorySlotSelected = true;
   owner.registry.plugins.push(record);
   const api = owner.createApi(record, { config });
+  assert(api.lifecycle.runInBackgroundContext);
+  const runtimeImplementation = createMemoryRuntime({
+    runInBackgroundContext: api.lifecycle.runInBackgroundContext,
+  });
+  if (options.legacy) {
+    delete runtimeImplementation.prepareReload;
+  }
   api.registerMemoryCapability({ runtime: runtimeImplementation });
   const runtime = owner.registry.memoryCapabilities[0]?.capability.runtime;
   assert(runtime);
@@ -151,12 +157,7 @@ it.each([
       },
     },
   };
-  const legacyRuntime = { ...memoryRuntime };
-  delete legacyRuntime.prepareReload;
-  const owner = registerMemoryOwner(
-    config,
-    mode === "legacy-retained" ? legacyRuntime : memoryRuntime,
-  );
+  const owner = registerMemoryOwner(config, { legacy: mode === "legacy-retained" });
   const sibling = registerMemoryOwner(config);
   const successor = registerMemoryOwner(config);
   const entered = createDeferredCore();
@@ -540,7 +541,7 @@ it("unwinds prepared memory admission when another runtime rejects preparation",
   const drain = vi.fn(async () => {});
   const failure = new Error("second memory runtime preparation failed");
   const firstRuntime = first.instance.wrap({
-    ...memoryRuntime,
+    ...first.runtime,
     prepareReload: () => ({ drain, resume }),
   });
   first.registry.memoryCapabilities[0]!.capability = first.instance.wrap({ runtime: firstRuntime });
@@ -548,7 +549,7 @@ it("unwinds prepared memory admission when another runtime rejects preparation",
     pluginId: "another-runtime",
     capability: {
       runtime: {
-        ...memoryRuntime,
+        ...first.runtime,
         prepareReload() {
           throw failure;
         },

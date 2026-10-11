@@ -90,9 +90,7 @@ function serializeToolParams(value: unknown): string {
     if (typeof serialized === "string") {
       return serialized;
     }
-  } catch {
-    // Fall through to String(value).
-  }
+  } catch {}
   if (typeof value === "function") {
     return value.name ? `[Function ${value.name}]` : "[Function anonymous]";
   }
@@ -283,7 +281,6 @@ function attachAdapterExecutionPreparer<T extends ToolDefinition>(definition: T)
 
 const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
-/** Find client-hosted tool names that collide with runtime or sibling tools. */
 export function findClientToolNameConflicts(params: {
   tools: ClientToolDefinition[];
   existingToolNames?: Iterable<string>;
@@ -318,7 +315,6 @@ export function findClientToolNameConflicts(params: {
   return Array.from(conflicts);
 }
 
-/** Build a recognizable error for rejecting conflicting client tool names. */
 export function createClientToolNameConflictError(conflicts: string[]): Error {
   return new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
 }
@@ -328,7 +324,6 @@ export function isClientToolNameConflictError(err: unknown): err is Error {
   return err instanceof Error && err.message.startsWith(CLIENT_TOOL_NAME_CONFLICT_PREFIX);
 }
 
-/** Convert executable agent tools into session definitions with hook handling. */
 export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
@@ -538,7 +533,6 @@ function coerceParamsRecord(
   return record;
 }
 
-/** Convert client-hosted tools into pending session definitions. */
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: ClientToolCallRecorder,

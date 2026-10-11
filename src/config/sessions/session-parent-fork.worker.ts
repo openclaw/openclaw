@@ -28,7 +28,7 @@ import { mergeSessionEntry } from "./types.js";
 
 export function prepareParentForkEntry(
   params: ParentForkEntryParams,
-  { open }: AgentWorkerOperationContext,
+  { open }: Pick<AgentWorkerOperationContext, "open">,
 ): ParentForkEntryPreparation {
   const database = open();
   const parentTarget = normalizeLifecycleTarget(params.parentTarget);
@@ -47,7 +47,7 @@ export function prepareParentForkEntry(
 
 export function readParentForkSource(
   input: { sessionId: string; forkFrom?: "last-completed" },
-  { open }: AgentWorkerOperationContext,
+  { open }: Pick<AgentWorkerOperationContext, "open">,
 ) {
   const database = open();
   return runSqlitePinnedReadSnapshotSync(database.db, () =>
@@ -68,24 +68,7 @@ export function commitParentFork(input: ParentForkCommit, context: AgentWorkerOp
           ? normalizeLifecycleTarget(input.params.sessionTarget).canonicalKey
           : normalizeStoreSessionKey(input.params.sessionKey);
       const previous = readSessionIdentitySnapshot(database, [sessionKey]);
-      const result =
-        input.kind === "entry"
-          ? commitEntry(database, input, context)
-          : forkSqliteParentTranscriptInTransaction(
-              database,
-              {
-                ...context.options,
-                agentId: input.agentId,
-                databaseAgentId: context.options.agentId,
-                sessionKey,
-              },
-              {
-                ...input.params,
-                targetSessionKey: sessionKey,
-                source: input.source,
-                parentSessionFile: input.parentSessionFile,
-              },
-            );
+      const result = commitParentForkInTransaction(database, input, context.options);
       const candidate: ParentForkCandidate = {
         kind: "session-parent-fork",
         result,
@@ -105,10 +88,34 @@ export function commitParentFork(input: ParentForkCommit, context: AgentWorkerOp
   );
 }
 
+export function commitParentForkInTransaction(
+  database: OpenClawAgentDatabase,
+  input: ParentForkCommit,
+  options: AgentWorkerOperationContext["options"],
+): ParentForkCandidate["result"] {
+  return input.kind === "entry"
+    ? commitEntry(database, input, { options })
+    : forkSqliteParentTranscriptInTransaction(
+        database,
+        {
+          ...options,
+          agentId: input.agentId,
+          databaseAgentId: options.agentId,
+          sessionKey: input.params.sessionKey,
+        },
+        {
+          ...input.params,
+          targetSessionKey: input.params.sessionKey,
+          source: input.source,
+          parentSessionFile: input.parentSessionFile,
+        },
+      );
+}
+
 function commitEntry(
   database: OpenClawAgentDatabase,
   input: Extract<ParentForkCommit, { kind: "entry" }>,
-  context: AgentWorkerOperationContext,
+  context: Pick<AgentWorkerOperationContext, "options">,
 ): Extract<
   ParentForkCandidate["result"],
   { status: "forked" | "skipped" | "missing-entry" | "missing-parent" | "failed" }

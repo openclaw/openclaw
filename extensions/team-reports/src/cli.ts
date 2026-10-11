@@ -9,8 +9,8 @@ import { periodSchema } from "./periods.js";
 
 type CliContext = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0];
 
-async function request(method: string, options: GatewayRpcOpts, params: unknown): Promise<unknown> {
-  return await callGatewayFromCli(`team-reports.${method}`, options, params, {
+function request(method: string, options: GatewayRpcOpts, params: unknown): Promise<unknown> {
+  return callGatewayFromCli(`team-reports.${method}`, options, params, {
     mode: "cli",
     scopes: method === "generate" ? ["operator.admin"] : ["operator.read"],
   });

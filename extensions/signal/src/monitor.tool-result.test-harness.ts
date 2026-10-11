@@ -219,7 +219,6 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
     ...actual,
     resolveStorePath: vi.fn(() => signalToolResultSessionStore.path),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
-    readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -230,6 +229,13 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   );
   return {
     ...actual,
+    resolveInboundSessionEnvelopeContextAsync: vi.fn(
+      async ({ cfg }: Parameters<typeof actual.resolveInboundSessionEnvelopeContextAsync>[0]) => ({
+        storePath: signalToolResultSessionStore.path,
+        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
+        previousTimestamp: undefined,
+      }),
+    ),
     runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
       const resolveTurn = params.adapter.resolveTurn;
       return await actual.runChannelInboundEvent({

@@ -120,7 +120,6 @@ function classMapPropertyName(node: ts.ObjectLiteralElementLike): string | null 
   return getPropertyNameText(node.name);
 }
 
-/** Collect literal class tokens and dynamic class stems from TypeScript source. */
 export function collectControlUiClassReferences(sourceFile: ts.SourceFile): SourceReferences {
   const literalClasses = new Set<string>();
   const stems = new Set<string>();

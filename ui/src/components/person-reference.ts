@@ -149,11 +149,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
       "session-progress-hovercard person-activity-hovercard",
     );
     this.portal.markTrigger(trigger);
-    card.addEventListener("keydown", this.portal.handleCardKeyDown);
-    card.addEventListener("pointerleave", () => {
-      this.portal.pointerOverCard = false;
-      this.portal.scheduleClose();
-    });
+    card.addEventListener("pointerleave", this.portal.handleCardPointerLeave);
     this.portal.mount(trigger, card, "vertical", true, () => render(nothing, card));
     document.addEventListener("pointerdown", this.outside, true);
     document.addEventListener("focusin", this.outside, true);

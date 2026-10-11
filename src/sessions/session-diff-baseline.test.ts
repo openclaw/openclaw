@@ -1,5 +1,10 @@
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
 import {
   deleteSessionEntryLifecycle,
@@ -7,7 +12,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -135,12 +140,14 @@ describe("ensureSessionDiffBaseline", () => {
       const mainBefore = loadSessionEntry(mainScope);
       captureMocks.capture.mockResolvedValue(baseline(entry.sessionId));
 
+      const sql = observeHostDataSql();
       const settled = await ensureSessionDiffBaseline({
         ...target,
         cwd: "/workspace",
         isNewSession,
-      });
+      }).finally(sql.restore);
 
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
       expect(settled.sessionDiffBaseline).toEqual(baseline(entry.sessionId));
       const persisted = loadSessionEntry(target);
       expect(persisted).toMatchObject({
@@ -174,6 +181,58 @@ describe("ensureSessionDiffBaseline", () => {
       await Promise.allSettled([first, second]);
     }
   });
+
+  it.each([
+    ["captured baseline", false],
+    ["terminal unavailable", true],
+  ] as const)(
+    "does not recapture after a delayed claim response outlives %s",
+    async (_label, captureFails) => {
+      const sessionId = "delayed-claim-session";
+      const target = await seedEntry({ entry: makeEntry(sessionId) });
+      const armed = createDeferredCore();
+      const releaseClaim = createDeferredCore();
+      persistenceMocks.patch.mockImplementationOnce(async (...args) => {
+        if (!persistenceMocks.actualPatch) {
+          throw new Error("missing actual session entry patcher");
+        }
+        const entry = await persistenceMocks.actualPatch(...args);
+        armed.resolve();
+        await releaseClaim.promise;
+        return entry;
+      });
+      if (captureFails) {
+        captureMocks.capture.mockRejectedValue(new Error("capture failed"));
+      } else {
+        captureMocks.capture.mockResolvedValue(baseline(sessionId));
+      }
+
+      const first = ensure(target, true);
+      try {
+        await awaitGateBeforeSettlement(
+          armed.promise,
+          first,
+          "claim arming settled before its gate",
+        );
+        const second = await ensure(target, true);
+        expect(captureMocks.capture).toHaveBeenCalledOnce();
+        if (captureFails) {
+          expect(second.sessionDiffBaselineCapture).toMatchObject({ status: "unavailable" });
+        } else {
+          expect(second.sessionDiffBaseline).toEqual(baseline(sessionId));
+        }
+
+        // Deliver the original pending snapshot only after the shared capture has settled.
+        releaseClaim.resolve();
+        expect(await first).toEqual(second);
+        expect(captureMocks.capture).toHaveBeenCalledOnce();
+        expect(loadInternal(target.sessionKey, target.storePath)).toEqual(second);
+      } finally {
+        releaseClaim.resolve();
+        await Promise.allSettled([first]);
+      }
+    },
+  );
 
   it("rejects a stale cached baseline after the authoritative generation rotates", async () => {
     const sessionId = "stale-cached-settled";
@@ -241,7 +300,7 @@ describe("ensureSessionDiffBaseline", () => {
     });
     const target = await seedEntry({ entry });
     const read = vi
-      .spyOn(historyLane.pool, "run")
+      .spyOn(projectionLane.pool, "run")
       .mockRejectedValueOnce(new Error("authoritative read failed"));
     try {
       await expect(ensure(target)).rejects.toBeInstanceOf(SessionWorkStartInvalidatedError);

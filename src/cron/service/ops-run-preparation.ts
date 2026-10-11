@@ -215,10 +215,12 @@ async function inspectManualRunPreflight(
   if (state.stopped) {
     return { ok: true, ran: false, reason: "stopped" };
   }
+  // Let the caller classify retirement before the generic service-source fence.
+  opts?.commitGuard?.();
   source.assertCurrent();
   await ensureLoaded(state);
-  source.assertCurrent();
   opts?.commitGuard?.();
+  source.assertCurrent();
   if (state.stopped) {
     return { ok: true, ran: false, reason: "stopped" };
   }

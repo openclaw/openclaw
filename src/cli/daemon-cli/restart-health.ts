@@ -315,6 +315,13 @@ export async function waitForGatewayHealthyRestart(
               ? "waiting for Gateway listener"
               : "waiting for Gateway health and identity");
       params.onObservation?.(snapshot);
+      if (!healthy && snapshot.runtime?.systemd?.startRefusal) {
+        return withWaitContext(
+          { ...snapshot, healthy: false },
+          "service-definition-refused",
+          elapsedMs,
+        );
+      }
       if (boundedDeadlineMs !== undefined && elapsedMs > boundedDeadlineMs + settleDurationMs) {
         return withWaitContext(
           { ...snapshot, healthy: false },

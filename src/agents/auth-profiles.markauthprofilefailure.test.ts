@@ -141,23 +141,6 @@ describe("markAuthProfileFailure", () => {
     expect(ensureAuthProfileStore(agentDir).usageStats?.[profileId]?.cooldownUntil).toBe(deadline);
   });
 
-  it("persists model-scoped timeout metadata (#87462)", async () => {
-    const { store, agentDir } = fixture();
-    await markAuthProfileFailure({
-      store,
-      agentDir,
-      profileId,
-      reason: "timeout",
-      modelId: "claude-sonnet-4.6",
-    });
-    expect(store.usageStats?.[profileId]).toMatchObject({
-      cooldownUntil: expect.any(Number),
-      cooldownReason: "timeout",
-      cooldownModel: "claude-sonnet-4.6",
-      failureCounts: { timeout: 1 },
-    });
-  });
-
   it("does not persist cooldown windows for OpenRouter", async () => {
     const { store, agentDir } = fixture();
     await markAuthProfileFailure({

@@ -87,15 +87,11 @@ export class PersonalInstructions extends OpenClawLightDomElement {
       connectionId !== this.connectionId ||
       available !== this.available;
     if (sourceChanged) {
-      this.generation += 1;
       this.client = snapshot.client;
       this.connectionId = connectionId;
       this.gatewayUrl = gatewayUrl;
       this.profileId = profileId;
       this.available = available;
-      this.busy = null;
-      this.error = null;
-      this.saved = false;
       if (identityChanged) {
         this.file = null;
         this.draft = "";
@@ -114,15 +110,17 @@ export class PersonalInstructions extends OpenClawLightDomElement {
       } else {
         this.drafts.delete(this.agentId);
       }
-      this.generation += 1;
-      this.busy = null;
-      this.error = null;
-      this.saved = false;
       this.agentId = nextAgentId;
       const pending = this.drafts.get(nextAgentId);
       this.drafts.delete(nextAgentId);
       this.file = pending?.file ?? null;
       this.draft = pending?.content ?? "";
+    }
+    if (sourceChanged || agentChanged) {
+      this.generation += 1;
+      this.busy = null;
+      this.error = null;
+      this.saved = false;
     }
     if (this.available && this.agentId && !this.dirty && (sourceChanged || agentChanged)) {
       void this.load();

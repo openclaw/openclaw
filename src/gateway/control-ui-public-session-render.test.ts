@@ -18,6 +18,24 @@ function render(
 }
 
 describe("public session document", () => {
+  it("adds only a protected login handoff, including unavailable conversations", () => {
+    const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
+    const html = render([], { entryUrl });
+    expect(html).toContain(`href="${entryUrl}"`);
+    expect(html).toContain("Log in");
+    expect(html).not.toContain('http-equiv="refresh"');
+    expect(html).toContain('data-public-refresh="true"');
+    expect(html).toContain('redirect:"error"');
+    expect(html).not.toMatch(/new WebSocket|bootstrap|sessions.list/);
+    const unavailable = render([], {
+      entryUrl,
+      title: "Conversation unavailable",
+      unavailable: true,
+    });
+    expect(unavailable).toContain("not publicly available");
+    expect(unavailable).not.toContain("Public · Read-only");
+    expect(unavailable).not.toContain('http-equiv="refresh"');
+  });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
     const html = render([
       { role: "system", content: "private system instructions" },

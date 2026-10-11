@@ -61,10 +61,7 @@ export function retainMcpOAuthAuthorizationState(
   };
   const assertSettled = () => {
     assertCurrent();
-    if (owner.uncertain) {
-      throw new McpConnectionAuthorityError("unavailable");
-    }
-    if (owner.pending) {
+    if (owner.uncertain || owner.pending) {
       throw new McpConnectionAuthorityError("unavailable");
     }
   };

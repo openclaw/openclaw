@@ -7,20 +7,11 @@ import {
 } from "../test-report-utils.mts";
 import { formatMs } from "./vitest-report-cli-utils.mts";
 
-type GroupedCounter = {
-  configs: string[];
-  durationMs: number;
-  fileCount: number;
-  key: string;
-  testCount: number;
-};
+type GroupedCounter = ReturnType<typeof finalizeCounter>;
 
-type GroupedFile = {
+type GroupedFile = ReturnType<typeof collectVitestFileDurations>[number] & {
   config: string;
-  durationMs: number;
-  file: string;
   group: string;
-  testCount: number;
 };
 
 type NumericCounter = {
@@ -55,12 +46,8 @@ type RunSnapshot = {
   status: number | null;
 };
 
-type SlowTestEntry = {
+type SlowTestEntry = ReturnType<typeof collectVitestAssertionDurations>[number] & {
   config: string;
-  durationMs: number;
-  file: string;
-  fullName: string;
-  status: string;
 };
 
 type ComparisonStatus = "added" | "changed" | "removed";
@@ -147,7 +134,7 @@ function addFileEntry(
   target.configs.add(config);
 }
 
-function finalizeCounter(counter: CounterAccumulator): GroupedCounter {
+function finalizeCounter(counter: CounterAccumulator) {
   return {
     key: counter.key,
     durationMs: counter.durationMs,

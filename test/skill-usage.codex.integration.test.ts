@@ -22,7 +22,7 @@ import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { consumeRunSkillUsage } from "../src/skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../src/skills/test-support/test-helpers.js";
-import { registerSkillUsageTracking } from "../src/skills/workshop/curator.js";
+import { registerSkillUsageTracking } from "../src/skills/workshop/skill-usage.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -57,8 +57,10 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     sharedEvents = [];
     trustedEvents = [];
     onDiagnosticEvent((event) => publicEvents.push(event));
-    onInternalDiagnosticEvent((event) => sharedEvents.push(event));
-    onTrustedInternalDiagnosticEvent((event) => trustedEvents.push(event));
+    onInternalDiagnosticEvent((event) => sharedEvents.push(event), { include: ["skill.used"] });
+    onTrustedInternalDiagnosticEvent((event) => trustedEvents.push(event), {
+      include: ["skill.used"],
+    });
     unregisterUsage = registerSkillUsageTracking({ env: testState.env });
   });
 

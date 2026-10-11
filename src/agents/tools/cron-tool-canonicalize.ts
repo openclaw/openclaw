@@ -402,11 +402,9 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   value: Record<string, unknown>;
 } {
   const value: Record<string, unknown> = {};
-  let found = false;
   for (const key of Object.keys(params)) {
     if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
       value[key] = params[key];
-      found = true;
     }
   }
   // Dotted keys run as a second pass so a canonical sibling always wins,
@@ -417,16 +415,13 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
       continue;
     }
     const outcome = nestDottedCronKey(value, key, params[key], canonicalRoots);
-    if (outcome === "recovered") {
-      found = true;
-    } else if (outcome === "conflict") {
+    if (outcome === "conflict") {
       // Ambiguous input: preserve the literal key so strict gateway validation
       // rejects the conflict instead of one value silently winning.
       value[key] = params[key];
-      found = true;
     }
   }
-  return { found, value: canonicalizeCronToolObject(value) };
+  return { found: Object.keys(value).length > 0, value: canonicalizeCronToolObject(value) };
 }
 
 /** Checks whether a recovered flat object has enough schedule/payload signal to create a job. */

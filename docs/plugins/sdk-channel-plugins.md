@@ -52,41 +52,24 @@ approval, command, URL, web-app, question, callback, and model-picker actions
 distinguishable until that encoding boundary; never infer picker intent from a
 raw callback string. Actor and source-message checks remain channel-owned.
 
-## Return to the source conversation
+## Opted-in public child sessions
 
-Channel plugins can supply `conversation.link` when building an inbound event
-with `buildChannelInboundEventContext`:
+The ingress resolver accepts an optional host-invocation intent,
+`childSessionPublication: { audience: "public", assertCurrent }`. Supply it only
+after explicit operator opt-in and provider-native proof that the entire
+supplied context is public. Unknown audience metadata must deny publication.
+`assertCurrent` synchronously rechecks account policy and the live ingress
+owner; never derive this field from message text, stored permalinks, or model
+arguments. The ordinary decision-only resolver does not grant authority.
 
-```typescript
-conversation: {
-  ...conversation,
-  link: {
-    url: "https://chat.example.com/conversations/example-thread",
-    label: "Example Thread",
-  },
-}
-```
-
-The channel owns the destination URL and plain-text label. Discord supplies the
-actual created or existing thread URL. Slack uses its documented
-[`app_redirect` channel link](https://docs.slack.dev/interactivity/deep-linking/)
-to open the containing channel or direct conversation; it does not request a
-message permalink while preparing an inbound reply.
-
-The host retains the first valid HTTP(S) link on the logical session, preserves
-it across resets, and carries it to explicitly spawned or forked child sessions.
-Later delivery-route changes do not replace it. Upgrades do not backfill
-existing entries: an existing session receives a link only when a later inbound
-event supplies one. There is no historical-message scan or store migration.
-This metadata does not render any UI by itself. A channel's browser plugin
-registers a `session-header` accessory to display its link. Discord and Slack
-use the shared `createSessionHeaderLink` helper from
-`openclaw/plugin-sdk/control-ui` for the standard appearance and direct
-navigation, with no preview or dropdown.
-The helper receives the current session snapshot through the accessory's props;
-it requires no extra Gateway request. See [Feature plugins](/plugins/feature-plugins#contribute-and-replace-views)
-for registration. Other plugin accessories, including their custom HTML, CSS,
-and JavaScript, keep their existing contract.
+An exact host resolver-to-context handoff binds the intent to one admitted
+run. Only its fresh immediate isolated visible children can receive public
+grants, in their creation commits before launch. Private/draft, incognito, existing,
+forked, retargeted, and descendant sessions do not qualify. The intent cannot
+be serialized for future turns or transport fallback. This does not grant
+creator/admin authority or change Team collaboration permissions. Consumers
+of `onVisibleWorkSessions` may use `publicRead: true` as the creation receipt;
+a canonical URL alone is not proof of anonymous access.
 
 ## Walkthrough
 
@@ -176,13 +159,19 @@ and JavaScript, keep their existing contract.
     for read-only diagnostics, including disabled or configured-but-unavailable
     accounts. Return `enabled`, `configured`, and applicable credential status
     fields without requiring secret resolution. Its result is not a resolved
-    account: operational hooks such as probes and account status builders receive
+    account: operational hooks such as checks and account status builders receive
     `config.resolveAccount` results instead.
     Diagnostics expose only status-safe fields from the inspection result.
     Include the same account enablement and configuration decisions used by the
     runtime, including duplicate-account suppression. If `configured` is omitted,
     diagnostics use a recorded Gateway value when available; otherwise they report
     that configuration status is unavailable.
+    Ordinary `channels.status` reads combine this metadata with the lifecycle's
+    recorded account status. Publish changing health and provider details through
+    `setStatus`; account snapshot and channel summary hooks run only for explicit
+    live checks on this RPC. All live hooks share a per-channel deadline. They
+    should also honor their supplied timeout because timing out the RPC cannot
+    cancel an already-running plugin operation.
     Selection before secret redemption also reads this metadata directly. Directory
     auto-selection requires `configured: true`; callers can still select the channel
     explicitly when configuration status is unknown.

@@ -33,11 +33,7 @@ import {
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
 import { UserProfileMergeError, UserProfileOwnerError } from "../../state/user-profiles-schema.js";
-import {
-  getUserProfileListItem,
-  listProfiles,
-  UserProfileNotFoundError,
-} from "../../state/user-profiles.js";
+import { listProfiles, UserProfileNotFoundError } from "../../state/user-profiles.js";
 import {
   invalidateOperatorRolePolicy,
   resolveOperatorRoleSelection,
@@ -60,7 +56,7 @@ import {
   prepareProfileMutationAccess,
   prepareUserProfileAdministration,
 } from "./users-profile-access.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
@@ -152,21 +148,23 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      let syncError: unknown;
       if (client.authenticatedGitHubIdentitySync) {
         try {
           await client.authenticatedGitHubIdentitySync();
-        } catch {
+        } catch (error) {
           // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
+          syncError = error;
         }
       }
-      const profile = await prepareAuthenticatedProfile(options);
+      const profile = await prepareAuthenticatedProfile(options, true);
       profile.assertCurrent();
       const profileId = profile.profileId;
-      if (!profileId) {
-        respond(false, undefined, authenticatedProfileUnavailableError());
+      if (!profileId || !profile.listItem) {
+        respond(false, undefined, authenticatedProfileUnavailableError(syncError));
         return;
       }
-      respond(true, { profile: getUserProfileListItem(profileId) });
+      respond(true, { profile: profile.listItem });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
@@ -288,12 +286,11 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.merge": async (options) => {
-    const { context, params, respond } = options;
-    if (!assertValidParams(params, validateUsersMergeParams, "users.merge", respond)) {
-      return;
-    }
-    try {
+  "users.merge": defineValidatedGatewayHandler(
+    "users.merge",
+    validateUsersMergeParams,
+    async (options) => {
+      const { context, params, respond } = options;
       const assertCurrent = await prepareUserProfileAdministration(options);
       holdGatewayPolicyResponse(respond);
       const { profile, movedAliasKinds } = await mergeCanonicalUserProfiles(
@@ -321,18 +318,14 @@ export const usersHandlers: GatewayRequestHandlers = {
         broadcastChatMetadataChanged(context);
       }
       respond(true, { profile, movedAliasKinds });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
-  "users.setDisplayName": async (options) => {
-    const { context, params, respond } = options;
-    if (
-      !assertValidParams(params, validateUsersSetDisplayNameParams, "users.setDisplayName", respond)
-    ) {
-      return;
-    }
-    try {
+    },
+    profileError,
+  ),
+  "users.setDisplayName": defineValidatedGatewayHandler(
+    "users.setDisplayName",
+    validateUsersSetDisplayNameParams,
+    async (options) => {
+      const { context, params, respond } = options;
       const assertCurrent = await prepareProfileMutationAccess(options, params.profileId);
       if (!assertCurrent) {
         return;
@@ -345,10 +338,9 @@ export const usersHandlers: GatewayRequestHandlers = {
       assertCurrent();
       refreshConnectedProfile(context, profile.id);
       respond(true, { profile });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
+    },
+    profileError,
+  ),
   "users.setRole": async (options) => {
     const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSetRoleParams, "users.setRole", respond)) {

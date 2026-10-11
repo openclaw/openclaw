@@ -22,8 +22,8 @@ import {
   type ControlUiPluginTabAuthGrant,
 } from "./control-ui-plugin-tabs.js";
 import {
-  authorizeControlUiPluginCookieRequest,
   bindControlUiPluginCookieRequestAuthority,
+  prepareControlUiPluginCookieRequest,
   resolveControlUiPluginAuthCookieGeneration,
 } from "./http-auth-plugin-cookie.js";
 import {
@@ -438,12 +438,16 @@ export async function authorizePluginGatewayHttpRequestOrReply(
 } | null> {
   const authGeneration = resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies);
   const hasCurrentClientAuthority = captureHttpRequestAuthority(params);
-  const cookieAuth = authorizeControlUiPluginCookieRequest(params.req, {
+  const cookieAuth = await prepareControlUiPluginCookieRequest(params.req, {
     requestPath: params.requestPath,
     authGeneration,
     res: params.res,
   });
   if (cookieAuth) {
+    if (!hasCurrentClientAuthority()) {
+      sendUnauthorized(params.res);
+      return null;
+    }
     return bindControlUiPluginCookieRequestAuthority(cookieAuth, {
       ...params,
       hasCurrentClientAuthority,

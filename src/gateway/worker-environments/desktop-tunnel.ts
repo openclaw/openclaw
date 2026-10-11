@@ -19,6 +19,7 @@ import {
   type PreparedWorkerSsh,
   type WorkerSshIdentityResolver,
   workerSshCommandOptions,
+  workerSshCommandPrefix,
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
@@ -66,13 +67,7 @@ function successful(result: Awaited<ReturnType<WorkerSshRunner["run"]>>): boolea
 
 function desktopSshCommand(prepared: PreparedWorkerSsh, argv: readonly string[]): string[] {
   return [
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(prepared.port),
+    ...workerSshCommandPrefix(prepared),
     "--",
     prepared.sshTarget,
     workerSshRemoteCommand(argv),

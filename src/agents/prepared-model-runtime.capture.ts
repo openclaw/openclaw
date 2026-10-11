@@ -3,7 +3,6 @@ import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import { mergePreparedNativeCatalog } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 
 const catalogCaptures = new WeakMap<
   PreparedModelRuntimeSnapshot,
@@ -75,16 +74,13 @@ export function capturePreparedModelRuntimeCatalog(
     }
     return capturedNative;
   }
-  const stores = snapshot.createStores();
-  const credentials = stores.authStorage.getAll();
-  const registry = stores.modelRegistry.fork(stores.authStorage, models);
   const captured: PreparedModelRuntimeSnapshot = Object.freeze({
     ...capturedNative,
     readPublishedModels: () => models,
     routeModelResolutionMemo: cached.memo,
     createStores: () => {
-      const authStorage = AuthStorage.inMemory(credentials);
-      return { authStorage, modelRegistry: registry.fork(authStorage) };
+      const { authStorage, modelRegistry } = snapshot.createStores();
+      return { authStorage, modelRegistry: modelRegistry.fork(authStorage, models) };
     },
   });
   copyPreparedModelRuntimeAuthBindings(snapshot, captured);

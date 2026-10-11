@@ -8,13 +8,13 @@ import {
 } from "../plugins/manifest-command-aliases.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
+import { rewriteUpdateFlagArgv } from "./argv.js";
 import {
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
   isGatewayRunFastPathArgv,
-  rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
   shouldStartProxyForCli,
   shouldUseRootHelpFastPath,

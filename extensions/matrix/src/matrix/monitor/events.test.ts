@@ -89,7 +89,6 @@ function createHarness(params?: {
   selfUserId?: string;
   selfUserIdError?: Error;
   startupMs?: number;
-  startupGraceMs?: number;
   getHealthySyncSinceMs?: () => number | undefined;
   allowFrom?: string[];
   dmEnabled?: boolean;
@@ -210,7 +209,6 @@ function createHarness(params?: {
     warnedEncryptedRooms: new Set<string>(),
     warnedCryptoMissingRooms: new Set<string>(),
     logger,
-    startupGraceMs: params?.startupGraceMs,
     getHealthySyncSinceMs:
       params?.getHealthySyncSinceMs ??
       (typeof params?.startupMs === "number" ? () => params.startupMs : undefined),

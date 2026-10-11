@@ -2,7 +2,7 @@ import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-en
 import { record } from "./protocol.js";
 import type { SubscriptionBinding } from "./state.js";
 
-export type PreparedEventSource = Awaited<
+type PreparedEventSource = Awaited<
   ReturnType<NonNullable<OpenClawPluginServiceContext["mcpEvents"]>["prepareSource"]>
 >;
 export type SourceBinding = {

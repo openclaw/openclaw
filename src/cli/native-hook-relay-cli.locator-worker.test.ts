@@ -12,7 +12,7 @@ import { writeNativeHookRelayBridgeRecord } from "../agents/harness/native-hook-
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
-import { runNativeHookRelayCliFromArgv } from "./native-hook-relay-cli.js";
+import { runNativeHookRelayCliFromArgvForTest } from "./native-hook-relay-cli.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -118,7 +118,7 @@ describe("native hook relay locator admission", () => {
             ]
           : [];
         try {
-          const pending = runNativeHookRelayCliFromArgv(
+          const pending = runNativeHookRelayCliFromArgvForTest(
             [
               "node",
               "openclaw",

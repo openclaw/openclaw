@@ -2,7 +2,7 @@ import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
   createAcceptedChannelDeliveryResult,
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   createChannelPartialDeliveryError,
   implicitMentionKindWhen,
   isChannelPartialDeliveryError,
@@ -483,7 +483,7 @@ async function processMessage(
   }
 
   const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
-  const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg: config, route });
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: config, route });
   const body = buildEnvelope({
     channel: "Zalo Personal",
     from: fromLabel,

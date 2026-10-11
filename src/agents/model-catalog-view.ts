@@ -267,14 +267,12 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           config: params.cfg,
           agentScope: { kind: "prepared", agentId: params.agentId },
         });
+        if (!policy.forcedByEnvironment && policy.runtimeSource === "implicit") {
+          policy = { ...policy, runtime: routes.implicitNativeRuntime(entry) ?? policy.runtime };
+        }
         runtimePolicies.set(entry, policy);
       }
-      const runtime =
-        runtimeId ??
-        host.requestedRuntimeId ??
-        (!policy.forcedByEnvironment && policy.runtimeSource === "implicit"
-          ? (routes.implicitNativeRuntime(entry) ?? policy.runtime)
-          : policy.runtime);
+      const runtime = runtimeId ?? host.requestedRuntimeId ?? policy.runtime;
       if (runtime === "auto" || runtime === "openclaw") {
         return host;
       }

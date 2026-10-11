@@ -58,8 +58,7 @@ import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
-  formatEmbeddedRunStageSummary,
-  shouldWarnEmbeddedRunStageSummary,
+  logEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
@@ -98,22 +97,13 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     if (summary.stages.length === 0) {
       return;
     }
-    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary, {
-      totalThresholdMs: 5_000,
-      stageThresholdMs: 2_000,
-    });
-    if (!shouldWarn && !log.isEnabled("trace")) {
-      return;
-    }
-    const message = formatEmbeddedRunStageSummary(
-      `[trace:embedded-run] core-plugin-tool stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+    logEmbeddedRunStageSummary(
       summary,
+      log,
+      () =>
+        `[trace:embedded-run] core-plugin-tool stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+      { totalThresholdMs: 5_000, stageThresholdMs: 2_000 },
     );
-    if (shouldWarn) {
-      log.warn(message);
-    } else {
-      log.trace(message);
-    }
   };
 
   const workspace = await resolveAttemptWorkspaceSandbox(params);
@@ -192,12 +182,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   sessionManager: ReturnType<typeof guardSessionManager>;
   settingsManager: AgentSession["settingsManager"];
   sandbox?: SandboxContext | null;
-}): {
-  getAfterTurnCheckpoint: () => number | null;
-  recordCacheTouch: (startedAt: number) => void;
-  remove: () => void;
-  takePendingMidTurnPrecheckRequest: () => MidTurnPrecheckRequest | null;
-} {
+}) {
   const { activeContextEngine, activeSession, attempt, settingsManager } = input;
   const contextTokenBudget = Math.max(
     1,
@@ -300,6 +285,8 @@ export function installEmbeddedAttemptContextGuards(input: {
       sessionTarget: attempt.sessionTarget,
       sessionFile: attempt.sessionFile,
       tokenBudget: attempt.contextTokenBudget,
+      reserveTokens: () => settingsManager.getCompactionReserveTokens(),
+      getSystemPrompt: input.getSystemPrompt,
       modelId: attempt.modelId,
       ...(input.repairToolUseResultPairing
         ? {
@@ -393,7 +380,7 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   return {
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
-    recordCacheTouch: (startedAt) => {
+    recordCacheTouch: (startedAt: number) => {
       lastCacheTouchAt = startedAt;
     },
     remove: () => {
@@ -417,11 +404,7 @@ export type EmitDiagnosticRunCompleted = (
   extra?: { blockedBy?: string },
 ) => void;
 
-export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams): {
-  diagnosticTrace: ReturnType<typeof freezeDiagnosticTraceContext>;
-  runTrace: ReturnType<typeof freezeDiagnosticTraceContext>;
-  emitCompleted: EmitDiagnosticRunCompleted;
-} {
+export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams) {
   const diagnosticTrace = freezeDiagnosticTraceContext(
     getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
   );

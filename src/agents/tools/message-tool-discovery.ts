@@ -80,10 +80,7 @@ function resolveSessionDeliveryChatType(peerKind: string): ChatType | undefined 
   if (peerKind === "direct" || peerKind === "dm") {
     return "direct";
   }
-  if (peerKind === "group" || peerKind === "channel") {
-    return peerKind;
-  }
-  return undefined;
+  return peerKind === "group" || peerKind === "channel" ? peerKind : undefined;
 }
 
 type MessageToolDeliveryRequest = {
@@ -392,10 +389,7 @@ export function buildMessageToolSchema(params: MessageToolDiscoveryParams, actio
 
 export function resolveAgentAccountId(value?: string): string | undefined {
   const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  return normalizeAccountId(trimmed);
+  return trimmed ? normalizeAccountId(trimmed) : undefined;
 }
 
 export function buildMessageToolDescription(actions: string[] | undefined): string {

@@ -1,6 +1,4 @@
-/* ── Settings design language ──────────────────────────────────────────────
- *
- * One structural pattern for every settings surface:
+/* One structural pattern for every settings surface:
  *   .settings-page > .settings-section > .settings-group > .settings-row
  *
  * Rules (see ui/docs/design-system/settings-design.md):
@@ -35,17 +33,12 @@
   font-weight: 600;
 }
 
-/* ── Workspace shell (shared by every settings takeover page) ── */
-
 .settings-workspace,
 .settings-workspace__body {
   width: 100%;
 }
 
-.content-header + .settings-workspace {
-  margin-top: var(--space-5);
-}
-
+.content-header + .settings-workspace,
 .settings-workspace__body > * + * {
   margin-top: var(--space-5);
 }
@@ -291,8 +284,6 @@
   font-weight: 600;
 }
 
-/* ── Group (the only surface) ── */
-
 .settings-group {
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
@@ -305,8 +296,7 @@
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
 }
 
-/* ── Advanced tier ──
- * Lives here rather than config.css because every schema-driven surface
+/* Lives here rather than config.css because every schema-driven surface
  * (config pages and the channel detail forms) renders the same split. */
 
 .config-tier-groups {
@@ -388,7 +378,6 @@
   margin-left: auto;
 }
 
-/* Plain right-aligned value text ("Default", "v2026.7.1", …). */
 .settings-row__value {
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
@@ -434,6 +423,98 @@
   }
 }
 
+.settings-tab-icon .settings-segmented > .settings-segmented__btn {
+  padding-inline: var(--space-2);
+}
+
+.settings-tab-icon__option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.settings-tab-icon__lobsters,
+.settings-tab-icon__shapes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.settings-tab-icon__pick {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.settings-tab-icon__pick:hover,
+.settings-tab-icon__pick[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.settings-tab-icon__pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-tab-icon .settings-tab-icon__lobster {
+  display: block;
+  position: relative;
+  left: auto;
+  bottom: auto;
+  width: 30px;
+  height: 30px;
+  transform: none;
+  pointer-events: none;
+}
+
+.settings-tab-icon__lobster,
+.settings-tab-icon__lobster * {
+  animation: none !important;
+  transition: none !important;
+}
+
+.settings-tab-icon__preview .settings-tab-icon__lobster {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-tab-icon__preview,
+.settings-tab-icon__preview img,
+.settings-tab-icon__preview.identity-avatar--agent img,
+.settings-tab-icon__preview svg {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.settings-tab-icon__preview[data-avatar-shape] {
+  border-radius: 0;
+}
+
+.settings-tab-icon__preview[data-avatar-shape="rounded"] {
+  clip-path: inset(0 round 25%);
+}
+
+.settings-tab-icon__preview[data-avatar-shape="circle"] {
+  clip-path: circle(50%);
+}
+
+.settings-tab-icon__preview:not([data-avatar-shape="square"]) img {
+  object-fit: cover;
+}
+
+.settings-tab-icon__pick .settings-tab-icon__preview,
+.settings-tab-icon__pick .settings-tab-icon__preview img {
+  width: 30px;
+  height: 30px;
+}
+
 /* Trailing action rows hold only a button cluster: give it the full row
    (definite width, see the wrap note on .settings-row__control) so nowrap
    button labels wrap as whole buttons instead of squeezing into 60%. */
@@ -452,7 +533,6 @@
   cursor: not-allowed;
 }
 
-/* Clickable drill-in row. */
 .settings-row--nav {
   width: 100%;
   border: none;
@@ -498,7 +578,6 @@
   transform: rotate(90deg);
 }
 
-/* Indented child rows (e.g. per-item options under a parent toggle). */
 .settings-subrows .settings-row {
   padding-left: var(--space-7);
 }
@@ -586,8 +665,6 @@ wa-switch.settings-toggle {
   width: auto;
 }
 
-/* ── Secret input (inset reveal toggle; no trailing button) ── */
-
 /* Stacked rows (config form arrays/maps) give the control full width; the
    wrapper must grow or the inner 100% resolves against fit-content. */
 .settings-row--stacked .settings-row__control > .settings-secret {
@@ -616,8 +693,6 @@ textarea.settings-input {
     font-size: 16px;
   }
 }
-
-/* ── Status (dot + text — replaces status pills) ── */
 
 .settings-status {
   display: inline-flex;
@@ -864,8 +939,6 @@ textarea.settings-input {
   letter-spacing: 0.08em;
   user-select: all;
 }
-
-/* ── Mobile ── */
 
 .shell--embed-settings {
   --settings-control-height: 44px;

@@ -448,6 +448,7 @@ runs:
         # Each protected warmer attempt publishes a new immutable generation.
         # Group signatures own validity; an outer input list can strand rebuilt
         # groups behind an old exact key that Actions cache cannot replace.
-        key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        # Aliases and exact pins share a seed only when they install the same Node version.
+        key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.setup-node.outputs.resolved-version }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+          ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.setup-node.outputs.resolved-version }}-

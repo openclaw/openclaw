@@ -20,7 +20,7 @@ import type {
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find as findPlacement } from "./placement-row-codec.js";
 import { parseWorkerEnvironmentState } from "./state.js";
-import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
+import type { WorkerEnvironmentNativePatch } from "./store-projection.js";
 import type { WorkerEnvironmentMutationInput } from "./store.types.js";
 
 type PreparationRow = Pick<
@@ -364,10 +364,11 @@ export function createPreparedEnvironmentStoreOps(options: {
 /** Placement and consumption commit together; dropping a placement never recreates a spare. */
 export function consumePreparedEnvironment(
   db: DatabaseSync,
-  input: PreparedEnvironmentSelection,
+  input: Omit<PreparedEnvironmentSelection, "assertCurrent">,
   nowMs: number,
-): WorkerSessionPlacementRecord | undefined {
-  input.assertCurrent();
+):
+  | { placement: WorkerSessionPlacementRecord; environmentPatch: WorkerEnvironmentNativePatch }
+  | undefined {
   const placement = findPlacement(db, input.sessionId);
   if (
     !placement ||
@@ -416,7 +417,6 @@ export function consumePreparedEnvironment(
   ) {
     return undefined;
   }
-  input.assertCurrent();
   executeSqliteQuerySync(
     db,
     query(db)
@@ -424,11 +424,13 @@ export function consumePreparedEnvironment(
       .set({ preparation_consumed_at_ms: nowMs, updated_at_ms: nowMs })
       .where("environment_id", "=", input.environmentId),
   );
-  publishWorkerEnvironmentNativeMutation(db, input.environmentId, {
-    preparation: { ...preparation, consumedAtMs: nowMs },
-    updatedAtMs: nowMs,
-  });
-  return placement;
+  return {
+    placement,
+    environmentPatch: {
+      preparation: { ...preparation, consumedAtMs: nowMs },
+      updatedAtMs: nowMs,
+    },
+  };
 }
 
 export function assertPreparedEnvironmentAttachment(

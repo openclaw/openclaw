@@ -94,9 +94,11 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ type: Boolean }) busy = false;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
+  @property({ type: Boolean }) loadingCovered = false;
 
   @state() private actionError = "";
   @state() private actionPending = false;
+  private bodyErrored = false;
   private readonly coreWidgetLoader = new LazyCustomElementRequestController(this);
   private readonly pluginSubscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.plugins,
@@ -110,6 +112,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   });
   private readonly frame = new BoardWidgetFrameLifecycle({
     active: () => this.active,
+    loadingCovered: () => this.loadingCovered,
     bridgeEnabled: () => this.bridgeEnabled,
     connected: () => this.isConnected,
     context: () => this.context,
@@ -165,6 +168,21 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       }
     });
     this.frame.update();
+    if (this.loadingCovered && this.presentationReady) {
+      this.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
+    }
+  }
+
+  get presentationReady(): boolean {
+    const widget = this.widget;
+    // Native views and access notices own their loading and recovery presentation.
+    return (
+      !widget?.viewTicket ||
+      widget.grantState === "pending" ||
+      widget.grantState === "rejected" ||
+      this.bodyErrored ||
+      this.frame.presentationReady
+    );
   }
 
   override disconnectedCallback(): void {
@@ -318,7 +336,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
             canMutate: this.canMutate,
             canGrant: this.canGrant,
           },
-          nothing,
           this.active,
         );
       }
@@ -409,6 +426,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       body = renderBoardWidgetError(error);
       bodyErrored = true;
     }
+    this.bodyErrored = bodyErrored;
     const label = widget.title || widget.name;
     const readOnly = !this.canMutate;
     const bodyScrollable =

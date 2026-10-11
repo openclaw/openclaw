@@ -15,6 +15,22 @@ import {
 } from "./preauth-websocket-guard.js";
 const log = createSubsystemLogger("browser").child("extension-relay");
 
+export function trackAuthenticatedRelaySocket(
+  authority: BrowserRelayAuthV2Authority,
+  ws: WebSocket,
+): boolean {
+  if (
+    !authority.registerAuthenticatedConnection(ws, () =>
+      ws.close(4003, "browser relay key rotated"),
+    )
+  ) {
+    ws.terminate();
+    return false;
+  }
+  ws.once("close", () => authority.releaseConnection(ws));
+  return true;
+}
+
 export function authenticateExtensionWebSocket(params: {
   ws: WebSocket;
   authority: BrowserRelayAuthV2Authority;

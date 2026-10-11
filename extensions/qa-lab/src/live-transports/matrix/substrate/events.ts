@@ -92,8 +92,7 @@ function resolveMatrixQaMessageContent(
   return content;
 }
 
-function normalizeMatrixQaRelation(value: unknown) {
-  const relation = asNullableObjectRecord(value);
+function normalizeMatrixQaRelation(relation: Record<string, unknown> | null) {
   if (!relation) {
     return undefined;
   }
@@ -224,7 +223,7 @@ export function normalizeMatrixQaObservedEvent(
   // An edit's outer m.replace relation describes wire delivery, not the
   // logical relation of the edited message. Matrix ignores relations inside
   // m.new_content, so the observer must inherit the original event's relation.
-  const logicalRelation = replacesEventId ? undefined : normalizeMatrixQaRelation(relatesToRaw);
+  const logicalRelation = replacesEventId ? undefined : normalizeMatrixQaRelation(relatesTo);
   const normalizedMsgtype = readStringField(messageContent, "msgtype") ?? msgtype;
   const normalizedFilename =
     readStringField(messageContent, "filename") ?? readStringField(content, "filename");

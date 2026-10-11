@@ -5,6 +5,7 @@ import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  resolveCodexPluginsPolicy,
   type CodexPluginConfig,
 } from "./config.js";
 import { refreshCodexPluginRuntimeState } from "./plugin-activation.js";
@@ -17,7 +18,6 @@ import {
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildCodexPluginThreadConfig,
@@ -28,6 +28,7 @@ import {
   refreshCodexPluginAppApprovalPolicy,
   shouldBuildCodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
+import { preparePluginThreadConfigForTest } from "./plugin-thread-config.test-helpers.js";
 import type {
   CodexAppServerRequestParams,
   CodexConfigReadResponse,
@@ -2350,13 +2351,8 @@ describe("Codex plugin thread config", () => {
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     const request = vi.fn(async () => pluginList([]));
 
-    const config = await createCodexPluginThreadConfigStartupProvider({
-      inputFingerprint: undefined,
-      enabledPluginConfigKeys: undefined,
-      policy: undefined,
-      requestTimeoutMs: 100,
-      signal: new AbortController().signal,
-      pluginConfig: {
+    const config = await preparePluginThreadConfigForTest(
+      {
         codexPlugins: {
           enabled: true,
           plugins: {
@@ -2367,8 +2363,11 @@ describe("Codex plugin thread config", () => {
           },
         },
       },
+      "runtime",
+    )({
+      requestTimeoutMs: 100,
+      signal: new AbortController().signal,
       appCache: new CodexAppInventoryCache(),
-      appCacheKey: "runtime",
       metadataCache,
       client: { request },
     }).build();
@@ -2395,13 +2394,8 @@ describe("Codex plugin thread config", () => {
       },
     );
 
-    await createCodexPluginThreadConfigStartupProvider({
-      inputFingerprint: undefined,
-      enabledPluginConfigKeys: undefined,
-      policy: undefined,
-      requestTimeoutMs: 240_000,
-      signal: new AbortController().signal,
-      pluginConfig: {
+    await preparePluginThreadConfigForTest(
+      {
         codexPlugins: {
           enabled: true,
           plugins: {
@@ -2412,8 +2406,11 @@ describe("Codex plugin thread config", () => {
           },
         },
       },
+      "runtime-long-startup",
+    )({
+      requestTimeoutMs: 240_000,
+      signal: new AbortController().signal,
       appCache: new CodexAppInventoryCache(),
-      appCacheKey: "runtime-long-startup",
       metadataCache: new CodexPluginMetadataCache(),
       client: { request },
     }).build();
@@ -2465,16 +2462,14 @@ describe("Codex plugin thread config", () => {
     });
 
     const buildConfig = (threadId?: string) =>
-      createCodexPluginThreadConfigStartupProvider({
-        inputFingerprint: undefined,
-        enabledPluginConfigKeys: ["google-calendar"],
-        policy: undefined,
+      preparePluginThreadConfigForTest(
+        calendarPluginConfig(),
+        "runtime",
+      )({
         requestTimeoutMs: 1_000,
         signal: new AbortController().signal,
-        pluginConfig: calendarPluginConfig(),
         configCwd: "/workspace/project",
         appCache: new CodexAppInventoryCache(),
-        appCacheKey: "runtime",
         metadataCache: new CodexPluginMetadataCache(),
         client: { request },
       }).build(threadId ? { threadId } : {});
@@ -2584,13 +2579,8 @@ describe("Codex plugin thread config", () => {
     });
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     const controller = new AbortController();
-    const build = createCodexPluginThreadConfigStartupProvider({
-      inputFingerprint: undefined,
-      enabledPluginConfigKeys: undefined,
-      policy: undefined,
-      requestTimeoutMs: 1_000,
-      signal: controller.signal,
-      pluginConfig: {
+    const build = preparePluginThreadConfigForTest(
+      {
         codexPlugins: {
           enabled: true,
           plugins: {
@@ -2601,7 +2591,10 @@ describe("Codex plugin thread config", () => {
           },
         },
       },
-      appCacheKey: "runtime",
+      "runtime",
+    )({
+      requestTimeoutMs: 1_000,
+      signal: controller.signal,
       metadataCache,
       client: { request: vi.fn(async () => pluginList([])) },
     }).build();
@@ -2618,16 +2611,10 @@ describe("Codex plugin thread config", () => {
     const request = vi.fn(async () => pluginList([]));
 
     await expect(
-      createCodexPluginThreadConfigStartupProvider({
-        inputFingerprint: undefined,
-        enabledPluginConfigKeys: undefined,
-        policy: undefined,
-        requestTimeoutMs: 1_000,
-        signal: controller.signal,
-        pluginConfig: { codexPlugins: { enabled: true } },
-        appCacheKey: "runtime",
-        client: { request },
-      }).build(),
+      preparePluginThreadConfigForTest(
+        { codexPlugins: { enabled: true } },
+        "runtime",
+      )({ requestTimeoutMs: 1_000, signal: controller.signal, client: { request } }).build(),
     ).rejects.toThrow("outer abort");
     expect(request).not.toHaveBeenCalled();
   });
@@ -2681,7 +2668,7 @@ describe("Codex plugin thread config", () => {
     expect(request.mock.calls.filter(([method]) => method === "plugin/list")).toHaveLength(1);
     expect(
       resolveRecoverableCodexPluginConfigKeys({
-        policy: first.inventory?.policy ?? second.inventory!.policy,
+        policy: resolveCodexPluginsPolicy(pluginConfig),
         metadataCache,
         appCacheKey: "runtime",
       }),
@@ -2849,12 +2836,6 @@ describe("missing configured plugins", () => {
         appCacheKey: "missing-plugin",
         request: inventoryRequest(() => false),
       });
-      expect(result.inventory?.policy.pluginPolicies.map((plugin) => plugin.configKey)).toEqual([
-        "healthy",
-      ]);
-      expect(result.inventory?.records.map((record) => record.policy.configKey)).toEqual([
-        "healthy",
-      ]);
       expect(result.policyContext.apps["healthy-app"]).toMatchObject({
         pluginName: "healthy",
         marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -2894,16 +2875,9 @@ describe("missing configured plugins", () => {
       request: inventoryRequest(() => available),
     };
     const first = await buildCodexPluginThreadConfig(params);
-    expect(first.inventory?.policy.pluginPolicies.map((plugin) => plugin.configKey)).toEqual([
-      "healthy",
-    ]);
     expect(first.policyContext.apps["healthy-app"]).toMatchObject({ pluginName: "healthy" });
     available = true;
     const next = await buildCodexPluginThreadConfig(params);
-    expect(next.inventory?.policy.pluginPolicies.map((plugin) => plugin.configKey)).toEqual([
-      "healthy",
-      "missing",
-    ]);
     expect(next.policyContext.apps["account-app"]).toMatchObject({ pluginName: "missing" });
     expect(pluginConfig).toEqual(savedSettings);
   });

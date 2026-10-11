@@ -68,12 +68,14 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
 
 const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
-function parseQaCliTcpPortOption(value: string, flag: string): number {
-  const parsed = parseQaCliPositiveIntegerOption(value, flag);
-  if (parsed > MAX_QA_CLI_TCP_PORT) {
-    throw invalidQaCliArgument(`${flag} must be a TCP port between 1 and 65535.`);
-  }
-  return parsed;
+function tcpPort(flag: string) {
+  return (value: string) => {
+    const parsed = parseQaCliPositiveIntegerOption(value, flag);
+    if (parsed > MAX_QA_CLI_TCP_PORT) {
+      throw invalidQaCliArgument(`${flag} must be a TCP port between 1 and 65535.`);
+    }
+    return parsed;
+  };
 }
 
 function parseQaEvidenceModeOption(value: string): QaProfileCommandOptions["evidenceMode"] {
@@ -143,6 +145,20 @@ function assertNoQaSubcommandCollision(qa: Command, commandName: string) {
   if (qa.commands.some((command) => command.name() === commandName)) {
     throw new Error(`QA runner command "${commandName}" conflicts with an existing qa subcommand`);
   }
+}
+
+function addQaDockerRuntimeOptions(command: Command, imageDescription: string) {
+  return command
+    .option("--gateway-port <port>", "Gateway host port", tcpPort("--gateway-port"))
+    .option("--qa-lab-port <port>", "QA lab host port", tcpPort("--qa-lab-port"))
+    .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
+    .option("--image <name>", imageDescription, "openclaw:qa-local-prebaked")
+    .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
+    .option(
+      "--bind-ui-dist",
+      "Bind-mount extensions/qa-lab/web/dist into the qa-lab container for faster UI refresh",
+      false,
+    );
 }
 
 export function registerQaLabCli(program: Command) {
@@ -511,12 +527,12 @@ export function registerQaLabCli(program: Command) {
     .description("Start the private QA debugger UI and local QA bus")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--host <host>", "Bind host", "127.0.0.1")
-    .option("--port <port>", "Bind port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--port"),
-    )
+    .option("--port <port>", "Bind port", tcpPort("--port"))
     .option("--advertise-host <host>", "Optional public host to advertise in bootstrap payloads")
-    .option("--advertise-port <port>", "Optional public port to advertise", (value: string) =>
-      parseQaCliTcpPortOption(value, "--advertise-port"),
+    .option(
+      "--advertise-port <port>",
+      "Optional public port to advertise",
+      tcpPort("--advertise-port"),
     )
     .option("--control-ui-url <url>", "Optional Control UI URL to embed beside the QA panel")
     .option(
@@ -533,25 +549,14 @@ export function registerQaLabCli(program: Command) {
     )
     .action(async (opts) => (await loadQaLabCliRuntime()).runQaLabUiCommand(opts));
 
-  qa.command("docker-scaffold")
-    .description("Write a prebaked Docker scaffold for the QA dashboard + gateway lane")
-    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .requiredOption("--output-dir <path>", "Output directory for docker-compose + state files")
-    .option("--gateway-port <port>", "Gateway host port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--gateway-port"),
-    )
-    .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--qa-lab-port"),
-    )
-    .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
-    .option("--image <name>", "Prebaked image name", "openclaw:qa-local-prebaked")
-    .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
-    .option(
-      "--bind-ui-dist",
-      "Bind-mount extensions/qa-lab/web/dist into the qa-lab container for faster UI refresh",
-      false,
-    )
-    .action(async (opts) => (await loadQaLabCliRuntime()).runQaDockerScaffoldCommand(opts));
+  addQaDockerRuntimeOptions(
+    qa
+      .command("docker-scaffold")
+      .description("Write a prebaked Docker scaffold for the QA dashboard + gateway lane")
+      .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+      .requiredOption("--output-dir <path>", "Output directory for docker-compose + state files"),
+    "Prebaked image name",
+  ).action(async (opts) => (await loadQaLabCliRuntime()).runQaDockerScaffoldCommand(opts));
 
   qa.command("docker-build-image")
     .description("Build the prebaked QA Docker image with qa-channel + qa-lab bundled")
@@ -559,24 +564,14 @@ export function registerQaLabCli(program: Command) {
     .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
     .action(async (opts) => (await loadQaLabCliRuntime()).runQaDockerBuildImageCommand(opts));
 
-  qa.command("up")
-    .description("Build the QA site, start the Docker-backed QA stack, and print the QA Lab URL")
-    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .option("--output-dir <path>", "Output directory for docker-compose + state files")
-    .option("--gateway-port <port>", "Gateway host port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--gateway-port"),
-    )
-    .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
-      parseQaCliTcpPortOption(value, "--qa-lab-port"),
-    )
-    .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
-    .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
-    .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
-    .option(
-      "--bind-ui-dist",
-      "Bind-mount extensions/qa-lab/web/dist into the qa-lab container for faster UI refresh",
-      false,
-    )
+  addQaDockerRuntimeOptions(
+    qa
+      .command("up")
+      .description("Build the QA site, start the Docker-backed QA stack, and print the QA Lab URL")
+      .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+      .option("--output-dir <path>", "Output directory for docker-compose + state files"),
+    "Image tag",
+  )
     .option("--skip-ui-build", "Skip pnpm qa:lab:build before starting Docker", false)
     .action(async (opts) => (await loadQaLabCliRuntime()).runQaDockerUpCommand(opts));
 
@@ -584,9 +579,7 @@ export function registerQaLabCli(program: Command) {
     qa.command(providerCommand.name)
       .description(providerCommand.description)
       .option("--host <host>", "Bind host", "127.0.0.1")
-      .option("--port <port>", "Bind port", (value: string) =>
-        parseQaCliTcpPortOption(value, "--port"),
-      )
+      .option("--port <port>", "Bind port", tcpPort("--port"))
       .action(async (opts: { host?: string; port?: number }) => {
         const runtime = await loadQaLabCliRuntime();
         await runtime.runQaProviderServerCommand(providerCommand.providerMode, opts);

@@ -70,8 +70,8 @@ const cases = [
       joinedOnlyAfterYield: true,
     },
   },
-  {
-    ending: "resource-cold-supervisor-loss",
+  ...(["resource-cold-supervisor-loss", "resource-cold-skewed-clock"] as const).map((ending) => ({
+    ending,
     expected: {
       unavailableBeforeReady: true,
       sameSourceRetained: true,
@@ -79,7 +79,7 @@ const cases = [
       neverAdmittedResourceClosed: true,
       brokerClosed: true,
     },
-  },
+  })),
   {
     ending: "native-resource",
     expected: { ...resourceCustody, shutdownRefused: true, lateNativeJoin: true },

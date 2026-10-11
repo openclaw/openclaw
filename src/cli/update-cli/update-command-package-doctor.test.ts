@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as backupConfigCapture from "../../infra/backup-config-capture.js";
+import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
+import { SqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -30,6 +32,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import * as configCapture from "./update-command-config-snapshot.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 import { createUpdateRunProgress } from "./update-command-run.js";
@@ -54,6 +57,56 @@ async function createDoctorFixture() {
   await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
   return { root, env };
 }
+
+it.each([
+  { restart: false, contention: true },
+  { restart: false, contention: true, wrapped: true },
+  { restart: true, contention: true },
+  { restart: false, contention: false },
+  { restart: false, contention: false, wrapped: true },
+])(
+  "defers only operator-owned state contention ($restart, $contention, wrapped=$wrapped)",
+  async ({ restart, contention, wrapped }) => {
+    const { root, env } = await createDoctorFixture();
+    const cause = contention
+      ? new GatewayStateOwnerContentionError(resolveOpenClawStateSqlitePath(env))
+      : new SqliteSchemaVersionError("This OpenClaw build cannot open your existing data.");
+    const error = wrapped ? new Error("Cannot read shared state for discovery", { cause }) : cause;
+    vi.spyOn(configCapture, "captureUpdateConfigSnapshot").mockRejectedValue(error);
+    const spawn = vi.spyOn(processRunner, "runCommandWithTimeout");
+    const onStepComplete = vi.fn();
+    const results: UpdateStepResult[] = [];
+    const operation = runPackageUpdateDoctor({
+      root,
+      restart,
+      managedServiceEnv: env,
+      results,
+      progress: { onStepComplete },
+      onConfigSnapshot: vi.fn(),
+    });
+    if (restart || !contention) {
+      await expect(operation).rejects.toBe(error);
+    } else {
+      const step = await operation;
+      assert(step);
+      expect(step).toMatchObject({
+        name: "post-install-verify",
+        exitCode: null,
+        advisory: {
+          kind: "recoverable-maintenance",
+          message: expect.stringContaining("deferred"),
+        },
+      });
+      expect(step && isFailedUpdateStep(step)).toBe(false);
+      expect(step?.advisory?.message).toContain("service owner");
+      expect(step?.advisory?.message).toContain("openclaw update status");
+      expect(step?.advisory?.message).toContain("openclaw doctor");
+      expect(results).toEqual([step]);
+      expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(step));
+    }
+    expect(spawn).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as const)(
   "runs Doctor with %s include capture without broadening rollback ownership",

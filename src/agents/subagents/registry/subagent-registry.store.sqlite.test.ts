@@ -3,8 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync, StatementSync, constants } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sqliteQueries from "../../../infra/kysely-sync.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
@@ -18,13 +16,14 @@ import {
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import {
+  loadSubagentRegistryFromSqlite,
   persistRegistryFixture,
   saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
-  getSubagentRunsSnapshotForRead,
+  getSubagentRunsSnapshotForChildSession,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
   prepareSubagentSessionListReadCache,
@@ -34,12 +33,14 @@ import {
   conflictingSubagentRunVersions,
   writeSubagentRunValuesInDatabase,
 } from "./subagent-registry.store.kernel.js";
+import {
+  isReleasedSubagentRunRecord,
+  releasedSubagentPayloadFilter,
+} from "./subagent-registry.store.released-reader.test-support.js";
 import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import {
   readSubagentRun,
   loadSubagentRunsForChildSessionFromSqlite,
-  loadSubagentRunsForControllerFromSqlite,
-  loadSubagentRegistryFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
   loadSubagentRunsForSessionsInDatabase,
 } from "./subagent-registry.store.sqlite.js";
@@ -92,58 +93,6 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
   };
 }
 
-// Frozen v2026.9.4 reader eligibility (3a9d69db306cd7f081e06254cb89c4bcc14a7107).
-// Keep these guards independent of the current codec: downgrade must fail closed.
-const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
-const DELIVERY_STATUSES = new Set(
-  "not_required pending in_progress delivered failed suspended discarded".split(" "),
-);
-
-function hasStateStatus(
-  value: unknown,
-  statuses: ReadonlySet<string>,
-): value is Record<string, unknown> {
-  return isRecord(value) && typeof value.status === "string" && statuses.has(value.status);
-}
-
-function isReleasedSubagentRunRecord(value: unknown): value is SubagentRunRecord {
-  return (
-    isRecord(value) &&
-    hasStateStatus(value.execution, EXECUTION_STATUSES) &&
-    isRecord(value.completion) &&
-    typeof value.completion.required === "boolean" &&
-    hasStateStatus(value.delivery, DELIVERY_STATUSES) &&
-    !(
-      "handoffLeaseId" in value.delivery ||
-      "handoffLeasedAt" in value.delivery ||
-      "handoffInjectedAt" in value.delivery
-    )
-  );
-}
-
-function releasedSubagentPayloadFilter() {
-  return /* kysely-allow-raw: Keep projection eligibility identical to the full canonical payload parser. */ sql<boolean>`json_valid(payload_json)
-    AND json_type(payload_json, '$.execution') = 'object'
-    AND json_extract(payload_json, '$.execution.status')
-      IN ('queued', 'running', 'interrupted', 'terminal')
-    AND json_type(payload_json, '$.completion') = 'object'
-    AND json_type(payload_json, '$.completion.required') IN ('true', 'false')
-    AND json_type(payload_json, '$.delivery') = 'object'
-    AND json_extract(payload_json, '$.delivery.status')
-      IN (
-        'not_required',
-        'pending',
-        'in_progress',
-        'delivered',
-        'failed',
-        'suspended',
-        'discarded'
-      )
-    AND json_type(payload_json, '$.delivery.handoffLeaseId') IS NULL
-    AND json_type(payload_json, '$.delivery.handoffLeasedAt') IS NULL
-    AND json_type(payload_json, '$.delivery.handoffInjectedAt') IS NULL`;
-}
-
 describe("subagent registry sqlite store", () => {
   let tempStateDir: string | null = null;
 
@@ -186,7 +135,9 @@ describe("subagent registry sqlite store", () => {
     const schema = current.db.prepare("PRAGMA schema_version").get();
     expect(loadSubagentRegistryFromSqlite().get(legacy.runId)?.requesterStorePath).toBeUndefined();
     expect(
-      loadSubagentSessionListRunsFromSqlite().get(legacy.runId)?.requesterStorePath,
+      loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(
+        legacy.runId,
+      )?.requesterStorePath,
     ).toBeUndefined();
     expect(current.db.prepare("PRAGMA schema_version").get()).toEqual(schema);
 
@@ -209,7 +160,11 @@ describe("subagent registry sqlite store", () => {
       requesterStorePath: bound.requesterStorePath,
       controllerStorePath: bound.controllerStorePath,
     });
-    expect(loadSubagentSessionListRunsFromSqlite().get(bound.runId)).toMatchObject({
+    expect(
+      loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(
+        bound.runId,
+      ),
+    ).toMatchObject({
       requesterStorePath: bound.requesterStorePath,
       controllerStorePath: bound.controllerStorePath,
     });
@@ -329,7 +284,11 @@ describe("subagent registry sqlite store", () => {
 
         const replaced = { ...run, model: "updated-model" };
         persistRegistryFixture(new Map([[run.runId, replaced]]), [run.runId]);
-        expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)).toMatchObject({
+        expect(
+          (await getSubagentRunsSnapshotForChildSession(new Map(), run.childSessionKey)).get(
+            run.runId,
+          ),
+        ).toMatchObject({
           model: replaced.model,
           task: run.task,
           completion: run.completion,
@@ -357,11 +316,17 @@ describe("subagent registry sqlite store", () => {
         expect(
           getSubagentSessionListRunsSnapshotForSessions(new Map(), keys).get(run.runId)?.model,
         ).toBe(published.model);
-        expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)?.task).toBe(run.task);
+        expect(
+          (await getSubagentRunsSnapshotForChildSession(new Map(), run.childSessionKey)).get(
+            run.runId,
+          )?.task,
+        ).toBe(run.task);
         expect(loadSubagentRegistryFromSqlite().get(run.runId)?.model).toBe(published.model);
         persistRegistryFixture(new Map(), [run.runId]);
         expect(getSubagentSessionListRunsSnapshotForRead(new Map(), keys).size).toBe(0);
-        expect(getSubagentRunsSnapshotForRead(new Map()).size).toBe(0);
+        expect(
+          (await getSubagentRunsSnapshotForChildSession(new Map(), run.childSessionKey)).size,
+        ).toBe(0);
         expect(loadSubagentRegistryFromSqlite().size).toBe(0);
       } finally {
         queries.mockRestore();
@@ -491,9 +456,12 @@ describe("subagent registry sqlite store", () => {
     const database = openOpenClawStateDatabase();
     expect(loadSubagentRegistryFromSqlite().get(run.runId)).toEqual(original);
     expect(readSubagentRun(database, run.runId)).toEqual(original);
-    expect(loadSubagentRunsForChildSessionFromSqlite(run.childSessionKey)).toEqual([original]);
-    expect(loadSubagentRunsForControllerFromSqlite("agent:main:controller")).toEqual([original]);
-    expect(loadSubagentSessionListRunsFromSqlite().get(run.runId)).toMatchObject({
+    expect(loadSubagentRunsForChildSessionFromSqlite(run.childSessionKey, database)).toEqual([
+      original,
+    ]);
+    expect(
+      loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(run.runId),
+    ).toMatchObject({
       runId: run.runId,
       execution: {
         status: "terminal",
@@ -504,7 +472,10 @@ describe("subagent registry sqlite store", () => {
       delivery: { status: "suspended" },
     });
     expect([
-      ...loadSubagentSessionListRunsFromSqlite(["agent:main:controller"]).values(),
+      ...loadSubagentSessionListRunsFromSqlite(
+        ["agent:main:controller"],
+        openOpenClawStateDatabase(),
+      ).values(),
     ]).toMatchObject([{ runId: run.runId, delivery: { status: "suspended" } }]);
     const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
     const releasedRows = executeSqliteQuerySync(
@@ -542,7 +513,9 @@ describe("subagent registry sqlite store", () => {
         run.runId,
       );
       expect(loadSubagentRegistryFromSqlite().size).toBe(0);
-      expect(loadSubagentSessionListRunsFromSqlite().size).toBe(0);
+      expect(
+        loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).size,
+      ).toBe(0);
     }
   });
 
@@ -705,7 +678,9 @@ describe("subagent registry sqlite store", () => {
     });
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
-    expect(loadSubagentSessionListRunsFromSqlite().get(run.runId)).toEqual({
+    expect(
+      loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(run.runId),
+    ).toEqual({
       runId: run.runId,
       swarmRunId: "stable-collector",
       childSessionKey: run.childSessionKey,
@@ -754,7 +729,9 @@ describe("subagent registry sqlite store", () => {
         admitted,
       );
       expect(
-        loadSubagentSessionListRunsFromSqlite().has(run.runId),
+        loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).has(
+          run.runId,
+        ),
         "compact row eligibility",
       ).toBe(admitted);
     }
@@ -793,7 +770,11 @@ describe("subagent registry sqlite store", () => {
       });
       const parse = vi.spyOn(JSON, "parse");
       try {
-        expect(loadSubagentSessionListRunsFromSqlite().get(run.runId)).toMatchObject({
+        expect(
+          loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(
+            run.runId,
+          ),
+        ).toMatchObject({
           execution: { status: "terminal" },
           delivery: { status: "pending" },
         });
@@ -817,7 +798,10 @@ describe("subagent registry sqlite store", () => {
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
       closeOpenClawStateDatabaseForTest();
 
-      const compact = loadSubagentSessionListRunsFromSqlite().get(run.runId);
+      const compact = loadSubagentSessionListRunsFromSqlite(
+        undefined,
+        openOpenClawStateDatabase(),
+      ).get(run.runId);
       expect(compact?.pauseReason).toBe("sessions_yield");
       expect(resolveSubagentDisplayStatus(compact!)).toBe("waiting for external continuation");
     },
@@ -886,7 +870,9 @@ describe("subagent registry sqlite store", () => {
     );
 
     expect(loadSubagentRegistryFromSqlite()).toEqual(new Map());
-    expect(loadSubagentSessionListRunsFromSqlite()).toEqual(new Map());
+    expect(loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase())).toEqual(
+      new Map(),
+    );
 
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
     db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
@@ -894,7 +880,9 @@ describe("subagent registry sqlite store", () => {
       run.runId,
     );
     expect(loadSubagentRegistryFromSqlite()).toEqual(new Map());
-    expect(loadSubagentSessionListRunsFromSqlite()).toEqual(new Map());
+    expect(loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase())).toEqual(
+      new Map(),
+    );
   });
 
   it("loads explicit controller rows and null-controller requester fallbacks", async () => {
@@ -933,23 +921,21 @@ describe("subagent registry sqlite store", () => {
       ]),
     );
 
-    expect(
-      loadSubagentRunsForControllerFromSqlite("agent:main:controller").map((run) => run.runId),
-    ).toEqual(["empty-controller", "explicit", "fallback", "padded-controller"]);
-    expect(
-      loadSubagentRunsForControllerFromSqlite("agent:main:controller").at(-1)?.controllerSessionKey,
-    ).toBe("agent:main:controller");
-    expect(loadSubagentRunsForControllerFromSqlite("   ")).toEqual([]);
     expect([
-      ...loadSubagentSessionListRunsFromSqlite([" agent:main:controller ", " "]).keys(),
+      ...loadSubagentSessionListRunsFromSqlite(
+        [" agent:main:controller ", " "],
+        openOpenClawStateDatabase(),
+      ).keys(),
     ]).toEqual(["empty-controller", "explicit", "fallback", "padded-controller"]);
     expect([
-      ...loadSubagentSessionListRunsFromSqlite([
-        "agent:main:controller",
-        "agent:main:other-controller",
-      ]).keys(),
+      ...loadSubagentSessionListRunsFromSqlite(
+        ["agent:main:controller", "agent:main:other-controller"],
+        openOpenClawStateDatabase(),
+      ).keys(),
     ]).toEqual(["empty-controller", "explicit", "fallback", "other", "padded-controller"]);
-    expect(loadSubagentSessionListRunsFromSqlite(["   "])).toEqual(new Map());
+    expect(loadSubagentSessionListRunsFromSqlite(["   "], openOpenClawStateDatabase())).toEqual(
+      new Map(),
+    );
   });
 
   it.each([
@@ -1000,9 +986,14 @@ describe("subagent registry sqlite store", () => {
       const database = openOpenClawStateDatabase();
       expect(loadSubagentRegistryFromSqlite().get(run.runId)).toEqual(original);
       expect(readSubagentRun(database, run.runId)).toEqual(original);
-      expect(loadSubagentRunsForChildSessionFromSqlite(run.childSessionKey)).toEqual([original]);
-      expect(loadSubagentRunsForControllerFromSqlite("agent:main:controller")).toEqual([original]);
-      expect(loadSubagentSessionListRunsFromSqlite().get(run.runId)).toMatchObject({
+      expect(loadSubagentRunsForChildSessionFromSqlite(run.childSessionKey, database)).toEqual([
+        original,
+      ]);
+      expect(
+        loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(
+          run.runId,
+        ),
+      ).toMatchObject({
         runId: run.runId,
         execution: {
           status: "terminal",
@@ -1013,7 +1004,10 @@ describe("subagent registry sqlite store", () => {
         delivery: { status },
       });
       expect([
-        ...loadSubagentSessionListRunsFromSqlite(["agent:main:controller"]).values(),
+        ...loadSubagentSessionListRunsFromSqlite(
+          ["agent:main:controller"],
+          openOpenClawStateDatabase(),
+        ).values(),
       ]).toMatchObject([{ runId: run.runId, delivery: { status } }]);
       const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
       const releasedRows = executeSqliteQuerySync(

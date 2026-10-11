@@ -13,6 +13,7 @@ import * as updateWriter from "../../infra/update-run-write.async.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import * as postUpdateMaintenance from "./update-command-post-update-maintenance.js";
+import { registerServiceStartRefusalFinalizationTests } from "./update-command-post-update-runtime-refresh.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
@@ -36,8 +37,11 @@ export function registerBoundaryFinalizationControls({
   mocks: {
     readServiceState: Mock;
     restartService: Mock<typeof import("./update-command-service.js").maybeRestartService>;
+    printResult: Mock;
   };
 }) {
+  registerServiceStartRefusalFinalizationTests({ makeTempDir, mocks });
+
   it.each(["confirmed", "unknown", "refused", "revoked", "replaced"] as const)(
     "settles progress before finalization and retains its failure (%s)",
     async (outcome) => {

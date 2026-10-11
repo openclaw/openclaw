@@ -88,7 +88,7 @@ Version scope: this page is verified against [llmman v0.1.334](https://github.co
     llmman ps
     ```
 
-    There is no `/health` route; use `/api/version` or `/v1/models` as the readiness probe. `/v1/models` lists fully qualified ids such as `docker.io/ai/qwen3.8:latest`; requests may use either that form or the short name.
+    There is no `/health` route; use `/api/version` or `/v1/models` as the readiness check. `/v1/models` lists fully qualified ids such as `docker.io/ai/qwen3.8:latest`; requests may use either that form or the short name.
 
   </Step>
   <Step title="Set the marker credential">
@@ -182,7 +182,7 @@ llmman pull qwen3.5:9b
 
 ### Smoke tests
 
-A narrow text probe that skips the full agent tool surface:
+A narrow text check that skips the full agent tool surface:
 
 ```bash
 LLMMAN_API_KEY=llmman-local \
@@ -193,7 +193,7 @@ LLMMAN_API_KEY=llmman-local \
     --json
 ```
 
-Add `--file` with an image for a lean vision-model probe (PNG/JPEG/WebP;
+Add `--file` with an image for a lean vision-model check (PNG/JPEG/WebP;
 non-image files are rejected before llmman is called; use
 `openclaw infer audio transcribe` for audio):
 
@@ -207,7 +207,7 @@ LLMMAN_API_KEY=llmman-local \
     --json
 ```
 
-Neither path loads chat tools, memory, or session context. If a probe succeeds
+Neither path loads chat tools, memory, or session context. If a check succeeds
 while normal agent replies fail, the issue is usually tool-schema handling or
 context pressure in the backend, not the endpoint; see
 [Troubleshooting](#troubleshooting).
@@ -468,7 +468,7 @@ openclaw infer image describe --file ./photo.jpg --model llmman/gemma4:e4b --jso
 
 `--model` must be a full `<provider/model>` ref. Use `infer image describe`
 for OpenClaw's image-understanding flow and configured `imageModel`; use
-`infer model run --file` for a raw multimodal probe with a custom prompt.
+`infer model run --file` for a raw multimodal check with a custom prompt.
 
 To make a llmman model the default image-understanding provider for inbound
 media:
@@ -866,7 +866,7 @@ container, or service account.
 
     With this declaration, `openclaw agent --model llmman/qwen3.8 --thinking off`, `/think off`, and `openclaw infer model run --local --model llmman/qwen3.8 --thinking off --prompt "Reply with exactly: pong" --json` map the thinking setting to `chat_template_kwargs.enable_thinking`. Without it, the generic proxy defaults do not send this control or `reasoning_effort`.
 
-    The lean `infer model run` path does not read the agent-level `params` recipe above; use the compatibility declaration and `--thinking off` for that probe. Do not combine a fixed `enable_thinking` agent param with per-run control, since the fixed param overrides the generated value. Apply Qwen-specific controls to a hybrid ref only if both its local and hosted backends accept them.
+    The lean `infer model run` path does not read the agent-level `params` recipe above; use the compatibility declaration and `--thinking off` for that check. Do not combine a fixed `enable_thinking` agent param with per-run control, since the fixed param overrides the generated value. Apply Qwen-specific controls to a hybrid ref only if both its local and hosted backends accept them.
 
   </Accordion>
 
@@ -885,7 +885,7 @@ container, or service account.
   </Accordion>
 
   <Accordion title="GPU and backend selection">
-    llmman probes CUDA, ROCm, Vulkan (Linux/Windows) or Metal (macOS) and downloads a matching `llama-server` release if none is on `PATH`. Override with `LLMMAN_LLM_LIBRARY`: `cpu`, `cuda`, `cuda13`, `rocm`, `vulkan`, or `metal`. Other knobs: `LLMMAN_FLASH_ATTENTION` (`on`/`off`/`auto`), `LLMMAN_KV_CACHE_TYPE` (`f16`, `q8_0`, `q4_0`), `LLMMAN_SCHED_SPREAD` for multi-GPU layer splitting, `LLMMAN_IGPU_ENABLE` to count integrated GPUs. On Linux, `llmman serve --ociman docker|podman` runs `llama-server` from the `ghcr.io/ggml-org/llama.cpp` images instead of a local binary. `LLMMAN_DEBUG=1` prints the probe result.
+    llmman checks CUDA, ROCm, Vulkan (Linux/Windows) or Metal (macOS) and downloads a matching `llama-server` release if none is on `PATH`. Override with `LLMMAN_LLM_LIBRARY`: `cpu`, `cuda`, `cuda13`, `rocm`, `vulkan`, or `metal`. Other knobs: `LLMMAN_FLASH_ATTENTION` (`on`/`off`/`auto`), `LLMMAN_KV_CACHE_TYPE` (`f16`, `q8_0`, `q4_0`), `LLMMAN_SCHED_SPREAD` for multi-GPU layer splitting, `LLMMAN_IGPU_ENABLE` to count integrated GPUs. On Linux, `llmman serve --ociman docker|podman` runs `llama-server` from the `ghcr.io/ggml-org/llama.cpp` images instead of a local binary. `LLMMAN_DEBUG=1` prints the check result.
   </Accordion>
 
   <Accordion title="Memory embeddings">
@@ -995,7 +995,7 @@ container, or service account.
   </Accordion>
 
   <Accordion title="Direct /v1/chat/completions calls pass but openclaw infer model run fails">
-    Both probes are tool-free, so `compat.supportsTools` cannot change this failure. Check the configured base URL, model id, and `LLMMAN_API_KEY`, inspect the daemon and backend logs, and compare the two request payloads.
+    Both checks are tool-free, so `compat.supportsTools` cannot change this failure. Check the configured base URL, model id, and `LLMMAN_API_KEY`, inspect the daemon and backend logs, and compare the two request payloads.
   </Accordion>
 
   <Accordion title="Model run passes but a normal agent turn fails">
@@ -1028,12 +1028,12 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
     Direct hosted access to the models used as the hybrid overflow half.
   </Card>
   <Card title="Inference CLI" href="/cli/infer" icon="terminal">
-    `openclaw infer model run` and the other one-shot probes used on this page.
+    `openclaw infer model run` and the other one-shot checks used on this page.
   </Card>
   <Card title="Model providers" href="/concepts/model-providers" icon="layers">
     Overview of all providers, model refs, and failover behavior.
   </Card>
   <Card title="Gateway troubleshooting" href="/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail" icon="wrench">
-    Debugging local OpenAI-compatible backends that pass probes but fail agent runs.
+    Debugging local OpenAI-compatible backends that pass checks but fail agent runs.
   </Card>
 </CardGroup>

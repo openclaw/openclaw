@@ -44,7 +44,7 @@ export function findPreferredDmConversationByUserId(
       continue;
     }
     const convType = normalizeLowercaseStringOrEmpty(
-      entry.reference.conversation?.conversationType ?? "",
+      entry.reference.conversation?.conversationType,
     );
     if (convType === "channel" || convType === "groupchat") {
       continue;

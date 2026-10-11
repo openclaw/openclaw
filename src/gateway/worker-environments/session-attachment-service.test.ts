@@ -10,7 +10,7 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { createGatewayPortalService } from "../portals/portal-service.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {

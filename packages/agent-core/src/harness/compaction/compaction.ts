@@ -12,6 +12,7 @@ import { buildSessionContext, projectSessionEntryMessage } from "../session/sess
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import { CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
+import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
   computeFileLists,
   createFileOps,
@@ -26,9 +27,7 @@ import {
 
 /** File-operation details stored on generated compaction entries. */
 export interface CompactionDetails {
-  /** Files read in the compacted history. */
   readFiles: string[];
-  /** Files modified in the compacted history. */
   modifiedFiles: string[];
   /** Run-owned request that remains active across another compaction generation. */
   latestUnresolvedUserRequest?: string;
@@ -57,27 +56,6 @@ function parseCompactionDetails(value: unknown): CompactionDetails | undefined {
   };
 }
 
-function extractFileOperations(
-  messages: AgentMessage[],
-  entries: SessionTreeEntry[],
-  prevBoundaryIndex: number,
-): FileOperations {
-  const fileOps = createFileOps();
-  if (prevBoundaryIndex >= 0) {
-    const prevCompaction = entries[prevBoundaryIndex];
-    if (prevCompaction?.type === "compaction" && !prevCompaction.fromHook) {
-      const details = parseCompactionDetails(prevCompaction.details);
-      if (details) {
-        mergeSummaryFileOperations(fileOps, details);
-      }
-    }
-  }
-  for (const msg of messages) {
-    extractFileOpsFromMessage(msg, fileOps);
-  }
-
-  return fileOps;
-}
 function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage | undefined {
   if (entry.type === "compaction") {
     return undefined;
@@ -91,7 +69,6 @@ export interface CompactionResult<T = unknown> {
   summary: string;
   /** Entry id where retained history starts. */
   firstKeptEntryId: string;
-  /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Optional implementation-specific details stored with the compaction entry. */
   details?: T;
@@ -165,12 +142,11 @@ export function fitCompactionSummary<T extends { summary: string }>(
   tokenBudget: number | undefined,
   render: (maxChars: number) => T | undefined,
 ): Result<T, CompactionError> {
+  const fits = (candidate: T) =>
+    tokenBudget === undefined ||
+    estimateStringChars(candidate.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget;
   const full = render(MAX_COMPACTION_SUMMARY_CHARS);
-  if (
-    full &&
-    (tokenBudget === undefined ||
-      estimateStringChars(full.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget)
-  ) {
+  if (full && fits(full)) {
     return ok(full);
   }
   let low = 1;
@@ -181,10 +157,7 @@ export function fitCompactionSummary<T extends { summary: string }>(
     const candidate = render(mid);
     if (!candidate) {
       low = mid + 1;
-    } else if (
-      tokenBudget === undefined ||
-      estimateStringChars(candidate.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget
-    ) {
+    } else if (fits(candidate)) {
       fitted = candidate;
       low = mid + 1;
     } else {
@@ -201,7 +174,6 @@ export function fitCompactionSummary<T extends { summary: string }>(
       );
 }
 
-/** Compaction thresholds and retention settings. */
 export interface CompactionSettings {
   /** Enable automatic compaction decisions. */
   enabled: boolean;
@@ -211,14 +183,12 @@ export interface CompactionSettings {
   keepRecentTokens: number;
 }
 
-/** Default compaction settings used by the harness. */
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   enabled: true,
   reserveTokens: 16384,
   keepRecentTokens: 20000,
 };
 
-/** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
   if (usage.contextUsage?.state === "available") {
     return usage.contextUsage.totalTokens;
@@ -244,16 +214,12 @@ function isUnavailableContextBarrier(message: AgentMessage): boolean {
   if (!usage) {
     return false;
   }
-  if (message.api === "cli" && usage.contextUsage === undefined) {
-    return true;
-  }
-  if (usage.contextUsage?.state !== "unavailable") {
-    return false;
-  }
-  return calculateContextTokens(usage) === 0;
+  return (
+    (message.api === "cli" && usage.contextUsage === undefined) ||
+    (usage.contextUsage?.state === "unavailable" && calculateContextTokens(usage) === 0)
+  );
 }
 
-/** Return usage from the last valid assistant message in session entries. */
 export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | undefined {
   for (const entry of entries.toReversed()) {
     if (entry.type === "message") {
@@ -269,7 +235,6 @@ export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | unde
   return undefined;
 }
 
-/** Estimated context-token usage for a message list. */
 export interface ContextUsageEstimate {
   /** Estimated total context tokens. */
   tokens: number;
@@ -315,7 +280,6 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
   };
 }
 
-/** Return whether context usage exceeds the configured compaction threshold. */
 export function shouldCompact(
   contextTokens: number,
   contextWindow: number,
@@ -393,20 +357,13 @@ function isCutPointMessage(message: AgentMessage): boolean {
 }
 
 function isTurnStartMessage(message: AgentMessage): boolean {
-  switch (message.role) {
-    case "custom":
-      return !isRuntimeContextCarrier(message);
-    case "user":
-    case "bashExecution":
-    case "branchSummary":
-    case "compactionSummary":
-      return true;
-    case "assistant":
-    case "toolResult":
-      return false;
-  }
-
-  return false;
+  const role = message.role;
+  return role === "custom"
+    ? !isRuntimeContextCarrier(message)
+    : role === "user" ||
+        role === "bashExecution" ||
+        role === "branchSummary" ||
+        role === "compactionSummary";
 }
 
 function isTurnStartEntry(entry: SessionTreeEntry): boolean {
@@ -422,17 +379,13 @@ export function findTurnStartIndex(
 ): number {
   for (let i = entryIndex; i >= startIndex; i--) {
     const entry = entries[i];
-    if (!entry) {
-      continue;
-    }
-    if (isTurnStartEntry(entry)) {
+    if (entry && isTurnStartEntry(entry)) {
       return i;
     }
   }
   return -1;
 }
 
-/** Cut point selected for compaction. */
 interface CutPointResult {
   /** Index of the first entry retained after compaction. */
   firstKeptEntryIndex: number;
@@ -556,40 +509,22 @@ export function findCutPoint(
   };
 }
 
-const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+const SUMMARIZATION_PROMPT = buildSummaryCheckpointPrompt({
+  introduction:
+    "The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.",
+  goal: "[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]",
+  constraints:
+    '- [Any constraints, preferences, or requirements mentioned by user]\n- [Or "(none)" if none were mentioned]',
+  inProgress: "- [ ] [Current work]",
+  blocked: "- [Issues preventing progress, if any]",
+  decisions: "- **[Decision]**: [Brief rationale]",
+  nextSteps: "1. [Ordered list of what should happen next]",
+  criticalContext:
+    '- [Any data, examples, or references needed to continue]\n- [Or "(none)" if not applicable]',
+});
 
-Use this EXACT format:
-
-## Goal
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
-
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned by user]
-- [Or "(none)" if none were mentioned]
-
-## Progress
-### Done
-- [x] [Completed tasks/changes]
-
-### In Progress
-- [ ] [Current work]
-
-### Blocked
-- [Issues preventing progress, if any]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale]
-
-## Next Steps
-1. [Ordered list of what should happen next]
-
-## Critical Context
-- [Any data, examples, or references needed to continue]
-- [Or "(none)" if not applicable]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
-
-const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+const UPDATE_SUMMARIZATION_PROMPT = buildSummaryCheckpointPrompt({
+  introduction: `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
 
 Update the existing structured summary with new information. RULES:
 - PRESERVE all existing information from the previous summary
@@ -597,43 +532,22 @@ Update the existing structured summary with new information. RULES:
 - UPDATE the Progress section: move items from "In Progress" to "Done" when completed. Record checks that ran and their results as completed, even when they failed; keep unresolved blockers separate.
 - UPDATE "Next Steps" based on what was accomplished
 - PRESERVE exact file paths, function names, and error messages
-- If something is no longer relevant, you may remove it
-
-Use this EXACT format:
-
-## Goal
-[Preserve existing goals, add new ones if the task expanded]
-
-## Constraints & Preferences
-- [Preserve existing, add new ones discovered]
-
-## Progress
-### Done
-- [x] [Include previously done items AND newly completed items]
-
-### In Progress
-- [ ] [Current work - update based on progress]
-
-### Blocked
-- [Current blockers - remove if resolved]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale] (preserve all previous, add new)
-
-## Next Steps
-1. [Update based on current state]
-
-## Critical Context
-- [Preserve important context, add new if needed]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+- If something is no longer relevant, you may remove it`,
+  goal: "[Preserve existing goals, add new ones if the task expanded]",
+  constraints: "- [Preserve existing, add new ones discovered]",
+  done: "- [x] [Include previously done items AND newly completed items]",
+  inProgress: "- [ ] [Current work - update based on progress]",
+  blocked: "- [Current blockers - remove if resolved]",
+  decisions: "- **[Decision]**: [Brief rationale] (preserve all previous, add new)",
+  nextSteps: "1. [Update based on current state]",
+  criticalContext: "- [Preserve important context, add new if needed]",
+});
 
 /** Caller-owned formats replace the default headings; focus remains additive. */
 export type CompactionSummaryPrompt =
   | { kind: "turn-prefix" }
   | { kind: "custom"; instructions: string };
 
-/** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
   currentMessages: AgentMessage[],
   model: Model,
@@ -685,7 +599,6 @@ export async function generateSummary(
   });
 }
 
-/** Prepared inputs for a compaction run. */
 export interface CompactionPreparation {
   /** Remaining foreground summary tokens, independent of the summarizer's context window. */
   summaryTokenBudget?: number;
@@ -695,11 +608,9 @@ export interface CompactionPreparation {
   messagesToSummarize: AgentMessage[];
   /** Prefix messages summarized separately when compaction splits a turn. */
   turnPrefixMessages: AgentMessage[];
-  /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
   /** Bounded request that the run owner will resume after compaction. */
   latestUnresolvedUserRequest?: string;
-  /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Previous compaction summary used for iterative updates. */
   previousSummary?: string;
@@ -707,7 +618,6 @@ export interface CompactionPreparation {
   previousSummaryDetails?: CompactionDetails;
   /** File operations extracted from summarized history. */
   fileOps: FileOperations;
-  /** Settings used to prepare compaction. */
   settings: CompactionSettings;
 }
 
@@ -843,7 +753,19 @@ export function prepareCompaction(
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {
     return ok(undefined);
   }
-  const fileOps = extractFileOperations(messagesToSummarize, effectiveEntries, prevBoundaryIndex);
+  const fileOps = createFileOps();
+  if (prevBoundaryIndex >= 0) {
+    const prevCompaction = effectiveEntries[prevBoundaryIndex];
+    if (prevCompaction?.type === "compaction" && !prevCompaction.fromHook) {
+      const details = parseCompactionDetails(prevCompaction.details);
+      if (details) {
+        mergeSummaryFileOperations(fileOps, details);
+      }
+    }
+  }
+  for (const msg of messagesToSummarize) {
+    extractFileOpsFromMessage(msg, fileOps);
+  }
   if (cutPoint.isSplitTurn) {
     for (const msg of turnPrefixMessages) {
       extractFileOpsFromMessage(msg, fileOps);
@@ -881,7 +803,6 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
 
 export { serializeConversation } from "./utils.js";
 
-/** Generate compaction summary data from prepared session history. */
 export async function compact(
   preparation: CompactionPreparation,
   model: Model,
@@ -910,22 +831,29 @@ export async function compact(
     );
   }
 
+  const summarize = (
+    messages: AgentMessage[],
+    previous?: string,
+    summaryPrompt?: CompactionSummaryPrompt,
+  ) =>
+    generateSummary(
+      messages,
+      model,
+      settings.reserveTokens,
+      apiKey,
+      headers,
+      signal,
+      customInstructions,
+      previous,
+      thinkingLevel,
+      streamFn,
+      runtime,
+      summaryPrompt,
+    );
   const summarizeTurnPrefix = isSplitTurn && turnPrefixMessages.length > 0;
   const historyResult =
     messagesToSummarize.length > 0 || !summarizeTurnPrefix
-      ? await generateSummary(
-          messagesToSummarize,
-          model,
-          settings.reserveTokens,
-          apiKey,
-          headers,
-          signal,
-          customInstructions,
-          previousSummary,
-          thinkingLevel,
-          streamFn,
-          runtime,
-        )
+      ? await summarize(messagesToSummarize, previousSummary)
       : ok<string, CompactionError>(
           previousSummaryWithoutFileOperations(preparation) ?? "No prior history.",
         );
@@ -935,20 +863,9 @@ export async function compact(
 
   let latestContext = "";
   if (summarizeTurnPrefix) {
-    const turnPrefixResult = await generateSummary(
-      turnPrefixMessages,
-      model,
-      settings.reserveTokens,
-      apiKey,
-      headers,
-      signal,
-      customInstructions,
-      undefined,
-      thinkingLevel,
-      streamFn,
-      runtime,
-      { kind: "turn-prefix" },
-    );
+    const turnPrefixResult = await summarize(turnPrefixMessages, undefined, {
+      kind: "turn-prefix",
+    });
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }

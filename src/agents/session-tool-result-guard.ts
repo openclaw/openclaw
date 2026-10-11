@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { bindAgentAssistantSource, readAgentAssistantSource } from "../infra/agent-events.js";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
@@ -10,7 +11,10 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../sessions/transcript-events.js";
-import { withRuntimeUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript-runtime-context.js";
+import {
+  withRuntimeUserTurnTranscriptRecorder,
+  withCurrentRuntimeUserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -37,8 +41,8 @@ import type {
   CompactionAppendPersistence,
   CompactionAppendPersistenceAsync,
 } from "./sessions/session-compaction-persistence.js";
+import { prepareSessionManagerSync } from "./sessions/session-manager-incognito-scope.js";
 import { withSessionManagerWrite } from "./sessions/session-manager-write-admission.js";
-import { warnSessionPersistenceDeprecation } from "./sessions/session-persistence-deprecation.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -71,15 +75,6 @@ type AppendRequest = {
   options?: AppendMessageOptions;
   sourceAppend?: CodeModeSourceAppend;
 };
-
-function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const provider = normalizeOptionalString(message.provider) ?? "";
-  const model = normalizeOptionalString(message.model) ?? "";
-  return isTranscriptOnlyOpenClawAssistantModel(provider, model);
-}
 
 // Aborted/error turns can contain incomplete calls that cannot receive synthetic results.
 function extractPendingAssistantToolCalls(message: AgentMessage) {
@@ -121,7 +116,10 @@ function clearsPendingToolCalls(
       message.excludeFromContext === true) ||
     (message.role === "assistant" &&
       toolCalls.length === 0 &&
-      isTranscriptOnlyOpenClawAssistantMessage(message));
+      isTranscriptOnlyOpenClawAssistantModel(
+        normalizeOptionalString(message.provider) ?? "",
+        normalizeOptionalString(message.model) ?? "",
+      ));
   return (
     (!transcriptOnly && (toolCalls.length === 0 || message.role !== "assistant")) ||
     (!allowSyntheticToolResults && toolCalls.length > 0)
@@ -251,8 +249,11 @@ export function installSessionToolResultGuard(
   const runAsync = async <T>(operation: Generator<AppendRequest, T, AppendReceipt>): Promise<T> => {
     let next = operation.next();
     while (!next.done) {
+      const request = next.value;
       next = operation.next(
-        await appendRequest(next.value, originalAppendWithTranscriptAnchorAsync),
+        await withCurrentRuntimeUserTurnTranscriptRecorder(request.message, () =>
+          appendRequest(request, originalAppendWithTranscriptAnchorAsync),
+        ),
       );
     }
     return next.value;
@@ -321,6 +322,7 @@ export function installSessionToolResultGuard(
     },
     AppendReceipt
   > {
+    const assistantSource = readAgentAssistantSource(acknowledgementSource);
     const runOwnedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
     copyCodeModeSourceAppend(message, runOwnedMessage, sourceAppend);
     const parentEntryId = sessionManager.getLeafId();
@@ -356,13 +358,17 @@ export function installSessionToolResultGuard(
         : undefined;
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
+    if (assistantSource && appended) {
+      assistantSource.committedMessageSeq =
+        messageSeq ?? (anchor ? anchor.activeMessagePosition + 1 : null);
+      bindAgentAssistantSource(persistedMessage, assistantSource);
+    }
     // Update only committed state, before callbacks can re-enter or throw.
     recordPendingReceipt(entryId, persistedMessage, viewWasSuperseded === true);
-    if (!appended) {
-      return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
+    if (appended) {
+      void opts?.onMessagePersisted?.(persistedMessage);
     }
-    void opts?.onMessagePersisted?.(persistedMessage);
-    if (!sessionTarget) {
+    if (!appended || !sessionTarget) {
       return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
     }
     return {
@@ -399,10 +405,7 @@ export function installSessionToolResultGuard(
     msg: AgentMessage,
     sourceAppend?: CodeModeSourceAppend,
   ): { message: AgentMessage; changed: boolean } | null => {
-    if (!beforeWrite) {
-      return { message: msg, changed: false };
-    }
-    const result = beforeWrite({ message: msg }, sourceAppend);
+    const result = beforeWrite ? beforeWrite({ message: msg }, sourceAppend) : undefined;
     if (result?.block) {
       return null;
     }
@@ -608,7 +611,7 @@ export function installSessionToolResultGuard(
 
   // Retained third-party synchronous adapter; bundled runtime uses the awaited guard below.
   sessionManager.appendMessage = ((message, options) => {
-    warnSessionPersistenceDeprecation("SessionManager.appendMessage", "appendMessageAsync");
+    prepareSessionManagerSync("appendMessage", sessionManager.getSessionTarget(), sessionManager);
     return withCodeModeSourceAppend(message, options, (sourceAppend) =>
       runSync(guardedAppend(message, options, sourceAppend)),
     );

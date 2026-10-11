@@ -58,3 +58,12 @@ export function createApplicationNavigationPreferences(
     },
   };
 }
+
+/** Both agent settings and the switcher use the same browser-profile pin preference. */
+export function togglePinnedAgent(navigation: ApplicationNavigationPreferences, agentId: string) {
+  const pinned = navigation.snapshot.pinnedAgentIds;
+  const next = pinned.includes(agentId)
+    ? pinned.filter((id) => id !== agentId)
+    : [...pinned, agentId];
+  navigation.update({ pinnedAgentIds: next });
+}

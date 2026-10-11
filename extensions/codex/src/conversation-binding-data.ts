@@ -4,6 +4,7 @@ import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const APP_SERVER_BINDING_DATA_VERSION = 2;
@@ -102,20 +103,16 @@ export function readCodexConversationBindingDataRecord(
   data: Record<string, unknown>,
 ): CodexConversationBindingData | undefined {
   if (data.kind === "codex-cli-node-session") {
-    if (
-      data.version !== CLI_BINDING_DATA_VERSION ||
-      typeof data.nodeId !== "string" ||
-      !data.nodeId.trim() ||
-      typeof data.sessionId !== "string" ||
-      !data.sessionId.trim()
-    ) {
+    const nodeId = normalizeOptionalString(data.nodeId);
+    const sessionId = normalizeOptionalString(data.sessionId);
+    if (data.version !== CLI_BINDING_DATA_VERSION || !nodeId || !sessionId) {
       return undefined;
     }
     return {
       kind: "codex-cli-node-session",
       version: CLI_BINDING_DATA_VERSION,
-      nodeId: data.nodeId.trim(),
-      sessionId: data.sessionId.trim(),
+      nodeId,
+      sessionId,
       agentId: normalizeOptionalString(data.agentId),
       cwd: normalizeOptionalString(data.cwd),
     };
@@ -136,20 +133,16 @@ export function readCodexConversationBindingDataRecord(
   }
   const start = readConversationStart(readRecord(data.start));
   const source = readConversationSource(readRecord(data.source));
-  const legacyBinding = data.version === 1;
   return {
     kind: "codex-app-server-session",
     version: APP_SERVER_BINDING_DATA_VERSION,
     bindingId,
-    workspaceDir:
-      typeof data.workspaceDir === "string" && data.workspaceDir.trim()
-        ? data.workspaceDir
-        : process.cwd(),
+    workspaceDir: readNonBlankString(data.workspaceDir) ?? process.cwd(),
     agentId: normalizeOptionalString(data.agentId),
     agentDir: normalizeOptionalString(data.agentDir),
     ...(source ? { source } : {}),
     ...(start ? { start } : {}),
-    ...(legacyBinding ? { legacyBinding: true } : {}),
+    ...(data.version === 1 ? { legacyBinding: true } : {}),
   };
 }
 

@@ -361,23 +361,18 @@ export async function consumeGoogleGenerateContentStream(params: {
     throw transportAbortError(params.signal);
   }
 
+  if (!sawTerminalReason) {
+    terminalGenerationError = Object.assign(
+      new Error("Google stream ended before a terminal finish reason"),
+      { code: "STREAM_INCOMPLETE", type: "google_incomplete_stream" },
+    );
+  }
   if (terminalGenerationError) {
     if (preserveParts) {
       params.output.errorCode = terminalGenerationError.code;
       params.output.errorType = terminalGenerationError.type;
     }
     throw terminalGenerationError;
-  }
-
-  if (!sawTerminalReason) {
-    if (preserveParts) {
-      params.output.errorCode = "STREAM_INCOMPLETE";
-      params.output.errorType = "google_incomplete_stream";
-    }
-    throw Object.assign(new Error("Google stream ended before a terminal finish reason"), {
-      code: "STREAM_INCOMPLETE",
-      type: "google_incomplete_stream",
-    });
   }
 
   if (params.output.stopReason === "aborted" || params.output.stopReason === "error") {

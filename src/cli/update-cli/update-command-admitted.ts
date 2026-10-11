@@ -27,11 +27,9 @@ import {
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
-type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
-
 export async function runAdmittedUpdate(
   inputOpts: UpdateCommandOptions,
-  prepared: PreparedUpdate,
+  prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
   recoveryState: UpdateCommandRecoveryState,
   invocationCwd: string | undefined,
   executeUpdate: (

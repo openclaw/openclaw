@@ -611,6 +611,7 @@ const fs = require("node:fs");
 const rename = fs.renameSync;
 let remainingDenials = ${publishDenials};
 const waits = [];
+process.umask(0o077);
 Atomics.wait = (_array, _index, _value, delay) => {
   waits.push(delay);
   return "timed-out";
@@ -682,6 +683,18 @@ require("node:module").syncBuiltinESMExports();
         }
       }
       if (expectedExit === 0) {
+        if (process.platform !== "win32") {
+          const published = [
+            output,
+            ...fs
+              .readdirSync(output, { recursive: true, encoding: "utf8" })
+              .map((entry) => path.join(output, entry)),
+          ];
+          for (const entry of published) {
+            const stat = fs.statSync(entry);
+            expect(stat.mode & 0o777, entry).toBe(stat.isDirectory() ? 0o755 : 0o644);
+          }
+        }
         const calls = result.stdout
           .trim()
           .split("\n")

@@ -265,6 +265,12 @@ describe("roster activity lifecycle", () => {
     const stop = store.subscribe(() => {});
     try {
       await vi.advanceTimersByTimeAsync(0);
+      expect(load).toHaveBeenCalledWith(
+        expect.objectContaining({
+          excludeDock: true,
+          ...(change === "involvingMe" ? { involvingMe: true } : {}),
+        }),
+      );
       const payload = ["groups", "stores"].includes(change)
         ? { reason: change }
         : {

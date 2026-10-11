@@ -1,10 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { withStateDatabaseSchemaMaintenance } from "../../infra/state-database-maintenance.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
@@ -16,27 +17,23 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { WorktreeRemovalContentionError } from "./errors.js";
+import { worktreeRegistryPublication } from "./registry-publication.js";
+import { rowToRecord } from "./registry-read.kernel.js";
+import { runWorktreeRunEndCommand } from "./registry-run-end.js";
+import type { WorktreeRegistryPatch } from "./registry-run-end.worker.js";
 import {
-  findLiveRegistryWorktreeByOwnerInDatabase,
-  getRegistryWorktreeInDatabase,
-  getRegistryWorktreeProvisionedStateInDatabase,
-  listRegistryWorktreesInDatabase,
-  rowToRecord,
-  WORKTREE_RECORD_COLUMNS,
-} from "./registry-read.kernel.js";
+  captureWorktreeRegistryMutation,
+  captureWorktreeRunEndContext,
+} from "./run-end-lifecycle.js";
 import {
-  assertRegistryMutationCustody,
   collectLiveRunLeases,
   worktreeRunLeaseScope,
   WORKTREE_REMOVING_LEASE_KEY,
 } from "./run-lease-owner.js";
 import { releaseWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
-import type {
-  ManagedWorktreeOwnerKind,
-  ManagedWorktreeRecord,
-  ProvisionedFileState,
-} from "./types.js";
+import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "./types.js";
 
 export { WorktreeRemovalContentionError } from "./errors.js";
 export {
@@ -50,8 +47,6 @@ export {
   getRegistryWorktreeProvisionedState,
 } from "./registry-read.js";
 
-type WorktreesTable = OpenClawStateKyselyDatabase["worktrees"];
-type WorktreeRow = Selectable<WorktreesTable>;
 type WorktreeRegistryDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "worktrees" | "worktree_provisioned_file_chunks" | "state_leases"
@@ -63,35 +58,6 @@ function dbFor(env: NodeJS.ProcessEnv): DatabaseSync {
 
 function kyselyFor(db: DatabaseSync) {
   return getNodeSqliteKysely<WorktreeRegistryDatabase>(db);
-}
-
-function recordToRow(
-  record: ManagedWorktreeRecord,
-  provisionedPaths: readonly string[] | undefined,
-): Insertable<WorktreesTable> {
-  return {
-    id: record.id,
-    repo_fingerprint: record.repoFingerprint,
-    repo_root: record.repoRoot,
-    path: record.path,
-    branch: record.branch,
-    base_ref: record.baseRef,
-    owner_kind: record.ownerKind,
-    owner_id: record.ownerId ?? null,
-    snapshot_ref: record.snapshotRef ?? null,
-    created_at: record.createdAt,
-    last_active_at: record.lastActiveAt,
-    removed_at: record.removedAt ?? null,
-    gc_protection_json: null,
-    provisioned_paths_json:
-      provisionedPaths === undefined ? null : JSON.stringify(provisionedPaths),
-    run_end_cleanup_json:
-      record.runEndCleanup === undefined ? null : JSON.stringify(record.runEndCleanup),
-  };
-}
-
-export function listRegistryWorktrees(env: NodeJS.ProcessEnv): ManagedWorktreeRecord[] {
-  return listRegistryWorktreesInDatabase(dbFor(env));
 }
 
 export function listRegistryWorktreesForMigration(
@@ -137,11 +103,15 @@ function readRegistry<T>(
     : withExistingOpenClawStateDatabaseReadOnly(operation, { env });
 }
 
-export function getRegistryWorktree(
-  env: NodeJS.ProcessEnv,
-  id: string,
-): ManagedWorktreeRecord | undefined {
-  return getRegistryWorktreeInDatabase(dbFor(env), id);
+// Doctor/startup planning may release schema custody before these native business writes.
+function runRegistryMigration(
+  write: (db: DatabaseSync) => number,
+  { env }: { env: NodeJS.ProcessEnv },
+): number {
+  return withStateDatabaseSchemaMaintenance(
+    { databasePath: resolveOpenClawStateSqlitePath(env) },
+    () => runOpenClawStateWriteTransaction(({ db }) => write(db), { env }),
+  );
 }
 
 export function discardLegacyRegistryWorktrees(
@@ -151,20 +121,21 @@ export function discardLegacyRegistryWorktrees(
   if (worktreeIds.length === 0) {
     return 0;
   }
-  const db = dbFor(env);
-  return runOpenClawStateWriteTransaction(
-    () =>
-      Number(
-        executeSqliteQuerySync(
-          db,
-          // Delete only the owner rows captured in the migration receipt. A row that
-          // appears after planning belongs to the next Doctor run.
-          kyselyFor(db)
-            .deleteFrom("worktrees")
-            .where("provisioned_paths_json", "is", null)
-            .where("id", "in", [...worktreeIds]),
-        ).numAffectedRows ?? 0n,
-      ),
+  return runRegistryMigration(
+    (db) => {
+      const removed = executeSqliteQuerySync(
+        db,
+        // Delete only the owner rows captured in the migration receipt. A row that
+        // appears after planning belongs to the next Doctor run.
+        kyselyFor(db)
+          .deleteFrom("worktrees")
+          .where("provisioned_paths_json", "is", null)
+          .where("id", "in", [...worktreeIds])
+          .returningAll(),
+      ).rows;
+      worktreeRegistryPublication.deleted(db, removed);
+      return removed.length;
+    },
     { env },
   );
 }
@@ -176,173 +147,70 @@ export function rewriteRegistryWorktreePathsForMigration(
   if (rewrites.length === 0) {
     return 0;
   }
-  const db = dbFor(env);
   // Only the state-migration owner may rewrite persisted worktree identity paths.
   // Runtime updates deliberately keep `path` outside their patch surface.
-  return runOpenClawStateWriteTransaction(
-    () =>
-      rewrites.reduce(
-        (count, rewrite) =>
-          count +
-          Number(
-            executeSqliteQuerySync(
-              db,
-              kyselyFor(db)
-                .updateTable("worktrees")
-                .set({ path: rewrite.toPath })
-                .where("id", "=", rewrite.id)
-                .where("path", "=", rewrite.fromPath),
-            ).numAffectedRows ?? 0n,
-          ),
-        0,
-      ),
+  return runRegistryMigration(
+    (db) =>
+      rewrites.reduce((count, rewrite) => {
+        const changed = executeSqliteQuerySync(
+          db,
+          kyselyFor(db)
+            .updateTable("worktrees")
+            .set({ path: rewrite.toPath })
+            .where("id", "=", rewrite.id)
+            .where("path", "=", rewrite.fromPath)
+            .returningAll(),
+        ).rows;
+        worktreeRegistryPublication.rows(db, changed);
+        return count + changed.length;
+      }, 0),
     { env },
   );
-}
-
-export function findLiveRegistryWorktreeByPath(
-  env: NodeJS.ProcessEnv,
-  worktreePath: string,
-): ManagedWorktreeRecord | undefined {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("worktrees")
-    .select(WORKTREE_RECORD_COLUMNS)
-    .where("path", "=", worktreePath)
-    .where("removed_at", "is", null)
-    .orderBy("created_at", "desc")
-    .limit(1);
-  const row = executeSqliteQuerySync(db, query).rows[0];
-  return row ? rowToRecord(row) : undefined;
-}
-
-export function findLiveRegistryWorktreeByOwner(
-  env: NodeJS.ProcessEnv,
-  ownerKind: ManagedWorktreeOwnerKind,
-  ownerId: string,
-): ManagedWorktreeRecord | undefined {
-  return findLiveRegistryWorktreeByOwnerInDatabase(dbFor(env), ownerKind, ownerId);
 }
 
 export function insertRegistryWorktree(
   env: NodeJS.ProcessEnv,
   record: ManagedWorktreeRecord,
-  options: { provisionedPaths?: readonly string[] } = {},
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        kyselyFor(db).insertInto("worktrees").values(recordToRow(record, options.provisionedPaths)),
-      );
+  options: {
+    provisionedPaths?: readonly string[];
+    workerAuthority?: WorktreeWorkerAuthority;
+    pendingId?: string;
+  } = {},
+): Promise<void> {
+  return runWorktreeRunEndCommand(
+    captureWorktreeRunEndContext(env),
+    {
+      type: "worktrees.insert",
+      input: {
+        value: { record, provisionedPaths: options.provisionedPaths, pendingId: options.pendingId },
+        receipt: randomUUID(),
+      },
     },
-    { env },
+    options.workerAuthority,
   );
 }
 
 export function updateRegistryWorktree(
   env: NodeJS.ProcessEnv,
   id: string,
-  patch: Partial<
-    Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "runEndCleanup" | "snapshotRef">
-  > & {
-    repositoryIdentity?: Pick<ManagedWorktreeRecord, "repoRoot" | "repoFingerprint">;
-    provisionedPaths?: readonly string[];
-    provisionedState?: readonly ProvisionedFileState[];
-  },
+  patch: WorktreeRegistryPatch,
   options: {
     onlyIfLive?: boolean;
     onlyIfActiveAt?: number;
     assertCurrent?: () => void;
     removalToken?: string;
+    workerAuthority?: WorktreeWorkerAuthority;
   } = {},
-): void {
-  const values: Partial<WorktreeRow> = {};
-  if (patch.lastActiveAt !== undefined) {
-    values.last_active_at = patch.lastActiveAt;
-  }
-  if ("removedAt" in patch) {
-    values.removed_at = patch.removedAt ?? null;
-  }
-  if ("snapshotRef" in patch) {
-    values.snapshot_ref = patch.snapshotRef ?? null;
-  }
-  if ("runEndCleanup" in patch) {
-    values.run_end_cleanup_json =
-      patch.runEndCleanup === undefined ? null : JSON.stringify(patch.runEndCleanup);
-  }
-  if (patch.repositoryIdentity) {
-    values.repo_root = patch.repositoryIdentity.repoRoot;
-    values.repo_fingerprint = patch.repositoryIdentity.repoFingerprint;
-  }
-  if (patch.provisionedState !== undefined) {
-    values.provisioned_paths_json = JSON.stringify(patch.provisionedState);
-  } else if (patch.provisionedPaths !== undefined) {
-    values.provisioned_paths_json = JSON.stringify(patch.provisionedPaths);
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // Revalidate under the immediate write transaction, excluding cross-process lifecycle writers.
-      options.assertCurrent?.();
-      assertRegistryMutationCustody(db, kyselyFor(db), id, options.removalToken);
-      let update = kyselyFor(db).updateTable("worktrees").set(values).where("id", "=", id);
-      // Busy/retained/failed outcomes are authoritative only for the lifecycle the
-      // writer observed: the live condition blocks post-finalization overwrites, and
-      // the activity condition blocks prior-lifecycle writes after a concurrent
-      // remove-plus-restore revives the row (restore bumps last_active_at).
-      if (options.onlyIfLive) {
-        update = update.where("removed_at", "is", null);
-      }
-      if (options.onlyIfActiveAt !== undefined) {
-        update = update.where("last_active_at", "=", options.onlyIfActiveAt);
-      }
-      executeSqliteQuerySync(db, update);
+): Promise<void> {
+  const { assertCurrent, workerAuthority, ...conditions } = options;
+  return runWorktreeRunEndCommand(
+    captureWorktreeRunEndContext(env),
+    {
+      type: "worktrees.update",
+      input: { value: { id, patch, ...conditions }, receipt: randomUUID() },
     },
-    { env },
+    workerAuthority ?? { assertCurrent },
   );
-}
-
-/** Retired snapshots cannot discard provisioned data or another lifecycle's custody. */
-function assertSnapshotRetirementInDatabase(
-  db: DatabaseSync,
-  observed: ManagedWorktreeRecord,
-): void {
-  const row = executeSqliteQuerySync(
-    db,
-    kyselyFor(db).selectFrom("worktrees").selectAll().where("id", "=", observed.id),
-  ).rows[0];
-  if (
-    observed.removedAt === undefined ||
-    !row ||
-    JSON.stringify(rowToRecord(row)) !== JSON.stringify(observed)
-  ) {
-    throw new Error("Worktree snapshot retirement identity changed");
-  }
-  const provisioned = getRegistryWorktreeProvisionedStateInDatabase(db, observed.id);
-  const chunk = executeSqliteQuerySync(
-    db,
-    kyselyFor(db)
-      .selectFrom("worktree_provisioned_file_chunks")
-      .select("worktree_id")
-      .where("worktree_id", "=", observed.id)
-      .limit(1),
-  ).rows[0];
-  if (provisioned === undefined || provisioned.length !== 0 || chunk) {
-    throw new Error("Worktree snapshot retains provisioned data; retain its custody");
-  }
-  const leases = collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(observed.id));
-  if (leases.liveCount !== 0 || leases.removingToken !== undefined) {
-    throw new Error("Worktree snapshot has an active or unresolved run/removal consumer");
-  }
-}
-
-export function assertRegistrySnapshotRetirement(
-  env: NodeJS.ProcessEnv,
-  observed: ManagedWorktreeRecord,
-): void {
-  runOpenClawStateWriteTransaction(({ db }) => assertSnapshotRetirementInDatabase(db, observed), {
-    env,
-  });
 }
 
 export function deleteRegistryWorktree(
@@ -352,26 +220,19 @@ export function deleteRegistryWorktree(
     assertCurrent?: () => void;
     removalToken?: string;
     expectedRetired?: ManagedWorktreeRecord;
+    workerAuthority?: WorktreeWorkerAuthority;
   } = {},
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // Validate before deleting either the record or its provisioned recovery chunks.
-      options.assertCurrent?.();
-      if (options.expectedRetired) {
-        if (options.expectedRetired.id !== id) {
-          throw new Error("Worktree snapshot retirement ID changed");
-        }
-        assertSnapshotRetirementInDatabase(db, options.expectedRetired);
-      }
-      assertRegistryMutationCustody(db, kyselyFor(db), id, options.removalToken);
-      executeSqliteQuerySync(
-        db,
-        kyselyFor(db).deleteFrom("worktree_provisioned_file_chunks").where("worktree_id", "=", id),
-      );
-      executeSqliteQuerySync(db, kyselyFor(db).deleteFrom("worktrees").where("id", "=", id));
+): Promise<void> {
+  return runWorktreeRunEndCommand(
+    captureWorktreeRunEndContext(env),
+    {
+      type: "worktrees.delete",
+      input: {
+        value: { id, removalToken: options.removalToken, expectedRetired: options.expectedRetired },
+        receipt: randomUUID(),
+      },
     },
-    { env },
+    options.workerAuthority ?? { assertCurrent: options.assertCurrent },
   );
 }
 
@@ -413,11 +274,42 @@ export function releaseWorktreeRunLeaseRow(
   token: string,
 ): void {
   // Process exit cannot await the worker. Runtime cleanup uses its async command.
-  runOpenClawStateWriteTransaction(
-    ({ db }) => releaseWorktreeRunLeaseInDatabase(db, worktreeId, token),
-    { env },
-    { operationLabel: "worktrees.releaseRunLease" },
+  const mutation = captureWorktreeRegistryMutation(
+    captureWorktreeRunEndContext(env),
+    [{ id: worktreeId, fields: ["leases"] }],
+    { settlement: true },
   );
+  mutation.observeTransaction();
+  try {
+    runOpenClawStateWriteTransaction(
+      ({ db }) => releaseWorktreeRunLeaseInDatabase(db, worktreeId, token),
+      { env },
+      { operationLabel: "worktrees.releaseRunLease" },
+    );
+  } finally {
+    mutation.settle(false);
+  }
+}
+
+/** Check removal custody before a session mutation waits for checkout allocation. */
+export function assertWorktreeRemovalAvailable(
+  env: NodeJS.ProcessEnv,
+  worktreeId: string,
+  ownToken?: string,
+): void {
+  const db = dbFor(env);
+  const token = collectLiveRunLeases(
+    db,
+    kyselyFor(db),
+    worktreeRunLeaseScope(worktreeId),
+    false,
+  ).removingToken;
+  if (token !== undefined && token !== ownToken) {
+    throw new WorktreeRemovalContentionError(
+      "busy",
+      "Worktree removal is in progress; retry after cleanup settles",
+    );
+  }
 }
 
 export function hasLiveWorktreeRunLeaseRow(env: NodeJS.ProcessEnv, worktreeId: string): boolean {

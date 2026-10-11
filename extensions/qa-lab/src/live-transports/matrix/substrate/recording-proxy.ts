@@ -477,12 +477,6 @@ export async function startMatrixQaRecordingProxy(params: {
   let sequence = 0;
   const records: MatrixQaInternalRecordedExchange[] = [];
   const syncTokensByPrincipal = new Map<string, Map<string, string>>();
-  const observer: Required<MatrixQaFaultProxyObserver> = {
-    createExchangeContext: () => ({ scenarioId, sequence: ++sequence }),
-    onExchange(exchange: MatrixQaFaultProxyExchange) {
-      recordExchange(exchange);
-    },
-  };
   const recordExchange = (exchange: MatrixQaFaultProxyExchange) => {
     const context = asOptionalObjectRecord(exchange.context);
     const exchangeSequence = typeof context?.sequence === "number" ? context.sequence : ++sequence;
@@ -551,6 +545,10 @@ export async function startMatrixQaRecordingProxy(params: {
           }
         : {}),
     });
+  };
+  const observer: Required<MatrixQaFaultProxyObserver> = {
+    createExchangeContext: () => ({ scenarioId, sequence: ++sequence }),
+    onExchange: recordExchange,
   };
   const proxy = await startMatrixQaFaultProxy({
     targetBaseUrl: params.targetBaseUrl,

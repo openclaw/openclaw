@@ -71,6 +71,31 @@ export function createOpenAIEncryptedToolCallReasoningTracker() {
   };
 }
 
+function hasObservableContent(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.some(hasObservableContent);
+  }
+  if (isRecord(value)) {
+    return Object.entries(value).some(
+      ([field, nestedValue]) =>
+        field !== "type" &&
+        field !== "id" &&
+        field !== "index" &&
+        hasObservableContent(nestedValue),
+    );
+  }
+  return false;
+}
+
+export function hasOpenAICompletionsDeltaContent(delta: ChatCompletionChunk.Choice.Delta): boolean {
+  return Object.entries(delta).some(
+    ([field, value]) => field !== "role" && hasObservableContent(value),
+  );
+}
+
 /** Normalize the SDK's legacy single-function lane into its modern tool-call shape. */
 export function createOpenAICompletionsToolCallDeltaNormalizer(): (
   delta: ChatCompletionChunk.Choice.Delta,
@@ -99,25 +124,6 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
     }
     pendingFollowingDeltaBytes += nextDeltaBytes;
     pendingFollowingDeltas.push(delta);
-  };
-
-  const hasObservableContent = (value: unknown): boolean => {
-    if (typeof value === "string") {
-      return value.length > 0;
-    }
-    if (Array.isArray(value)) {
-      return value.some(hasObservableContent);
-    }
-    if (isRecord(value)) {
-      return Object.entries(value).some(
-        ([field, nestedValue]) =>
-          field !== "type" &&
-          field !== "id" &&
-          field !== "index" &&
-          hasObservableContent(nestedValue),
-      );
-    }
-    return false;
   };
 
   return (delta, finishReason) => {
@@ -162,11 +168,7 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
 
     const hadPendingLegacyCall = pendingLegacyToolCall !== undefined;
     const leadingDeltas: NormalizedOpenAICompletionsDelta[] = [];
-    if (
-      Object.entries(ordinaryDelta).some(
-        ([field, value]) => field !== "role" && hasObservableContent(value),
-      )
-    ) {
+    if (hasOpenAICompletionsDeltaContent(ordinaryDelta)) {
       if (hadPendingLegacyCall) {
         // Keep every lane behind its provisional call; publishing text early
         // permanently reverses the assistant's original tool/content order.

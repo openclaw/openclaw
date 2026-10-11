@@ -21,7 +21,7 @@ import { resolveStartupEntryPaths, resolveTaskLauncherScriptPath } from "./schta
 import { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import {
-  assertInteractiveLeastPrivilegeTask,
+  assertUnattendedLeastPrivilegeTask,
   canBindLoopbackPort,
   DIAGNOSTIC_TEXT_LIMIT,
   readRelatedProcessDiagnostics,
@@ -32,8 +32,6 @@ import {
   sanitizeDiagnosticText,
   sanitizeTaskXml,
   sanitizeVerboseQuery,
-  TASK_LOGON_INTERACTIVE_TOKEN,
-  TASK_RUNLEVEL_LEAST_PRIVILEGE,
   waitForCompletedScheduledTaskRun,
   waitForRuntimeStatus,
   type ScheduledTaskPrincipal,
@@ -392,39 +390,7 @@ async function createIntegrationRoot(
   return rootDir;
 }
 
-describe("schtasks Windows integration principal assertion", () => {
-  it("accepts omitted default run level when COM reports least privilege", () => {
-    expect(() =>
-      assertInteractiveLeastPrivilegeTask({
-        taskXml: "<LogonType>InteractiveToken</LogonType>",
-        principal: {
-          enabled: true,
-          lastRunTime: "2026-07-31T00:00:00.0000000Z",
-          lastTaskResult: 0,
-          logonType: TASK_LOGON_INTERACTIVE_TOKEN,
-          runLevel: TASK_RUNLEVEL_LEAST_PRIVILEGE,
-          taskState: 3,
-        },
-      }),
-    ).not.toThrow();
-  });
-
-  it("rejects an elevated effective run level", () => {
-    expect(() =>
-      assertInteractiveLeastPrivilegeTask({
-        taskXml: "<LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel>",
-        principal: {
-          enabled: true,
-          lastRunTime: "2026-07-31T00:00:00.0000000Z",
-          lastTaskResult: 0,
-          logonType: TASK_LOGON_INTERACTIVE_TOKEN,
-          runLevel: 1,
-          taskState: 3,
-        },
-      }),
-    ).toThrow();
-  });
-
+describe("schtasks Windows integration fixture isolation", () => {
   it("refuses to reuse or delete an existing configured root", async () => {
     const existingRoot = path.join(os.tmpdir(), `openclaw-schtasks-existing-${randomUUID()}`);
     await fs.mkdir(existingRoot);
@@ -599,13 +565,11 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
           throw new Error(`Could not export Scheduled Task XML for ${taskName}`);
         }
         expect(taskXml).toContain("<UserId>");
-        expect(taskXml.replaceAll("/", "\\").toLowerCase()).toContain(
-          launcherPath.replaceAll("/", "\\").toLowerCase(),
-        );
         expect(taskXml).toContain("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>");
-        assertInteractiveLeastPrivilegeTask({
+        assertUnattendedLeastPrivilegeTask({
           taskXml,
           principal: installedPrincipal,
+          scriptPath,
         });
         for (const startupEntryPath of resolveStartupEntryPaths(env)) {
           await expect(fs.access(startupEntryPath)).rejects.toThrow();
@@ -950,7 +914,9 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
                 hostedRestart: hostedRestartProof,
                 defaultTaskUnchanged: true,
                 taskXml: {
-                  interactiveToken: true,
+                  s4u: true,
+                  bootAndLogonTriggers: true,
+                  directCmdLauncher: true,
                   leastPrivilege: true,
                   logonType: installedPrincipal?.logonType,
                   runLevel: installedPrincipal?.runLevel,

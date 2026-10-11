@@ -257,7 +257,7 @@ export function createCrabboxWorkerProvider(
     signal?.throwIfAborted();
     const binary = await resolveBinary(parsed.binary, preparationSignal);
     preparationSignal?.throwIfAborted();
-    const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
+    const deadline = performance.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
     const nodeBootstrapTimeoutMs = resolveCrabboxNodeEnrollmentTimeoutMs(
       options?.nodeBootstrapTimeoutMs,
     );

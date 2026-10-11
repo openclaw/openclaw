@@ -17,6 +17,7 @@ import {
   formatPriorityLabel,
   formatStatusLabel,
   renderPriorityIcon,
+  workboardMutationContext,
   type WorkboardProps,
 } from "./view-helpers.ts";
 import { workboardPopoverRef } from "./view-popover.ts";
@@ -137,11 +138,9 @@ export function renderInlinePriority(
     disabled: disabled || !props.connected || !props.client,
     onSelect: (priority) => {
       return updateWorkboardCardProperties({
-        host: props.host,
-        client: props.client,
+        ...workboardMutationContext(props),
         card,
         patch: { priority },
-        requestUpdate: props.onRequestUpdate,
       });
     },
   });
@@ -182,11 +181,9 @@ export function renderInlineAgent(props: WorkboardProps, card: WorkboardCard, di
       onSelect: (agentId) => {
         if (agentId !== (card.agentId ?? "")) {
           void updateWorkboardCardProperties({
-            host: props.host,
-            client: props.client,
+            ...workboardMutationContext(props),
             card,
             patch: { agentId },
-            requestUpdate: props.onRequestUpdate,
           });
         }
       },
@@ -266,7 +263,7 @@ export class WorkboardInlineText extends LitElement {
         this.isConnected &&
         (document.activeElement === previousFocus || document.activeElement === document.body)
       ) {
-        this.querySelector<HTMLButtonElement>(".workboard-detail__text-trigger")?.focus();
+        this.querySelector<HTMLElement>(".workboard-detail__text-trigger")?.focus();
       }
     });
   };
@@ -301,11 +298,9 @@ export class WorkboardInlineText extends LitElement {
     const patch =
       field === "labels" ? { labels: normalizeDraftLabels(this.value) } : { [field]: this.value };
     const saved = await updateWorkboardCardProperties({
-      host: owner.host,
-      client: owner.client,
+      ...workboardMutationContext(owner),
       card: base,
       patch,
-      requestUpdate: owner.onRequestUpdate,
     });
     document.removeEventListener("focusin", trackFocus);
     document.removeEventListener("pointerdown", trackPointer);
@@ -350,33 +345,72 @@ export class WorkboardInlineText extends LitElement {
             >`
           : t("workboard.inlineAddLabels")
         : card[field] || t("workboard.inlineAddDescription");
-    const trigger = html`<button
-      type="button"
-      class="workboard-detail__text-trigger workboard-detail__text-trigger--${field}"
-      aria-description=${label}
-      aria-haspopup=${field === "labels" ? "dialog" : nothing}
-      aria-controls=${field === "labels" ? labelsPopoverId : nothing}
-      aria-expanded=${field === "labels" ? String(this.editing) : nothing}
-      ?disabled=${disabled && !(field === "labels" && this.hasUnsavedChanges && !this.saving)}
-      @click=${() => {
-        if (!this.base || !this.hasUnsavedChanges) {
-          this.base = card;
-          this.value = field === "labels" ? card.labels.join(", ") : (card[field] ?? "");
+    const triggerDisabled =
+      disabled && !(field === "labels" && this.hasUnsavedChanges && !this.saving);
+    const openEditor = () => {
+      if (!this.base || !this.hasUnsavedChanges) {
+        this.base = card;
+        this.value = field === "labels" ? card.labels.join(", ") : (card[field] ?? "");
+      }
+      this.editing = true;
+      void this.updateComplete.then(() => {
+        if (!this.isConnected || !this.editing) {
+          return;
         }
-        this.editing = true;
-        void this.updateComplete.then(() => {
-          if (!this.isConnected || !this.editing) {
-            return;
-          }
-          if (field === "labels") {
-            this.querySelector<HTMLElement>(".workboard-detail__labels-popover")?.showPopover();
-          }
-          this.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea")?.focus();
-        });
-      }}
-    >
-      <span class="workboard-detail__text-value">${content}</span>
-    </button>`;
+        if (field === "labels") {
+          this.querySelector<HTMLElement>(".workboard-detail__labels-popover")?.showPopover();
+        }
+        this.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea")?.focus();
+      });
+    };
+    const value = html`<span class="workboard-detail__text-value">${content}</span>`;
+    // Notes stay selectable so their text can be copied; a native button would block that.
+    const trigger =
+      field === "notes"
+        ? html`<div
+            class="workboard-detail__text-trigger workboard-detail__text-trigger--notes"
+            role="button"
+            tabindex=${triggerDisabled ? "-1" : "0"}
+            aria-description=${label}
+            aria-disabled=${triggerDisabled ? "true" : nothing}
+            @click=${(event: MouseEvent) => {
+              const selection = this.ownerDocument.getSelection();
+              const target = event.currentTarget;
+              if (
+                triggerDisabled ||
+                (selection &&
+                  !selection.isCollapsed &&
+                  target instanceof Node &&
+                  [selection.anchorNode, selection.focusNode].some(
+                    (node) => node && target.contains(node),
+                  ))
+              ) {
+                return;
+              }
+              openEditor();
+            }}
+            @keydown=${(event: KeyboardEvent) => {
+              if (triggerDisabled || (event.key !== "Enter" && event.key !== " ")) {
+                return;
+              }
+              event.preventDefault();
+              openEditor();
+            }}
+          >
+            ${value}
+          </div>`
+        : html`<button
+            type="button"
+            class="workboard-detail__text-trigger workboard-detail__text-trigger--${field}"
+            aria-description=${label}
+            aria-haspopup=${field === "labels" ? "dialog" : nothing}
+            aria-controls=${field === "labels" ? labelsPopoverId : nothing}
+            aria-expanded=${field === "labels" ? String(this.editing) : nothing}
+            ?disabled=${triggerDisabled}
+            @click=${openEditor}
+          >
+            ${value}
+          </button>`;
     if (!this.editing && field !== "labels") {
       return trigger;
     }
@@ -419,7 +453,7 @@ export class WorkboardInlineText extends LitElement {
           ? html`<textarea
               class="settings-input"
               aria-label=${label}
-              rows="3"
+              rows="12"
               .value=${this.value}
               ?disabled=${this.saving || (disabled && !readOnly)}
               ?readonly=${readOnly}

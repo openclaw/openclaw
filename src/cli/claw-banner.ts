@@ -192,10 +192,6 @@ async function animateBanner(opts: {
   }
 }
 
-/**
- * Prints the OpenClaw banner: animated on rich interactive terminals, static
- * otherwise, plain title on terminals too narrow for the art.
- */
 export async function printClawBanner(
   runtime: RuntimeEnv,
   options: ClawBannerOptions = {},

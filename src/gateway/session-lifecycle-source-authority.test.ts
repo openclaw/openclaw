@@ -81,7 +81,6 @@ async function recoveryFixture(name: string) {
     sessionId,
     lifecycleRevision: claim.lifecycleRevision,
     lifecycleRunId: runId,
-    status: "running",
     startedAt: 1_000,
     updatedAt: 1_000,
     restartRecoveryHarnessCompletion: claim,
@@ -136,7 +135,13 @@ async function recoveryFixture(name: string) {
         sessionKey,
         agentId: "main",
         assertCommitAllowed: writeContext.assertCurrent,
-        event: { runId, sessionId, ts: 2_000, data: { phase: "start", startedAt: 2_000 } },
+        event: {
+          runId,
+          sessionId,
+          lifecycleGeneration: authority.lifecycleGeneration,
+          ts: 2_000,
+          data: { phase: "start", startedAt: 2_000 },
+        },
       }),
     finish: () =>
       owner.observe({
@@ -146,6 +151,7 @@ async function recoveryFixture(name: string) {
         event: {
           runId,
           sessionId,
+          lifecycleGeneration: authority.lifecycleGeneration,
           seq: 2,
           stream: "lifecycle",
           ts: 3_000,
@@ -213,10 +219,10 @@ it("refuses a changed same-store recovery source before lifecycle commit with th
       SessionWorkStartChangedError,
     );
     expect(loadSessionEntry(fixture.target)).toMatchObject({
-      status: "running",
       startedAt: 1_000,
       updatedAt: 1_000,
     });
+    expect(loadSessionEntry(fixture.target)?.status).toBeUndefined();
     expect(loadSessionEntry(fixture.target)?.endedAt).toBeUndefined();
   } finally {
     await fixture.close();
@@ -289,7 +295,6 @@ it("keeps a recovered tool caller's source preparation through in-process Stop a
       startedAt: 1_000,
       lifecycleRunId: runId,
       activeWriterRunId: runId,
-      status: "running",
     });
     routing.loadSessionEntry.mockReturnValue({
       ...target,
@@ -354,6 +359,7 @@ it("keeps a recovered tool caller's source preparation through in-process Stop a
           event: {
             runId,
             sessionId,
+            lifecycleGeneration: fixture.authority.lifecycleGeneration,
             ts: 3_000,
             data: {
               phase: "end",

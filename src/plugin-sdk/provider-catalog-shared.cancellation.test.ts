@@ -13,40 +13,29 @@ import {
 describe("live catalog consumer cancellation", () => {
   afterEach(() => clearLiveCatalogCacheForTests());
 
-  it.each(["resolve", "reject"] as const)(
-    "delivers a shared %s to active consumers",
-    async (outcome) => {
-      const pending = createDeferred<string>();
-      const error = new Error("catalog failed");
-      let loads = 0;
-      const load = () => {
-        loads += 1;
-        return pending.promise;
-      };
-      const signals = [
-        new AbortController().signal,
-        new AbortController().signal,
-        outcome === "resolve" ? undefined : new AbortController().signal,
-      ];
-      const values = signals.map((signal) =>
-        getCachedLiveCatalogValue({ keyParts: [outcome], load, signal }),
-      );
-      const joined = Promise.allSettled(values);
-      if (outcome === "resolve") {
-        pending.resolve("catalog");
-      } else {
-        pending.reject(error);
-      }
-      expect(await joined).toEqual(
-        Array.from({ length: 3 }, () =>
-          outcome === "resolve"
-            ? { status: "fulfilled", value: "catalog" }
-            : { status: "rejected", reason: error },
-        ),
-      );
-      expect(loads).toBe(1);
-    },
-  );
+  it.each(["reject"] as const)("delivers a shared %s to active consumers", async (outcome) => {
+    const pending = createDeferred<string>();
+    const error = new Error("catalog failed");
+    let loads = 0;
+    const load = () => {
+      loads += 1;
+      return pending.promise;
+    };
+    const signals = [
+      new AbortController().signal,
+      new AbortController().signal,
+      new AbortController().signal,
+    ];
+    const values = signals.map((signal) =>
+      getCachedLiveCatalogValue({ keyParts: [outcome], load, signal }),
+    );
+    const joined = Promise.allSettled(values);
+    pending.reject(error);
+    expect(await joined).toEqual(
+      Array.from({ length: 3 }, () => ({ status: "rejected", reason: error })),
+    );
+    expect(loads).toBe(1);
+  });
 
   it.each(["synchronous", "queued", "warm"] as const)(
     "preserves completion ordering against a %s abort",

@@ -1,3 +1,4 @@
+import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import "./modal-dialog.ts";
@@ -39,6 +40,57 @@ async function mountModal(host = container, variant = "", autofocus = true) {
 }
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
+  it.each(["standard", "drawer"])(
+    "honors reduced motion when opening and closing (%s)",
+    async (variant) => {
+      const { cdp } = await import("vitest/browser");
+      const session: CDPSession = cdp();
+      await session.send("Emulation.setEmulatedMedia", {
+        features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+      });
+      try {
+        expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
+        const modal = document.createElement("openclaw-modal-dialog");
+        modal.manual = true;
+        modal.className = variant === "drawer" ? "drawer" : "";
+        modal.label = "Motion preference";
+        modal.style.setProperty("--wa-transition-normal", "150ms");
+        modal.textContent = "Settings";
+        container.append(modal);
+        const { dialog, webAwesomeDialog } = await getRenderedModalDialog(container);
+        expect(dialog.open).toBe(false);
+        const after = (name: string) =>
+          new Promise<void>((resolve) => {
+            webAwesomeDialog.addEventListener(name, () => resolve(), { once: true });
+          });
+        // Observe motion after the lifecycle event's task sets up the animation.
+        const motionAtStart = (name: string) =>
+          after(name).then(() =>
+            dialog
+              .getAnimations({ subtree: true })
+              .map((animation) => Number(animation.effect?.getComputedTiming().activeDuration ?? 0))
+              .filter((duration) => duration > 0),
+          );
+
+        const opening = motionAtStart("wa-show");
+        const shown = after("wa-after-show");
+        modal.show();
+        expect(await opening).toEqual([]);
+        await shown;
+        expect(dialog.open).toBe(true);
+
+        const closing = motionAtStart("wa-hide");
+        const hidden = after("wa-after-hide");
+        modal.hide();
+        expect(await closing).toEqual([]);
+        await hidden;
+        expect(dialog.open).toBe(false);
+      } finally {
+        await session.send("Emulation.setEmulatedMedia", { features: [] });
+      }
+    },
+  );
+
   it.each(["drawer", "viewport-edge-to-edge"])(
     "keeps the bottom action reachable in scrollable viewport content (%s)",
     async (variant) => {

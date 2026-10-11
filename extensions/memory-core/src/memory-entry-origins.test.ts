@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentDatabase,
@@ -184,9 +185,9 @@ describe("memory entry origins", () => {
       origin("queued", "session-1"),
     ]);
     const dispatch = Promise.withResolvers<void>();
-    const run = cpuRuntime.runMemoryOriginRows;
+    const run = cpuRuntime.runMemoryOriginRead;
     const transport = vi
-      .spyOn(cpuRuntime, "runMemoryOriginRows")
+      .spyOn(cpuRuntime, "runMemoryOriginRead")
       .mockImplementationOnce(async (...args) => {
         await dispatch.promise;
         return run(...args);
@@ -378,38 +379,72 @@ describe("memory entry origins", () => {
     async (cleanupFails) => {
       const prior = origin("prior", "session-1");
       await recordMemoryEntryOrigins({ agentId: "main", origins: [prior] });
-      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-      db.exec(`
-        CREATE TRIGGER reject_origin_reservation BEFORE INSERT ON memory_entry_origins
-        WHEN NEW.entry_key = 'failing'
-        BEGIN SELECT RAISE(ABORT, 'fixture reservation write rejected'); END;
-      `);
-      if (cleanupFails) {
-        db.exec(`
-          CREATE TRIGGER reject_origin_compensation BEFORE DELETE ON memory_entry_origins
-          WHEN OLD.entry_key = 'first'
-          BEGIN SELECT RAISE(ABORT, 'fixture reservation cleanup rejected'); END;
-        `);
+      const moduleUrl = resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins);
+      const fixturePath = path.join(stateDir, "origin-statement-fault.mjs");
+      // Intercept execution, including cached statements, without changing admitted schema.
+      await fs.writeFile(
+        fixturePath,
+        `import { StatementSync } from "node:sqlite";
+import { bindSqliteWorkerBackend as bind } from ${JSON.stringify(moduleUrl.href)};
+export function bindSqliteWorkerBackend(input, context) {
+  const backend = bind(input, context);
+  const originals = new Map();
+  for (const method of ["run", "get", "all", "iterate"]) {
+    const original = StatementSync.prototype[method];
+    originals.set(method, original);
+    StatementSync.prototype[method] = function (...args) {
+      const sql = this.sourceSQL.toLowerCase().replaceAll('"', '');
+      if (sql.startsWith('insert into memory_entry_origins ') && args.includes('failing')) {
+        throw new Error('fixture reservation write rejected');
       }
+      if (${cleanupFails} && sql.startsWith('delete from memory_entry_origins ') && args.includes('["first"]')) {
+        throw new Error('fixture reservation cleanup rejected');
+      }
+      return Reflect.apply(original, this, args);
+    };
+  }
+  return { ...backend, close() {
+    for (const [method, original] of originals) StatementSync.prototype[method] = original;
+    return backend.close();
+  } };
+}
+`,
+      );
+      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+      const fault = vi
+        .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+        .mockImplementation((options, source, worker) =>
+          open(
+            options,
+            source,
+            worker.moduleUrl.href === moduleUrl.href
+              ? { ...worker, moduleUrl: pathToFileURL(fixturePath) }
+              : worker,
+          ),
+        );
       const priorEntry = "- Retain the source until publication settles.";
-      await expect(
-        reserveMemoryEntryOrigins({
-          agentIds: ["main"],
-          previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
-          operations: ["first", "failing"].map((candidateKey) => ({
-            candidateKey,
-            action: "merged" as const,
-            priorEntries: [priorEntry],
-          })),
-        }),
-      ).rejects.toThrow(
-        cleanupFails
-          ? "fixture reservation cleanup rejected"
-          : "fixture reservation write rejected",
-      );
-      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(
-        cleanupFails ? [origin("first", "session-1"), prior] : [prior],
-      );
+      try {
+        await expect(
+          reserveMemoryEntryOrigins({
+            agentIds: ["main"],
+            previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
+            operations: ["first", "failing"].map((candidateKey) => ({
+              candidateKey,
+              action: "merged" as const,
+              priorEntries: [priorEntry],
+            })),
+          }),
+        ).rejects.toThrow(
+          cleanupFails
+            ? "fixture reservation cleanup rejected"
+            : "fixture reservation write rejected",
+        );
+        expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(
+          cleanupFails ? [origin("first", "session-1"), prior] : [prior],
+        );
+      } finally {
+        fault.mockRestore();
+      }
     },
   );
 

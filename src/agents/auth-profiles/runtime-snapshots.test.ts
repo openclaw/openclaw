@@ -31,33 +31,9 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
-import { testing } from "./runtime-snapshots.test-support.js";
+import { createSnapshotStore as createStore, testing } from "./runtime-snapshots.test-support.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
-
-function createStore(access: string): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "openai:default": {
-        type: "oauth",
-        provider: "openai",
-        access,
-        refresh: `refresh-${access}`,
-        expires: Date.now() + 60_000,
-        accountId: "acct-1",
-      },
-    },
-    order: {
-      openai: ["openai:default"],
-    },
-    usageStats: {
-      "openai:default": {
-        lastUsed: 1,
-      },
-    },
-  };
-}
 
 function expectOpenAICodexSnapshotCredential(
   store: AuthProfileStore | undefined,
@@ -502,6 +478,66 @@ describe("runtime auth profile snapshots", () => {
       structuredCloneSpy.mockRestore();
       clearRuntimeAuthProfileStoreSnapshots();
     }
+  });
+
+  it("retains the JSON clone contract for nested values without encoding credential bodies", () => {
+    const baseStore = createStore("synthetic-access");
+    const nested = { value: "original" };
+    const array: unknown[] = [undefined];
+    array.length = 2;
+    array.push(Number.NaN, Infinity, -0, nested);
+    const store = {
+      ...baseStore,
+      metadata: {
+        absent: undefined,
+        date: new Date("2026-01-01T00:00:00.000Z"),
+        array,
+        first: nested,
+        second: nested,
+        projected: { toJSON: (key: string) => ({ key }) },
+        boxed: [Object(3), Object("string"), Object(false)],
+        ...JSON.parse('{"__proto__":{"synthetic":true}}'),
+      },
+    };
+    const expected = {
+      ...baseStore,
+      metadata: {
+        date: "2026-01-01T00:00:00.000Z",
+        array: [null, null, null, null, 0, { value: "original" }],
+        first: { value: "original" },
+        second: { value: "original" },
+        projected: { key: "projected" },
+        boxed: [3, "string", false],
+        ["__proto__"]: { synthetic: true },
+      },
+    };
+    const stringify = vi.spyOn(JSON, "stringify");
+    let cloned: typeof store;
+    try {
+      cloned = authProfileClone.cloneAuthProfileStore(store);
+      expect(stringify).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(cloned).toEqual(expected);
+    expect(Object.getPrototypeOf(cloned.metadata)).toBe(Object.prototype);
+    nested.value = "mutated";
+    expect(cloned.metadata.first).toEqual({ value: "original" });
+    expect(cloned.metadata.first).not.toBe(cloned.metadata.second);
+  });
+
+  it.each([1n, Symbol("non-json"), () => undefined])("rejects non-JSON auth values %s", (value) => {
+    expect(() =>
+      authProfileClone.cloneAuthProfileStore({ ...createStore("synthetic"), value }),
+    ).toThrow(TypeError);
+  });
+
+  it("rejects cycles without rejecting repeated JSON containers", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() =>
+      authProfileClone.cloneAuthProfileStore({ ...createStore("synthetic"), circular }),
+    ).toThrow(TypeError);
   });
 
   it("refreshes only owned usage while keeping frozen worker credentials and references", () => {

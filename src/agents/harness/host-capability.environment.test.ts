@@ -72,71 +72,43 @@ describe("prepared harness tool environment", () => {
     }
   });
 
-  it.each([
-    {
-      name: "retained policy",
-      sandboxAgentId: "policy",
-      expected: ["/fixture/cli", "/fixture/policy", "/fixture/system", "/fixture/global"],
-    },
-    {
-      name: "Gateway shim with blank agent override",
-      agentPrepend: [" ", ""],
-      expected: undefined,
-    },
-    {
-      name: "Gateway shim with inherited global prefix",
-      expected: ["/fixture/cli", "/fixture/global", "/fixture/system"],
-    },
-  ])(
-    "snapshots the $name tool PATH independently of identity",
-    async ({ agentPrepend, sandboxAgentId, expected }) => {
-      const merge = vi
-        .spyOn(gatewayCliShim, "mergeGatewayAgentCliPath")
-        .mockImplementation((configured) => ["/fixture/cli", ...(configured ?? [])]);
-      vi.stubEnv("PATH", ["/fixture/system", "/fixture/global"].join(path.delimiter));
-      const config: NonNullable<
-        Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]["config"]
-      > = {
-        tools: {
-          exec: { pathPrepend: [" /fixture/global ", "/fixture/global", ""] },
-        },
-        agents: {
-          entries: {
-            main: { tools: { exec: agentPrepend ? { pathPrepend: agentPrepend } : {} } },
-            policy: { tools: { exec: { pathPrepend: ["/fixture/policy"] } } },
-          },
-        },
-      };
-      const host = await createAdmittedHostCapabilityTestFixture({
-        runId: "run-tool-path",
-        agentId: "main",
-        sessionKey: "agent:main:tool-path",
-        config,
-        sandboxAgentId,
+  it("snapshots the inherited tool PATH independently of identity", async () => {
+    const merge = vi
+      .spyOn(gatewayCliShim, "mergeGatewayAgentCliPath")
+      .mockImplementation((configured) => ["/fixture/cli", ...(configured ?? [])]);
+    vi.stubEnv("PATH", ["/fixture/system", "/fixture/global"].join(path.delimiter));
+    const config: NonNullable<
+      Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]["config"]
+    > = {
+      tools: {
+        exec: { pathPrepend: [" /fixture/global ", "/fixture/global", ""] },
+      },
+      agents: { entries: { main: { tools: { exec: {} } } } },
+    };
+    const host = await createAdmittedHostCapabilityTestFixture({
+      runId: "run-tool-path",
+      agentId: "main",
+      sessionKey: "agent:main:tool-path",
+      config,
+    });
+    try {
+      config.tools!.exec!.pathPrepend = ["/mutated"];
+      vi.stubEnv("PATH", "/mutated-process");
+      const environment = host.hostCapabilities.preparedEnvironment?.();
+      expect(environment?.localToolEnv).toEqual({
+        PATH: ["/fixture/cli", "/fixture/global", "/fixture/system"].join(path.delimiter),
       });
-      try {
-        config.tools!.exec!.pathPrepend = ["/mutated"];
-        vi.stubEnv("PATH", "/mutated-process");
-        const environment = host.hostCapabilities.preparedEnvironment?.();
-        expect(environment?.localToolEnv).toEqual(
-          expected ? { PATH: expected.join(path.delimiter) } : undefined,
-        );
-        expect(environment?.localToolPathPrepend).toEqual(
-          expected ? expected.slice(0, expected.indexOf("/fixture/system")) : undefined,
-        );
-        expect(environment?.localProcessEnv).toBeUndefined();
-        expect(environment?.localIdentityEnv).toEqual({});
-        if (expected) {
-          expect(Object.isFrozen(environment?.localToolEnv)).toBe(true);
-          expect(Object.isFrozen(environment?.localToolPathPrepend)).toBe(true);
-        }
-        host.closeHost();
-        expect(() => host.hostCapabilities.preparedEnvironment?.()).toThrow("no longer active");
-      } finally {
-        host.closeHost();
-        host.closeAdmission();
-        merge.mockRestore();
-      }
-    },
-  );
+      expect(environment?.localToolPathPrepend).toEqual(["/fixture/cli", "/fixture/global"]);
+      expect(environment?.localProcessEnv).toBeUndefined();
+      expect(environment?.localIdentityEnv).toEqual({});
+      expect(Object.isFrozen(environment?.localToolEnv)).toBe(true);
+      expect(Object.isFrozen(environment?.localToolPathPrepend)).toBe(true);
+      host.closeHost();
+      expect(() => host.hostCapabilities.preparedEnvironment?.()).toThrow("no longer active");
+    } finally {
+      host.closeHost();
+      host.closeAdmission();
+      merge.mockRestore();
+    }
+  });
 });

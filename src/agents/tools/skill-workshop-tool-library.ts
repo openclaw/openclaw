@@ -24,7 +24,7 @@ export function createLibrarySkillWorkshopTool(
     name: "skill_workshop",
     label: "Skill Workshop",
     displaySummary: "Author reusable skills",
-    description: `${workspace ? `Omit target for Workshop proposals. Set target=personal only for personal library operations. ${workspace.description} ` : "Author skills in the requesting person's personal library. "}${personalArguments} Workshop-only actions and fields such as prepare_patch, inspect, skill_name, query, and limit are not accepted by the personal library. Personal create/update publishes a revision only when the user requests the change; personal drafts are unsupported. Describe unsolicited improvements without publishing. Read before updating; name is the slug, not the command identity. Read artifact_path for a whole text support file. On update omit name/proposal_content to preserve them; files upserts named support files, delete_files removes explicit paths. Unmentioned files and omitted executable flags are preserved. Binary or oversized reads require My skills or the CLI. Ownership is bound by the Gateway. Publication affects new sessions; activate explicitly for the next turn in this session. Sharing or transfer requires explicit user intent and current permissions.${multipleProfiles ? " This shared Gateway has personal and team libraries; sharing preserves authorship and ownership, while transfer makes a skill team managed." : ""}`,
+    description: `${workspace ? `Omit target for your learned (Workshop) skills. Set target=personal only for personal library operations. ${workspace.description} ` : "Author skills in the requesting person's personal library. "}${personalArguments} Workshop-only actions and fields such as view, patch, write_file, old_text, and file_path are not accepted by the personal library. Personal create/update publishes a revision only when the user requests the change; personal drafts are unsupported. Describe unsolicited improvements without publishing. Read before updating; name is the slug, not the command identity. Read artifact_path for a whole text support file. On update omit name/proposal_content to preserve them; files upserts named support files, delete_files removes explicit paths. Unmentioned files and omitted executable flags are preserved. Binary or oversized reads require My skills or the CLI. Ownership is bound by the Gateway. Publication affects new sessions; activate explicitly for the next turn in this session. Sharing or transfer requires explicit user intent and current permissions.${multipleProfiles ? " This shared Gateway has personal and team libraries; sharing preserves authorship and ownership, while transfer makes a skill team managed." : ""}`,
     parameters: workspace ? Type.Union([workspace.parameters, schema]) : schema,
     execute: async (id, raw) => {
       if (workspace && (!raw || typeof raw !== "object" || !("target" in raw))) {
@@ -46,7 +46,7 @@ export function createLibrarySkillWorkshopTool(
             return `${path}: ${error.message}`;
           });
         throw new ToolInputError(
-          `Invalid personal Skill Workshop arguments: ${issues.join("; ")}. ${personalArguments}${workspace ? " Omit target for Workshop proposal actions." : ""}`,
+          `Invalid personal Skill Workshop arguments: ${issues.join("; ")}. ${personalArguments}${workspace ? " Omit target for Workshop actions." : ""}`,
         );
       }
       const result = await capability.invoke({

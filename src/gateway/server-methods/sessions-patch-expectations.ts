@@ -108,37 +108,6 @@ export function sessionPatchTargetIdentity(patch: SessionsPatchParams) {
   };
 }
 
-/** The retained source and target keep the existing personal-account error boundary. */
-function bindPreparedSessionPatchTarget(params: {
-  key: string;
-  originalGuard: () => ErrorShape | undefined;
-  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
-  personalModelSelection: UserModelAccountSelection | undefined;
-  preparation: { facts: { matchesCurrent: (cfg: OpenClawConfig) => boolean } } | { error: unknown };
-  getCurrentConfig: () => OpenClawConfig;
-}): () => ErrorShape | undefined {
-  return () => {
-    try {
-      assertSessionPatchCommitAllowed({
-        personalModelSelection: params.personalModelSelection,
-        guards: [params.originalGuard],
-        archiveTransitions: [],
-      });
-      params.operatorAuthority?.assertCurrent();
-      if ("error" in params.preparation) {
-        throw params.preparation.error instanceof Error
-          ? params.preparation.error
-          : new Error("Session target preparation failed", { cause: params.preparation.error });
-      }
-      return params.preparation.facts.matchesCurrent(params.getCurrentConfig())
-        ? undefined
-        : sessionChangedError(params.key);
-    } catch (error) {
-      return unexpectedPatchError(params.key, error);
-    }
-  };
-}
-
 /** Prepare original writers and bind their facts before patch projection can acquire admission. */
 export async function prepareSessionPatchTargets(params: {
   cfg: OpenClawConfig;
@@ -236,14 +205,27 @@ export async function prepareSessionPatchTargets(params: {
         (facts) => ({ facts }),
         (error: unknown) => ({ error }),
       );
-      const guard = bindPreparedSessionPatchTarget({
-        key: target.key,
-        originalGuard: params.originalCommitGuards[target.index]!,
-        operatorAuthority,
-        personalModelSelection: params.personalModelSelection,
-        preparation: result,
-        getCurrentConfig: params.getCurrentConfig,
-      });
+      const originalGuard = params.originalCommitGuards[target.index]!;
+      const guard = () => {
+        try {
+          assertSessionPatchCommitAllowed({
+            personalModelSelection: params.personalModelSelection,
+            guards: [originalGuard],
+            archiveTransitions: [],
+          });
+          operatorAuthority?.assertCurrent();
+          if ("error" in result) {
+            throw result.error instanceof Error
+              ? result.error
+              : new Error("Session target preparation failed", { cause: result.error });
+          }
+          return result.facts.matchesCurrent(params.getCurrentConfig())
+            ? undefined
+            : sessionChangedError(target.key);
+        } catch (error) {
+          return unexpectedPatchError(target.key, error);
+        }
+      };
       params.mutationTargets[target.index]!.commitGuard = guard;
       if ("error" in result) {
         // Original caller errors retain precedence; failed preparation never reaches a fallback open.

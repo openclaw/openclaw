@@ -198,6 +198,7 @@ export async function resolveSkillDispatchTools(
     cronCreatorToolAllowlist,
     inheritedToolAllowlist,
     inheritedToolDenylist: explicitDenylist,
+    inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
   });
   const policyFiltered = applyToolPolicyPipeline({
     tools,

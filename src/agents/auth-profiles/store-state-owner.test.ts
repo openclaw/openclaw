@@ -10,6 +10,7 @@ import {
   prepareSecretsRuntimeSnapshotRestoreState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
 } from "../../secrets/runtime-state.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
@@ -113,6 +114,7 @@ describe("explicit auth state ownership", () => {
           bookkeepingOwner === "mixed-live",
       );
       if (localBookkeeping) {
+        await closeOpenClawAgentDatabaseByPathAsync(first.agentPath);
         if (bookkeepingOwner === "cleared-local") {
           await updateAuthProfileStoreWithLock({
             stateDir: second.stateDir,

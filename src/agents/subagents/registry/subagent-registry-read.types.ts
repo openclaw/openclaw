@@ -93,6 +93,10 @@ export type SubagentRunReadRecord = {
   taskRunId?: string;
   /** Stable public collector id; gateway execution ids can change across dispatch/recovery. */
   swarmRunId?: string;
+  /** Stable scheduler slot identity across Gateway run replacements. */
+  schedulerSlotId?: string;
+  /** Replay identity selects one collector payload before hydration. */
+  swarmLaunchReplayKey?: string;
   /** Collector-mode runs remain waitable and never announce to the requester. */
   collect?: boolean;
   groupId?: string;

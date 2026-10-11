@@ -1,7 +1,6 @@
 import type { Selectable } from "kysely";
 import type { ChannelIngressEvents } from "../../state/openclaw-state-db.generated.js";
 
-/** Pending or retryable inbound channel event stored in the durable ingress queue. */
 export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = ChannelIngressScope & {
   id: string;
   payload: TPayload;
@@ -14,7 +13,6 @@ export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = ChannelIn
   lastError?: string;
 };
 
-/** Pending ingress event currently claimed by a worker. */
 export type ChannelIngressQueueClaim<TPayload, TMetadata = unknown> = ChannelIngressQueueRecord<
   TPayload,
   TMetadata
@@ -50,7 +48,6 @@ export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> =
     metadata?: TCompletedMetadata;
   };
 
-/** Retention options for pending, completed, and failed ingress queue rows. */
 export type ChannelIngressQueuePruneOptions = {
   pendingTtlMs?: number;
   completedTtlMs?: number;
@@ -84,7 +81,6 @@ export type ChannelIngressQueueDeadLetterRecord<
   lastAttemptAt?: number;
 };
 
-/** Outcome of asking a channel/account queue to re-enqueue one failed event. */
 type ChannelIngressQueueResubmitResult<
   TPayload,
   TMetadata = unknown,
@@ -106,7 +102,6 @@ type ChannelIngressQueueResubmitResult<
       record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
     };
 
-/** Result of enqueueing a possibly duplicate ingress event id. */
 type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
       kind: "accepted";
@@ -134,7 +129,6 @@ type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
       record: ChannelIngressQueueFailedRecord;
     };
 
-/** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
   enqueue(
     id: string,
@@ -233,7 +227,6 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   purge?(options?: { signal?: AbortSignal }): Promise<number>;
 };
 
-/** Construction options for a channel/account-scoped ingress queue. */
 export type CreateChannelIngressQueueOptions = {
   channelId: string;
   accountId?: string;

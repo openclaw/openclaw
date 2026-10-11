@@ -14,7 +14,6 @@ import androidx.room3.RoomDatabase
 import androidx.room3.migration.Migration
 import androidx.room3.useReaderConnection
 import androidx.room3.withWriteTransaction
-import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -176,130 +175,113 @@ internal abstract class LegacyChatDatabase : RoomDatabase() {
 
   companion object {
     internal val MIGRATION_2_3 =
-      object : Migration(2, 3) {
-        override suspend fun migrate(connection: SQLiteConnection) {
-          // v2 persisted every post-dispatch exception as queued+lastError. Those rows may
-          // already have run, so upgrading must park them alongside crash-interrupted sends.
-          connection
-            .prepare(
-              "UPDATE outbox_commands SET status = ?, lastError = ? " +
-                "WHERE status = ? OR (status = ? AND lastError IS NOT NULL)",
-            ).use { statement ->
-              statement.bindText(1, ChatOutboxStatus.Failed.dbValue)
-              statement.bindText(2, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
-              statement.bindText(3, ChatOutboxStatus.Sending.dbValue)
-              statement.bindText(4, ChatOutboxStatus.Queued.dbValue)
-              statement.step()
-            }
-        }
+      Migration(2, 3) { connection ->
+        // v2 persisted every post-dispatch exception as queued+lastError. Those rows may
+        // already have run, so upgrading must park them alongside crash-interrupted sends.
+        connection
+          .prepare(
+            "UPDATE outbox_commands SET status = ?, lastError = ? " +
+              "WHERE status = ? OR (status = ? AND lastError IS NOT NULL)",
+          ).use { statement ->
+            statement.bindText(1, ChatOutboxStatus.Failed.dbValue)
+            statement.bindText(2, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+            statement.bindText(3, ChatOutboxStatus.Sending.dbValue)
+            statement.bindText(4, ChatOutboxStatus.Queued.dbValue)
+            statement.step()
+          }
       }
 
     internal val MIGRATION_3_4 =
-      object : Migration(3, 4) {
-        override suspend fun migrate(connection: SQLiteConnection) {
-          connection.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `gatedEpoch` INTEGER")
-          // Legacy queued command-shaped rows predate connection epochs; the sentinel makes
-          // them park for explicit retry instead of silently replaying on the next reconnect.
-          connection
-            .prepare(
-              "UPDATE outbox_commands SET gatedEpoch = ? WHERE status = ? AND text LIKE '/%'",
-            ).use { statement ->
-              statement.bindLong(1, OUTBOX_GATED_EPOCH_NEVER)
-              statement.bindText(2, ChatOutboxStatus.Queued.dbValue)
-              statement.step()
-            }
-          connection.execSQL(
-            "CREATE TABLE IF NOT EXISTS `outbox_attachments` (`id` TEXT NOT NULL, `commandId` TEXT NOT NULL, " +
-              "`position` INTEGER NOT NULL, `type` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `fileName` TEXT NOT NULL, " +
-              "`durationMs` INTEGER, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`))",
-          )
-          connection.execSQL("CREATE INDEX IF NOT EXISTS `index_outbox_attachments_commandId` ON `outbox_attachments` (`commandId`)")
-          connection.execSQL(
-            "CREATE TABLE IF NOT EXISTS `outbox_attachment_chunks` (`attachmentId` TEXT NOT NULL, " +
-              "`chunkIndex` INTEGER NOT NULL, `bytes` BLOB NOT NULL, PRIMARY KEY(`attachmentId`, `chunkIndex`))",
-          )
-        }
+      Migration(3, 4) { connection ->
+        connection.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `gatedEpoch` INTEGER")
+        // Legacy queued command-shaped rows predate connection epochs; the sentinel makes
+        // them park for explicit retry instead of silently replaying on the next reconnect.
+        connection
+          .prepare(
+            "UPDATE outbox_commands SET gatedEpoch = ? WHERE status = ? AND text LIKE '/%'",
+          ).use { statement ->
+            statement.bindLong(1, OUTBOX_GATED_EPOCH_NEVER)
+            statement.bindText(2, ChatOutboxStatus.Queued.dbValue)
+            statement.step()
+          }
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `outbox_attachments` (`id` TEXT NOT NULL, `commandId` TEXT NOT NULL, " +
+            "`position` INTEGER NOT NULL, `type` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `fileName` TEXT NOT NULL, " +
+            "`durationMs` INTEGER, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        )
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_outbox_attachments_commandId` ON `outbox_attachments` (`commandId`)")
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `outbox_attachment_chunks` (`attachmentId` TEXT NOT NULL, " +
+            "`chunkIndex` INTEGER NOT NULL, `bytes` BLOB NOT NULL, PRIMARY KEY(`attachmentId`, `chunkIndex`))",
+        )
       }
 
     internal val MIGRATION_4_5 =
-      object : Migration(4, 5) {
-        override suspend fun migrate(connection: SQLiteConnection) {
-          connection.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `ownerAgentId` TEXT")
-          // Agent-qualified keys carry a durable owner in the key itself. Backfill it so session
-          // deletion and replay keep working after upgrade without consulting mutable defaults.
-          connection.execSQL(
-            "UPDATE outbox_commands SET ownerAgentId = " +
-              "substr(sessionKey, 7, instr(substr(sessionKey, 7), ':') - 1) " +
-              "WHERE sessionKey LIKE 'agent:%:%' AND instr(substr(sessionKey, 7), ':') > 1",
-          )
-          // Earlier rows did not persist the default agent that owned an unscoped key. Never
-          // guess after upgrade: queued input stays visible for manual resend, while accepted
-          // input remains delivery-ambiguous and must not be replayed under a different owner.
+      Migration(4, 5) { connection ->
+        connection.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `ownerAgentId` TEXT")
+        // Agent-qualified keys carry a durable owner in the key itself. Backfill it so session
+        // deletion and replay keep working after upgrade without consulting mutable defaults.
+        connection.execSQL(
+          "UPDATE outbox_commands SET ownerAgentId = " +
+            "substr(sessionKey, 7, instr(substr(sessionKey, 7), ':') - 1) " +
+            "WHERE sessionKey LIKE 'agent:%:%' AND instr(substr(sessionKey, 7), ':') > 1",
+        )
+        // Earlier rows did not persist the default agent that owned an unscoped key. Never
+        // guess after upgrade: queued input stays visible for manual resend, while accepted
+        // input remains delivery-ambiguous and must not be replayed under a different owner.
+        for ((status, error) in listOf(
+          ChatOutboxStatus.Queued to OUTBOX_OWNER_CHANGED_ERROR,
+          ChatOutboxStatus.Accepted to OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+        )) {
           connection
             .prepare(
               "UPDATE outbox_commands SET status = ?, lastError = ? " +
                 "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
             ).use { statement ->
               statement.bindText(1, ChatOutboxStatus.Failed.dbValue)
-              statement.bindText(2, OUTBOX_OWNER_CHANGED_ERROR)
-              statement.bindText(3, ChatOutboxStatus.Queued.dbValue)
-              statement.step()
-            }
-          connection
-            .prepare(
-              "UPDATE outbox_commands SET status = ?, lastError = ? " +
-                "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
-            ).use { statement ->
-              statement.bindText(1, ChatOutboxStatus.Failed.dbValue)
-              statement.bindText(2, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
-              statement.bindText(3, ChatOutboxStatus.Accepted.dbValue)
+              statement.bindText(2, error)
+              statement.bindText(3, status.dbValue)
               statement.step()
             }
         }
       }
 
     internal val MIGRATION_5_6 =
-      object : Migration(5, 6) {
-        override suspend fun migrate(connection: SQLiteConnection) {
-          // Session and transcript caches are disposable, and legacy unscoped rows have no
-          // provable owner. Rebuild both; the durable outbox remains intact across the upgrade.
-          connection.execSQL("DROP TABLE IF EXISTS `cached_sessions`")
-          connection.execSQL("DROP TABLE IF EXISTS `cached_messages`")
-          connection.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_sessions` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
-              "`displayName` TEXT, `updatedAtMs` INTEGER, `rowOrder` INTEGER NOT NULL, " +
-              "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`))",
-          )
-          connection.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_messages` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
-              "`rowOrder` INTEGER NOT NULL, `role` TEXT NOT NULL, `textPartsJson` TEXT NOT NULL, " +
-              "`timestampMs` INTEGER, `idempotencyKey` TEXT, " +
-              "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`, `rowOrder`))",
-          )
-        }
+      Migration(5, 6) { connection ->
+        // Session and transcript caches are disposable, and legacy unscoped rows have no
+        // provable owner. Rebuild both; the durable outbox remains intact across the upgrade.
+        connection.execSQL("DROP TABLE IF EXISTS `cached_sessions`")
+        connection.execSQL("DROP TABLE IF EXISTS `cached_messages`")
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `cached_sessions` " +
+            "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
+            "`displayName` TEXT, `updatedAtMs` INTEGER, `rowOrder` INTEGER NOT NULL, " +
+            "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`))",
+        )
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `cached_messages` " +
+            "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, `sessionKey` TEXT NOT NULL, " +
+            "`rowOrder` INTEGER NOT NULL, `role` TEXT NOT NULL, `textPartsJson` TEXT NOT NULL, " +
+            "`timestampMs` INTEGER, `idempotencyKey` TEXT, " +
+            "PRIMARY KEY(`gatewayId`, `agentId`, `sessionKey`, `rowOrder`))",
+        )
       }
 
     internal val MIGRATION_6_7 =
-      object : Migration(6, 7) {
-        override suspend fun migrate(connection: SQLiteConnection) {
-          connection.execSQL(
-            "CREATE TABLE IF NOT EXISTS `cached_gateway_owners` " +
-              "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, PRIMARY KEY(`gatewayId`))",
-          )
-        }
+      Migration(6, 7) { connection ->
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `cached_gateway_owners` " +
+            "(`gatewayId` TEXT NOT NULL, `agentId` TEXT NOT NULL, PRIMARY KEY(`gatewayId`))",
+        )
       }
 
     internal val MIGRATION_7_8 =
-      object : Migration(7, 8) {
-        override suspend fun migrate(connection: SQLiteConnection) {
-          connection.execSQL(
-            "CREATE TABLE IF NOT EXISTS `composer_send_admissions` " +
-              "(`id` TEXT NOT NULL, `gatewayId` TEXT NOT NULL, `ownerAgentId` TEXT NOT NULL, " +
-              "`sessionKey` TEXT NOT NULL, PRIMARY KEY(`id`))",
-          )
-        }
+      Migration(7, 8) { connection ->
+        connection.execSQL(
+          "CREATE TABLE IF NOT EXISTS `composer_send_admissions` " +
+            "(`id` TEXT NOT NULL, `gatewayId` TEXT NOT NULL, `ownerAgentId` TEXT NOT NULL, " +
+            "`sessionKey` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        )
       }
 
     suspend fun open(
@@ -463,21 +445,12 @@ private class OpenedAndroidClientDatabases private constructor(
   private suspend fun resolvePendingGatewayRemovals(registeredGatewayIds: Set<String>?) {
     for (removal in clientState.controlDao().gatewayRemovals()) {
       when {
-        removal.phase == GATEWAY_REMOVAL_CACHE_PENDING -> {
-          completeCacheRemoval(removal.gatewayId, propagateFailure = false)
-        }
+        removal.phase == GATEWAY_REMOVAL_CACHE_PENDING -> completeCacheRemoval(removal.gatewayId, propagateFailure = false)
 
-        removal.phase == GATEWAY_REMOVAL_COMMITTING -> {
-          commitGatewayRemoval(removal.gatewayId)
-        }
+        removal.phase == GATEWAY_REMOVAL_COMMITTING ||
+          (registeredGatewayIds != null && removal.gatewayId !in registeredGatewayIds) -> commitGatewayRemoval(removal.gatewayId)
 
-        registeredGatewayIds != null && removal.gatewayId !in registeredGatewayIds -> {
-          commitGatewayRemoval(removal.gatewayId)
-        }
-
-        registeredGatewayIds != null -> {
-          cancelGatewayRemoval(removal.gatewayId)
-        }
+        registeredGatewayIds != null -> cancelGatewayRemoval(removal.gatewayId)
       }
     }
   }

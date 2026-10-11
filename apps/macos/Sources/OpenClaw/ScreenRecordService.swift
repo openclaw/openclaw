@@ -224,14 +224,10 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
                 self.input.markAsFinished()
                 self.audioInput?.markAsFinished()
                 self.writer.finishWriting {
-                    if let err = self.writer.error {
-                        cont
-                            .resume(throwing: ScreenRecordService.ScreenRecordError
-                                .writeFailed(err.localizedDescription))
-                    } else if self.writer.status != .completed {
-                        cont
-                            .resume(throwing: ScreenRecordService.ScreenRecordError
-                                .writeFailed("Failed to finalize video"))
+                    let failure = self.writer.error?.localizedDescription ??
+                        (self.writer.status == .completed ? nil : "Failed to finalize video")
+                    if let failure {
+                        cont.resume(throwing: ScreenRecordService.ScreenRecordError.writeFailed(failure))
                     } else {
                         cont.resume()
                     }

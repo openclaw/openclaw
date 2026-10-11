@@ -9,7 +9,6 @@ import {
   resolveGatewayProbeAuthSafe,
   resolveGatewayProbeAuthSafeWithSecretInputs,
   resolveGatewayProbeTarget,
-  resolveGatewayProbeAuthWithSecretInputs,
 } from "./probe-auth.js";
 
 const EMPTY_PROBE_AUTH = {
@@ -471,11 +470,9 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
 
     expect(result).toEqual({ auth: {} });
   });
-});
 
-describe("resolveGatewayProbeAuthWithSecretInputs", () => {
   it("resolves local probe SecretRef values before shared credential selection", async () => {
-    const auth = await resolveGatewayProbeAuthWithSecretInputs({
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg: configWithDefaultEnvProvider({
         auth: tokenAuthConfig("DAEMON_GATEWAY_TOKEN"),
       }),
@@ -485,9 +482,11 @@ describe("resolveGatewayProbeAuthWithSecretInputs", () => {
       } as NodeJS.ProcessEnv,
     });
 
-    expect(auth).toEqual({
-      token: "resolved-daemon-token",
-      password: undefined,
+    expect(result).toEqual({
+      auth: {
+        token: "resolved-daemon-token",
+        password: undefined,
+      },
     });
   });
 });

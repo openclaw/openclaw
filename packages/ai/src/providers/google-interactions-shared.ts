@@ -464,11 +464,6 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       }
     }
 
-    if (!output.stopReason) {
-      const hasToolCalls = output.content.some((b) => b.type === "toolCall");
-      output.stopReason = hasToolCalls ? "toolUse" : "stop";
-    }
-
     if (output.stopReason === "aborted" || output.stopReason === "error") {
       throw new Error("An unknown error occurred");
     }

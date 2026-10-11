@@ -1,7 +1,7 @@
 // SQLite persistence for plugin-owned byte blobs and JSON metadata.
 import type { DatabaseSync } from "node:sqlite";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import type { Insertable, Selectable } from "kysely";
+import type { InferResult, Insertable } from "kysely";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
@@ -31,19 +31,7 @@ export const MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN = 50_000;
 
 type PluginBlobTable = OpenClawStateKyselyDatabase["plugin_blob_entries"];
 type PluginBlobDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_blob_entries">;
-type PluginBlobRow = Selectable<PluginBlobTable>;
-
-type PluginBlobStoredInfo = Pick<
-  PluginBlobRow,
-  "entry_key" | "metadata_json" | "created_at" | "expires_at"
-> & { size_bytes: number | bigint };
-
-type BlobUsage = {
-  namespaceCount: number;
-  namespaceBytes: number;
-  pluginCount: number;
-  pluginBytes: number;
-};
+type PluginBlobStoredInfo = InferResult<ReturnType<typeof blobInfoQuery>>[number];
 
 export type BlobWriteParams = {
   pluginId: string;
@@ -58,14 +46,12 @@ export type BlobWriteParams = {
   env?: NodeJS.ProcessEnv;
 };
 
-function createError(params: {
-  code: PluginBlobStoreErrorCode;
-  operation: PluginBlobStoreOperation;
-  message: string;
-  env?: NodeJS.ProcessEnv;
-  cause?: unknown;
-  path?: string;
-}): PluginBlobStoreError {
+function createError(
+  params: ConstructorParameters<typeof PluginBlobStoreError>[1] & {
+    message: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): PluginBlobStoreError {
   return new PluginBlobStoreError(params.message, {
     code: params.code,
     operation: params.operation,
@@ -204,10 +190,7 @@ function selectEvictionCandidates(
   );
 }
 
-function readStoredUsage(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string },
-): BlobUsage {
+function readStoredUsage(db: DatabaseSync, params: { pluginId: string; namespace: string }) {
   // Expired rows retain cleanup metadata, so physical accounting includes them.
   const row = executeSqliteQueryTakeFirstSync(
     db,

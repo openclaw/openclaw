@@ -240,6 +240,7 @@ describe("agentCommand compaction transcript rotation", () => {
     "keeps successor context %s from the private ordered fact, not public snapshots",
     async (tokens) => {
       const storePath = requireStorePath();
+      const onSessionIdChanged = vi.fn();
       const rotatedSessionFile = formatSqliteSessionFileMarker({
         agentId: "main",
         sessionId: "rotated-session",
@@ -251,6 +252,7 @@ describe("agentCommand compaction transcript rotation", () => {
           count: 1,
           currentContextSnapshot: { tokens },
         });
+        params.onSuccessfulAuthProfile?.({});
         await appendTranscriptMessage(accepted.sessionTarget, {
           message: { role: "assistant", content: "first answer after rotation", timestamp: 1 },
         });
@@ -264,6 +266,7 @@ describe("agentCommand compaction transcript rotation", () => {
           sessionFile: rotatedSessionFile,
           provider: "openai",
           model: "gpt-5.5",
+          agentHarnessId: "openclaw",
           compactionCount: 99,
           compactionTokensAfter: 42,
           promptTokens: 95_000,
@@ -277,7 +280,13 @@ describe("agentCommand compaction transcript rotation", () => {
         message: "first prompt",
         sessionId: "old-session",
         cwd: state.workspaceDir,
+        onSessionIdChanged,
       });
+      await waitForSessionMaintenance("agent:main:explicit:old-session");
+
+      expect(onSessionIdChanged.mock.calls).toEqual([["rotated-session"]]);
+      expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
+      expect(state.runSessionCompactionIfNeededMock).not.toHaveBeenCalled();
 
       const entries = listSessionEntriesCore({ storePath });
       expect(entries).toHaveLength(1);
@@ -454,35 +463,6 @@ describe("agentCommand compaction transcript rotation", () => {
     });
 
     expect(onSessionIdChanged).not.toHaveBeenCalled();
-  });
-
-  it("reports an in-run successor without starting another optional memory flush", async () => {
-    const sessionId = "pre-memory-session";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    const onSessionIdChanged = vi.fn();
-    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-      await commitAttemptCompaction(params);
-      params.onSuccessfulAuthProfile?.({});
-      return makeResult({
-        sessionId,
-        text: "answer",
-        runner: "embedded",
-        agentHarnessId: "openclaw",
-      });
-    });
-
-    await agentCommand({
-      message: "compact in the attempt",
-      sessionId,
-      sessionKey,
-      onSessionIdChanged,
-    });
-    await waitForSessionMaintenance(sessionKey);
-
-    expect(onSessionIdChanged.mock.calls).toEqual([["rotated-session"]]);
-    expect(findStoredSessionEntry(sessionKey)?.sessionId).toBe("rotated-session");
-    expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
-    expect(state.runSessionCompactionIfNeededMock).not.toHaveBeenCalled();
   });
 
   it("carries Gateway plugin generation through failed post-turn compaction and still delivers", async () => {

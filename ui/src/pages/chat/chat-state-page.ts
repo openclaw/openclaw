@@ -173,7 +173,6 @@ async function loadPageAssistantIdentity(state: ChatPageHost) {
     }
     state.assistantName = identity.name;
     state.assistantAvatar = identity.avatar;
-    state.assistantAvatarSource = identity.avatarSource ?? null;
     state.assistantAvatarStatus = identity.avatarStatus ?? null;
     state.assistantAvatarReason = identity.avatarReason ?? null;
     state.assistantAgentId = identity.agentId ?? null;
@@ -189,6 +188,7 @@ export function createPageState(
   page: ChatPageElement,
   chatMessagesBySession: ChatMessageCache = new Map(),
 ): ChatPageHost {
+  const invalidate = () => renderLifecycle.invalidate();
   const settings = loadSettings();
   const initialSessionKey = page.sessionKey?.trim() || settings.sessionKey;
   const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
@@ -212,7 +212,6 @@ export function createPageState(
     assistantAvatar: null,
     assistantAvatarStatus: null,
     assistantAvatarReason: null,
-    assistantAvatarSource: null,
     assistantIdentityRequestVersion: 0,
     userName: identity.name,
     userAvatar: identity.avatar,
@@ -265,7 +264,6 @@ export function createPageState(
     waitingApprovalStatuses: new Map(),
     waitingApprovalResolvedIds: new Set(),
     chatAvatarUrl: null,
-    chatAvatarSource: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
     chatModelSwitchPromises: {},
@@ -331,7 +329,7 @@ export function createPageState(
     toolStreamSyncTimer: null,
     ...createInitialChatRealtimeState(),
     renderLifecycle,
-    requestUpdate: () => renderLifecycle.invalidate(),
+    requestUpdate: invalidate,
     // Background warming gates on these edges. Session-event reloads never
     // re-render the page, so no update can carry the fact to it.
     transcriptLoadingChanged: () =>
@@ -388,10 +386,13 @@ export function createPageState(
     }
     return handleSendChat(state, messageOverride, options, submissionAction);
   };
-  state.handleAbortChat = async (options) => {
-    await handleAbortChat(state, options);
-    renderLifecycle.invalidate();
-  };
+  const runAndInvalidate =
+    <Arg>(action: (host: ChatPageHost, argument: Arg) => Promise<unknown>) =>
+    async (argument: Arg) => {
+      await action(state, argument);
+      renderLifecycle.invalidate();
+    };
+  state.handleAbortChat = runAndInvalidate(handleAbortChat);
   state.removeQueuedMessage = (id) => {
     if (cancelPendingQueuedChatInput(state, id)) {
       return;
@@ -410,14 +411,8 @@ export function createPageState(
     }
     renderLifecycle.invalidate();
   };
-  state.retryQueuedChatMessage = async (id) => {
-    await retryQueuedChatMessage(state, id);
-    renderLifecycle.invalidate();
-  };
-  state.steerQueuedChatMessage = async (id) => {
-    await steerQueuedChatMessage(state, id);
-    renderLifecycle.invalidate();
-  };
+  state.retryQueuedChatMessage = runAndInvalidate(retryQueuedChatMessage);
+  state.steerQueuedChatMessage = runAndInvalidate(steerQueuedChatMessage);
   state.moveQueuedChatMessage = (id, targetId) => {
     moveQueuedChatMessage(state, id, targetId);
     renderLifecycle.invalidate();
@@ -449,10 +444,7 @@ export function createPageState(
         mentionsOverride: edit.mentions,
         resumeQueuedMessageEditId: edit.id,
       })
-      .then(
-        () => renderLifecycle.invalidate(),
-        () => renderLifecycle.invalidate(),
-      );
+      .then(invalidate, invalidate);
   };
   state.cancelQueuedChatMessageEdit = () => {
     if (cancelQueuedMessageEdit(state)) {

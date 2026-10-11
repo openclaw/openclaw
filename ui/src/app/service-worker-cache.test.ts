@@ -106,8 +106,10 @@ describe("Control UI service worker HTTP recovery", () => {
     "assets/app-AbCd1234.js",
     "assets/background-AbCd1234.webp",
     "fonts/custom.woff2?v=public-fixture",
+    "themes/custom.css?v=public-fixture",
+    "manifest.webmanifest?v=public-fixture",
   ])(
-    "preserves cached %s and returns a network error when no offline copy exists",
+    "serves %s without a second network request and fails offline without a copy",
     async (route) => {
       const worker = createFetchServiceWorker();
       const url = `${worker.scope}${route}`;
@@ -118,6 +120,7 @@ describe("Control UI service worker HTTP recovery", () => {
       expect(await (await worker.dispatch({ url }))?.text()).toBe("offline asset");
       expect(await (await worker.dispatch({ url }))?.text()).toBe("offline asset");
       expect(worker.windowClients[0].postMessage).not.toHaveBeenCalled();
+      expect(worker.fetch).toHaveBeenCalledOnce();
 
       worker.cache.clear();
       expect((await worker.dispatch({ url }))?.type).toBe("error");
@@ -442,6 +445,7 @@ describe("Control UI offline app shell", () => {
     worker.priorCache.set(priorUrl, new Response("previous font"));
     worker.fetch.mockRejectedValue(new TypeError("Offline"));
     expect(await (await worker.dispatch({ url: priorUrl }))?.text()).toBe("previous font");
+    expect(worker.fetch).not.toHaveBeenCalled();
     expect(
       (await worker.dispatch({ url: priorUrl.replace("previous-build", "unknown-build") }))?.type,
     ).toBe("error");
@@ -483,7 +487,7 @@ const offlineBootFixture = {
     },
   ] as const,
   publicAssetVersion: "public-fixture",
-  publicAssets: ["fonts/custom.woff2"],
+  publicAssets: ["fonts/custom.woff2", "themes/custom.css", "manifest.webmanifest"],
 };
 type ServiceWorkerFetchEventStub = {
   request: ServiceWorkerFetchRequest;

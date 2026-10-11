@@ -39,11 +39,6 @@ export function resolveOpenAIProviderConfigRecord(
   );
 }
 
-type OpenAIRealtimeClientSecretResult = {
-  value: string;
-  expiresAt?: number;
-};
-
 type OpenAIRealtimeClientSecretRequest = {
   authToken: string;
   auditContext: string;
@@ -60,7 +55,7 @@ export async function createOpenAIRealtimeClientSecret(
     fetchWithSsrFGuard,
   }: OpenAIRealtimeHost,
   label = "OpenAI Realtime",
-): Promise<OpenAIRealtimeClientSecretResult> {
+) {
   const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
   const { response, release } = await fetchWithSsrFGuard({
     url,

@@ -102,7 +102,7 @@ response remains authoritative even if it contains no visible models; HTTP
 
 <Note>
 The current bundled harness is `@openai/codex` `0.160.0`. A `model/list`
-probe against that app-server in an isolated, unauthenticated Codex home returned
+check against that app-server in an isolated, unauthenticated Codex home returned
 these visible bundled catalog entries on October 2, 2026:
 
 | Model id        | Input modalities | Reasoning efforts                    | Default effort |
@@ -154,7 +154,7 @@ fallback and leave native models unavailable until discovery succeeds.
 }
 ```
 
-Disable discovery when you want startup to avoid probing Codex and use only
+Disable discovery when you want startup to avoid checking Codex and use only
 the fallback catalog:
 
 ```json5

@@ -2354,7 +2354,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.5.1"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.7.0"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -2727,7 +2727,7 @@ bounded_probe_output() {
 
     status="$(cat "$status_file" 2>/dev/null || true)"
     if [[ -s "$timeout_file" || "$status" == "timeout" ]]; then
-        echo "Warning: timed out during installer finalization probe: ${label}" >&2
+        echo "Warning: timed out during installer finalization check: ${label}" >&2
         return 124
     fi
 

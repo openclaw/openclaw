@@ -336,7 +336,8 @@ vi.mock("./setup-onboard-configure-help-fast-path.js", () => ({
   tryOutputSetupOnboardConfigureHelp: tryOutputSetupOnboardConfigureHelpMock,
 }));
 
-vi.mock("./program.js", () => ({ buildProgram: buildProgramMock }));
+// mock-isolation: Exercise dispatch without constructing the real Commander program.
+vi.mock("./program/build-program.js", () => ({ buildProgram: buildProgramMock }));
 
 vi.mock("./program/program-context.js", () => ({ getProgramContext: getProgramContextMock }));
 

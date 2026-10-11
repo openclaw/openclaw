@@ -4,6 +4,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import {
@@ -48,6 +50,55 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     expect(new Set(result.map((entry) => entry.id))).toEqual(
       new Set(catalog.map((entry) => entry.id)),
     );
+  });
+
+  it("leads each provider with its hosted-catalog recommendations after the selected model", async () => {
+    const row = (provider: string, id: string, providerOrder: number): ModelCatalogEntry => ({
+      provider,
+      id,
+      name: id,
+      providerOrder,
+    });
+    const catalog = [
+      ...["a-0", "a-1", "a-2", "a-3", "a-4"].map((id, index) => row("alpha", id, index)),
+      row("beta", "b-0", 0),
+      row("beta", "b-1", 1),
+    ];
+    const result = await withRemoteModelCatalogSnapshot(
+      {
+        sourceUrl: resolveRemoteCatalogUrl({}),
+        generatedAt: 1,
+        revision: "fixture",
+        // "gone" is no longer served by alpha; beta recommends nothing.
+        providers: { alpha: { models: [], recommendedModels: ["a-3", "gone", "a-1"] } },
+        pricing: {},
+        upstreamPricing: {},
+      },
+      () =>
+        resolveLogicalVisibleModelCatalog({
+          cfg: {},
+          catalog,
+          defaultProvider: "alpha",
+          selectedModel: { provider: "alpha", model: "a-4" },
+          view: "all",
+          metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+          routePolicy: openAIModelCatalogRoutePolicy,
+          evaluateEntry: async () =>
+            resolveLogicalModelCatalogEntryState({
+              evaluation: { availability: true, routeResolution: null },
+              routePolicy: openAIModelCatalogRoutePolicy,
+            }),
+        }),
+    );
+    expect(result.map((entry) => entry.id)).toEqual([
+      "a-4",
+      "a-3",
+      "a-1",
+      "a-0",
+      "a-2",
+      "b-0",
+      "b-1",
+    ]);
   });
 
   it.each([

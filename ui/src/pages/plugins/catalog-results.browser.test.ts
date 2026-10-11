@@ -10,6 +10,7 @@ import { renderPluginMcpServers } from "./overview.ts";
 import baseStyles from "../../styles/base.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import pluginStyles from "../../styles/plugins.css?inline";
+import settingsStyles from "../../styles/settings.css?inline";
 
 const entry = {
   id: "long-title",
@@ -33,7 +34,7 @@ let styles: HTMLStyleElement;
 beforeEach(async () => {
   await page.viewport(1440, 900);
   styles = document.createElement("style");
-  styles.textContent = [baseStyles, componentStyles, pluginStyles].join("\n");
+  styles.textContent = [baseStyles, componentStyles, settingsStyles, pluginStyles].join("\n");
   document.head.append(styles);
   container = document.createElement("div");
   document.body.append(container);
@@ -128,6 +129,30 @@ it.each([263, 362])(
     expect(onInstall).toHaveBeenCalledOnce();
   },
 );
+
+it.each([263, 362])("centers installed status dots in a %ipx card header", (width) => {
+  for (const state of ["enabled", "disabled", "needs-setup", "error"] as const) {
+    render(
+      renderPluginCatalogResults({
+        ...catalogProps(),
+        result: {
+          items: [{ ...entry, local: { ...entry.local, installed: true, state } }],
+        },
+      }),
+      container,
+    );
+    container.querySelector<HTMLElement>(".plugin-catalog-grid")!.style.gridTemplateColumns =
+      `${width}px`;
+    const card = container.querySelector<HTMLElement>(".plugin-catalog-card")!;
+    const header = card
+      .querySelector<HTMLElement>(".plugin-catalog-card__head")!
+      .getBoundingClientRect();
+    const dot = card.querySelector<HTMLElement>(".settings-status__dot")!.getBoundingClientRect();
+    expect(dot.width).toBeGreaterThan(0);
+    expect(Math.abs(dot.y + dot.height / 2 - (header.y + header.height / 2))).toBeLessThan(1);
+    expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
+  }
+});
 
 it.each([
   { width: 40, whiteBackground: false },

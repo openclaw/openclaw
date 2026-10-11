@@ -46,7 +46,6 @@ type RenderableSessionSection = SidebarVisibleSections["sections"][number];
 
 type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
-  readonly sessionInvolvingMeFilterActive: boolean;
   readonly sessionData: SessionListHost["sessionData"] &
     Pick<
       SessionDataController,

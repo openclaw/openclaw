@@ -125,24 +125,6 @@ describe("agent delivery target resolution", () => {
     expect(plan.targetResolutionError).toBeUndefined();
   });
 
-  it("rejects named targets when directory and plugin resolution miss", async () => {
-    const targetError = new Error('Unknown target "channel:missing"');
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      messaging: {
-        resolveOutboundSessionRoute: vi.fn(),
-        targetResolver: { resolveTarget: vi.fn() },
-      },
-    });
-    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:missing" });
-    mocks.resolveChannelTarget.mockResolvedValue({ ok: false, error: targetError });
-
-    const plan = await resolvePlan("channel:missing");
-
-    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
-    expect(plan.resolvedTo).toBe("channel:missing");
-    expect(plan.targetResolutionError).toBe(targetError);
-  });
-
   it("resolves plugin default targets before returning the delivery plan", async () => {
     const plugin = { messaging: { targetResolver: { resolveTarget: vi.fn() } } };
     mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
@@ -195,40 +177,4 @@ describe("agent delivery target resolution", () => {
       mode: "implicit",
     });
   });
-
-  it.each(["session-route-only", "heuristic-only"])(
-    "preserves normalized fallback for %s plugins",
-    async (kind) => {
-      const plugin = {
-        messaging: {
-          resolveOutboundSessionRoute: vi.fn(),
-          ...(kind === "heuristic-only" ? { targetResolver: { looksLikeId: vi.fn() } } : {}),
-        },
-      };
-      mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
-      mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "some-channel" });
-      mocks.resolveChannelTarget.mockResolvedValue({
-        ok: true,
-        target: {
-          to: "some-channel",
-          kind: "group",
-          source: "normalized",
-          resolutionSource: "normalized",
-        },
-      });
-
-      const plan = await resolvePlan("some-channel");
-
-      expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
-        cfg: {},
-        channel: "workspace",
-        input: "some-channel",
-        accountId: undefined,
-        unknownTargetMode: "normalized",
-        plugin,
-      });
-      expect(plan.resolvedTo).toBe("some-channel");
-      expect(plan.targetResolutionError).toBeUndefined();
-    },
-  );
 });

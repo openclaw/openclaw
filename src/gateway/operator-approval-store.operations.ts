@@ -26,7 +26,7 @@ export type OperatorApprovalCommitReceipt = {
   grantUse?: CronStandingGrantRecord;
   receiptAuthority?: CronReceiptAuthorityPublication;
 };
-type Context = WorkerOperationContext & {
+type Context = Pick<WorkerOperationContext, "open" | "stateOptions"> & {
   native?: {
     assertCurrent: () => void;
     receiptAuthority: CronReceiptAuthorityAttachment;

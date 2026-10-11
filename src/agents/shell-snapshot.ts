@@ -1,14 +1,10 @@
-/**
- * Login-shell environment snapshot capture.
- *
- * Caches safe shell-derived environment variables while filtering secrets and stale snapshots.
- */
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { resolveStateDir } from "../config/paths.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -364,13 +360,8 @@ function buildSnapshotFile(stdout: string): string | null {
 }
 
 function parseSafeEnvExports(envJson: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(envJson);
-  } catch {
-    return "";
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const parsed = safeParseJsonRecord(envJson);
+  if (!parsed) {
     return "";
   }
   return Object.entries(parsed)

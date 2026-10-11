@@ -17,6 +17,12 @@ const FAILOVER_TIMEOUT_ERROR_CODES = new Set([
 ]);
 const NO_BODY_HTTP_WRAPPER_RE =
   /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;
+const PRESERVED_NOT_FOUND_OR_GONE_REASONS = new Set<FailoverReason | null>([
+  "session_expired",
+  "billing",
+  "auth_permanent",
+  "auth",
+]);
 function stripErrorPrefix(raw: string): string {
   return raw.replace(/^error:\s*/i, "").trim();
 }
@@ -243,10 +249,8 @@ export function classifyFailoverClassificationFromHttpStatus(
   if (status === 410) {
     // Generic 410/no-body responses behave like transport failures, not session expiry.
     if (
-      messageReason === "session_expired" ||
-      messageReason === "billing" ||
-      messageReason === "auth_permanent" ||
-      messageReason === "auth"
+      PRESERVED_NOT_FOUND_OR_GONE_REASONS.has(messageReason) ||
+      messageReason === "model_not_found"
     ) {
       return messageClassification;
     }
@@ -257,13 +261,7 @@ export function classifyFailoverClassificationFromHttpStatus(
     return messageClassification;
   }
   if (status === 404) {
-    if (
-      messageReason === "session_expired" ||
-      messageReason === "billing" ||
-      messageReason === "auth_permanent" ||
-      messageReason === "auth" ||
-      messageReason === "format"
-    ) {
+    if (PRESERVED_NOT_FOUND_OR_GONE_REASONS.has(messageReason) || messageReason === "format") {
       return messageClassification;
     }
     return toReasonClassification("model_not_found");

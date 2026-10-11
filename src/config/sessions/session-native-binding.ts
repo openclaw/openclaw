@@ -35,7 +35,7 @@ import type {
 import type { SessionEntry } from "./types.js";
 
 type NativeDeletionCapture = NonNullable<ReturnType<typeof captureNativeSessionWorkerDeletion>>;
-// A may be unknown even without an S binding (ACP or initialization-only deletion).
+// A may be unknown even without an S binding (ACP's commit-only finalizer).
 // Keep the exact generation and its cleanup custody until the process owner closes.
 const unresolved = resolveGlobalSingleton(
   Symbol.for("openclaw.nativeSessionDeletionOutcomes"),
@@ -66,15 +66,6 @@ export function deleteSessionWithNativeBindingsInWorker(
     candidateKind: "session-native-binding-deletion",
     execute: (worker, participants) =>
       worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),
-    onAcknowledged(candidate) {
-      captured.committed(
-        new Set(
-          collectReclamationDeletionEntries(plan, candidate.result).map(
-            ({ sessionKey }) => sessionKey,
-          ),
-        ),
-      );
-    },
     onCommitted(candidate, published, identity) {
       try {
         onResult?.(candidate.result, identity);
@@ -209,6 +200,9 @@ export function runSessionNativeBindingWorkerOperation<
         }
         admitted = { admission, retained };
         assertHeld();
+        if (facts.kind === "native-binding-ready" || facts.phase === "delete") {
+          params.onTransactionFacts?.(facts);
+        }
         if (facts.kind === "native-binding-ready") {
           if (members.some(({ participant }) => participant.renewalPending())) {
             readinessRefused = true;

@@ -352,6 +352,12 @@ describe("WebChat message tool internal source reply", () => {
       sourceReplySink: "internal-ui",
       sourceReply: { text: "Visible progress from the message tool." },
     });
+    expect(toolResult.content).toEqual([
+      {
+        type: "text",
+        text: "Sent visible reply to the current source conversation via internal-ui.",
+      },
+    ]);
 
     const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
     expect(sourceReply).toMatchObject({ text: "Visible progress from the message tool." });
@@ -393,6 +399,34 @@ describe("WebChat message tool internal source reply", () => {
     expect(getReplyPayloadMetadata(payloads[1] as object)?.sourceReplyTranscriptMirror).toBe(
       undefined,
     );
+  });
+
+  it("reports a route-less inter-session send as a transcript record, not a channel delivery", async () => {
+    const tool = createCurrentSourceMessageTool({
+      agentSessionKey: "agent:main:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceTool: "sessions_send",
+      },
+    });
+
+    const toolResult = await tool.execute("message-call", {
+      action: "send",
+      message: "Child task finished.",
+    });
+
+    expect(toolResult.details).toMatchObject({
+      target: "current-run",
+      sourceReplySink: "internal-ui",
+    });
+    expect(toolResult.content).toEqual([
+      {
+        type: "text",
+        text: "Recorded reply in the current session transcript via internal-ui. This send did not deliver it to an external channel.",
+      },
+    ]);
   });
 
   it("stages a trusted HTML buffer before acknowledging the current-source send", async () => {

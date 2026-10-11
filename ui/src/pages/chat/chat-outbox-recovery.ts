@@ -1,9 +1,9 @@
 import { html, LitElement, nothing, type PropertyValues } from "lit";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/chat/outbox-recovery.css";
 import type { DurableComposerRecoveryEntry } from "../../lib/chat/composer-draft-store.runtime.ts";
-import { observeOutboxRecoveryOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
   captureChatOutboxRecoveryDestination,
   discardChatOutboxRecovery,
@@ -80,12 +80,12 @@ class ChatOutboxRecovery extends LitElement {
   }
   private owner() {
     const host = this.host;
-    if (!host || host.selectedChatSessionIncognito || !observeOutboxRecoveryOwner(host)) {
+    if (!host || host.selectedChatSessionIncognito || !readOfflineStorageScope(host)) {
       return null;
     }
     return {
       gatewayOwner: storageTargetForGateway(host.settings.gatewayUrl).gatewayOwner,
-      recoveryScope: observeOutboxRecoveryOwner(host)!,
+      recoveryScope: readOfflineStorageScope(host)!,
     };
   }
   private async refresh() {
@@ -114,16 +114,14 @@ class ChatOutboxRecovery extends LitElement {
       }
       this.entries = recovery?.entries ?? [];
       this.error = retirementError || (recovery?.blocked ? t("chat.outboxRecoveryFull") : "");
-      if (owner) {
-        const result = await (await draftStore).prepareDurableComposerRecovery(owner);
-        if (generation !== this.generation || !this.isConnected) {
-          return;
-        }
-        if (result.status === "storage-failed") {
-          throw new Error("storage-failed");
-        }
-        this.drafts = result.entries;
+      const result = await (await draftStore).prepareDurableComposerRecovery(owner);
+      if (generation !== this.generation || !this.isConnected) {
+        return;
       }
+      if (result.status === "storage-failed") {
+        throw new Error("storage-failed");
+      }
+      this.drafts = result.entries;
     } catch {
       if (generation !== this.generation || !this.isConnected) {
         return;
@@ -246,8 +244,7 @@ class ChatOutboxRecovery extends LitElement {
     if (attachments.length) {
       return t("chat.outboxRecoveryAttachments", { files: attachments.join(", ") });
     }
-    const goal = "id" in entry ? entry.session.goalMode : entry.goalMode;
-    const reply = "id" in entry ? entry.session.replyTarget : entry.replyTarget;
+    const { goalMode: goal, replyTarget: reply } = "id" in entry ? entry.session : entry;
     if (goal) {
       return t("chat.outboxRecoveryGoal");
     }
@@ -267,8 +264,7 @@ class ChatOutboxRecovery extends LitElement {
   private details(entry: RecoveryEntry) {
     const session = "id" in entry ? entry.session : null;
     const text = "id" in entry ? entry.session.draft : entry.text;
-    const goal = "id" in entry ? entry.session.goalMode : entry.goalMode;
-    const reply = "id" in entry ? entry.session.replyTarget : entry.replyTarget;
+    const { goalMode: goal, replyTarget: reply } = "id" in entry ? entry.session : entry;
     const attachmentNames = "id" in entry ? [] : entry.attachmentNames;
     return [
       text?.trim(),
@@ -395,20 +391,18 @@ class ChatOutboxRecovery extends LitElement {
           : nothing
       }
       <div class="chat-outbox-recovery__actions">
-        <button
-          class="btn btn--sm"
-          ?disabled=${this.busy || !this.owner()}
-          @click=${() => void this.recover(entry)}
-        >
-          ${t("chat.outboxRecoveryRestore")}
-        </button>
-        <button
-          class="btn btn--sm"
-          ?disabled=${this.busy || !this.owner()}
-          @click=${() => void this.discard(entry)}
-        >
-          ${t("chat.outboxRecoveryDelete")}
-        </button>
+        ${(
+          [
+            ["chat.outboxRecoveryRestore", () => void this.recover(entry)],
+            ["chat.outboxRecoveryDelete", () => void this.discard(entry)],
+          ] as const
+        ).map(
+          ([label, action]) => html`
+            <button class="btn btn--sm" ?disabled=${this.busy || !this.owner()} @click=${action}>
+              ${t(label)}
+            </button>
+          `,
+        )}
       </div>
     </div>`;
   }

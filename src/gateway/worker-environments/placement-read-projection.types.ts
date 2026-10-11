@@ -15,7 +15,7 @@ export type WorkerEnvironmentPlacementFacts = Pick<
   | "ownerEpoch"
   | "nodeDeviceId"
   | "attachedSessionIds"
->;
+> & { inference?: "worker" };
 
 export type WorkerSessionPlacementProjection = {
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;

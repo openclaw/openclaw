@@ -59,7 +59,7 @@ function runIosScreenshotsCommand(
   writeExecutable(
     "bundle",
     '[[ "$BUNDLE_GEMFILE" == "$OPENCLAW_FASTLANE_EXPECTED_GEMFILE" ]] || exit 91\n' +
-      '[[ "${1:-}" == "_4.0.21_" ]] || exit 92\n' +
+      '[[ "${1:-}" == "_4.0.22_" ]] || exit 92\n' +
       `[[ "\${2:-}" != "check" ]] || exit ${options.bundleCheckExit ?? 0}\n` +
       'printf "bundle:%s\\n" "$*" >> "$OPENCLAW_FASTLANE_TEST_TRACE"\n' +
       `exit ${options.bundleExit ?? 0}`,
@@ -473,7 +473,7 @@ puts JSON.generate(rows)
     const rubyArgs = ["-e", source, fastfilePath];
     const result = spawnSync(
       useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.21_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
       { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
     );
     expect(result.status, result.stderr).toBe(0);
@@ -725,15 +725,15 @@ puts JSON.generate(rows)
     const gemfile = readFileSync(gemfilePath, "utf8");
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
-    expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
+    expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.11\n");
     expect(gemfile).toContain('gem "fastlane", "2.240.1"');
-    expect(gemfile).toContain('ruby "3.4.10"');
+    expect(gemfile).toContain('ruby "3.4.11"');
     expect(lockfile).toContain("fastlane (2.240.1)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
-    expect(lockfile).toContain("RUBY VERSION\n  ruby 3.4.10");
-    expect(lockfile).toContain("BUNDLED WITH\n  4.0.21");
+    expect(lockfile).toContain("RUBY VERSION\n  ruby 3.4.11");
+    expect(lockfile).toContain("BUNDLED WITH\n  4.0.22");
     expect(iosJob).not.toContain("BUNDLE_DEPLOYMENT");
     expect(iosJob).not.toContain("BUNDLE_GEMFILE");
     expect(iosJob).not.toContain("ruby/setup-ruby@");
@@ -742,13 +742,13 @@ puts JSON.generate(rows)
     expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
     // Dependabot bumps this pin; the contract is an immutable commit SHA, not one release.
     expect(shardJob).toMatch(/ruby\/setup-ruby@[0-9a-f]{40}\s/u);
-    expect(shardJob).toContain('ruby-version: "3.4.10"');
-    expect(shardJob).toContain('bundler: "4.0.21"');
+    expect(shardJob).toContain('ruby-version: "3.4.11"');
+    expect(shardJob).toContain('bundler: "4.0.22"');
     expect(shardJob).toContain("bundler-cache: false");
     expect(shardJob).toContain("working-directory: apps/ios");
-    expect(shardJob).toContain("bundle _4.0.21_ install --jobs 4 --retry 3");
-    expect(shardJob).toContain("bundle _4.0.21_ check");
-    expect(shardJob).toContain("bundle _4.0.21_ exec fastlane --version");
+    expect(shardJob).toContain("bundle _4.0.22_ install --jobs 4 --retry 3");
+    expect(shardJob).toContain("bundle _4.0.22_ check");
+    expect(shardJob).toContain("bundle _4.0.22_ exec fastlane --version");
     expect(workflow.match(/ruby\/setup-ruby@/gu)).toHaveLength(1);
     expect(workflow.match(/name: Install locked Fastlane bundle/gu)).toHaveLength(1);
   });
@@ -763,7 +763,7 @@ puts JSON.generate(rows)
 
     expect(documentedCommands.length).toBeGreaterThan(0);
     for (const command of documentedCommands) {
-      expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane');
+      expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane');
     }
   });
 
@@ -781,7 +781,7 @@ puts JSON.generate(rows)
     try {
       const result = spawnSync(
         "bash",
-        ["-c", 'BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.21_ exec fastlane ios auth_check'],
+        ["-c", 'BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane ios auth_check'],
         {
           cwd: path.join(process.cwd(), "apps", "ios"),
           encoding: "utf8",
@@ -805,14 +805,14 @@ puts JSON.generate(rows)
     const { result, trace } = runIosScreenshotsCommand();
 
     expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.22_ exec fastlane ios screenshots\n");
   });
 
   it("fails closed when the repository bundle fails", () => {
     const { result, trace } = runIosScreenshotsCommand({ bundleExit: 42 });
 
     expect(result.status).toBe(42);
-    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.22_ exec fastlane ios screenshots\n");
   });
 
   it("prints the pinned setup command when the repository bundle is unavailable", () => {
@@ -820,16 +820,16 @@ puts JSON.generate(rows)
 
     expect(result.status).toBe(1);
     expect(trace).toBe("");
-    expect(result.stderr).toContain("Install Ruby 3.4.10");
-    expect(result.stderr).toContain("gem install bundler -v 4.0.21");
-    expect(result.stderr).toContain("bundle _4.0.21_ install");
+    expect(result.stderr).toContain("Install Ruby 3.4.11");
+    expect(result.stderr).toContain("gem install bundler -v 4.0.22");
+    expect(result.stderr).toContain("bundle _4.0.22_ install");
   });
 
   it("ignores a conflicting inherited Gemfile on the pinned path", () => {
     const { result, trace } = runIosScreenshotsCommand({ conflictingGemfile: true });
 
     expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_4.0.21_ exec fastlane ios screenshots\n");
+    expect(trace).toBe("bundle:_4.0.22_ exec fastlane ios screenshots\n");
   });
 
   it("fails closed when the repository Gemfile is absent", () => {
@@ -869,7 +869,7 @@ puts JSON.generate(rows)
       expect(existsSync(tracePath)).toBe(false);
       expect(result.stderr).toContain("repository iOS Gemfile is missing");
       expect(result.stderr).toContain("Restore it from the repository checkout");
-      expect(result.stderr).toContain("bundle _4.0.21_ install");
+      expect(result.stderr).toContain("bundle _4.0.22_ install");
     } finally {
       rmSync(fixture, { force: true, recursive: true });
     }

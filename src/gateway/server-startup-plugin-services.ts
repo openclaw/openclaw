@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -51,29 +52,18 @@ export async function startGatewayPluginServices(
         if (deadlineAtMs === undefined) {
           return stopPromise;
         }
-        return new Promise<Awaited<ReturnType<PluginServicesHandle["stop"]>>>((resolve, reject) => {
-          const timer = setTimeout(
-            () => {
-              reject(
-                new AggregateError(
-                  [new Error("Gateway plugin service startup did not settle before replacement")],
-                  "Gateway plugin service replacement cleanup failed",
-                ),
-              );
-            },
-            Math.max(0, deadlineAtMs - Date.now()),
-          );
-          void stopPromise.then(
-            (result) => {
-              clearTimeout(timer);
-              resolve(result);
-            },
-            (error: unknown) => {
-              clearTimeout(timer);
-              reject(error instanceof Error ? error : new Error(String(error)));
-            },
-          );
-        });
+        return raceWithTimeout(
+          stopPromise.catch((error: unknown) => {
+            throw error instanceof Error ? error : new Error(String(error));
+          }),
+          Math.max(0, deadlineAtMs - Date.now()),
+          () => {
+            throw new AggregateError(
+              [new Error("Gateway plugin service startup did not settle before replacement")],
+              "Gateway plugin service replacement cleanup failed",
+            );
+          },
+        );
       },
     };
     // Startup may outlive a replacement deadline. Final shutdown retains this

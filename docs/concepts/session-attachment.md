@@ -194,7 +194,7 @@ session was deleted after the command was copied, return to the Control UI and
 copy a command from an available session.
 
 Revoke or remove the device from the same Gateway's **Devices** page when that
-client should no longer connect. Tokens do not cross origins. Read-only probes
+client should no longer connect. Tokens do not cross origins. Read-only checks
 through an SSH tunnel also suppress stored device auth because the loopback
 transport does not identify the remote origin; explicit credentials still work.
 

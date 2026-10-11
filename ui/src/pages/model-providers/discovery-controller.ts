@@ -104,20 +104,23 @@ export class ModelProviderDiscoveryController implements ReactiveController {
       return nothing;
     }
     const generation = this.generation;
-    const cancel = () => {
+    const close = (refresh = false) => {
       if (generation === this.generation) {
         this.reset();
+        if (refresh) {
+          this.options.onClose();
+        }
       }
     };
     if (this.state === "loading") {
       return html`<openclaw-modal-dialog
         label=${t("modelSetup.discovery.title")}
-        @modal-cancel=${cancel}
+        @modal-cancel=${() => close()}
       >
         <div class="model-setup-wizard">
           <div class="model-setup-wizard__body" role="status">${t("common.loading")}</div>
           <div class="model-setup-wizard__footer">
-            <button class="btn" @click=${cancel}>${t("common.cancel")}</button>
+            <button class="btn" @click=${() => close()}>${t("common.cancel")}</button>
           </div>
         </div>
       </openclaw-modal-dialog>`;
@@ -127,12 +130,7 @@ export class ModelProviderDiscoveryController implements ReactiveController {
       .embedded=${true}
       .credentialChoices=${data.credentialChoices}
       .agentLabel=${data.agentLabel}
-      .onClose=${() => {
-        if (generation === this.generation) {
-          this.reset();
-          this.options.onClose();
-        }
-      }}
+      .onClose=${() => close(true)}
     ></openclaw-model-setup-page>`;
   }
 }

@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { MCP_EVENTS_PROTOCOL_VERSION, requestMcpEvent } from "../../agents/mcp-event-request.js";
 import {
@@ -92,7 +91,6 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
       cfg,
       respond,
       rawAgentId: params.agentId ?? caller?.agentId,
-      normalize: normalizeOptionalString,
     });
     if (!resolved) {
       return;

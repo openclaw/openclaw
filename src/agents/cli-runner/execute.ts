@@ -236,9 +236,7 @@ export async function executePreparedCliRun(
       : resolvedArgs;
 
   const cliLiveOwnerKey = buildCliLiveOwnerKey({
-    agentAccountId: params.agentAccountId,
     agentId: params.agentId,
-    authProfileId: context.effectiveAuthProfileId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });
@@ -328,7 +326,7 @@ export async function executePreparedCliRun(
           provider: params.provider,
           model: context.normalizedModel,
           promptChars: basePrompt.length,
-          trigger: params.trigger,
+          trigger: params.isolatedCompletionPurpose ?? params.trigger,
           useResume,
           cliSessionId: cliSessionIdToUse,
           resolvedSessionId,

@@ -49,29 +49,15 @@ const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
   ["deleteDays", "--delete-days"],
 ]);
 
-function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
-  const { account, ...rest } = opts;
-  return {
-    ...rest,
-    accountId: typeof account === "string" ? account : rest.accountId,
-  };
-}
-
 function validateMessageNumericOptions(opts: Record<string, unknown>): void {
-  for (const [key, flag] of STRICT_POSITIVE_INTEGER_OPTIONS) {
-    if (opts[key] === undefined) {
-      continue;
-    }
-    if (parseStrictPositiveInteger(opts[key]) === undefined) {
-      throw new Error(`${flag} must be a positive integer.`);
-    }
-  }
-  for (const [key, flag] of STRICT_NON_NEGATIVE_INTEGER_OPTIONS) {
-    if (opts[key] === undefined) {
-      continue;
-    }
-    if (parseStrictNonNegativeInteger(opts[key]) === undefined) {
-      throw new Error(`${flag} must be a non-negative integer.`);
+  for (const [options, parse, kind] of [
+    [STRICT_POSITIVE_INTEGER_OPTIONS, parseStrictPositiveInteger, "positive"],
+    [STRICT_NON_NEGATIVE_INTEGER_OPTIONS, parseStrictNonNegativeInteger, "non-negative"],
+  ] as const) {
+    for (const [key, flag] of options) {
+      if (opts[key] !== undefined && parse(opts[key]) === undefined) {
+        throw new Error(`${flag} must be a ${kind} integer.`);
+      }
     }
   }
 }
@@ -93,20 +79,13 @@ async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
   }
 }
 
-function asChannelMessageActionName(action: string): ChannelMessageActionName | undefined {
-  return CHANNEL_MESSAGE_ACTION_NAME_SET.has(action)
-    ? (action as ChannelMessageActionName)
-    : undefined;
-}
-
 function isGatewayOwnedMessageAction(action: string, scopedChannel: string | undefined): boolean {
-  const messageAction = asChannelMessageActionName(action);
-  if (!messageAction || !scopedChannel) {
+  if (!CHANNEL_MESSAGE_ACTION_NAME_SET.has(action) || !scopedChannel) {
     return false;
   }
   const plugin = getChannelPlugin(scopedChannel);
   const executionMode = plugin?.actions?.resolveExecutionMode?.({
-    action: messageAction,
+    action: action as ChannelMessageActionName,
   });
   return executionMode === "gateway";
 }
@@ -187,16 +166,18 @@ export function createMessageCliHelpers(messageChannelOptions: string) {
               import("../../deps.js"),
             ]);
             const deps = createDefaultDeps();
-            const run = () =>
+            const { account, ...rest } = opts;
+            result = await withPluginRuntimeRegistryScope(pluginRegistry, () =>
               messageCommand(
                 {
-                  ...normalizeMessageOptions(opts),
+                  ...rest,
+                  accountId: typeof account === "string" ? account : rest.accountId,
                   action,
                 },
                 deps,
                 defaultRuntime,
-              );
-            result = await withPluginRuntimeRegistryScope(pluginRegistry, run);
+              ),
+            );
           },
           (err) => {
             failed = true;

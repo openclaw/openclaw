@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import {
@@ -73,7 +73,7 @@ export async function prepareAgentContentPhase(params: {
   knownAgents: string[];
   assertAdmissionCurrent?: () => void;
 }) {
-  const transcriptInputText = (params.request.message ?? "").trim();
+  const transcriptInputText = params.request.message.trim();
   let message = params.isRawModelRun
     ? transcriptInputText
     : annotateInterSessionPromptText(transcriptInputText, params.inputProvenance);
@@ -87,11 +87,10 @@ export async function prepareAgentContentPhase(params: {
 
   const isKnownGatewayChannel = (value: string): boolean =>
     isGatewayMessageChannel(value) || isInternalNonDeliveryChannel(value);
-  const channelHints = normalizeStringEntries(
-    [params.request.channel, params.request.replyChannel].filter(
-      (value): value is string => typeof value === "string",
-    ),
-  );
+  const channelHints = normalizeTrimmedStringList([
+    params.request.channel,
+    params.request.replyChannel,
+  ]);
   for (const rawChannel of channelHints) {
     const normalized = normalizeMessageChannel(rawChannel);
     if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {

@@ -29,6 +29,7 @@ export async function resolveClickClackDiscussionRoute(params: {
   channelId: string;
 }): Promise<ClickClackDiscussionRouteResolution> {
   const store = getClickClackDiscussionBindingStore(params.runtime);
+  await store.prepare();
   let matched = store.getByChannel(params.serverBaseUrl, params.channelId);
   let pending = false;
   if (!matched) {

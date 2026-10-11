@@ -206,60 +206,58 @@ describe("gateway chat metadata refresh", () => {
     },
   );
 
-  test.each([false, true])(
-    "notifies settled catalog status without rebuilding metadata (beforeRefresh: %s)",
-    async (prepareBeforeRefresh) => {
-      const onChanged = vi.fn();
-      const harness = createChatMetadataHarness(undefined, {
-        onChanged,
-        ...(prepareBeforeRefresh ? { beforeRefresh: async () => {} } : {}),
+  test("notifies settled catalog status without rebuilding metadata", async () => {
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(undefined, {
+      onChanged,
+    });
+    const owner = harness.getPreparedOwner()!;
+    const catalog = owner.modelCatalog;
+    try {
+      await harness.runtime.refresh();
+      const original = await harness.runtime.read({ agentId: "main" });
+      onChanged.mockClear();
+      catalog.pendingProviders = ["test"];
+      await harness.runtime.refresh();
+      expect(onChanged).not.toHaveBeenCalled();
+
+      catalog.pendingProviders = undefined;
+      // The settlement signal must survive joining an unrelated, already-pending refresh.
+      await Promise.all([
+        harness.runtime.refresh(),
+        harness.runtime.refresh({ notifyIfUnchanged: true }),
+      ]);
+      expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+        modelCatalogChanged: true,
+        authChanged: false,
+        commandsChanged: false,
       });
-      const owner = harness.getPreparedOwner()!;
-      const catalog = owner.modelCatalog;
-      try {
-        await harness.runtime.refresh();
-        const original = await harness.runtime.read({ agentId: "main" });
-        onChanged.mockClear();
-        catalog.pendingProviders = ["test"];
-        await harness.runtime.refresh();
-        expect(onChanged).not.toHaveBeenCalled();
+      expect(await harness.runtime.read({ agentId: "main" })).toEqual(original);
+      expect(harness.getPreparedOwner()).toBe(owner);
+      expect(owner.modelCatalog).toBe(catalog);
+      expect(harness.buildCommands).toHaveBeenCalledOnce();
+      expect(harness.buildProjection).toHaveBeenCalledOnce();
+      await harness.runtime.refresh();
+      expect(onChanged).toHaveBeenCalledOnce();
 
-        catalog.pendingProviders = undefined;
-        // The settlement signal must survive joining an unrelated, already-pending refresh.
-        await Promise.all([
-          harness.runtime.refresh(),
-          harness.runtime.refresh({ notifyIfUnchanged: true }),
-        ]);
-        expect(onChanged).toHaveBeenCalledExactlyOnceWith({
-          modelCatalogChanged: true,
-          authChanged: false,
-        });
-        expect(await harness.runtime.read({ agentId: "main" })).toEqual(original);
-        expect(harness.getPreparedOwner()).toBe(owner);
-        expect(owner.modelCatalog).toBe(catalog);
-        expect(harness.buildCommands).toHaveBeenCalledOnce();
-        expect(harness.buildProjection).toHaveBeenCalledOnce();
-        await harness.runtime.refresh();
-        expect(onChanged).toHaveBeenCalledOnce();
-
-        catalog.refreshFailed = true;
-        await Promise.all([
-          harness.runtime.refresh(),
-          harness.runtime.refresh({ notifyIfUnchanged: true }),
-        ]);
-        expect(onChanged).toHaveBeenCalledTimes(2);
-        expect(onChanged).toHaveBeenLastCalledWith({
-          modelCatalogChanged: true,
-          authChanged: false,
-        });
-        await harness.runtime.read({ agentId: "main" });
-        expect(harness.buildCommands).toHaveBeenCalledTimes(2);
-        expect(harness.buildProjection).toHaveBeenCalledTimes(2);
-      } finally {
-        await harness.runtime.stop();
-      }
-    },
-  );
+      catalog.refreshFailed = true;
+      await Promise.all([
+        harness.runtime.refresh(),
+        harness.runtime.refresh({ notifyIfUnchanged: true }),
+      ]);
+      expect(onChanged).toHaveBeenCalledTimes(2);
+      expect(onChanged).toHaveBeenLastCalledWith({
+        modelCatalogChanged: true,
+        authChanged: false,
+        commandsChanged: false,
+      });
+      await harness.runtime.read({ agentId: "main" });
+      expect(harness.buildCommands).toHaveBeenCalledTimes(2);
+      expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+    } finally {
+      await harness.runtime.stop();
+    }
+  });
 
   test.each([
     { settlement: "resolve", explicitInvalidation: true },
@@ -335,7 +333,7 @@ describe("gateway chat metadata refresh", () => {
   test.each(["resolve", "reject"] as const)(
     "discards a late projection's %s after cooldown state changes",
     async (settlement) => {
-      const harness = createChatMetadataHarness(undefined, { refreshOnRead: false });
+      const harness = createChatMetadataHarness();
       const blocked: AuthProfileStore = {
         version: 1,
         profiles: { "test:session": { type: "api_key", provider: "test", key: "not-real" } },

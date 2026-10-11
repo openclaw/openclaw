@@ -1,5 +1,5 @@
+import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
-import { supportsCurrentWorkerLaunch } from "./admission.js";
 import type {
   WorkerDispatchEnvironmentService,
   WorkerDispatchPlacement,
@@ -25,7 +25,7 @@ export function isPendingProvisioningEnvironment(
 }
 
 export function createInterruptedWorkerProvisioningRetainer(options: {
-  placements: Pick<WorkerDispatchPlacementStore, "get">;
+  placements: Pick<WorkerDispatchPlacementStore, "get" | "getAsync">;
   environments: Pick<WorkerEnvironmentService, "get" | "recordError">;
   isShuttingDown?: () => boolean;
 }) {
@@ -34,7 +34,7 @@ export function createInterruptedWorkerProvisioningRetainer(options: {
     owned: WorkerDispatchPlacement,
     error: unknown,
   ): Promise<WorkerDispatchPlacement | undefined> => {
-    const current = placements.get(owned.sessionId);
+    const current = await placements.getAsync(owned.sessionId);
     if (
       error instanceof WorkerPlacementAdmissionTargetError ||
       error instanceof WorkerDispatchTargetChangedError ||

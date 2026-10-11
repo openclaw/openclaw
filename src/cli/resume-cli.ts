@@ -13,7 +13,6 @@ export type ResumeCliOptions = {
   tlsFingerprint?: string;
 };
 
-/** Register the Gateway-backed session resume command. */
 export function registerResumeCli(program: Command) {
   const command = program
     .command("resume")

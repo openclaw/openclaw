@@ -31,6 +31,7 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
   queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
 } from "../embedded-agent-runner/runs.js";
+import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { jsonResult } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -295,21 +296,18 @@ export async function trySessionsSendActiveRunDelivery(
 function resolveSendMutationGuards(
   params: Pick<SessionsSendDeliveryParams, "assertDispatchCurrent" | "assertSendCurrent">,
 ) {
-  if (!params.assertSendCurrent) {
-    return { assertDispatchCurrent: params.assertDispatchCurrent };
-  }
-  if (hasInProcessGatewayToolContext()) {
+  if (params.assertSendCurrent && !hasInProcessGatewayToolContext()) {
+    // Standalone operator clients can fence wire submission, not attach a host-only commit callback.
     return {
-      assertDispatchCurrent: params.assertDispatchCurrent,
-      sessionMutationCommitGuard: params.assertSendCurrent,
+      assertDispatchCurrent: () => {
+        params.assertDispatchCurrent?.();
+        params.assertSendCurrent?.();
+      },
     };
   }
-  // Standalone operator clients can fence wire submission, not attach a host-only commit callback.
   return {
-    assertDispatchCurrent: () => {
-      params.assertDispatchCurrent?.();
-      params.assertSendCurrent?.();
-    },
+    assertDispatchCurrent: params.assertDispatchCurrent,
+    ...(params.assertSendCurrent ? { sessionMutationCommitGuard: params.assertSendCurrent } : {}),
   };
 }
 
@@ -436,13 +434,27 @@ export function isConfiguredAgentMainSessionKey(params: {
 }
 
 export async function createConfiguredAgentMainSession(params: {
+  mode?: "followup" | "steer" | "notify" | "resume";
+  inheritedToolPolicySource?: "sender";
   callGateway: AgentToolGatewayRequestCaller;
   agentId: string;
   sessionKey: string;
   requesterSessionKey?: string;
   useTrustedInProcessCreation: boolean;
   assertCurrent?: () => void;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true } | { ok: false; status: "error" | "forbidden"; error: string }> {
+  const requesterPolicyError = resolveSenderRestrictedSpawnError({ ...params, visible: true });
+  if (requesterPolicyError) {
+    return { ok: false, status: "forbidden", error: requesterPolicyError };
+  }
+  if (params.mode === "steer" || params.mode === "notify" || params.mode === "resume") {
+    return {
+      ok: false,
+      status: "error",
+      error:
+        "Cannot notify, steer, or resume a missing session. Use mode=followup to start a new turn.",
+    };
+  }
   try {
     params.assertCurrent?.();
     const createParams = {
@@ -475,6 +487,6 @@ export async function createConfiguredAgentMainSession(params: {
     }
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: formatErrorMessage(err) };
+    return { ok: false, status: "error", error: formatErrorMessage(err) };
   }
 }

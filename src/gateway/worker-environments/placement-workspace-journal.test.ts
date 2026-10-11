@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -6,6 +7,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -50,9 +52,7 @@ describe("worker placement workspace journal", () => {
       ownerEpoch: 7,
     });
     const active = await seedActivePlacement(store, { environmentId: "worker-1", ownerEpoch: 7 });
-    if (active.state !== "active") {
-      throw new Error("expected active placement");
-    }
+    assert(active.state === "active", "expected active placement");
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -85,9 +85,7 @@ describe("worker placement workspace journal", () => {
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation,
       });
-      if (draining.state !== "draining") {
-        throw new Error("expected draining placement");
-      }
+      assert(draining.state === "draining", "expected draining placement");
       const reconciling = await store.startReconcile({
         sessionId: draining.sessionId,
         environmentId: draining.environmentId,
@@ -109,9 +107,7 @@ describe("worker placement workspace journal", () => {
   it("reads, writes and accepts the durable journal without host data SQL", async () => {
     const { active, owner } = await seedJournal();
     const journal = await store.loadWorkspaceReconciliation(owner);
-    if (!journal) {
-      throw new Error("expected journal");
-    }
+    assert(journal, "expected journal");
     const claim = await store.claimTurn({
       ...REQUEST,
       claimId: "journal-worker-claim",
@@ -170,9 +166,7 @@ describe("worker placement workspace journal", () => {
   it("captures streamed journal bytes and owner before asynchronous admission", async () => {
     const { owner } = await seedJournal();
     const journal = await store.loadWorkspaceReconciliation(owner);
-    if (!journal) {
-      throw new Error("expected journal");
-    }
+    assert(journal, "expected journal");
     await store.abortWorkspaceReconciliation(owner);
     // Cross the broker's message boundary while retaining the journal's existing pack contract.
     journal.basePack = new Uint8Array(33 * 1024 * 1024).fill(7);
@@ -195,21 +189,15 @@ describe("worker placement workspace journal", () => {
   it("refuses a journal write whose original caller is revoked at commit", async () => {
     const { owner } = await seedJournal();
     const journal = await store.loadWorkspaceReconciliation(owner);
-    if (!journal) {
-      throw new Error("expected journal");
-    }
+    assert(journal, "expected journal");
     await store.abortWorkspaceReconciliation(owner);
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     let revoked = false;
-    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            revoked = true;
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        revoked = true;
+      }
+      admit(request, grant);
+    });
     await expect(
       store.beginWorkspaceReconciliation(owner, journal, () => {
         if (revoked) {
@@ -229,9 +217,7 @@ describe("worker placement workspace journal", () => {
   ] as const)("preserves $operation custody when settlement is $outcome", async (scenario) => {
     const { active, owner } = await seedJournal();
     const journal = await store.loadWorkspaceReconciliation(owner);
-    if (!journal) {
-      throw new Error("expected journal");
-    }
+    assert(journal, "expected journal");
     const claim =
       scenario.operation === "acceptance"
         ? await store.claimTurn({

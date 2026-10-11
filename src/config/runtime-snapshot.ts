@@ -145,14 +145,8 @@ const managedRuntimeConfigWriteOwners = new Map<
 >();
 const runtimeConfigWriteListeners = new Set<(event: RuntimeConfigWriteNotification) => void>();
 const runtimeConfigSnapshotPreparers = new Map<
-  (config: OpenClawConfig) => void,
-  | {
-      prepareAsync: (
-        config: OpenClawConfig,
-        context: RuntimeConfigSnapshotPreparationContext,
-      ) => Promise<() => void>;
-    }
-  | undefined
+  Parameters<typeof registerRuntimeConfigSnapshotPreparer>[0],
+  Parameters<typeof registerRuntimeConfigSnapshotPreparer>[1]
 >();
 
 // Diagnostic callers stop at their raw revision; this owner accepts config objects.
@@ -653,18 +647,16 @@ export async function preflightRuntimeSnapshotWrite(params: {
   }
 }
 
-export async function finalizeRuntimeSnapshotWrite(params: {
-  nextSourceConfig: OpenClawConfig;
-  refreshOptions?: RuntimeConfigSnapshotRefreshOptions;
-  hadBothSnapshots: boolean;
-  freshConfig: OpenClawConfig | RuntimeConfigAsyncLoader;
-  notifyCommittedWrite: () => void;
-  createRefreshError: (detail: string, cause: unknown) => Error;
-  formatRefreshError: (error: unknown) => string;
-  preflightResult?: unknown;
-  deferRuntimeActivation?: boolean;
-  assertCurrent?: () => void;
-}): Promise<void> {
+export async function finalizeRuntimeSnapshotWrite(
+  params: Parameters<typeof preflightRuntimeSnapshotWrite>[0] & {
+    hadBothSnapshots: boolean;
+    freshConfig: OpenClawConfig | RuntimeConfigAsyncLoader;
+    notifyCommittedWrite: () => void;
+    preflightResult?: unknown;
+    deferRuntimeActivation?: boolean;
+    assertCurrent?: () => void;
+  },
+): Promise<void> {
   const notifyCommittedWrite = () => {
     params.assertCurrent?.();
     params.notifyCommittedWrite();

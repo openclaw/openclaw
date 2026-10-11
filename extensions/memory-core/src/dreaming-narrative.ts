@@ -56,8 +56,6 @@ const NARRATIVE_SYSTEM_PROMPT = [
   "- Output ONLY the diary entry. No preamble, no sign-off, no commentary.",
 ].join("\n");
 
-// Bound best-effort diary inference independently from the parent sweep.
-const NARRATIVE_TIMEOUT_MS = 60_000;
 const RECENT_DIARY_CONTEXT_LIMIT = 3;
 function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
   return (
@@ -182,6 +180,7 @@ function buildNarrativePrompt(data: NarrativePhaseData): string {
 export type DreamNarrativeRequest = {
   /** Agent whose configured model and credentials own the completion. */
   agentId: string;
+  timeoutMs: number;
   subagent: DreamingCompletion;
   workspaceDir: string;
   data: NarrativePhaseData;
@@ -189,6 +188,7 @@ export type DreamNarrativeRequest = {
   timezone?: string;
   model?: string;
   logger: Logger;
+  runInBackground?: <T>(run: () => Promise<T>) => Promise<T>;
 };
 
 export type DreamNarrativeOutcome =
@@ -211,7 +211,7 @@ async function generateAndAppendDreamNarrative(
           message,
           extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
           ...(model ? { model } : {}),
-          timeoutMs: NARRATIVE_TIMEOUT_MS,
+          timeoutMs: params.timeoutMs,
         });
         narrative = result.text.trim();
         break;
@@ -277,9 +277,9 @@ async function generateAndAppendDreamNarrative(
  * A sweep without an owning agent still runs; only the subagent narrative is unavailable.
  */
 export async function runDreamNarrative(
-  params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string; detached?: boolean },
+  params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string },
 ): Promise<DreamNarrativeOutcome> {
-  const { agentId, detached, ...rest } = params;
+  const { agentId, runInBackground, ...rest } = params;
   // Nothing to narrate is a no-op on every path; checking ownership first would let an
   // ownerless empty sweep append a diary entry for material that never existed.
   if (rest.data.snippets.length === 0 && !rest.data.promotions?.length) {
@@ -299,14 +299,12 @@ export async function runDreamNarrative(
         });
         return { status: "completed" as const };
       };
-  if (detached) {
-    // The shared runtime queue bounds inference; the sweep never waits for diary publication.
-    queueMicrotask(() => {
-      void job().catch((error: unknown) => {
-        rest.logger.warn(
-          `memory-core: detached dreaming narrative failed for ${rest.data.phase} phase: ${formatErrorMessage(error)}`,
-        );
-      });
+  if (runInBackground) {
+    // Keep completion and publication in the owning instance after the sweep returns.
+    void runInBackground(job).catch((error: unknown) => {
+      rest.logger.warn(
+        `memory-core: detached dreaming narrative failed for ${rest.data.phase} phase: ${formatErrorMessage(error)}`,
+      );
     });
     return { status: "pending" };
   }

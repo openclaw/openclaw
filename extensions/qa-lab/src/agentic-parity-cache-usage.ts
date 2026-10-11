@@ -2,16 +2,7 @@ import type { RuntimeId } from "./runtime-id.js";
 import type { RuntimeParityCacheMiss } from "./runtime-parity-cache-diagnostics.js";
 import type { RuntimeParityUsage } from "./runtime-parity.js";
 
-export type QaRuntimeParityCacheUsage = {
-  totalTokens: number;
-  inputTokens: number;
-  outputTokens: number;
-  grossInputTokens: number | null;
-  uncachedInputTokens: number | null;
-  cachedInputTokens: number | null;
-  cacheWriteTokens: number | null;
-  cacheHitPercent: number | null;
-};
+export type QaRuntimeParityCacheUsage = ReturnType<typeof summarizeRuntimeParityCacheUsage>;
 
 type QaRuntimeParityCacheScenario = {
   openclawUsage: QaRuntimeParityCacheUsage | null;
@@ -23,7 +14,7 @@ export function summarizeRuntimeParityCacheUsage(
     RuntimeParityUsage,
     "inputTokens" | "outputTokens" | "totalTokens" | "cacheRead" | "cacheWrite"
   >,
-): QaRuntimeParityCacheUsage {
+) {
   const cachedInputTokens = usage.cacheRead ?? null;
   const cacheWriteTokens = usage.cacheWrite ?? null;
   const uncachedInputTokens =

@@ -53,14 +53,24 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
 }
 
 /** A single bound set avoids SQLite parameter and JS variadic-call limits. */
-export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
+export function encodeSqliteStringSet(values: readonly (string | null)[]): string {
   // Keep node:sqlite's USV binding. SQLite 3.44 needs JSON5 \x00 to retain NUL;
   // consuming escaped backslashes first preserves literal "\\u0000" keys.
-  const encoded = JSON.stringify(values.map(toUSVString)).replace(/\\(?:\\|u0000)/g, (escape) =>
-    escape === "\\u0000" ? "\\x00" : escape,
-  );
+  return JSON.stringify(
+    values.map((value) => (value === null ? null : toUSVString(value))),
+  ).replace(/\\(?:\\|u0000)/g, (escape) => (escape === "\\u0000" ? "\\x00" : escape));
+}
+
+export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
   /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
-  return kyselySql<string>`(SELECT value FROM json_each(${encoded}))`;
+  return kyselySql<string>`(SELECT value FROM json_each(${encodeSqliteStringSet(values)}))`;
+}
+
+/** Expands encoded string tuples without adding one SQLite parameter per field. */
+export function sqliteStringSetEntries(
+  encoded: string | RawBuilder<string>,
+): RawBuilder<{ key: number; value: string | null }> {
+  return kyselySql<{ key: number; value: string | null }>`json_each(${encoded})`;
 }
 
 function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {
@@ -71,8 +81,22 @@ function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): voi
   }
 }
 
-function throwSqliteIteratorCleanupError(error: unknown): never {
-  throw toErrorObject(error, "SQLite iterator cleanup failed");
+function releaseSqliteIterator(
+  iterator: Iterator<unknown>,
+  reader: ReturnType<typeof retainSqliteReader>,
+  failed: boolean,
+  cleanupErrorMessage: string,
+): void {
+  let cleanupError: unknown;
+  try {
+    iterator.return?.();
+  } catch (error) {
+    cleanupError = error;
+  }
+  reader.release();
+  if (!failed && cleanupError !== undefined) {
+    throw toErrorObject(cleanupError, cleanupErrorMessage);
+  }
 }
 
 /** Execute a compiled Kysely query synchronously against node:sqlite. */
@@ -104,7 +128,6 @@ function executeCompiledSqliteQuerySync<Row>(
         // an expired statement. Eagerly consuming iterate() reads it after step.
         const iterator = statement.iterate(...parameters);
         const reader = retainSqliteReader(db, "kysely eager query");
-        let cleanupError: unknown;
         let failed = false;
         let failure: unknown;
         const rows: Row[] = [];
@@ -117,17 +140,9 @@ function executeCompiledSqliteQuerySync<Row>(
           failed = true;
           failure = error;
         }
-        try {
-          iterator.return?.();
-        } catch (error) {
-          cleanupError = error;
-        }
-        reader.release();
+        releaseSqliteIterator(iterator, reader, failed, "SQLite query cleanup failed");
         if (failed) {
           throw toErrorObject(failure, "SQLite query failed");
-        }
-        if (cleanupError !== undefined) {
-          throw toErrorObject(cleanupError, "SQLite query cleanup failed");
         }
         return { rows };
       }
@@ -260,7 +275,6 @@ export function iterateSqliteQuerySync<Row>(
       const parameters = compiledQuery.parameters as SQLInputValue[];
       const iterator = statement.iterate(...parameters);
       const reader = retainSqliteReader(db, "kysely iterator", owner);
-      let cleanupError: unknown;
       let failed = false;
       try {
         for (const row of iterator) {
@@ -271,15 +285,7 @@ export function iterateSqliteQuerySync<Row>(
         failed = true;
         throw toErrorObject(error, "SQLite iterator failed");
       } finally {
-        try {
-          iterator.return?.();
-        } catch (error) {
-          cleanupError = error;
-        }
-        reader.release();
-        if (!failed && cleanupError !== undefined) {
-          throwSqliteIteratorCleanupError(cleanupError);
-        }
+        releaseSqliteIterator(iterator, reader, failed, "SQLite iterator cleanup failed");
       }
     } catch (error) {
       reportNodeSqliteKyselyQueryError(db, error);

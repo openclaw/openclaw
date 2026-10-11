@@ -3,7 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
@@ -16,7 +16,11 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import {
+  historyLane,
+  projectionLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
@@ -147,7 +151,14 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
       await loadSessionCostSummary({ agentId: "main", sessionId, sessionFile, config });
     }
     for (const groupBy of ["instance", "family"]) {
-      const result = await readUsage({ range: "all", agentId: "main", groupBy });
+      const sql = observeHostDataSql();
+      let result: SessionsUsageResult;
+      try {
+        result = await readUsage({ range: "all", agentId: "main", groupBy });
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(result.totals.totalTokens).toBe(60);
       expect(result.totals.totalCost).toBeCloseTo(0.03);
       expect(result.sessions).toHaveLength(groupBy === "instance" ? 3 : 1);
@@ -155,6 +166,21 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
       expect(result.aggregates.byCreator).toMatchObject([
         { actor: { type: "system" }, totals: { totalTokens: 60, totalCost: 0.03 } },
       ]);
+    }
+    for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
+      const sql = observeHostDataSql();
+      try {
+        const [ok, payload] = await requestUsage({ key: sessionKey }, method);
+        expect(ok).toBe(true);
+        expect(payload).toMatchObject(
+          method === "sessions.usage.timeseries"
+            ? { points: [expect.objectContaining({ totalTokens: 30 })] }
+            : { logs: [expect.objectContaining({ role: "assistant", tokens: 30 })] },
+        );
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
     }
   });
 });
@@ -234,15 +260,20 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
       { selected: [adaNewest], includeContextWeight: true, creatorKey: adaCreatorKey },
     ]) {
       let payload: unknown;
-      const reads = ["main", "opus"].map((agentId) =>
-        trackSqliteStatementExecutions(
-          openOpenClawAgentDatabase({ agentId }).db,
-          ["entries"],
-          (sql) => (/from\s+"session_nodes"/i.test(sql) ? "entries" : null),
-        ),
-      );
-      const parse = vi.spyOn(JSON, "parse");
-      let parsedPrompts: string[];
+      const transferredPrompts = new Set<string>();
+      const transfers = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
+        const run = pool.run.bind(pool);
+        return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
+          const reply = await run(...args);
+          const bytes = JSON.stringify(reply);
+          for (const fixture of fixtures) {
+            if (bytes.includes(fixture.promptMarker)) {
+              transferredPrompts.add(fixture.promptMarker);
+            }
+          }
+          return reply;
+        });
+      });
       try {
         payload = await readUsage({
           ...(scenario.key ? { key: scenario.key } : { agentScope: "all" }),
@@ -251,18 +282,9 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
           includeContextWeight: scenario.includeContextWeight,
           creatorKey: scenario.creatorKey,
         });
-        parsedPrompts = fixtures
-          .filter((fixture) =>
-            parse.mock.calls.some(([json]) => json.includes(fixture.promptMarker)),
-          )
-          .map((fixture) => fixture.promptMarker);
-        expect(reads.reduce((bytes, read) => bytes + read.textBytes.entries, 0)).toBeLessThan(
-          65_536 * scenario.selected.length * 4,
-        );
       } finally {
-        parse.mockRestore();
-        for (const read of reads) {
-          read.restore();
+        for (const transfer of transfers) {
+          transfer.mockRestore();
         }
       }
       const matches = scenario.key
@@ -290,8 +312,8 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
       const emittedPrompts = new Set(scenario.selected.map((fixture) => fixture.promptMarker));
       expect
         .soft(
-          parsedPrompts.filter((marker) => !emittedPrompts.has(marker)),
-          "large saved prompts outside the emitted usage page must remain unparsed",
+          [...transferredPrompts].filter((marker) => !emittedPrompts.has(marker)),
+          "large saved prompts outside the emitted usage page must not cross the worker boundary",
         )
         .toEqual([]);
     }
@@ -315,25 +337,27 @@ it("reads selected reports from the physical owner of shared-store sentinels and
     const unrelated = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env });
     let changeRegistryAfterInventory = false;
     let registryChanges = 0;
-    const run = historyLane.pool.run.bind(historyLane.pool);
-    const inventory = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await run(...args);
-      if (
-        changeRegistryAfterInventory &&
-        reply.ok &&
-        isRecord(reply.value) &&
-        reply.value.kind === "session-target-inventory"
-      ) {
-        changeRegistryAfterInventory = false;
-        registryChanges++;
-        unregisterOpenClawAgentDatabase({
-          agentId: unrelated.agentId,
-          path: unrelated.path,
-          env: state.env,
-        });
-      }
-      return reply;
-    });
+    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const inventory = vi
+      .spyOn(targetDiscoveryLane.pool, "run")
+      .mockImplementation(async (...args) => {
+        const reply = await run(...args);
+        if (
+          changeRegistryAfterInventory &&
+          reply.ok &&
+          isRecord(reply.value) &&
+          reply.value.kind === "session-target-inventory"
+        ) {
+          changeRegistryAfterInventory = false;
+          registryChanges++;
+          unregisterOpenClawAgentDatabase({
+            agentId: unrelated.agentId,
+            path: unrelated.path,
+            env: state.env,
+          });
+        }
+        return reply;
+      });
     onTestFinished(() => inventory.mockRestore());
     for (const [agentId, key] of [
       ["ops", "global"],

@@ -12,6 +12,7 @@ import type {
 type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
+  sessionId?: string;
   messageId: string;
   maxChars?: number;
 };

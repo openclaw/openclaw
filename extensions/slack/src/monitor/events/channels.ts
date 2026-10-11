@@ -10,9 +10,9 @@ import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runti
 import { migrateSlackChannelConfig } from "../../channel-migration.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 import type { SlackChannelIdChangedEvent, SlackChannelRenamedEvent } from "../types.js";
-import { resolveSlackListenerEventScope } from "./system-event-context.js";
 
 export function registerSlackChannelEvents(params: {
   ctx: SlackMonitorContext;
@@ -30,7 +30,7 @@ export function registerSlackChannelEvents(params: {
         args: SlackEventMiddlewareArgs<"channel_created" | "channel_rename"> & AllMiddlewareArgs,
       ) => {
         const { event, body, context, client } = args;
-        const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+        const eventScope = resolveSlackMonitorEventScope({ ctx, body, context, client });
         if (eventScope === null || ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }

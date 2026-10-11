@@ -18,7 +18,10 @@ import {
   getAdmittedSqliteSchemaFacts,
   readSqliteCacheDataVersion,
 } from "../infra/sqlite-schema-facts.js";
-import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import {
+  assertTransactionUsable,
+  type SqliteTransactionOptions,
+} from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
@@ -43,7 +46,7 @@ import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 
 type ExistingWriteOptions = OpenClawStateDatabaseOptions & { busyTimeoutMs?: number };
-type ExistingWriteContract = {
+type ExistingWriteContract = Pick<SqliteTransactionOptions, "beginLockFailureReporting"> & {
   schemaSql: string;
   schemaCompatibility?: SqliteSchemaCompatibility;
   operationLabel: string;
@@ -59,11 +62,7 @@ type ExistingWriteOperation<T> = (database: {
   recoveryChanges: string[];
 }) => T;
 
-export type ExistingOpenClawStateWriter = {
-  run<T>(operation: ExistingWriteOperation<T>, options: ExistingWriteOptions): T;
-  assertSettled(): void;
-  close(): void;
-};
+export type ExistingOpenClawStateWriter = ReturnType<typeof createExistingOpenClawStateWriter>;
 
 function assertExistingOpenClawStateSchemaMetadata(
   db: DatabaseSync,
@@ -151,7 +150,7 @@ function prepareExistingOpenClawStateWriter(
 function createExistingOpenClawStateWriter(
   { env, pathname, original }: ReturnType<typeof prepareExistingOpenClawStateWriter>,
   contract: OneShotWriteContract,
-): ExistingOpenClawStateWriter {
+) {
   const assertSameFile = () => {
     const current = fs.lstatSync(pathname);
     if (!current.isFile() || current.dev !== original.dev || current.ino !== original.ino) {
@@ -168,7 +167,7 @@ function createExistingOpenClawStateWriter(
   let closed = false;
   let admitted: { version: number; cookie: number; existingSchema: boolean } | undefined;
   return {
-    run(operation, currentOptions) {
+    run<T>(operation: ExistingWriteOperation<T>, currentOptions: ExistingWriteOptions) {
       if (closed || !db.isOpen) {
         throw new Error("Existing-state writer is closed.");
       }
@@ -282,6 +281,7 @@ function createExistingOpenClawStateWriter(
           return value;
         },
         {
+          beginLockFailureReporting: contract.beginLockFailureReporting,
           busyTimeoutMs,
           databaseLabel: pathname,
           operationLabel: contract.operationLabel,

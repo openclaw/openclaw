@@ -44,6 +44,7 @@ import {
   collectKnownSidebarSessionCatalogIds,
   extendSidebarSessionSelection,
   findProjectedSidebarSession,
+  findSidebarSessionInTree,
   resolveActiveSidebarAgent,
   resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
@@ -94,7 +95,6 @@ import {
   SidebarProjectionMemo,
 } from "./sidebar-projection-memo.ts";
 
-/** Session-row projection, selection, sorting, and agent scope navigation. */
 export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   @state() rosterSessionSource: {
     result: SessionsListResult | null;
@@ -290,10 +290,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     for (const session of pending) {
       pending.push(...session.children);
       if (
-        (session.childLoadParentKeys?.length ?? 0) > 0 &&
+        session.childLoadParentKeys?.length &&
         (session.visuallyActive || this.isSessionChildrenExpanded(session))
       ) {
-        for (const key of session.childLoadParentKeys ?? [session.key]) {
+        for (const key of session.childLoadParentKeys) {
           revalidating.add(key);
         }
       }
@@ -475,24 +475,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession) {
-    if (session.isChild && shouldHandleNavigationClick(event)) {
-      event.preventDefault();
-      this.clearSessionSelection();
-      this.selectSession(session.key);
+    if (
+      session.isChild
+        ? !shouldHandleNavigationClick(event)
+        : event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey
+    ) {
       return;
     }
-    if (session.isChild || event.defaultPrevented || event.button !== 0) {
-      return;
-    }
-    if (event.metaKey || event.ctrlKey) {
-      return;
-    }
-    if (event.shiftKey) {
+    if (!session.isChild && event.shiftKey) {
       event.preventDefault();
       this.extendSessionSelection(session.key);
       return;
     }
-    if (event.altKey) {
+    if (!session.isChild && event.altKey) {
       event.preventDefault();
       this.toggleSessionSelected(session.key);
       return;
@@ -641,6 +636,16 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
   }
 
+  /** Menus act on folded hidden-run state, which only the rendered tree keeps. */
+  findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
+    return (
+      findSidebarSessionInTree(
+        this.selectedAgentSessionRows(this.getSessionNavigationState()),
+        (row) => row.key === sessionKey,
+      ) ?? this.findSidebarSessionByKey(sessionKey)
+    );
+  }
+
   findSidebarHovercardRowByKey(sessionKey: string) {
     return findSidebarHovercardRow(
       this,
@@ -695,7 +700,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       : (this.sessionData.sessionResultsByAgent[selected] ?? null);
   }
 
-  /** Canonical main-session key for the selected (or given) agent. */
   selectedAgentMainSessionKey(agentId?: string): string {
     return resolveSidebarMainSessionKey({
       agentId: agentId ?? this.expandedAgentId(),

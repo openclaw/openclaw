@@ -324,7 +324,7 @@ describe("managed llama-server", () => {
     },
   );
 
-  it("writes a 2048-token physical batch in the combined preset", async () => {
+  it("bounds embedding capacity independently of chat in the combined preset", async () => {
     const { presetPath } = await createPresetFixture("combined-preset");
     await prepareManagedLlamaServer({
       chatModel: {
@@ -334,19 +334,18 @@ describe("managed llama-server", () => {
         contextSize: 8192,
         maxTokens: 2048,
       },
-      embeddingModelIsDefault: true,
       embeddingModelPath: "/models/embedding.gguf",
       port: 19_432,
     });
     const preset = await fs.readFile(presetPath, "utf8");
     expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
     expect(preset).toContain(
-      "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true",
+      "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nembedding = true\nparallel = 1\nctx-size = 2048\nubatch-size = 2048\n",
     );
     expect(preset).not.toMatch(/mmproj|draft/iu);
   });
 
-  it("preserves the llama.cpp physical batch default for a custom embedding model", async () => {
+  it("bounds a custom embedding model while removing stale chat from the preset", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-embedding-only-"));
     const presetPath = path.join(tempRoot, "models.ini");
     const asset = selectLlamaServerAsset("darwin", "arm64");
@@ -373,7 +372,7 @@ describe("managed llama-server", () => {
       });
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toBe(
-        "version = 1\n\n[*]\ncache-type-k = q8_0\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\n",
+        "version = 1\n\n[*]\ncache-type-k = q8_0\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\nparallel = 1\nctx-size = 2048\nubatch-size = 2048\n",
       );
       expect(preset).not.toContain("jinja");
     } finally {
@@ -427,7 +426,7 @@ describe("managed llama-server", () => {
       expect(preset).toContain(
         `[embeddinggemma-300m-qat-q8_0]\nmodel = ${embeddingModelPath}\nembedding = true`,
       );
-      expect(preset).not.toContain("ubatch-size");
+      expect(preset).toContain("parallel = 1\nctx-size = 2048\nubatch-size = 2048\n");
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }

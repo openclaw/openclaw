@@ -462,7 +462,7 @@ export function registerServiceInstallationConvergenceTests(
   makeHome: () => string,
   mocks: {
     revalidateService: Mock<
-      typeof import("./update-command-service.js").revalidateManagedGatewayServiceAfterUpdate
+      typeof import("./update-command-service-revalidation.js").revalidateManagedGatewayServiceAfterUpdate
     >;
     readServiceState: Mock;
     stopService: Mock<

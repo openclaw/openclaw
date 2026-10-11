@@ -12,8 +12,13 @@ import type { PluginDiscoveryIntent } from "./catalog-results.ts";
 
 const CATALOG_PAGE_SIZE = 100;
 const CATALOG_SECTION_SIZE = 8;
-const NO_CATALOG_CLIENT: GatewayBrowserClient | null = null;
-const NO_CATALOG_CURSOR: string | null = null;
+
+type CatalogPageArgs = readonly [
+  client: GatewayBrowserClient | null,
+  intent: PluginDiscoveryIntent,
+  category: string | null,
+  query: string,
+];
 
 type CatalogPageLoad = PluginDiscoveryResult & {
   overview: boolean;
@@ -42,19 +47,6 @@ function rankedOverviewShelf(
         (right.catalog[rank] ?? Number.MAX_SAFE_INTEGER),
     )
     .slice(0, CATALOG_SECTION_SIZE);
-}
-
-function appendUniqueEntries(
-  existing: readonly PluginDiscoveryEntry[],
-  incoming: readonly PluginDiscoveryEntry[],
-): PluginDiscoveryEntry[] {
-  const entries = new Map(existing.map((item) => [item.id, item]));
-  for (const item of incoming) {
-    // Cursor pages contain remote catalog projections, so they replace any first-page local
-    // placeholder while carrying forward the Gateway's latest authoritative local state.
-    entries.set(item.id, item);
-  }
-  return [...entries.values()];
 }
 
 export class PluginDiscoveryController {
@@ -86,8 +78,7 @@ export class PluginDiscoveryController {
   ) {
     this.categoriesTask = new Task(host, {
       autoRun: false,
-      args: () => [NO_CATALOG_CLIENT] as const,
-      task: ([client], { signal }) =>
+      task: ([client]: readonly [GatewayBrowserClient | null], { signal }) =>
         client
           ? client.request<{ categories: PluginDiscoveryCategory[] }>(
               "plugins.catalog.categories",
@@ -106,15 +97,10 @@ export class PluginDiscoveryController {
     });
     this.browseTask = new Task(host, {
       autoRun: false,
-      args: () =>
-        [
-          this.gateway.isConnected() ? this.gateway.getClient() : null,
-          this.intent,
-          this.category,
-          this.committedQuery,
-          false,
-        ] as const,
-      task: ([client, intent, category, query, manual], { signal }) =>
+      task: (
+        [client, intent, category, query, manual]: readonly [...CatalogPageArgs, manual: boolean],
+        { signal },
+      ) =>
         client
           ? this.fetchAvailablePage({ client, intent, category, query, manual, signal })
           : initialState, // Lit returns to INITIAL without invoking onComplete.
@@ -125,15 +111,13 @@ export class PluginDiscoveryController {
     });
     this.loadMoreTask = new Task(host, {
       autoRun: false,
-      args: () =>
-        [
-          NO_CATALOG_CLIENT,
-          this.intent,
-          this.category,
-          this.committedQuery,
-          NO_CATALOG_CURSOR,
-        ] as const,
-      task: ([client, intent, category, query, cursor], { signal }) =>
+      task: (
+        [client, intent, category, query, cursor]: readonly [
+          ...CatalogPageArgs,
+          cursor: string | null,
+        ],
+        { signal },
+      ) =>
         client && cursor
           ? this.fetchAvailablePage({ client, intent, category, query, cursor, signal })
           : initialState,
@@ -141,7 +125,12 @@ export class PluginDiscoveryController {
         if (!this.result || this.result.nextCursor !== page.requestedCursor) {
           return;
         }
-        const items = appendUniqueEntries(this.result.items, page.items);
+        const entries = new Map(this.result.items.map((item) => [item.id, item]));
+        for (const item of page.items) {
+          // Cursor projections replace first-page placeholders with current Gateway local state.
+          entries.set(item.id, item);
+        }
+        const items = [...entries.values()];
         this.result = {
           items:
             this.intent === "all" && !this.committedQuery

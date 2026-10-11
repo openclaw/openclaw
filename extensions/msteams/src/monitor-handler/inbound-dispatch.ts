@@ -1,6 +1,6 @@
 import { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 import {
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
   resolveInboundSupplementalSenderAllowed,
@@ -87,7 +87,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
       : `msteams:group:${conversationId}`;
   const teamsTo = isDirectMessage ? `user:${senderId}` : `conversation:${conversationId}`;
   const envelopeFrom = isDirectMessage ? senderName : conversationType;
-  const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route });
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg, route });
   const body = buildEnvelope({
     channel: "Teams",
     from: envelopeFrom,

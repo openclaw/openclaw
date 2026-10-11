@@ -116,12 +116,11 @@ function resolveVapidSubjectFromEnv(): string {
   );
 }
 
-type RegisterWebPushParams = {
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
-  binding?: { deviceId: string; userProfileId: string | null };
+type RegisterWebPushParams = Pick<
+  Parameters<typeof upsertWebPushSubscription>[0],
+  "endpoint" | "keys" | "binding" | "guard"
+> & {
   baseDir?: string;
-  guard?: WebPushMutationGuard;
 };
 
 export async function registerWebPushSubscription(
@@ -269,11 +268,9 @@ async function sendPreparedWebPushNotifications(params: {
 export async function prepareWebPushNotificationSender(
   baseDir?: string,
 ): Promise<
-  (params: {
-    subscriptions: readonly WebPushSubscription[];
-    payload: WebPushPayload;
-    deliveryOptions?: WebPushDeliveryOptions;
-  }) => Promise<WebPushSendResult[]>
+  (
+    params: Omit<Parameters<typeof sendPreparedWebPushNotifications>[0], "webPush" | "baseDir">,
+  ) => Promise<WebPushSendResult[]>
 > {
   assertLegacyWebPushMigrationComplete(baseDir);
   const vapidKeys = await resolveVapidKeys(baseDir);

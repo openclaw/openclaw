@@ -30,6 +30,7 @@ import type {
   LegacyMainSessionMigrationOutcome,
   PhysicalStore,
   SessionClaim,
+  SessionComparisonClaim,
 } from "./legacy-main-session-migration.contract.js";
 import {
   runSqliteSessionDeletionTransaction,
@@ -77,7 +78,7 @@ function freshestClaim(claims: readonly SessionClaim[]): SessionClaim {
 export function warningForDivergence(
   kind: "divergent-aliases" | "divergent-canonical",
   canonicalKey: string,
-  claims: readonly SessionClaim[],
+  claims: readonly SessionComparisonClaim[],
 ): string {
   const claimsText = claims.map((claim) => `${claim.store.path}#${claim.key}`).join(", ");
   return `session: ${kind} for ${canonicalKey}; preserved claims ${claimsText}. Run openclaw doctor --fix to quarantine the losing claims.`;
@@ -532,23 +533,11 @@ export async function processIdenticalClaims(params: {
   env: NodeJS.ProcessEnv;
   mode: LegacyMainSessionMigrationMode;
 }): Promise<LegacyMainSessionMigrationOutcome> {
-  const winner = params.canonical ?? freshestClaim(params.aliases);
-  const crossStore = params.aliases.some(
-    (claim) => !samePhysicalStore(claim.store, params.destination),
-  );
-  const completedOutcome = (): LegacyMainSessionMigrationOutcome => ({
-    kind: params.canonical
-      ? "canonical-exists-identical"
-      : crossStore
-        ? "migrated-cross-store"
-        : "migrated-in-place",
-    canonicalKey: params.canonicalKey,
-    paths: [...new Set(params.aliases.map((claim) => claim.store.path))],
-    sourceKeys: params.aliases.map((claim) => claim.key),
-  });
+  const completedOutcome = () => describeIdenticalClaims(params);
   if (params.mode !== "doctor-fix") {
     return completedOutcome();
   }
+  const winner = params.canonical ?? freshestClaim(params.aliases);
 
   let canonical = params.canonical;
   const destinationAliases = params.aliases.filter((claim) =>
@@ -626,6 +615,24 @@ export async function processIdenticalClaims(params: {
     };
   }
   return completedOutcome();
+}
+
+export function describeIdenticalClaims(params: {
+  aliases: readonly SessionComparisonClaim[];
+  canonical?: SessionComparisonClaim;
+  canonicalKey: string;
+  destination: PhysicalStore;
+}): LegacyMainSessionMigrationOutcome {
+  return {
+    kind: params.canonical
+      ? "canonical-exists-identical"
+      : params.aliases.some((claim) => !samePhysicalStore(claim.store, params.destination))
+        ? "migrated-cross-store"
+        : "migrated-in-place",
+    canonicalKey: params.canonicalKey,
+    paths: [...new Set(params.aliases.map((claim) => claim.store.path))],
+    sourceKeys: params.aliases.map((claim) => claim.key),
+  };
 }
 
 export async function repairDivergentClaims(params: {

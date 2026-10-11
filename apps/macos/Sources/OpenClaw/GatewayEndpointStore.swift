@@ -86,26 +86,8 @@ actor GatewayEndpointStore {
         let sourceSnapshot: @Sendable () async throws -> SourceSnapshot
 
         static let live = Deps(
-            token: {
-                let root = OpenClawConfigFile.loadDict()
-                let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
-                return GatewayEndpointStore.resolveGatewayCredential(
-                    .token,
-                    isRemote: isRemote,
-                    root: root,
-                    env: ProcessInfo.processInfo.environment,
-                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
-            },
-            password: {
-                let root = OpenClawConfigFile.loadDict()
-                let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
-                return GatewayEndpointStore.resolveGatewayCredential(
-                    .password,
-                    isRemote: isRemote,
-                    root: root,
-                    env: ProcessInfo.processInfo.environment,
-                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
-            },
+            token: { GatewayEndpointStore.resolveGatewayCredential(.token) },
+            password: { GatewayEndpointStore.resolveGatewayCredential(.password) },
             localPort: { GatewayEnvironment.gatewayPort() },
             localUnavailableReason: { GatewayEnvironment.profileGatewayPortConflict() },
             remoteRouteIfRunning: { await RemoteTunnelManager.shared.controlTunnelRouteIfRunning() },
@@ -136,6 +118,16 @@ actor GatewayEndpointStore {
         self.primaryAppLaunchAdmitted.withValue { $0 = true }
     }
 
+    private static func resolveGatewayCredential(_ kind: Credential) -> String? {
+        let root = OpenClawConfigFile.loadDict()
+        return self.resolveGatewayCredential(
+            kind,
+            isRemote: ConnectionModeResolver.resolve(root: root).mode == .remote,
+            root: root,
+            env: ProcessInfo.processInfo.environment,
+            launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
+    }
+
     static func resolveGatewayCredential(
         _ kind: Credential,
         isRemote: Bool,
@@ -160,7 +152,7 @@ actor GatewayEndpointStore {
         }
         if let override {
             // Password overrides always warn; token overrides warn only when different.
-            if let configured, !configured.isEmpty, kind == .password || configured != override {
+            if let configured, kind == .password || configured != override {
                 self.warnEnvOverrideOnce(
                     kind: kind,
                     envVar: envVar,
@@ -168,7 +160,7 @@ actor GatewayEndpointStore {
             }
             return override
         }
-        if let configured, !configured.isEmpty {
+        if let configured {
             return configured
         }
         guard !isRemote else { return nil }
@@ -185,14 +177,8 @@ actor GatewayEndpointStore {
         guard let envName = envSecretRefName(trimmed) else {
             return trimmed
         }
-        // Finder-launched apps cannot see gateway-service-only env values. Resolve
-        // local refs from app env first, then the gateway LaunchAgent snapshot.
-        for source in [env, serviceEnv] {
-            if let value = source[envName]?.nonEmpty {
-                return value
-            }
-        }
-        return nil
+        // Finder-launched apps cannot see gateway-service-only env values.
+        return env[envName]?.nonEmpty ?? serviceEnv[envName]?.nonEmpty
     }
 
     private static func envSecretRefName(_ value: String) -> String? {
@@ -322,9 +308,7 @@ actor GatewayEndpointStore {
             let generation = self.adoptSource(source)
             await self.resolveSource(source, generation: generation)
             guard await self.sourceIsCurrent(source, generation: generation),
-                  !Task.isCancelled,
-                  generation == self.resolutionGeneration,
-                  self.activeSource == source
+                  self.sourceMatchesCurrentState(source, generation: generation)
             else { return nil }
             return (source, generation)
         } catch {
@@ -347,32 +331,24 @@ actor GatewayEndpointStore {
         return self.resolutionGeneration
     }
 
+    private func sourceMatchesCurrentState(_ source: SourceSnapshot, generation: UInt64) -> Bool {
+        !Task.isCancelled && generation == self.resolutionGeneration && self.activeSource == source
+    }
+
     private func sourceIsCurrent(_ source: SourceSnapshot, generation: UInt64) async -> Bool {
-        guard !Task.isCancelled,
-              generation == self.resolutionGeneration,
-              self.activeSource == source
-        else { return false }
-        if source.routingGeneration != nil {
+        guard self.sourceMatchesCurrentState(source, generation: generation) else { return false }
+        let matches: Bool = if source.routingGeneration != nil {
             // Live snapshots are anchored to the MainActor routing generation plus
             // volatile route facts. Re-reading config here would multiply disk work.
-            let liveSourceIsCurrent = await deps.liveSourceIsCurrent(source)
-            return liveSourceIsCurrent &&
-                !Task.isCancelled &&
-                generation == self.resolutionGeneration &&
-                self.activeSource == source
+            await self.deps.liveSourceIsCurrent(source)
+        } else {
+            await (try? self.deps.sourceSnapshot()) == source
         }
-        guard let current = try? await deps.sourceSnapshot() else { return false }
-        return current == source &&
-            !Task.isCancelled &&
-            generation == self.resolutionGeneration &&
-            self.activeSource == source
+        return matches && self.sourceMatchesCurrentState(source, generation: generation)
     }
 
     private func resolveSource(_ source: SourceSnapshot, generation: UInt64) async {
-        guard !Task.isCancelled,
-              generation == self.resolutionGeneration,
-              self.activeSource == source
-        else { return }
+        guard self.sourceMatchesCurrentState(source, generation: generation) else { return }
         switch source.mode {
         case .local:
             self.cancelRemoteEnsure()
@@ -432,18 +408,12 @@ actor GatewayEndpointStore {
                 throw CancellationError()
             }
             guard let url = context.source.directRemoteURL else {
-                throw NSError(
-                    domain: "GatewayEndpoint",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
+                throw Self.endpointError("gateway.remote.url missing or invalid")
             }
             guard let port = GatewayRemoteConfig.defaultPort(for: url),
                   let portInt = UInt16(exactly: port)
             else {
-                throw NSError(
-                    domain: "GatewayEndpoint",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Invalid gateway.remote.url port"])
+                throw Self.endpointError("Invalid gateway.remote.url port")
             }
             self.logger.info("remote transport direct; skipping SSH tunnel")
             return portInt
@@ -461,10 +431,7 @@ actor GatewayEndpointStore {
                 generation: context.generation)
         }
         guard let portInt = endpoint.config.url.port, let port = UInt16(exactly: portInt) else {
-            throw NSError(
-                domain: "GatewayEndpoint",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Missing tunnel port"])
+            throw Self.endpointError("Missing tunnel port")
         }
         return port
     }
@@ -475,9 +442,7 @@ actor GatewayEndpointStore {
         // A newer resolution owns the endpoint after it increments the generation.
         // Never let this request fall through to the previously-ready route.
         guard let context = await refreshIfCurrent(),
-              !Task.isCancelled,
-              context.generation == self.resolutionGeneration,
-              context.source == self.activeSource
+              self.sourceMatchesCurrentState(context.source, generation: context.generation)
         else {
             throw CancellationError()
         }
@@ -487,22 +452,16 @@ actor GatewayEndpointStore {
                 throw CancellationError()
             }
             guard let resolvedEndpoint else {
-                throw NSError(
-                    domain: "GatewayEndpoint",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Gateway endpoint changed while resolving"])
+                throw Self.endpointError("Gateway endpoint changed while resolving")
             }
             return resolvedEndpoint
-        case let .connecting(mode, _, _):
-            guard mode == .remote else {
-                throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
-            }
+        case .connecting:
             return try await self.ensureRemoteEndpoint(
                 source: context.source,
                 generation: context.generation)
         case let .unavailable(mode, reason, _):
             guard mode == .remote else {
-                throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+                throw Self.endpointError(reason)
             }
 
             // Auto-recover for remote mode: if the SSH control tunnel died (or hasn't been created yet),
@@ -554,10 +513,7 @@ actor GatewayEndpointStore {
                 throw CancellationError()
             }
             guard let url = source.directRemoteURL else {
-                throw NSError(
-                    domain: "GatewayEndpoint",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
+                throw Self.endpointError("gateway.remote.url missing or invalid")
             }
             self.cancelRemoteEnsure()
             return self.publishReadyEndpoint(source: source, url: url)
@@ -610,8 +566,12 @@ actor GatewayEndpointStore {
             let message = "Remote control tunnel failed (\(error.localizedDescription))"
             self.setState(.unavailable(mode: .remote, reason: message))
             self.logger.error("remote control tunnel ensure failed \(message, privacy: .public)")
-            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+            throw Self.endpointError(message)
         }
+    }
+
+    private static func endpointError(_ message: String) -> NSError {
+        NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     private func removeSubscriber(_ id: UUID) {

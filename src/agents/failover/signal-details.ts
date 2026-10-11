@@ -4,17 +4,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 const MAX_FAILOVER_DETAIL_CANDIDATES = 12;
 const MAX_FAILOVER_DETAIL_CHARS = 1_000;
 
-function appendFailoverDetailCandidate(
-  candidates: string[],
-  value: string | number | boolean,
-): void {
-  const normalized = truncateUtf16Safe(String(value).trim(), MAX_FAILOVER_DETAIL_CHARS);
-  if (!normalized || candidates.includes(normalized)) {
-    return;
-  }
-  candidates.push(normalized);
-}
-
 function collectFailoverDetailCandidates(
   value: unknown,
   candidates: string[],
@@ -23,21 +12,21 @@ function collectFailoverDetailCandidates(
   if (candidates.length >= MAX_FAILOVER_DETAIL_CANDIDATES) {
     return;
   }
-  if (typeof value === "string") {
-    appendFailoverDetailCandidate(candidates, value);
-    const trimmed = value.trim();
-    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-      return;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    const normalized = truncateUtf16Safe(String(value).trim(), MAX_FAILOVER_DETAIL_CHARS);
+    if (normalized && !candidates.includes(normalized)) {
+      candidates.push(normalized);
     }
-    try {
-      collectFailoverDetailCandidates(JSON.parse(trimmed) as unknown, candidates, seen);
-    } catch {
-      // Non-JSON detail strings are still useful as direct classifier candidates.
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+        try {
+          collectFailoverDetailCandidates(JSON.parse(trimmed) as unknown, candidates, seen);
+        } catch {
+          // Non-JSON detail strings are still useful as direct classifier candidates.
+        }
+      }
     }
-    return;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    appendFailoverDetailCandidate(candidates, value);
     return;
   }
   const record = asOptionalRecord(value);

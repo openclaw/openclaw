@@ -443,6 +443,41 @@ describe("memory embedding policy", () => {
     },
   );
 
+  it.each([
+    Object.assign(
+      new Error(
+        "openai embeddings failed (model: model-500, batch size: 429): expected 429 vectors, got 500",
+      ),
+      { code: "INVALID_EMBEDDING_RESPONSE" },
+    ),
+    Object.assign(new Error("input array max 64"), { code: "INVALID_EMBEDDING_RESPONSE" }),
+    ...["malformed JSON response", "JSON response exceeds 16777216 bytes"].map((condition) =>
+      Object.assign(
+        new Error(`openai embeddings failed (model: model-500, batch size: 429): ${condition}`),
+        {
+          embeddingErrorMessage: `openai embeddings failed: ${condition}`,
+        },
+      ),
+    ),
+  ])("does not retry or split malformed response diagnostics: %s", async (error) => {
+    const run = vi.fn(async (): Promise<number[][]> => {
+      throw error;
+    });
+    const waitForRetry = vi.fn(async () => {});
+    const onSuccess = vi.fn();
+    await expect(
+      runMemoryEmbeddingBatchRetryWithSplit({
+        items: ["first", "second"],
+        run,
+        waitForRetry,
+        onSuccess,
+      }),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledOnce();
+    expect(waitForRetry).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
   it("splits transport errors only when a smaller request can help", async () => {
     const splittableMessages = [
       "TypeError: fetch failed | other side closed",

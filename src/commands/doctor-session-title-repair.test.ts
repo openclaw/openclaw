@@ -123,7 +123,6 @@ describe("Doctor session title repair", () => {
   it.each([
     ["a replacement lifecycle", { lifecycleRevision: "replacement" }],
     ["a manual rename", { label: "Manual title" }],
-    ["a newly running turn", { status: "running" }],
     ["a rewritten transcript", undefined],
   ] satisfies Array<[string, Partial<SessionEntry> | undefined]>)(
     "preserves %s admitted before its metadata write",

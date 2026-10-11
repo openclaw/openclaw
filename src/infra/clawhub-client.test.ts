@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { fetchClawHubJson } from "./clawhub-client.js";
 import {
   fetchClawHubSkillInstallResolution,
   fetchClawHubSkillSecurityVerdicts,
@@ -410,6 +411,42 @@ describe("clawhub client", () => {
     ).rejects.toThrow("ClawHub /api/v1/skills/-/security-verdicts failed (503)");
     expect(attempts).toBe(1);
   });
+
+  it.each(["GET", "POST"] as const)(
+    "replays a pre-header timeout only for %s reads",
+    async (method) => {
+      let attempts = 0;
+      const result = fetchClawHubJson({
+        path: "/timeout",
+        method,
+        skipAuth: true,
+        timeoutMs: 5,
+        fetchImpl: async (_input, init) => {
+          attempts += 1;
+          if (attempts > 1) {
+            return new Response('{"recovered":true}');
+          }
+          return await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                const reason: unknown = init.signal?.reason;
+                reject(reason instanceof Error ? reason : new Error("Expected a timeout Error"));
+              },
+              { once: true },
+            );
+          });
+        },
+      });
+      if (method === "GET") {
+        await expect(result).resolves.toEqual({ recovered: true });
+        expect(attempts).toBe(2);
+      } else {
+        await expect(result).rejects.toThrow("ClawHub request timed out after 5ms");
+        expect(attempts).toBe(1);
+      }
+    },
+  );
 
   it("wraps malformed successful ClawHub JSON responses", async () => {
     await expect(

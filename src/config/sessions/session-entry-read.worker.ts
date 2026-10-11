@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { ok } from "@openclaw/normalization-core/result";
-import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -14,17 +13,16 @@ import {
   readOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
-import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import {
-  listSessionEntriesReadOnly,
   listSqliteSessionEntriesFromDatabase,
   readSelectedSessionEntriesInDatabase,
 } from "./session-accessor.sqlite-entry-list.read.js";
@@ -39,31 +37,34 @@ import { readSessionEntryReplacementState } from "./session-accessor.sqlite-repl
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
-  hasSessionEntriesByStatus,
-  readSessionEntriesByStatus,
-} from "./session-accessor.sqlite-status.js";
-import {
   readLatestAssistantTextFromDatabase,
   readTranscriptHeaderFromDatabase,
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { readSessionWorktreeOwnerFactsInDatabase } from "./session-accessor.sqlite-worktree-owner.js";
 import {
   assertCanonicalSessionKeyWrite,
-  assertCanonicalSqliteSessionKeysCurrent,
   canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
+import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { boundSessionDiagnosticText } from "./session-diagnostic-text.js";
+import { createSessionEntryReadScope } from "./session-entry-cohort.worker.js";
 import {
   assertSessionEntryCurrentNativeSource,
   readSessionEntryCurrentFactsInDatabase,
 } from "./session-entry-current-admission.worker.js";
+import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
   SessionEntryReadWorkerInput,
   SessionEntryReadWorkerResult,
+  SessionExactEntriesWorkerInput,
+  SessionExactEntriesWorkerResult,
   SessionRuntimeTargetWorkerInput,
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
+import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
@@ -72,10 +73,6 @@ import {
   type SessionDiagnosticTextWorkerInput,
   type SessionEntryCurrentWorkerInput,
   type SessionEntryCurrentWorkerResult,
-  type SessionEntryListWorkerInput,
-  type SessionExactEntriesWorkerInput,
-  type SessionExactEntriesWorkerResult,
-  type SessionRowDatabaseFacts,
   type SessionRowFactsWorkerInput,
   type SessionRowFactsWorkerResult,
   type SessionTranscriptWorkerValues,
@@ -129,30 +126,24 @@ export async function readSessionEntryWorkerRequest(
   if (request.kind === "session-runtime-target") {
     const { readSessionTranscriptRuntimeTarget } =
       await import("./session-accessor.transcript-target.js");
-    const readTarget = () =>
-      readSessionTranscriptRuntimeTarget(request.scope, {
-        keyFormat: request.keyFormat,
-        databaseAgentId: request.database.agentId,
-        continuation: request.continuation,
-      });
     const read = withOpenClawAgentDatabaseReadOnly(
       (database) => {
-        const target = readTarget();
-        const identity = readOpenClawAgentDatabaseIdentity(database);
-        if (
-          typeof identity.identity !== "string" ||
-          !isOpenClawAgentDatabasePathCurrent(database)
-        ) {
-          throw new Error("Session runtime target requires its current durable owner");
-        }
+        const target = readSessionTranscriptRuntimeTarget(
+          request.scope,
+          {
+            keyFormat: request.keyFormat,
+            databaseAgentId: request.database.agentId,
+            continuation: request.continuation,
+          },
+          database,
+        );
         return {
           target,
-          source: {
-            agentId: database.agentId,
-            path: database.path,
-            databaseIdentity: identity.identity,
-            databaseBirthtime: identity.birthtime,
-          },
+          source: captureSessionEntryReadSource(
+            database,
+            undefined,
+            "Session runtime target requires its current durable owner",
+          ),
         };
       },
       { ...request.database, env: request.scope.env },
@@ -203,50 +194,6 @@ export async function readSessionEntryWorkerRequest(
   return { kind: "session-entry-read", entry: read.value, source };
 }
 
-/** Cleanup selects identity columns before materializing metadata in the same worker snapshot. */
-export function readSessionEntryList(request: SessionEntryListWorkerInput) {
-  const scope = {
-    ...request.scope,
-    env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-  };
-  if (scope.cleanupSession === undefined) {
-    return listSessionEntriesReadOnly(scope, { continuation: request.continuation });
-  }
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
-        withSqlitePostCommitPublications(database.db, () =>
-          runSqliteDeferredTransactionSync(database.db, () => {
-            const identities = executeSqliteQuerySync(
-              database.db,
-              getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
-                .selectFrom("session_nodes")
-                .select(["session_key as sessionKey", "current_session_id as sessionId"])
-                .orderBy("session_key"),
-            ).rows;
-            const keys = identities
-              .filter((row) =>
-                matchesPluginHostCleanupSession(row.sessionKey, row, scope.cleanupSession),
-              )
-              .map((row) => row.sessionKey);
-            const entries = new Map(
-              readSelectedSessionEntriesInDatabase(database, keys).map((entry) => [
-                entry.sessionKey,
-                entry,
-              ]),
-            );
-            return keys.flatMap((key) => {
-              const entry = entries.get(key);
-              return entry ? [entry] : [];
-            });
-          }),
-        ),
-      ),
-    { ...request.database, env: scope.env },
-  );
-  return result.found ? result.value : [];
-}
-
 /** Canonical entry currency reuses parsed facts only at the same native connection revision. */
 export function readSessionEntryCurrentFacts(
   request: SessionEntryCurrentWorkerInput,
@@ -266,24 +213,17 @@ export function readSessionEntryCurrentFacts(
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
-        const identity = readOpenClawAgentDatabaseIdentity(database);
-        if (
-          typeof identity.identity !== "string" ||
-          !isOpenClawAgentDatabasePathCurrent(database)
-        ) {
-          throw new Error("Session currency read requires its current durable owner");
-        }
+        const source = captureSessionEntryReadSource(
+          database,
+          undefined,
+          "Session currency read requires its current durable owner",
+        );
         if (request.source) {
           assertSessionEntryCurrentNativeSource(request.source, database);
         }
         return {
           entry: readSessionEntryCurrentFactsInDatabase(database, sessionKey),
-          source: {
-            agentId: database.agentId,
-            path: database.path,
-            databaseIdentity: identity.identity,
-            databaseBirthtime: identity.birthtime,
-          },
+          source,
         };
       }),
     { ...request.database, env: request.scope.env },
@@ -303,19 +243,11 @@ export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerIn
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
         runSqliteDeferredTransactionSync(database.db, () => {
-          const identity = readOpenClawAgentDatabaseIdentity(database);
-          if (
-            typeof identity.identity !== "string" ||
-            !isOpenClawAgentDatabasePathCurrent(database)
-          ) {
-            throw new Error("Session diagnostic read requires its current durable owner");
-          }
-          const source = {
-            agentId: database.agentId,
-            path: database.path,
-            databaseIdentity: identity.identity,
-            databaseBirthtime: identity.birthtime,
-          };
+          const source = captureSessionEntryReadSource(
+            database,
+            undefined,
+            "Session diagnostic read requires its current durable owner",
+          );
           const scope = {
             agentId: request.scope.agentId,
             sessionKey: resolveSqliteSessionKey(request.scope.sessionKey, request.scope.agentId),
@@ -345,66 +277,88 @@ export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerIn
 /** Full rows share a snapshot with lifecycle fallback; list reads retain listing admission. */
 export function readExactSessionEntriesWithLifecycle(
   request: SessionExactEntriesWorkerInput,
+  capturedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): SessionExactEntriesWorkerResult {
-  if (request.projection === "exact") {
+  const { readDatabase, snapshot, assertCanonicalRead } =
+    createSessionEntryReadScope(capturedDatabase);
+  if (request.projection === "exact" || request.projection === "worktree") {
     // Logical accessors validate only their candidates; unrelated rows are not listing admission.
-    const read = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        runSqliteDeferredTransactionSync(database.db, () =>
-          request.sessionKeys.flatMap((sessionKey) => {
-            const entry = readExactSessionEntryRow(
-              database,
-              sessionKey,
-              request.snapshotFields ?? "full",
-              "canonical",
-            )?.entry;
-            return entry ? [{ sessionKey, entry }] : [];
-          }),
-        ),
+    let source: SessionExactEntriesWorkerResult["source"];
+    const read = readDatabase(
+      (database) => {
+        source = captureSessionEntryReadSource(database, request.expectedIdentity);
+        using sourceGuard = prepareSessionColdSourceGuard(
+          { ...request.database, env: request.env },
+          request.manualCompact?.sources,
+        );
+        return snapshot(database, () => {
+          const entries =
+            request.projection === "worktree"
+              ? readSessionWorktreeOwnerFactsInDatabase(database, request.sessionKeys)
+              : request.sessionKeys.flatMap((sessionKey) => {
+                  const entry = readExactSessionEntryRow(
+                    database,
+                    sessionKey,
+                    request.snapshotFields ?? "full",
+                    "canonical",
+                  )?.entry;
+                  return entry ? [{ sessionKey, entry }] : [];
+                });
+          return {
+            entries,
+            ...(request.manualCompact
+              ? {
+                  manualCompact: {
+                    archive: readSessionColdTranscript(
+                      database.db,
+                      request.manualCompact.sessionId,
+                    ),
+                    refusedSource: sourceGuard.read(
+                      database,
+                      new Map(
+                        request.sessionKeys.map((key) => [
+                          key,
+                          entries.find((row) => row.sessionKey === key)?.entry,
+                        ]),
+                      ),
+                    ).refusedSource,
+                  },
+                }
+              : {}),
+          };
+        });
+      },
       { ...request.database, env: request.env },
     );
     if (!read.found && read.reason !== "database-missing") {
       throw new SessionMetadataUnavailableError(read.reason);
     }
-    return {
-      kind: "session-exact-entries",
-      entries: read.found ? read.value : [],
-      lifecycleTimestamps: {},
-    };
-  }
-  if (request.statusSelection) {
-    const { statuses, presenceOnly } = request.statusSelection;
-    const read = withOpenClawAgentDatabaseReadOnly(
-      (database) => ({
-        entries: presenceOnly ? [] : readSessionEntriesByStatus(database, statuses),
-        statusFound: presenceOnly ? hasSessionEntriesByStatus(database, statuses) : false,
-      }),
-      { ...request.database, env: request.env },
-    );
-    if (!read.found && !presenceOnly && read.reason !== "database-missing") {
-      throw new SessionMetadataUnavailableError(read.reason);
+    if (!read.found && request.expectedIdentity?.key.startsWith("file:")) {
+      throw new Error("Session entry read lost its captured physical owner");
     }
     return {
       kind: "session-exact-entries",
+      source,
+      ...(read.found ? read.value : { entries: [] }),
       lifecycleTimestamps: {},
-      ...(read.found
-        ? read.value
-        : { entries: [], statusFound: read.reason !== "database-missing" }),
     };
   }
-  const result = withOpenClawAgentDatabaseReadOnly(
+  const result = readDatabase(
     (database) =>
       request.projection === "list"
         ? {
             kind: "session-exact-entries" as const,
+            ...(request.expectedIdentity
+              ? { source: captureSessionEntryReadSource(database, request.expectedIdentity) }
+              : {}),
             entries: readSelectedSessionEntriesInDatabase(database, request.sessionKeys, {
               continuation: request.continuation,
             }),
             lifecycleTimestamps: {},
           }
         : withSqlitePostCommitPublications(database.db, () =>
-            runSqliteDeferredTransactionSync(database.db, () => {
-              assertCanonicalSqliteSessionKeysCurrent(database);
+            snapshot(database, () => {
+              assertCanonicalRead(database, request.expectedIdentity);
               if (request.projection === "creation") {
                 const { identity, canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
                 const sessionKey = request.sessionKeys[0];
@@ -453,7 +407,8 @@ export function readExactSessionEntriesWithLifecycle(
               const selectedById = request.selection
                 ? readSessionEntryByIdInDatabase(database, {
                     sessionId: request.selection.sessionId,
-                    projection: "list",
+                    orderBy: request.selection.orderBy,
+                    projection: request.projection === "sharing" ? "list" : "full",
                   })
                 : undefined;
               const selected = request.selection
@@ -465,6 +420,7 @@ export function readExactSessionEntriesWithLifecycle(
                       request.projection === "sharing"
                         ? "list"
                         : (request.snapshotFields ?? "full"),
+                      { validation: capturedDatabase ? "canonical" : undefined },
                     )[0],
                     "exact session read result",
                   );
@@ -485,6 +441,7 @@ export function readExactSessionEntriesWithLifecycle(
                       database,
                       [[parentKey]],
                       request.snapshotFields ?? "full",
+                      { validation: capturedDatabase ? "canonical" : undefined },
                     )[0],
                     "reply initialization parent read result",
                   );
@@ -585,7 +542,10 @@ export function readExactSessionEntriesWithLifecycle(
                 ...(request.includeParticipantRecords
                   ? {
                       participantRecords: Object.fromEntries(
-                        participantRecordsBySessionKey(database.db, request.sessionKeys),
+                        participantRecordsBySessionKey(
+                          database.db,
+                          request.sessionKeys ?? selected.value.map(({ sessionKey }) => sessionKey),
+                        ),
                       ),
                     }
                   : {}),
@@ -611,6 +571,9 @@ export function readExactSessionEntriesWithLifecycle(
   }
   if (result.reason !== "database-missing") {
     throw new SessionMetadataUnavailableError(result.reason);
+  }
+  if (request.expectedIdentity?.key.startsWith("file:")) {
+    throw new Error("Session entry read lost its captured physical owner");
   }
   return {
     kind: "session-exact-entries",
@@ -639,19 +602,21 @@ export function readSessionRowDatabaseFacts(
             request.sessionKeys,
             "list",
             "canonical",
+            { includeBoardPresence: true },
           );
-          const boardKeys = readBoardSessionKeys(database, request.sessionKeys);
           return {
             kind: "session-row-facts" as const,
             rows: request.sessionKeys.flatMap((sessionKey) => {
-              const entry = readRow(sessionKey)?.entry;
-              if (!entry) {
+              const selected = readRow(sessionKey);
+              if (!selected) {
                 return [];
               }
+              const { entry } = selected;
               const facts: SessionRowDatabaseFacts = {
                 sessionKey,
                 entry,
-                hasBoard: boardKeys.has(sessionKey),
+                hasBoard:
+                  selected.row.session_key === sessionKey && selected.row.board_present === 1,
               };
               if (readSessionActivitySummary(entry)) {
                 facts.activitySummaryWatermark = readSessionTranscriptWatermarkInDatabase(

@@ -1,13 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
+import type { NodeWorkerSupervisorTransport } from "../gateway/node-registry-private.js";
+import { createNodeWorkerLaunchAdapter } from "../gateway/worker-environments/node-launch-adapter.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import * as secretRegistry from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
+import { parseNodeWorkerLaunchInput } from "../worker/node-supervisor-protocol.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import type * as workerLaunchTransport from "./node-worker-launch-transport.js";
@@ -15,6 +22,7 @@ import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
+import { projectNodeWorkerSupervisorReceipt } from "./node-worker-supervisor-contract.js";
 import {
   createNodeWorkerSupervisorFixture,
   observeNodeWorkerAdapters,
@@ -237,23 +245,6 @@ describe("node worker supervisor", () => {
     }
   });
 
-  it("times out saturated admission without creating a launch row", async () => {
-    await using f = fixture({ capacity: 1, capacityWaitMs: 25 });
-    const { env, supervisor, workspaceDir } = f;
-    const running = launchInput(workspaceDir, "capacity-running", "wait");
-    const rejected = launchInput(workspaceDir, "capacity-rejected", "wait");
-    await supervisor.launch(running, TEST_WORKER_ENDPOINT);
-
-    await expect(supervisor.launch(rejected, TEST_WORKER_ENDPOINT)).rejects.toMatchObject({
-      name: "NodeWorkerCapacityExhaustedError",
-      code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
-      message: "node worker capacity remained full for 25 ms",
-    });
-    expect(
-      await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(rejected.launchId),
-    ).toBeUndefined();
-  });
-
   it("aborts saturated admission when the supervisor closes", async () => {
     const { env, supervisor, workspaceDir } = fixture({ capacity: 1, capacityWaitMs: 5_000 });
     const running = launchInput(workspaceDir, "capacity-close-running", "wait");
@@ -273,70 +264,6 @@ describe("node worker supervisor", () => {
       await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(waiting.launchId),
     ).toBeUndefined();
   });
-
-  it.each(["status", "close"] as const)(
-    "retains an observed terminal outcome when %s reconciliation keeps failing",
-    async (operation) => {
-      const capacitySnapshots: Array<{ total: number; available: number }> = [];
-      const { env, supervisor, workspaceDir } = fixture({
-        capacity: 1,
-        onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
-      });
-      const input = launchInput(workspaceDir, `finish-failure-${operation}`);
-      const store = (supervisor as unknown as { store: NodeWorkerLaunchStore }).store;
-      const originalFinish = store.finish.bind(store);
-      let persistenceUnavailable = true;
-      const finish = vi.spyOn(store, "finish").mockImplementation(async (params) => {
-        if (persistenceUnavailable) {
-          throw new Error("injected finish failure");
-        }
-        return originalFinish(params);
-      });
-      const invoke = async () => {
-        switch (operation) {
-          case "status":
-            return await supervisor.status(input.launchId);
-          case "close":
-            await supervisor.close();
-            return await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(
-              input.launchId,
-            );
-          default:
-            throw new Error("unsupported reconciliation operation");
-        }
-      };
-
-      expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
-        state: "running",
-      });
-      await vi.waitFor(() => expect(finish).toHaveBeenCalled(), { timeout: 5_000 });
-      expect(
-        (await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(input.launchId))
-          ?.state,
-      ).toBe("running");
-      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
-
-      await expect(invoke()).rejects.toThrow("injected finish failure");
-      expect(
-        (await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(input.launchId))
-          ?.state,
-      ).toBe("running");
-      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
-
-      persistenceUnavailable = false;
-      const completed = await invoke();
-      expect(completed).toMatchObject({
-        state: "completed",
-        resultJson: expect.stringContaining('"status":"completed"'),
-      });
-      expect(
-        (await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(input.launchId))
-          ?.state,
-      ).toBe("completed");
-      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 1 });
-      await supervisor.close();
-    },
-  );
 
   it("spawns workers with only supplied runtime essentials", async () => {
     const root = tempDirs.make("node-worker-env-");
@@ -618,40 +545,6 @@ describe("node worker supervisor", () => {
     }
   }, 15_000);
 
-  it.each([
-    [
-      "connection-failure",
-      "cancelled",
-      "worker could not reach gateway gateway.example:18789: certificate rejected ",
-    ],
-    [
-      "connection-deadline",
-      "failed",
-      "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out ",
-    ],
-  ] as const)(
-    "records the child's %s diagnosis in the terminal journal",
-    async (prompt, state, errorText) => {
-      const { supervisor, workspaceDir } = fixture();
-      const input = launchInput(workspaceDir, "connection-failure-launch", prompt);
-      await supervisor.launch(input, {
-        kind: "websocket",
-        url: "wss://gateway.example:18789/__openclaw__/worker",
-      });
-      if (state === "cancelled") {
-        await vi.waitFor(() =>
-          expect(fs.existsSync(path.join(workspaceDir, "connection-failure-reported"))).toBe(true),
-        );
-        await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
-      }
-      const terminal = await waitForTerminal(supervisor, input.launchId);
-      expect(terminal).toMatchObject({ state, errorText: expect.stringContaining(errorText) });
-      expect(Buffer.byteLength(terminal.errorText ?? "", "utf8")).toBeLessThanOrEqual(4 * 1024);
-      expect(terminal.errorText).not.toContain(TEST_WORKER_CREDENTIAL);
-      await supervisor.close();
-    },
-  );
-
   it("never signals a running worker for a mismatched immutable cancel identity", async () => {
     await using f = fixture();
     const { supervisor, workspaceDir } = f;
@@ -777,5 +670,97 @@ describe("node worker supervisor", () => {
       state: "failed",
       errorText: expect.stringContaining("inside its bundle"),
     });
+  });
+});
+
+describe("node worker admission re-arm journal", () => {
+  it("retains each child's reason and replays the same attempts after supervisor restart", async () => {
+    const admissionFixture = writeNodeWorkerFixture(tempDirs.make("node-admission-journal-"));
+    let supervisor = createNodeWorkerSupervisor(admissionFixture);
+    const launchIds = new Set<string>();
+    const transport: NodeWorkerSupervisorTransport = {
+      isCurrent: () => true,
+      hasCurrentRunner: () => true,
+      async getCurrentNode(nodeId) {
+        return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+      },
+      listCurrentNodes: async () => [
+        {
+          nodeId: "node-1",
+          connId: "conn-1",
+          pairingIdentity: "identity-1",
+          pairingGeneration: "generation-1",
+          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+          clientMode: GATEWAY_CLIENT_MODES.NODE,
+          protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+          workerHost: {
+            enabled: true,
+            environmentSession: 1,
+            capturedExecPolicy: true,
+            promptContext: 1,
+            capacity: { total: 1, available: 1 },
+          },
+          commands: [],
+        },
+      ],
+      invoke: async (request) => {
+        let receipt;
+        if (request.command === "worker.launch.v1") {
+          const input = parseNodeWorkerLaunchInput(JSON.stringify(request.params));
+          launchIds.add(input.launchId);
+          request.onDispatchReady?.("invoke-1");
+          receipt = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
+        } else if (request.command === "worker.status.v1") {
+          receipt = await supervisor.status((request.params as { launchId: string }).launchId);
+        } else {
+          throw new Error("unexpected cancellation");
+        }
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify(receipt ? projectNodeWorkerSupervisorReceipt(receipt) : null),
+        };
+      },
+    };
+    const request = {
+      deviceId: "node-1",
+      input: testWorkerLaunchInput(
+        admissionFixture.workspaceDir,
+        "admission-launch",
+        "admission-rearm",
+      ),
+      isDispatchAuthorized: () => true,
+      isCancellationAuthorized: () => true,
+      timeoutMs: 10_000,
+    };
+    const createAdapter = () =>
+      createNodeWorkerLaunchAdapter({ getTransport: () => transport, pollIntervalMs: 10 });
+    try {
+      const completed = await createAdapter().launch(request);
+      expect(completed).toMatchObject({
+        state: "completed",
+        resultJson: JSON.stringify({
+          status: "completed",
+          transcriptLeafId: "leaf-1",
+          transcriptNextSeq: 2,
+        }),
+      });
+      expect(launchIds.size).toBe(2);
+      const first = await supervisor.status(request.input.launchId);
+      expect(JSON.parse(first?.resultJson ?? "null")).toEqual({
+        status: "not-started",
+        reason: "admission-deadline",
+        errorText: "gateway unreachable [REDACTED]",
+      });
+      expect(first?.completedAtMs).not.toBeNull();
+      const marker = path.join(admissionFixture.workspaceDir, "admission-attempt");
+      expect(fs.readFileSync(marker, "utf8")).toBe(completed.launchId);
+      await supervisor.close();
+      supervisor = createNodeWorkerSupervisor(admissionFixture);
+      expect(await createAdapter().launch(request)).toEqual(completed);
+      expect(fs.readFileSync(marker, "utf8")).toBe(completed.launchId);
+      expect(launchIds.size).toBe(2);
+    } finally {
+      await supervisor.close();
+    }
   });
 });

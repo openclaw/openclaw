@@ -3,7 +3,6 @@ import {
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
   resolveAgentDir,
-  runAgentCleanupStep,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
   type ExecApprovalDecision,
@@ -14,6 +13,7 @@ import {
   materializeStaticMcpToolsForHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { formatStageTimings } from "openclaw/plugin-sdk/time-runtime";
+import type { CodexComputerContextEpoch } from "./computer-context.js";
 import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
   buildDynamicTools,
@@ -38,7 +38,7 @@ import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import { requestPluginApprovalOutcome } from "./plugin-approval-roundtrip.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
-import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
+import { emitCodexAppServerEvent, runCodexCleanupStep } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import {
@@ -147,11 +147,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       : {}),
     ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
   };
-  const computerContextEpoch: {
-    value: number;
-    frameToolCallId?: string;
-    frameImageIdentity?: string;
-  } = { value: 0 };
+  const computerContextEpoch: CodexComputerContextEpoch = { value: 0 };
   const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
   const cronCreatorToolAllowlistCaptureRef: {
@@ -299,34 +295,22 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   let toolDisposal: Promise<void> | undefined;
   const disposeTools = (reason: string): Promise<void> =>
     (toolDisposal ??= (async () => {
-      await runAgentCleanupStep({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        step: "codex-dynamic-tool-cleanup",
-        log: embeddedAgentLog,
-        cleanup: async () => {
-          const settled = await Promise.allSettled(
-            runCleanups.splice(0).map(async (cleanup) => await cleanup(reason)),
-          );
-          const errors = settled.flatMap((result) =>
-            result.status === "rejected" ? [result.reason] : [],
-          );
-          if (params.oneShotCliRun && errors.length) {
-            throw new AggregateError(errors, "Codex tool cleanup failed");
-          }
-        },
+      await runCodexCleanupStep(params, "codex-dynamic-tool-cleanup", async () => {
+        const settled = await Promise.allSettled(
+          runCleanups.splice(0).map(async (cleanup) => await cleanup(reason)),
+        );
+        const errors = settled.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (params.oneShotCliRun && errors.length) {
+          throw new AggregateError(errors, "Codex tool cleanup failed");
+        }
       });
       for (const [step, materialized] of [
         ["codex-scoped-mcp-dispose", scopedMcpTools],
         ["codex-configured-mcp-dispose", configuredMcp],
       ] as const) {
-        await runAgentCleanupStep({
-          runId: params.runId,
-          sessionId: params.sessionId,
-          step,
-          log: embeddedAgentLog,
-          cleanup: async () => materialized?.dispose(),
-        });
+        await runCodexCleanupStep(params, step, async () => materialized?.dispose());
       }
     })());
   try {

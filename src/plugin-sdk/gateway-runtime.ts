@@ -5,10 +5,6 @@ export { isGatewayClientRequestError, isGatewayTransportError } from "../gateway
 // they must use the canonical redactor so URL userinfo/tokens never print.
 export { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 export { isLoopbackHost } from "../gateway/net.js";
-export async function resolveAdvertisedLanHost(): Promise<string | null> {
-  const runtime = await import("../infra/advertised-lan-host.js");
-  return await runtime.resolveAdvertisedLanHostCore();
-}
 export { resolveHostedPluginSurfaceUrl } from "../gateway/hosted-plugin-surface-url.js";
 export type { HostedPluginSurfaceUrlParams } from "../gateway/hosted-plugin-surface-url.js";
 export {

@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { McpConnectionAuthorityError } from "../agents/mcp-connection-authority-error.js";
 import type { McpConnectionAuthority } from "../agents/mcp-connection-authority.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronStoredJob } from "../cron/types.js";
-import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import { createGatewayRequestContext } from "../gateway/server-request-context.js";
+import { makeContextParams } from "../gateway/server-request-context.test-support.js";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -21,17 +22,23 @@ const mocks = vi.hoisted(() => ({
   useResolver: false,
   request: vi.fn<typeof import("../agents/mcp-event-request.js").requestMcpEvent>(),
 }));
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   listAgentIds: () => ["main"],
   resolveAgentDir: () => "/agent",
   resolveAgentWorkspaceDir: () => "/workspace",
 }));
-vi.mock("../agents/agent-tools.policy.js", () => ({
+vi.mock("../agents/agent-tools.policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-tools.policy.js")>()),
   resolveEffectiveToolPolicy: () => ({ globalPolicy: { deny: mocks.deny } }),
   resolveGroupToolPolicy: mocks.group,
 }));
-vi.mock("../agents/sender-tool-policy.js", () => ({ resolveSenderToolPolicy: () => undefined }));
-vi.mock("./bundle-mcp.js", () => ({
+vi.mock("../agents/sender-tool-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/sender-tool-policy.js")>()),
+  resolveSenderToolPolicy: () => undefined,
+}));
+vi.mock("./bundle-mcp.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bundle-mcp.js")>()),
   loadEnabledBundleMcpConfig: (): ReturnType<
     typeof import("./bundle-mcp.js").loadEnabledBundleMcpConfig
   > => ({
@@ -41,17 +48,20 @@ vi.mock("./bundle-mcp.js", () => ({
     prepareDataDirsByServer: {},
   }),
 }));
-vi.mock("./runtime.js", () => ({
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
   getActivePluginRegistry: () => ({
     mcpServerConnectionResolvers: mocks.useResolver
       ? [{ pluginId: "connector", resolver: { serverName: "calendar", resolve: mocks.resolver } }]
       : [],
   }),
 }));
-vi.mock("./runtime/gateway-request-scope.js", () => ({
+vi.mock("./runtime/gateway-request-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime/gateway-request-scope.js")>()),
   getPluginRuntimeGatewayRequestScope: () => undefined,
 }));
-vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
   withSessionEntryReadOnlyInWorker: async (
     _input: unknown,
     guard: () => void,
@@ -61,11 +71,19 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
     return await consume({ ok: true, value: mocks.entry });
   },
 }));
-vi.mock("../gateway/scheduled-run-gateway-context.js", () => ({
+vi.mock("../gateway/scheduled-run-gateway-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/scheduled-run-gateway-context.js")>()),
   createScheduledGatewayRunner: () => async (run: () => Promise<unknown>) => await run(),
 }));
-vi.mock("../agents/mcp-event-request.js", () => ({ requestMcpEvent: mocks.request }));
-vi.mock("../logger.js", () => ({ logWarn: vi.fn(), logDebug: vi.fn() }));
+vi.mock("../agents/mcp-event-request.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/mcp-event-request.js")>()),
+  requestMcpEvent: mocks.request,
+}));
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: vi.fn(),
+  logDebug: vi.fn(),
+}));
 
 function resolverAuthority(authorizationId = "grant-one"): McpConnectionAuthority {
   return {
@@ -126,10 +144,11 @@ function fixture(pluginId = "mcp-events") {
   const lease = createPluginRuntimeCapabilityLease("test service");
   cleanups.push(lease.revoke);
   const cron = { ...createServiceCronHost(), getJob: () => job };
-  const context = {
-    getRuntimeConfig: () => cfg,
-    getGatewayMethodRegistry: () => undefined,
-  } as unknown as GatewayRequestContext;
+  const runtime = makeContextParams();
+  onTestFinished(() => runtime.runtime.scheduler.stop());
+  const context = createGatewayRequestContext(runtime);
+  context.getRuntimeConfig = () => cfg;
+  context.getGatewayMethodRegistry = undefined;
   const capability = createPluginServiceMcpEvents({
     pluginId,
     lease,

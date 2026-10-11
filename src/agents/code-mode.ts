@@ -1,7 +1,3 @@
-/**
- * Host-side Code Mode controller for selectable JavaScript execution with bridged
- * tool search/call/yield support.
- */
 import { Type } from "typebox";
 import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -32,6 +28,7 @@ import {
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
+import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";
@@ -89,14 +86,16 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
 }
 
 function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[]): string {
+  const priority = (entry: CodeModeCatalogBinding) =>
+    entry.id === `openclaw:core:${entry.name}` && isCoreCodingSurfaceToolName(entry.name)
+      ? 0
+      : entry.output
+        ? 1
+        : 2;
   const lines = bindings
-    // Declared-output entries sort first so byte truncation drops `-> ?`
-    // lines, which stay fully discoverable through catalog.search, before it drops
-    // contracts the model can one-pass on. Deterministic within each tier.
-    .toSorted(
-      (a, b) =>
-        (a.output ? 0 : 1) - (b.output ? 0 : 1) || a.callableName.localeCompare(b.callableName),
-    )
+    // Keep the same core file/shell contracts visible as Tool Search, even without
+    // declared outputs. Otherwise catalog growth hides their input argument names.
+    .toSorted((a, b) => priority(a) - priority(b) || a.callableName.localeCompare(b.callableName))
     .map(
       (entry) => `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
     );
@@ -108,13 +107,7 @@ function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[])
     return fullIndex;
   }
 
-  // Greedily pack lines in the deterministic sorted order, skipping any single
-  // line too large to fit rather than dropping the whole tail after it. A prefix
-  // cut let one oversized entry — a pathological plugin id or input hint — blank
-  // the entire index; skipping it keeps every other declared contract visible
-  // and fits more of them when the declared tier alone overflows. Skipped
-  // entries stay discoverable through catalog.search, and the stable input order
-  // keeps prompt bytes deterministic for provider caches.
+  // Skip oversized entries instead of letting one blank the remaining index.
   const included: string[] = [];
   let includedLineLength = 0;
   for (const line of lines) {
@@ -144,7 +137,7 @@ function createCodeModeExecDescription(
   const swarmEnabled = isCodeModeSwarmAvailable(ctx, catalog);
   const apiGuidance =
     !catalogKnown || (catalog?.length ?? 0) > 0 || swarmEnabled
-      ? " Read types with `API.list(prefix?)` and `API.read(path)`; native tools: `tools/`. Types are documentation; write plain JavaScript."
+      ? " Read types with `API.list(prefix?)` and `API.read(path)`; read returns `{ path, description, content, bytes }`, not a string. Use `.content` for declaration text. Native tools: `tools/`. Types are documentation; write plain JavaScript."
       : "";
   const mcpGuidance =
     !catalogKnown || hasMcp

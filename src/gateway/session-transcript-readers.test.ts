@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   persistSessionTranscriptTurn,
+  preflightSessionTranscriptForManualCompact,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { readTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
@@ -103,6 +105,43 @@ describe("session transcript reader facade", () => {
       turnTainted: true,
       usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [] },
     });
+  });
+
+  test("preflights manual compaction without caller-thread SQL and sees later appends", async () => {
+    const scope = await writeTranscript("compact-stats", [
+      { type: "session", version: 3, id: "compact-stats" },
+      { type: "message", id: "first", message: { role: "user", content: "hello" } },
+    ]);
+    await readTranscriptStatsAsync(scope);
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "second",
+          parentId: "first",
+          message: { role: "assistant", content: "world", timestamp: 2 },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const hostSql = observeHostDataSql();
+    try {
+      expect(await readTranscriptStatsAsync(scope)).toMatchObject({ eventCount: 3, maxSeq: 2 });
+      expect(await preflightSessionTranscriptForManualCompact(scope, { maxLines: 2 })).toEqual({
+        compacted: true,
+      });
+      expect(await preflightSessionTranscriptForManualCompact(scope, { maxLines: 3 })).toEqual({
+        compacted: false,
+        kept: 3,
+      });
+      expect(await readTranscriptStatsAsync({ ...scope, sessionId: "empty" })).toEqual({
+        eventCount: 0,
+        maxSeq: 0,
+        sizeBytes: 0,
+      });
+    } finally {
+      hostSql.restore();
+    }
+    expect(hostSql.queries).toEqual([]);
   });
 
   test("reads active-branch messages and message ids through a scope", async () => {

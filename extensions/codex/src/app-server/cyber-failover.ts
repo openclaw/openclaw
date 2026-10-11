@@ -48,7 +48,6 @@ export type CodexCyberWorkspace = {
   authProfileId?: string | undefined;
 };
 
-// Unauthorized targets, keyed by workspace and model and holding an expiry.
 // Authorization belongs to the workspace rather than any one conversation, and
 // one process can host several agent-scoped Codex homes, so an unentitled
 // workspace must not disable escalation for one that is entitled. Writes sweep
@@ -83,7 +82,6 @@ export function reserveCodexCyberProbe(params: {
   };
 }
 
-/** Remembers that this workspace cannot use the target for `cooloffMs`. */
 export function recordCodexCyberTargetUnavailable(params: {
   model: string;
   workspace?: CodexCyberWorkspace;
@@ -122,7 +120,6 @@ export type CodexCyberEscalationPlan =
         | "probe_in_flight";
     };
 
-/** Decides whether a refused turn may be retried on Daybreak. */
 export function planCodexCyberEscalation(params: {
   config: CodexCyberFailoverConfig;
   currentModel: string | undefined;
@@ -180,7 +177,6 @@ export type CodexCyberAttemptVerdict = {
 
 const AUTHORIZATION_FAILURE_RE = /\b(401|403)\b|unauthorized|not authorized|forbidden/i;
 
-/** Everything the escalation decision needs from one attempt outcome. */
 export function readCodexCyberAttemptVerdict(
   result: CodexCyberAttemptOutcome | undefined,
 ): CodexCyberAttemptVerdict {

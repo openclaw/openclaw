@@ -44,11 +44,9 @@ export type SlackChannelConfig = Omit<CommonChannelGroupConfig, "allowFrom"> & {
   presenceEvents?: SlackPresenceEventsConfig;
 };
 
-type SlackPresenceEventsMode = "off" | "auto" | "on";
-
 type SlackPresenceEventsConfig = {
   /** Presence wake mode. Default: off. */
-  mode?: SlackPresenceEventsMode;
+  mode?: "off" | "auto" | "on";
   /** Override the default presence-event guidance. Empty omits guidance. Maximum: 20,000 characters. */
   prompt?: string;
 };
@@ -160,7 +158,6 @@ export type SlackAccountConfig = Omit<
      * Example: { direct: "all", group: "first", channel: "off" }.
      */
     replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
-    /** Thread session behavior. */
     thread?: SlackThreadConfig;
     /** Poll Slack presence and wake the routed agent on away-to-active transitions. Default: off. */
     presenceEvents?: SlackPresenceEventsConfig;
@@ -173,7 +170,6 @@ export type SlackAccountConfig = Omit<
   };
 
 export type SlackConfig = {
-  /** Optional per-account Slack configuration (multi-account). */
   accounts?: Record<string, SlackAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;

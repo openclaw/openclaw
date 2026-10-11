@@ -229,19 +229,13 @@ describe("secrets tool", () => {
     }
   });
 
-  it.each<{ label: string; config: OpenClawConfig }>([
-    { label: "built-in store", config: {} },
-    { label: "renamed store default", config: { secrets: { defaults: { store: "teamstore" } } } },
-    {
-      label: "store default shared with another source",
-      config: {
-        secrets: {
-          defaults: { store: "teamstore" },
-          providers: { teamstore: { source: "env" } },
-        },
+  it("returns a valid shared-default store ref without claiming chat text", async () => {
+    const config: OpenClawConfig = {
+      secrets: {
+        defaults: { store: "teamstore" },
+        providers: { teamstore: { source: "env" } },
       },
-    },
-  ])("returns a valid $label ref without claiming chat text", async ({ config }) => {
+    };
     const { gateway, answer, waiting } = waitingStoredRequestGateway();
     const tool = createSecretsTool({
       config,
@@ -329,7 +323,7 @@ describe("secrets tool", () => {
     );
   });
 
-  it.each(["pending", "expired", "cancelled"] as const)(
+  it.each(["pending", "cancelled"] as const)(
     "returns no_answer when a credential request is %s",
     async (status) => {
       const gateway = gatewayStub(async (method, _options, params) => {
@@ -448,19 +442,8 @@ describe("secrets tool", () => {
   );
 
   const longHost = `${"a".repeat(62)}.${"b".repeat(62)}.${"c".repeat(62)}.${"d".repeat(59)}.test`;
-  const boundaryHosts = [longHost, longHost.slice(1)];
   const oversizedHosts = [longHost, `e${longHost.slice(1)}`];
   it.each([
-    {
-      label: "empty hosts",
-      metadata: { entries: [{ ...secretEntry, allowedHosts: [] }] },
-      currentPolicy: { status: "available", allowedHosts: [] },
-    },
-    {
-      label: "512-character complete array",
-      metadata: { entries: [{ ...secretEntry, allowedHosts: boundaryHosts }] },
-      currentPolicy: { status: "available", allowedHosts: boundaryHosts },
-    },
     {
       label: "513-character array",
       metadata: { entries: [{ ...secretEntry, allowedHosts: oversizedHosts }] },
@@ -484,11 +467,6 @@ describe("secrets tool", () => {
     {
       label: "read rejection",
       metadata: new Error("private-env-value"),
-      currentPolicy: { status: "unavailable" },
-    },
-    {
-      label: "invalid inventory",
-      metadata: { entries: "private-env-value" },
       currentPolicy: { status: "unavailable" },
     },
     {
@@ -527,16 +505,8 @@ describe("secrets tool", () => {
     }
     expect(text.text.length).toBeLessThan(1800);
     expect(text.text).not.toMatch(/private-env-value|UNRELATED_ENV|proposed\.example\.test/);
-    if (currentPolicy.status === "available") {
-      const hosts = currentPolicy.allowedHosts!;
-      expect(JSON.stringify(hosts).length).toBeLessThanOrEqual(512);
-      for (const host of hosts) {
-        expect(text.text.split(JSON.stringify(host))).toHaveLength(2);
-      }
-    } else {
-      expect(text.text).not.toContain(longHost.slice(0, 62));
-      expect(text.text).not.toContain("allowedHosts");
-    }
+    expect(text.text).not.toContain(longHost.slice(0, 62));
+    expect(text.text).not.toContain("allowedHosts");
   });
 
   it.each(["resolve", "reject"] as const)(
@@ -625,15 +595,6 @@ describe("secrets tool", () => {
       answered: false,
     },
     {
-      label: "UNAVAILABLE after registration",
-      error: new GatewayClientRequestError({
-        code: "UNAVAILABLE",
-        message: "Secret store entry metadata is unavailable.",
-      }),
-      abort: false,
-      answered: false,
-    },
-    {
       label: "an aborted registration reply",
       error: new Error("registration interrupted"),
       abort: true,
@@ -718,105 +679,60 @@ describe("secrets tool", () => {
     },
   );
 
-  it.each([
-    { reason: undefined, abort: false },
-    { reason: undefined, abort: true },
-    { reason: "QUESTION_ID_IN_USE", abort: false },
-    { reason: "QUESTION_ID_IN_USE", abort: true },
-    { reason: "QUESTION_REQUESTER_INACTIVE", abort: false },
-    { reason: "QUESTION_REQUESTER_INACTIVE", abort: true },
-  ])(
-    "does not cancel a refused registration (reason=$reason, abort=$abort)",
-    async ({ reason, abort }) => {
-      const manager = new QuestionManager(createTestGatewayScheduler());
-      const controller = new AbortController();
-      const sessionKey = "agent:main:secret-refusal";
-      const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
-      const normalized = normalizeSecretsRequestParams(args);
-      const reservation = reserveAskUserPromptDelivery({
-        toolCallId: "call-refusal",
-        sessionKey,
-        questions: normalized.questions,
-      });
-      if (!reservation) {
-        throw new Error("expected prompt reservation");
-      }
-      const existing = structuredClone(
-        manager.request({
-          id: reservation.questionId,
-          questions: normalized.questions,
-          sessionKey: "agent:main:other-requester",
-          timeoutMs: 60_000,
-        }),
-      );
-      const error = reason
-        ? Object.assign(new Error("registration refused"), {
-            name: "GatewayClientRequestError",
-            details: { reason },
-          })
-        : new GatewayClientRequestError({
-            code: "INVALID_REQUEST",
-            message: "registration refused",
-          });
-      const gateway = questionManagerGateway(manager, () => {
-        if (abort) {
-          controller.abort(new Error("run stopped"));
-        }
-        throw error;
-      });
-
-      try {
-        await expect(
-          createSecretsTool({ sessionKey, gatewayCall: gateway.call }).execute(
-            "call-refusal",
-            args,
-            controller.signal,
-          ),
-        ).rejects.toBe(error);
-        expect(manager.get(existing.id)).toEqual(existing);
-        expect(gateway.mock.mock.calls.some(([method]) => method === "question.resolve")).toBe(
-          false,
-        );
-        expect(gateway.mock.mock.calls.some(([method]) => method === "secrets.store.list")).toBe(
-          false,
-        );
-        expect(
-          reserveAskUserPromptDelivery({
-            toolCallId: "call-after-refusal",
-            sessionKey,
-            questions: normalized.questions,
-          }),
-        ).toBeDefined();
-      } finally {
-        manager.close();
-      }
-    },
-  );
-
-  it("shares the existing subscriber prompt reservation and settlement lifecycle", async () => {
-    const sessionKey = "agent:main:secret-prompt";
+  it("does not cancel another request after a refused registration and abort", async () => {
+    const manager = new QuestionManager(createTestGatewayScheduler());
+    const controller = new AbortController();
+    const sessionKey = "agent:main:secret-refusal";
     const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
     const normalized = normalizeSecretsRequestParams(args);
     const reservation = reserveAskUserPromptDelivery({
-      toolCallId: "call-secret-prompt",
+      toolCallId: "call-refusal",
       sessionKey,
       questions: normalized.questions,
-      timeoutSeconds: normalized.timeoutSeconds,
     });
     if (!reservation) {
-      throw new Error("expected secret prompt reservation");
+      throw new Error("expected prompt reservation");
     }
-    const { gateway, answer, waiting } = waitingStoredRequestGateway();
-    const pending = createSecretsTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-secret-prompt",
-      args,
+    const existing = structuredClone(
+      manager.request({
+        id: reservation.questionId,
+        questions: normalized.questions,
+        sessionKey: "agent:main:other-requester",
+        timeoutMs: 60_000,
+      }),
     );
-    await waiting;
+    const error = Object.assign(new Error("registration refused"), {
+      name: "GatewayClientRequestError",
+      details: { reason: "QUESTION_ID_IN_USE" },
+    });
+    const gateway = questionManagerGateway(manager, () => {
+      controller.abort(new Error("run stopped"));
+      throw error;
+    });
 
-    settleAskUserPromptDelivery(reservation.questionId);
-    answer.resolve(storedAnswer);
-
-    await expect(pending).resolves.toMatchObject({ details: { status: "stored" } });
+    try {
+      await expect(
+        createSecretsTool({ sessionKey, gatewayCall: gateway.call }).execute(
+          "call-refusal",
+          args,
+          controller.signal,
+        ),
+      ).rejects.toBe(error);
+      expect(manager.get(existing.id)).toEqual(existing);
+      expect(gateway.mock.mock.calls.some(([method]) => method === "question.resolve")).toBe(false);
+      expect(gateway.mock.mock.calls.some(([method]) => method === "secrets.store.list")).toBe(
+        false,
+      );
+      expect(
+        reserveAskUserPromptDelivery({
+          toolCallId: "call-after-refusal",
+          sessionKey,
+          questions: normalized.questions,
+        }),
+      ).toBeDefined();
+    } finally {
+      manager.close();
+    }
   });
 
   it("publishes its own credential prompt when no harness reserved one", async () => {

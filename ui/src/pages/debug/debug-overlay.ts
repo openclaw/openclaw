@@ -61,15 +61,11 @@ export class DebugOverlay extends OpenClawLightDomElement {
   }
 
   toggle(): void {
-    if (this.mode === "minimized") {
-      this.mode = "expanded";
-      return;
-    }
     if (this.mode === "expanded") {
       this.close();
-      return;
+    } else {
+      this.open("expanded");
     }
-    this.open("expanded");
   }
 
   open(mode: DebugOverlayMode): void {

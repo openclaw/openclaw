@@ -1,5 +1,4 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { setWorkboardCards } from "./card-state.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { formatError } from "./normalization-utils.ts";
@@ -10,15 +9,12 @@ import {
   isCurrentWorkboardLoadGeneration,
   nextWorkboardLoadGeneration,
   workboardHasActiveWrites,
-  type WorkboardHost,
+  type WorkboardClientContext,
   type WorkboardLoadToken,
 } from "./runtime.ts";
 import type { WorkboardRefreshSource, WorkboardUiState } from "./types.ts";
 
-type LoadWorkboardParams = {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
+type LoadWorkboardParams = WorkboardClientContext & {
   force?: boolean;
   refreshDiagnostics?: boolean;
   preserveError?: boolean;
@@ -28,9 +24,7 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
   return await loadWorkboardInternal(params);
 }
 
-export async function loadWorkboardCatalog(
-  params: Pick<LoadWorkboardParams, "host" | "client" | "requestUpdate">,
-): Promise<boolean> {
+export async function loadWorkboardCatalog(params: WorkboardClientContext): Promise<boolean> {
   return await loadWorkboardInternal({ ...params, force: true }, undefined, true);
 }
 
@@ -170,13 +164,12 @@ async function loadWorkboardInternal(
   return await loadPromise;
 }
 
-export async function refreshWorkboard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-  source: WorkboardRefreshSource;
-  refreshDiagnostics?: boolean;
-}): Promise<boolean> {
+export async function refreshWorkboard(
+  params: WorkboardClientContext & {
+    source: WorkboardRefreshSource;
+    refreshDiagnostics?: boolean;
+  },
+): Promise<boolean> {
   const state = getWorkboardState(params.host);
   const passive = params.source === "live";
   if (state.dispatching || workboardHasActiveWrites(state)) {

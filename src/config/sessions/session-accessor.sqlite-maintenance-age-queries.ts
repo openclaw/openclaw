@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   createSqliteQueryCache,
@@ -7,7 +6,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
-function createAgeReaders(database: DatabaseSync) {
+export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database) => {
   const db =
     getNodeSqliteKysely<Pick<DB, "session_nodes" | "session_canonical_validation_pending">>(
       database,
@@ -113,6 +112,4 @@ function createAgeReaders(database: DatabaseSync) {
     // Raw edits remain marked until the canonical owner validates their key/row shape.
     uncertified: prepareSqliteQueryIterator(database, () => uncertified),
   };
-}
-
-export const readSessionMaintenanceAgeQueries = createSqliteQueryCache(createAgeReaders);
+});

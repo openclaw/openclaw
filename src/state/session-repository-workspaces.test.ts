@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -52,17 +53,13 @@ it("rolls back a revoked native commit without publishing changed repository fac
   let commitRequested = false;
   const changed = vi.fn();
   const unsubscribe = sessionChanges.subscribe(changed);
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          commitRequested = true;
-          current = false;
-        }
-        admit(request, grant);
-      }, attachment),
-  );
+  probe.admission(operationAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      commitRequested = true;
+      current = false;
+    }
+    admit(request, grant);
+  });
   try {
     await expect(
       store.bindBase({

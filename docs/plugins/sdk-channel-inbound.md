@@ -298,7 +298,9 @@ routing or hook correlation. An explicit override must be non-empty and contain 
 surrounding whitespace.
 
 The shared `recordInboundSession` recorder joins its metadata writer before
-returning, so dispatch cannot race creation of the session store. Metadata write
+returning, so dispatch cannot race creation of the session store. If the agent
+database is still awaiting startup inspection, recording rejects before dispatch
+so the channel transport can retry the inbound message. Other metadata write
 failures still reach `onRecordError` without failing the turn. The promise passed
 to `trackSessionMetaTask` includes asynchronous error reporting; reporting and
 automatic session maintenance remain outside foreground completion.

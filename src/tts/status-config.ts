@@ -59,12 +59,9 @@ function isCustomOpenAiTtsBaseUrl(baseUrl: string | undefined): boolean {
 }
 
 function firstStatusDetail(
-  record: Record<string, unknown> | undefined,
+  record: Record<string, unknown>,
   keys: readonly string[],
 ): string | undefined {
-  if (!record) {
-    return undefined;
-  }
   for (const key of keys) {
     const value = normalizeStatusDetail(record[key]);
     if (value) {
@@ -77,7 +74,7 @@ function firstStatusDetail(
 function resolveProviderConfigRecord(
   raw: TtsConfig,
   provider: TtsProvider,
-): Record<string, unknown> | undefined {
+): Record<string, unknown> {
   const rawRecord: Record<string, unknown> = isObjectRecord(raw)
     ? (raw as Record<string, unknown>)
     : {};
@@ -106,7 +103,7 @@ function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
     return {};
   }
   const record = resolveProviderConfigRecord(raw, provider);
-  const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record?.baseUrl);
+  const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record.baseUrl);
   const customBaseUrl = provider === "openai" && isCustomOpenAiTtsBaseUrl(sanitizedBaseUrl);
   const details: Partial<TtsStatusSnapshot> = {};
   for (const [field, keys] of [

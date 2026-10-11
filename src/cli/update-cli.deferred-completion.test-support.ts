@@ -13,7 +13,7 @@ export const readPackageVersion = vi.fn();
 export const syncPluginsForUpdateChannel = vi.fn();
 export const updateNpmInstalledPlugins = vi.fn();
 export const loadInstalledPluginIndexInstallRecords = vi.fn();
-export const pathExists = vi.fn();
+const pathExists = vi.fn();
 const spawn = vi.fn();
 export const observeUpdateGatewayReadiness =
   vi.fn<typeof import("./update-cli/update-command-readiness.js").observeUpdateGatewayReadiness>();

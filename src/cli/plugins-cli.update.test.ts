@@ -8,7 +8,7 @@ import {
   resolvePluginInstallTransactionRequest,
   type PluginInstallTransaction,
 } from "../plugins/install-transaction.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   createTestInstalledPluginIndex,
   pluginCliConfigMock,
@@ -37,7 +37,7 @@ import {
 } from "./plugins-cli.update.test-support.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
-const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
+const originalEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
 const { set: setTty, restore: restoreTty } = createCliTtyMock();
 
 function createTrackedPluginConfig(params: { pluginId: string; spec: string }): OpenClawConfig {
@@ -221,11 +221,7 @@ describe("plugins cli update", () => {
 
   afterEach(() => {
     restoreTty();
-    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
-      delete process.env.OPENCLAW_NIX_MODE;
-    } else {
-      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
-    }
+    originalEnv.restore();
   });
 
   it("refuses plugin updates in Nix mode before package-manager work", async () => {

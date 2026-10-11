@@ -64,9 +64,9 @@ describe("publication SQLite materialization", () => {
     }
   });
 
-  it("observes no current publication after worktree GC retires the session checkout", () => {
+  it("observes no current publication after worktree GC retires the session checkout", async () => {
     insertSharedWorktreeReceipt("latest");
-    updateRegistryWorktree(process.env, "worktree-1", { removedAt: 2 });
+    await updateRegistryWorktree(process.env, "worktree-1", { removedAt: 2 });
     expect(
       readSharedGitHubPublicationRequestInDatabase(
         openOpenClawStateDatabase().db,
@@ -77,7 +77,7 @@ describe("publication SQLite materialization", () => {
     ).toBeUndefined();
   });
 
-  it("defers rich receipts with compact notifications while retaining rollback and input order", () => {
+  it("defers rich receipts with authority postimages while retaining rollback and input order", () => {
     const first = insertSharedWorktreeReceipt("first");
     const second = insertSharedWorktreeReceipt("second", {
       session: { ...session, sessionKey: session.sessionKey + ":other" },
@@ -146,7 +146,8 @@ describe("publication SQLite materialization", () => {
         expect(db.isTransaction).toBe(false);
         expect(counter.rowCounts.defer).toBeGreaterThan(0);
         expect(counter.rowCounts.defer).toBeLessThanOrEqual(3);
-        expect(counter.textBytes.defer).toBeLessThan(512);
+        const authorityPostimageTextBudget = 2048;
+        expect(counter.textBytes.defer).toBeLessThan(authorityPostimageTextBudget);
       } finally {
         counter.restore();
         clock.mockRestore();

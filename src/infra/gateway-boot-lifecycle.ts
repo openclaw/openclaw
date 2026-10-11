@@ -2,38 +2,40 @@
 import { randomUUID } from "node:crypto";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import {
+  buildGatewayCrashLoopBreakerDecision,
+  inspectGatewayCrashLoopBreakerInDatabase,
+  maintenanceStartupReasons,
+} from "./gateway-boot-lifecycle.kernel.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
-import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
+import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 
-// Retain the released media-only tag while its bounded boot history expires.
-const maintenanceStartupReasons = [
-  GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON,
-  "gateway.agent_media_migration_required",
-];
+export {
+  GATEWAY_CRASH_LOOP_BREAKER_REASON,
+  GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+} from "./gateway-boot-lifecycle.kernel.js";
 
-// Supervisors usually restart immediately. Three unclean boots in this window
-// means the gateway should come up without auto-start sidecars so operators
-// can inspect a stable process instead of a flap.
-const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
-const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
 // Keep enough history for operator forensics while bounding lifecycle-segment
 // growth. Retention must comfortably exceed GATEWAY_BOOT_LOOP_WINDOW_MS.
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 export const GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS = 500;
-export const GATEWAY_CRASH_LOOP_BREAKER_REASON = "gateway.crash_loop_breaker";
-export const GATEWAY_CRASH_LOOP_RECOVERED_REASON = "gateway.crash_loop_recovered";
 export const GATEWAY_SIGNAL_REPEAT_WINDOW_MS = 5 * 60_000;
 
 export function formatGatewayRepeatedSignalHint(
@@ -78,13 +80,9 @@ export type GatewayBootLifecycleCompletion = {
   startupReason?: string;
 };
 
-export type GatewayCrashLoopBreakerDecision = {
-  tripped: boolean;
-  uncleanBoots: number;
-  windowMs: number;
-  shouldWriteStabilityBundle: boolean;
-  recovered: boolean;
-};
+export type GatewayCrashLoopBreakerDecision = ReturnType<
+  typeof buildGatewayCrashLoopBreakerDecision
+>;
 
 export function readGatewayLastShutdown(
   env: NodeJS.ProcessEnv = process.env,
@@ -121,86 +119,34 @@ export function readGatewayLastInstallationReplacement(env: NodeJS.ProcessEnv = 
   return { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs };
 }
 
-function buildGatewayCrashLoopBreakerDecision(params: {
-  uncleanBoots: number;
-  latestBreakerStartedAtMs?: number | null;
-  latestRecoveryStartedAtMs?: number | null;
-}): GatewayCrashLoopBreakerDecision {
-  const tripped = params.uncleanBoots >= GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD;
-  const hasUnrecoveredBreakerMarker =
-    typeof params.latestBreakerStartedAtMs === "number" &&
-    (typeof params.latestRecoveryStartedAtMs !== "number" ||
-      params.latestRecoveryStartedAtMs < params.latestBreakerStartedAtMs);
-  // Recovery waits until the unclean window drains. A clean safe-mode boot
-  // proves the control plane works, not that suppressed channel autostart is safe.
-  return {
-    tripped,
-    uncleanBoots: params.uncleanBoots,
-    windowMs: GATEWAY_BOOT_LOOP_WINDOW_MS,
-    shouldWriteStabilityBundle: tripped && !hasUnrecoveredBreakerMarker,
-    recovered: !tripped && hasUnrecoveredBreakerMarker,
-  };
-}
-
 export function inspectGatewayCrashLoopBreaker(
   env: NodeJS.ProcessEnv = process.env,
   nowMs = Date.now(),
 ): GatewayCrashLoopBreakerDecision {
   try {
     const { db } = openOpenClawStateDatabase({ env });
-    const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
-    const windowStartMs = nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS;
-    // Unclean means startup_failed by completion time, or an open boot row
-    // whose process disappeared. forced_stop is operator shutdown pressure,
-    // not a startup crash-loop signal.
-    const uncleanRow = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("gateway_boot_lifecycle")
-        .select((eb) => eb.fn.countAll<number>().as("count"))
-        .where((eb) =>
-          eb.or([
-            eb("startup_reason", "is", null),
-            eb("startup_reason", "not in", maintenanceStartupReasons),
-          ]),
-        )
-        .where((eb) =>
-          eb.or([
-            eb.and([eb("completed_at_ms", "is", null), eb("started_at_ms", ">=", windowStartMs)]),
-            eb.and([
-              eb("outcome", "=", "startup_failed"),
-              eb("completed_at_ms", ">=", windowStartMs),
-            ]),
-          ]),
-        ),
-    );
-    const latestBreaker = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("gateway_boot_lifecycle")
-        .select("started_at_ms as startedAtMs")
-        .where("startup_reason", "=", GATEWAY_CRASH_LOOP_BREAKER_REASON)
-        .orderBy("started_at_ms", "desc")
-        .limit(1),
-    );
-    const latestRecovery = executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom("gateway_boot_lifecycle")
-        .select("started_at_ms as startedAtMs")
-        .where("startup_reason", "=", GATEWAY_CRASH_LOOP_RECOVERED_REASON)
-        .orderBy("started_at_ms", "desc")
-        .limit(1),
-    );
-    return buildGatewayCrashLoopBreakerDecision({
-      uncleanBoots: uncleanRow?.count ?? 0,
-      latestBreakerStartedAtMs: latestBreaker?.startedAtMs,
-      latestRecoveryStartedAtMs: latestRecovery?.startedAtMs,
-    });
+    return inspectGatewayCrashLoopBreakerInDatabase(db, nowMs);
   } catch (err) {
     gatewayLifecycleLog.warn(`crash-loop breaker state unavailable; fail-open: ${String(err)}`);
     return buildGatewayCrashLoopBreakerDecision({ uncleanBoots: 0 });
   }
+}
+
+/** Runtime readers share the boot owner's decision without opening SQLite on the main thread. */
+export async function inspectGatewayCrashLoopBreakerAsync(
+  env: NodeJS.ProcessEnv = process.env,
+  nowMs = Date.now(),
+  signal?: AbortSignal,
+): Promise<GatewayCrashLoopBreakerDecision> {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "gatewayBoot.breaker", input: nowMs },
+    { signal, current: true },
+  );
+  if (reply && (!reply.ok || reply.type !== "gatewayBoot.breaker")) {
+    throw new Error("Unexpected Gateway crash-loop breaker result");
+  }
+  return reply?.decision ?? buildGatewayCrashLoopBreakerDecision({ uncleanBoots: 0 });
 }
 
 export function recordGatewayBootStart(
@@ -246,45 +192,25 @@ export function recordGatewayBootStart(
  * open row makes a process death during recovered channel startup count toward
  * the next breaker decision instead of aging out with the original boot.
  */
-export function recordGatewayCrashLoopRecovery(
+export async function recordGatewayCrashLoopRecovery(
   bootId: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
-  nowMs = Date.now(),
-): string | undefined {
-  const recoveredBootId = randomUUID();
+  nowMs?: number,
+  assertCurrent?: () => void,
+): Promise<string | undefined> {
   try {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
-        if (bootId) {
-          executeSqliteQuerySync(
-            db,
-            kysely
-              .updateTable("gateway_boot_lifecycle")
-              .set({
-                completed_at_ms: nowMs,
-                outcome: "safe_mode_stable",
-                reason: null,
-              })
-              .where("boot_id", "=", bootId),
-          );
-        }
-        executeSqliteQuerySync(
-          db,
-          kysely.insertInto("gateway_boot_lifecycle").values({
-            boot_id: recoveredBootId,
-            pid: process.pid,
-            started_at_ms: nowMs,
-            completed_at_ms: null,
-            outcome: null,
-            startup_reason: GATEWAY_CRASH_LOOP_RECOVERED_REASON,
-            reason: null,
-          }),
-        );
+    const context = captureOpenClawStateWorkerContext({ env });
+    return await runOpenClawStateWorkerOperation(
+      context,
+      (scope) => scope.execute({ type: "gatewayBoot.recover", input: { bootId, nowMs } }),
+      {
+        assertCurrent,
+        createAdmission: createSqliteWorkerWriteAdmission(() => {
+          context.admission.assertCurrent();
+          assertCurrent?.();
+        }, [context.admission.databasePath]),
       },
-      { env },
     );
-    return recoveredBootId;
   } catch (err) {
     gatewayLifecycleLog.warn(
       `failed to persist gateway crash-loop recovery; fail-safe: ${String(err)}`,

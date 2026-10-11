@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -22,11 +23,16 @@ import {
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 
+vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
+}));
+
 function observeNativeIo(filename: string) {
   const original = fs.statSync(filename);
   const readSync = fs.readSync;
   const readFileSync = fs.readFileSync;
-  const copyFileSync = fs.copyFileSync;
+  const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+  const createBatch = fsSafeAdvanced.createRootFileCopyBatchSync;
   const writeSync = fs.writeSync;
   const empty = () => ({ originalBytes: 0, capturedBytes: 0, wholeFileReads: 0, largestBuffer: 0 });
   let current: ReturnType<typeof empty> | undefined;
@@ -35,6 +41,12 @@ function observeNativeIo(filename: string) {
     if (current && stat.size === original.size) {
       copies.add(`${stat.dev}:${stat.ino}`);
     }
+  };
+  const recordCopiedFile = (copied: ReturnType<typeof fsSafeAdvanced.copyRootFileSync>) => {
+    if (current) {
+      recordCopy(fs.fstatSync(copied.fd));
+    }
+    return copied;
   };
   const spies = [
     vi.spyOn(fs, "readSync").mockImplementation((...args) => {
@@ -59,11 +71,15 @@ function observeNativeIo(filename: string) {
       }
       return result;
     }),
-    vi.spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
-      copyFileSync(from, to, mode);
-      if (current) {
-        recordCopy(fs.statSync(to));
-      }
+    vi
+      .spyOn(fsSafeAdvanced, "copyRootFileSync")
+      .mockImplementation((options) => recordCopiedFile(copyRootFileSync(options))),
+    vi.spyOn(fsSafeAdvanced, "createRootFileCopyBatchSync").mockImplementation(() => {
+      const batch = createBatch();
+      return {
+        ...batch,
+        copyFile: (options) => recordCopiedFile(batch.copyFile(options)),
+      };
     }),
     vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
       const length = Reflect.apply(writeSync, fs, args);

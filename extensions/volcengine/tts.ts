@@ -14,8 +14,6 @@ type VolcengineTTSParams = {
   appKey?: string;
   baseUrl?: string;
   speedRatio?: number;
-  volumeRatio?: number;
-  pitchRatio?: number;
   emotion?: string;
   encoding?: VolcengineTtsEncoding;
   timeoutMs?: number;
@@ -112,8 +110,6 @@ export async function volcengineTTS(params: VolcengineTTSParams): Promise<Buffer
     appKey = DEFAULT_SEED_TTS_APP_KEY,
     baseUrl = apiKey ? BYTEPLUS_SEED_TTS_URL : VOLCENGINE_LEGACY_TTS_URL,
     speedRatio = 1,
-    volumeRatio = 1,
-    pitchRatio = 1,
     emotion,
     encoding = "ogg_opus",
     timeoutMs = 30_000,
@@ -143,8 +139,8 @@ export async function volcengineTTS(params: VolcengineTTSParams): Promise<Buffer
           voice_type: voice,
           encoding,
           speed_ratio: speedRatio,
-          volume_ratio: volumeRatio,
-          pitch_ratio: pitchRatio,
+          volume_ratio: 1,
+          pitch_ratio: 1,
           ...(emotion ? { emotion } : {}),
         },
         request: {

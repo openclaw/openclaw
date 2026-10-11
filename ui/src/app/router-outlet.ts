@@ -70,15 +70,11 @@ function renderError(
     // Reload also resets failed browser imports and Vite stylesheet preloads.
     void scheduleStaleChunkReload();
   }
-  const revalidate = () => {
-    if (retryContext === undefined) {
-      return;
-    }
-    void router.revalidate(retryContext, routeId).catch(() => undefined);
-  };
   const handleRetry = (event: Event) => {
     if (!staleChunk) {
-      revalidate();
+      if (retryContext !== undefined) {
+        void router.revalidate(retryContext, routeId).catch(() => undefined);
+      }
       return;
     }
     // The Gateway may still be restarting or unreachable, so wait for it to answer

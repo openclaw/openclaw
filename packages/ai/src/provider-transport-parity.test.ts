@@ -40,12 +40,9 @@ vi.mock("openai", () => ({
               }
             },
           });
-          const iterable = createIterable();
-          return Object.assign(iterable, {
-            withResponse: async () => ({
-              data: createIterable(),
-              response: { status: 200, headers: new Headers({ "x-request-id": "req-parity" }) },
-            }),
+          return Object.assign(Promise.resolve(createIterable()), {
+            asResponse: async () =>
+              new Response(null, { status: 200, headers: { "x-request-id": "req-parity" } }),
           });
         },
       },
@@ -72,7 +69,8 @@ const openAiModel = {
   name: "GPT-5.5",
   api: "openai-completions",
   provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
+  // Managed official OpenAI reasoning tool turns use Responses; this covers the Chat wire.
+  baseUrl: "https://chat-proxy.example/v1",
   reasoning: true,
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

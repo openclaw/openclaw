@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { startMSTeamsQaBotFrameworkServer } from "./qa/bot-framework-server.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
+import type { MSTeamsCredentials } from "./token.js";
 
 const secretCredentials: MSTeamsCredentials = {
   type: "secret",
@@ -250,7 +250,7 @@ describe("createMSTeamsApp", () => {
   });
 
   it("creates app with federated certificate credentials", async () => {
-    const creds: MSTeamsFederatedCredentials = {
+    const creds: MSTeamsCredentials = {
       type: "federated",
       appId: "test-app-id",
       tenantId: "test-tenant",
@@ -301,7 +301,7 @@ describe("createMSTeamsApp", () => {
     const certificatePath = "/private/msteams-race-sensitive-certificate.pem";
     readSecretFile.mockRejectedValue(new Error(`ENOENT: no such file, open '${certificatePath}'`));
 
-    const creds: MSTeamsFederatedCredentials = {
+    const creds: MSTeamsCredentials = {
       type: "federated",
       appId: "test-app-id",
       tenantId: "test-tenant",
@@ -317,7 +317,7 @@ describe("createMSTeamsApp", () => {
   });
 
   it("creates app with user-assigned managed identity", async () => {
-    const creds: MSTeamsFederatedCredentials = {
+    const creds: MSTeamsCredentials = {
       type: "federated",
       appId: "test-app-id",
       tenantId: "test-tenant",
@@ -330,7 +330,7 @@ describe("createMSTeamsApp", () => {
   });
 
   it("throws when federated credentials lack certificate and managed identity", async () => {
-    const creds: MSTeamsFederatedCredentials = {
+    const creds: MSTeamsCredentials = {
       type: "federated",
       appId: "test-app-id",
       tenantId: "test-tenant",

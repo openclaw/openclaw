@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
+import type { GatewayServerOptions } from "../../gateway/server-public.js";
 import { createNewerSqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.js";
@@ -128,8 +129,12 @@ const bootLifecycle = vi.hoisted(() => ({
     (_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string): string | undefined => "boot-id",
   ),
   recover: vi.fn(
-    (_bootId?: string, _env?: NodeJS.ProcessEnv, _nowMs?: number): string | undefined =>
-      "recovered-boot-id",
+    async (
+      _bootId?: string,
+      _env?: NodeJS.ProcessEnv,
+      _nowMs?: number,
+      _assertCurrent?: () => void,
+    ): Promise<string | undefined> => "recovered-boot-id",
   ),
   complete: vi.fn(),
 }));
@@ -315,16 +320,23 @@ vi.mock("../../logging/diagnostic-stability-bundle.js", () => ({
     writeDiagnosticStabilityBundleForFailureSync(reason, error),
 }));
 
+// mock-isolation: Keep boot history and its database workers outside the CLI fixture.
 vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
   GATEWAY_CRASH_LOOP_BREAKER_REASON: "gateway.crash_loop_breaker",
   formatGatewayCrashLoopManualChannelStartHint: () => bootLifecycle.manualChannelStartHint,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON: "gateway.crash_loop_recovered",
   inspectGatewayCrashLoopBreaker: (env?: NodeJS.ProcessEnv, nowMs?: number) =>
     bootLifecycle.inspect(env, nowMs),
+  inspectGatewayCrashLoopBreakerAsync: async (env?: NodeJS.ProcessEnv, nowMs?: number) =>
+    bootLifecycle.inspect(env, nowMs),
   recordGatewayBootStart: (env?: NodeJS.ProcessEnv, nowMs?: number, reason?: string) =>
     bootLifecycle.record(env, nowMs, reason),
-  recordGatewayCrashLoopRecovery: (bootId?: string, env?: NodeJS.ProcessEnv, nowMs?: number) =>
-    bootLifecycle.recover(bootId, env, nowMs),
+  recordGatewayCrashLoopRecovery: (
+    bootId?: string,
+    env?: NodeJS.ProcessEnv,
+    nowMs?: number,
+    assertCurrent?: () => void,
+  ) => bootLifecycle.recover(bootId, env, nowMs, assertCurrent),
   completeGatewayBootLifecycle: (bootId: string | undefined, completion: unknown) =>
     bootLifecycle.complete(bootId, completion),
 }));
@@ -456,15 +468,7 @@ describe("gateway run option collisions", () => {
 
   function gatewayStartOptions(index = 0) {
     expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
-    return callArg(startGatewayServer, index, 1) as {
-      auth?: { mode?: string; token?: string; password?: string };
-      bind?: string;
-      channelAutostartSuppression?: { reason?: string; message?: string };
-      tryRecoverChannelAutostartSuppression?: () => boolean;
-      ambientEnvTriggers?: "allow" | "suppress";
-      startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
-      startupStartedAt?: number;
-    };
+    return callArg(startGatewayServer, index, 1) as GatewayServerOptions;
   }
 
   it("rejects invalid gateway ports before startup", async () => {
@@ -1283,7 +1287,7 @@ describe("gateway run option collisions", () => {
   });
 
   it("refreshes config and crash-loop state for each boot iteration", async () => {
-    let firstBootRecovery: (() => boolean) | undefined;
+    let firstBootRecovery: GatewayServerOptions["tryRecoverChannelAutostartSuppression"];
     bootLifecycle.record.mockReturnValueOnce("boot-1").mockReturnValueOnce("boot-2");
     runGatewayLoop.mockImplementationOnce(async ({ beginBoot, start }: GatewayLoopParams) => {
       await beginBoot?.(1000);
@@ -1339,7 +1343,9 @@ describe("gateway run option collisions", () => {
       shouldWriteStabilityBundle: false,
       recovered: true,
     });
-    expect(firstBootRecovery?.()).toBe(false);
+    await expect(firstBootRecovery?.(new AbortController().signal)).rejects.toThrow(
+      "replaced boot",
+    );
     expect(bootLifecycle.inspect).toHaveBeenCalledTimes(2);
     expect(bootLifecycle.recover).not.toHaveBeenCalled();
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
@@ -1400,47 +1406,6 @@ describe("gateway run option collisions", () => {
       expect(runtimeErrors.join("\n")).toContain(failure.message);
     },
   );
-
-  it("recovers channel autostart only after the full breaker window drains", async () => {
-    runGatewayLoop.mockImplementationOnce(async ({ beginBoot, start }: GatewayLoopParams) => {
-      await beginBoot?.(1000);
-      await start({ startupStartedAt: 1000 });
-    });
-    bootLifecycle.decisions.push({
-      tripped: true,
-      uncleanBoots: 3,
-      windowMs: 300_000,
-      shouldWriteStabilityBundle: false,
-      recovered: false,
-    });
-
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
-
-    const recover = gatewayStartOptions().tryRecoverChannelAutostartSuppression;
-    expect(recover).toBeTypeOf("function");
-    bootLifecycle.decisions.push(
-      {
-        tripped: false,
-        uncleanBoots: 1,
-        windowMs: 300_000,
-        shouldWriteStabilityBundle: false,
-        recovered: true,
-      },
-      {
-        tripped: false,
-        uncleanBoots: 0,
-        windowMs: 300_000,
-        shouldWriteStabilityBundle: false,
-        recovered: true,
-      },
-    );
-
-    expect(recover?.()).toBe(false);
-    expect(bootLifecycle.recover).not.toHaveBeenCalled();
-    expect(recover?.()).toBe(true);
-    expect(bootLifecycle.recover).toHaveBeenCalledWith("boot-id", process.env, undefined);
-    expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
-  });
 
   it("retains the actual legacy-session refusal without triage on restart", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-legacy-refusal-"));

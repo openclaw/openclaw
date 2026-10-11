@@ -43,9 +43,9 @@ import {
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
-  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   readResponseTextSnippet,
   resolveModelHeaderSentinels,
+  streamFragmentError,
 } from "./transport-utils.js";
 
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -152,10 +152,7 @@ function parseAnthropicSseEventData(data: string): Record<string, unknown> {
   try {
     return JSON.parse(data) as Record<string, unknown>;
   } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause: error });
-    }
-    throw error;
+    throw streamFragmentError(error);
   }
 }
 

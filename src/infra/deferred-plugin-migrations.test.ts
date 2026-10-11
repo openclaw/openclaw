@@ -24,6 +24,7 @@ import {
   assertDeferredPluginMigrationsCurrent,
   readDeferredPluginMigrationCompletions,
   readDeferredPluginMigrations,
+  readDeferredPluginMigrationsAsync,
   recordDeferredPluginMigrations,
   formatDeferredPluginMigration,
   withDeferredPluginMigrationsCurrent,
@@ -33,6 +34,7 @@ import * as kyselyCache from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
 
 const log = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
@@ -92,6 +94,31 @@ describe("deferred configured-plugin migrations", () => {
     );
   }
 
+  it.each([undefined, false])(
+    "keeps async inspection on its captured snapshot (preserve artifacts: %s)",
+    async (artifactPreservingReadOnly) => {
+      const { env } = fixture();
+      writePending(env, pending);
+      await closeOpenClawStateDatabaseAsync();
+      using writer = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+      const changed = { ...pending, reason: "Committed after the inspection snapshot" };
+      await withOpenClawStateDatabaseReadSnapshot(
+        async () => {
+          writer
+            .prepare("UPDATE migration_runs SET report_json = ? WHERE id = ?")
+            .run(JSON.stringify(changed), `deferred-plugin-migration:${pending.pluginId}`);
+          expect(
+            await readDeferredPluginMigrationsAsync({ env, artifactPreservingReadOnly }),
+          ).toEqual([pending]);
+        },
+        { env },
+      );
+      expect(await readDeferredPluginMigrationsAsync({ env, artifactPreservingReadOnly })).toEqual([
+        changed,
+      ]);
+    },
+  );
+
   it.each(["transaction", "commit"] as const)(
     "rolls back deferred obligations when the requester is revoked at worker %s admission",
     async (stage) => {
@@ -110,22 +137,17 @@ describe("deferred configured-plugin migrations", () => {
             },
           },
           async () => {
-            const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-            const spy = vi
-              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-              .mockImplementation((admit, attachment) =>
-                createAdmission((request, grant) => {
-                  if (
-                    request.stage === stage &&
-                    isRecord(request.facts) &&
-                    request.facts.kind === "state-lease"
-                  ) {
-                    observed = true;
-                    current = false;
-                  }
-                  return admit(request, grant);
-                }, attachment),
-              );
+            const spy = probe.admission(workerAdmission, (request, grant, admit) => {
+              if (
+                request.stage === stage &&
+                isRecord(request.facts) &&
+                request.facts.kind === "state-lease"
+              ) {
+                observed = true;
+                current = false;
+              }
+              return admit(request, grant);
+            });
             try {
               await recordDeferredPluginMigrations({ env, pending: [pending] });
             } finally {

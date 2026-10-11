@@ -184,7 +184,9 @@ export class AcpTranslatorSessionUpdates {
     kind: "prompt" | "update",
     mutation: () => Promise<void>,
   ): Promise<void> {
-    return this.enqueueLedgerMutation(resolveLedgerSessionId(session), async () => {
+    const ledgerSessionId = resolveLedgerSessionId(session);
+    const previous = this.ledgerMutationTails.get(ledgerSessionId) ?? Promise.resolve();
+    const pending = previous.then(async () => {
       if (this.stopped) {
         return;
       }
@@ -197,14 +199,6 @@ export class AcpTranslatorSessionUpdates {
         await this.markLedgerIncomplete(session);
       }
     });
-  }
-
-  private enqueueLedgerMutation(
-    ledgerSessionId: string,
-    mutation: () => Promise<void>,
-  ): Promise<void> {
-    const previous = this.ledgerMutationTails.get(ledgerSessionId) ?? Promise.resolve();
-    const pending = previous.then(mutation, mutation);
     const tail = pending.catch(() => {});
     this.ledgerMutationTails.set(ledgerSessionId, tail);
     void tail.then(() => {

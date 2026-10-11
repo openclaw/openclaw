@@ -8,6 +8,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import { buildRemoteCommand } from "../../agents/sandbox/remote-shell-command.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveEnvironmentValue } from "../../infra/process-env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -92,13 +93,12 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   const restartRestrictions = createRestrictions();
   const commitRestrictions = createRestrictions();
   const committedTerminalConfig = () => appliedConfigWhileRestartPending ?? activeConfig;
-  const resolveForConfig = (config: OpenClawConfig, agentId?: string, shellConfig = config) => {
-    return resolveTerminalLaunch({
+  const resolveForConfig = (config: OpenClawConfig, agentId?: string, shellConfig = config) =>
+    resolveTerminalLaunch({
       config,
       agentId,
       configuredShell: shellConfig.gateway?.terminal?.shell,
     });
-  };
   const accumulateRestrictions = (
     config: OpenClawConfig,
     restrictions: ReturnType<typeof createRestrictions>,
@@ -136,13 +136,11 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       if (!active.ok) {
         return active;
       }
-      const pendingBlock = restartRestrictions.blockedAgents.get(active.plan.agentId);
-      if (pendingBlock) {
-        return { ok: false, block: pendingBlock };
-      }
-      const preparedBlock = commitRestrictions.blockedAgents.get(active.plan.agentId);
-      if (preparedBlock) {
-        return { ok: false, block: preparedBlock };
+      const block =
+        restartRestrictions.blockedAgents.get(active.plan.agentId) ??
+        commitRestrictions.blockedAgents.get(active.plan.agentId);
+      if (block) {
+        return { ok: false, block };
       }
       const candidateConfig = preparedConfig ?? appliedConfigWhileRestartPending;
       if (candidateConfig) {
@@ -167,24 +165,20 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       accumulateRestrictions(preparedConfig, commitRestrictions);
     },
     commitConfig: () => {
-      if (hasPendingRestart) {
+      if (preparedConfig) {
         // The applied marker separates runtime truth from a later candidate
         // that may fail before publication while this restart remains pending.
-        if (preparedConfig) {
+        if (hasPendingRestart) {
           appliedConfigWhileRestartPending = preparedConfig;
+        } else {
+          activeConfig = preparedConfig;
         }
-        preparedConfig = null;
-        clearRestrictions(commitRestrictions);
-        if (appliedConfigWhileRestartPending) {
-          accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
-        }
-        return;
-      }
-      if (preparedConfig) {
-        activeConfig = preparedConfig;
       }
       preparedConfig = null;
       clearRestrictions(commitRestrictions);
+      if (hasPendingRestart && appliedConfigWhileRestartPending) {
+        accumulateRestrictions(appliedConfigWhileRestartPending, commitRestrictions);
+      }
     },
     acceptConfig: (options) => {
       // Baseline acceptance retires an un-published candidate, including config
@@ -228,10 +222,6 @@ export function buildTerminalEnv(
   return env;
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
 /** Converts a policy-approved plan into the exact local PTY spawn. */
 export function resolveTerminalSpawnPlan(
   plan: TerminalLaunchPlan,
@@ -240,23 +230,16 @@ export function resolveTerminalSpawnPlan(
   const env = options.env ?? process.env;
   const cwd = existingDirOrHome(plan.cwdOverride ?? plan.cwd, env);
   const command = plan.initialCommand;
-  if (!command || command.length === 0) {
-    return { agentId: plan.agentId, shell: plan.shell, args: plan.args, cwd };
+  let { shell, args } = plan;
+  if (command?.length) {
+    if ((options.platform ?? process.platform) === "win32") {
+      shell = command[0] ?? shell;
+      args = command.slice(1);
+    } else {
+      args = ["-il", "-c", buildRemoteCommand(command)];
+    }
   }
-  if ((options.platform ?? process.platform) === "win32") {
-    return {
-      agentId: plan.agentId,
-      shell: command[0] ?? plan.shell,
-      args: command.slice(1),
-      cwd,
-    };
-  }
-  return {
-    agentId: plan.agentId,
-    shell: plan.shell,
-    args: ["-il", "-c", command.map(shellQuote).join(" ")],
-    cwd,
-  };
+  return { agentId: plan.agentId, shell, args, cwd };
 }
 
 // A workspace dir that has not been created yet would make the PTY spawn fail;

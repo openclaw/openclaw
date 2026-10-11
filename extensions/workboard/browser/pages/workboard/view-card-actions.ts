@@ -28,6 +28,7 @@ import {
   cardHasUnresolvedStartedRun,
   engineBlockedByRuntime,
   formatStatusLabel,
+  workboardMutationContext,
   type WorkboardProps,
 } from "./view-helpers.ts";
 
@@ -49,12 +50,10 @@ export async function moveCardToStatus(
     return;
   }
   await moveWorkboardCard({
-    host: props.host,
-    client: props.client,
+    ...workboardMutationContext(props),
     cardId: card.id,
     status,
     position: nextWorkboardCardPosition(state.cards, card, status),
-    requestUpdate: props.onRequestUpdate,
   });
 }
 
@@ -213,11 +212,9 @@ export function renderArchiveCardAction(
     disabled: busy,
     onClick: () => {
       void archiveWorkboardCard({
-        host: props.host,
-        client: props.client,
+        ...workboardMutationContext(props),
         cardId: card.id,
         archived: !archived,
-        requestUpdate: props.onRequestUpdate,
       });
     },
   });
@@ -254,11 +251,9 @@ export function renderStopCardAction(props: WorkboardProps, card: WorkboardCard,
     disabled: busy || !props.connected,
     onClick: () => {
       void stopWorkboardCard({
-        host: props.host,
-        client: props.client,
+        ...workboardMutationContext(props),
         card,
         session: getCardActionState(props, card).sessionTarget,
-        requestUpdate: props.onRequestUpdate,
       });
     },
   });
@@ -277,12 +272,7 @@ export function renderDeleteCardAction(
     className: "workboard-card__delete",
     disabled: busy,
     onClick: () => {
-      void deleteWorkboardCard({
-        host: props.host,
-        client: props.client,
-        cardId: card.id,
-        requestUpdate: props.onRequestUpdate,
-      });
+      void deleteWorkboardCard({ ...workboardMutationContext(props), cardId: card.id });
     },
   });
 }
@@ -314,12 +304,10 @@ export function renderStartExecutionButton(
       ?disabled=${disabled}
       @click=${async () => {
         const key = await startWorkboardCard({
-          host: props.host,
-          client: props.client,
+          ...workboardMutationContext(props),
           card,
           ...(engine ? { engine } : {}),
           mode,
-          requestUpdate: props.onRequestUpdate,
         });
         if (key) {
           props.onOpenSession({ sessionKey: key });

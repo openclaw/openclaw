@@ -15,6 +15,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { type ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
@@ -53,6 +54,38 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
 }
 
 describe("native UI roster refresh", () => {
+  it("forwards dock conversation creation through the host to the Gateway", async () => {
+    const key = "agent:main:board-agent";
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return { key, entry: { sessionId: "board-agent", createdSurface: "plugin-dock" } };
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 1);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = createTestGatewayClient(request);
+    const fixture = createRosterHost(client.request.bind(client));
+    onTestFinished(fixture.dispose);
+    await expect(
+      fixture.host.sessions.create({
+        agentId: "main",
+        displayName: "Board agent",
+        surface: "plugin-dock",
+      }),
+    ).resolves.toBe(key);
+    expect(request).toHaveBeenCalledWith("sessions.create", {
+      agentId: "main",
+      displayName: "Board agent",
+      surface: "plugin-dock",
+    });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ excludeDock: true }),
+    );
+  });
+
   it("observes independent session windows without replacing or exposing the application roster", async () => {
     const primary = sessionsResult(
       [{ key: "agent:main:current", kind: "direct", updatedAt: 1 }],
@@ -109,6 +142,7 @@ describe("native UI roster refresh", () => {
         source: "chat-pane",
         includeGlobal: true,
         includeUnknown: true,
+        excludeDock: true,
         configuredAgentsOnly: false,
         limit: 1,
         archived: "all",

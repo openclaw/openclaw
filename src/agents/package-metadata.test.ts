@@ -50,8 +50,6 @@ const snapshotScript = String.raw`
     return {
       appName: metadata.APP_NAME,
       configDir: metadata.CONFIG_DIR_NAME,
-      version: metadata.PACKAGE_MANIFEST_VERSION,
-      isBunBinary: metadata.isBunBinary,
       paths,
       contents: [
         readFileSync(paths[0], "utf8"),
@@ -126,8 +124,6 @@ describe("package metadata", () => {
         const captured = {
           appName: "fixture-claw",
           configDir: ".fixture-claw",
-          version: "7.8.9-custom",
-          isBunBinary: false,
         };
         expect(result).toEqual({
           before: { ...captured, ...expectedAssets(packageDir) },
@@ -151,8 +147,6 @@ describe("package metadata", () => {
       expect(result).toEqual({
         appName: "openclaw",
         configDir: ".openclaw",
-        version: "0.0.0",
-        isBunBinary: false,
         ...expectedAssets(packageDir),
       });
     }));
@@ -191,7 +185,7 @@ describe("package metadata", () => {
   );
 
   it.each(["2026.9.14-worker", ""])(
-    "preserves the worker version binding %j and manifest fallback",
+    "uses worker metadata defaults for %j and preserves manifest fallback",
     (workerVersion) =>
       fixtures.run(async () => {
         const root = fixtures.createTempDir("openclaw-worker-package-metadata-");
@@ -211,8 +205,6 @@ describe("package metadata", () => {
         expect(result).toEqual({
           appName: workerVersion ? "openclaw" : "package-claw",
           configDir: workerVersion ? ".openclaw" : ".package-claw",
-          version: workerVersion || "4.5.6",
-          isBunBinary: false,
           ...expectedAssets(root),
         });
       }),

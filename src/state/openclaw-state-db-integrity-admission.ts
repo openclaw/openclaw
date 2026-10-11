@@ -12,6 +12,8 @@ const bindings = resolveGlobalSingleton(
   () => new WeakMap<DatabaseSync, { revision: SharedArrayBuffer; release(): void }>(),
 );
 
+export type OpenClawStateIntegrityPolicy = "verify" | "require-proof";
+
 function invalidate(revision: BigInt64Array): void {
   let previous = Atomics.load(revision, 0);
   while (previous >= 0n) {
@@ -59,6 +61,7 @@ export function assertOpenClawStateRuntimeIntegrity(
   pathname: string,
   schema: { schemaVersion: number; userVersion: number },
   admission?: OpenClawStateIntegrityAdmission,
+  policy: OpenClawStateIntegrityPolicy = "verify",
 ): (() => void) | undefined {
   const identity = admission && readTrackedStateDatabaseIdentity(database);
   if (
@@ -68,6 +71,9 @@ export function assertOpenClawStateRuntimeIntegrity(
     identity.key !== admission.identity.key ||
     identity.birthtime !== admission.identity.birthtime
   ) {
+    if (policy === "require-proof") {
+      throw new Error("Shared-state reader requires current worker integrity proof");
+    }
     assertSqliteIntegrity(database, pathname);
     return undefined;
   }
@@ -84,6 +90,9 @@ export function assertOpenClawStateRuntimeIntegrity(
       return undefined;
     }
     invalidate(revision);
+  }
+  if (policy === "require-proof") {
+    throw new Error("Shared-state reader requires current worker integrity proof");
   }
   assertSqliteIntegrity(database, pathname);
   const publish = () => {

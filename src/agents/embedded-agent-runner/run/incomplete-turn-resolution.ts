@@ -65,17 +65,6 @@ type TerminalAuthFailureContext = {
  * not produce a safe final assistant response and no committed delivery/progress
  * already completed the task.
  */
-/**
- * A `canDeliverSourceReply` tool wrote the final reply, which the host delivers. The
- * source-reply delivery state still reads "missing" until that send happens, so this
- * evidence must be checked directly.
- */
-function hasToolAuthoredSourceReply(attempt: IncompleteTurnAttempt): boolean {
-  return (attempt.messagingToolSourceReplyPayloads ?? []).some(
-    (payload) => payload.toolAuthored === true,
-  );
-}
-
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -102,6 +91,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   // so that incomplete-turn stall detection fires below. (#89787, #91953)
   const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
+    params.attempt.keptAnswer === undefined &&
     !assistantState.visibleText.length &&
     !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
@@ -115,20 +105,15 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
-    params.hasIntentionalTerminalCompletion
-  ) {
-    return null;
-  }
-
-  if (
+    params.hasIntentionalTerminalCompletion ||
     params.attempt.hasToolMediaBlockReply ||
     resolveSourceReplyDelivery(params.attempt) !== "missing" ||
-    hasToolAuthoredSourceReply(params.attempt)
+    // A tool-authored final reply awaits host delivery, so its delivery state is still missing.
+    params.attempt.messagingToolSourceReplyPayloads?.some(
+      (payload) => payload.toolAuthored === true,
+    ) ||
+    hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)
   ) {
-    return null;
-  }
-
-  if (hasCompletionMessageSessionSpawn(params.attempt.acceptedSessionSpawns)) {
     return null;
   }
 
@@ -205,7 +190,12 @@ export function resolveIncompleteTurnPayloadText(params: {
       }),
     });
   }
-  return promptFailureText ?? "⚠️ Agent couldn't generate a response. Please try again.";
+  return (
+    promptFailureText ??
+    (stopReason === "length"
+      ? "⚠️ The model reached its output token limit before generating an answer. Please try again."
+      : "⚠️ Agent couldn't generate a response. Please try again.")
+  );
 }
 
 /**

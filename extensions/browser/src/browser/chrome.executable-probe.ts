@@ -31,7 +31,6 @@ export function execBrowserProbe(
   }
 }
 
-/** Read a browser executable version from platform metadata or a command-line probe. */
 export function readBrowserVersion(executablePath: string): string | null {
   if (process.platform === "darwin") {
     const bundleVersion = readMacBundleBrowserVersion(executablePath);
@@ -50,7 +49,7 @@ export function readBrowserVersion(executablePath: string): string | null {
   if (!output) {
     return null;
   }
-  return output.replace(/\s+/g, " ").trim();
+  return output.replace(/\s+/g, " ");
 }
 
 function readMacBundleBrowserVersion(executablePath: string): string | null {
@@ -99,7 +98,7 @@ function readWindowsBrowserVersion(executablePath: string): string | null {
     { OPENCLAW_BROWSER_EXECUTABLE_PATH: executablePath },
   );
   if (metadataVersion) {
-    return metadataVersion.replace(/\s+/g, " ").trim();
+    return metadataVersion.replace(/\s+/g, " ");
   }
 
   // Standard Chromium installers also keep a versioned child directory. Only
@@ -123,7 +122,6 @@ function resolveMacAppBundlePath(executablePath: string): string | null {
   return parts.slice(0, appIndex + 1).join(path.sep) || path.sep;
 }
 
-/** Parse a major browser version from a raw version string. */
 export function parseBrowserMajorVersion(rawVersion: string | null | undefined): number | null {
   const matches = [...(rawVersion ?? "").matchAll(CHROME_VERSION_RE)];
   const match = matches.at(-1);

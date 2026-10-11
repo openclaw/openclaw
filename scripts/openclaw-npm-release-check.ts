@@ -66,9 +66,6 @@ type ReleaseCheckCommandInvocation = {
   windowsVerbatimArguments?: boolean;
 };
 
-function normalizePackedPath(packedPath: string): string {
-  return packedPath.replace(/\\/g, "/");
-}
 function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
   const parent = segments[index - 1];
   if (parent === "node_modules") {
@@ -78,7 +75,7 @@ function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
 }
 
 function pathContainsPackedTestCargo(packedPath: string): boolean {
-  const normalizedPath = normalizePackedPath(packedPath);
+  const normalizedPath = packedPath.replace(/\\/g, "/");
   // Root docs ship Markdown reference material; topic directories such as
   // "test" are not runtime test cargo. Dependency fixtures remain disallowed.
   if (normalizedPath.startsWith("docs/") && normalizedPath.endsWith(".md")) {
@@ -106,10 +103,6 @@ function normalizeRepoUrl(value: unknown): string {
     .replace(/^git\+/, "")
     .replace(/\.git$/i, "")
     .replace(/\/+$/, "");
-}
-
-function isLocalDependencySpec(value: string | undefined): boolean {
-  return /^(?:file|link|workspace):/u.test(value ?? "");
 }
 
 function shouldSkipPackedTarballValidation(env = process.env): boolean {
@@ -189,7 +182,7 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
       `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
   }
-  if (isLocalDependencySpec(pkg.dependencies?.[FS_SAFE_PACKAGE])) {
+  if (/^(?:file|link|workspace):/u.test(pkg.dependencies?.[FS_SAFE_PACKAGE] ?? "")) {
     errors.push(
       `package.json dependencies["${FS_SAFE_PACKAGE}"] must use a published semver range before npm release; found "${pkg.dependencies?.[FS_SAFE_PACKAGE]}".`,
     );
@@ -274,10 +267,6 @@ export function collectReleaseTagErrors(params: {
   return errors;
 }
 
-function loadPackageJson(): PackageJson {
-  return JSON.parse(readFileSync("package.json", "utf8")) as PackageJson;
-}
-
 function isNpmExecPath(value: string): boolean {
   return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(portableBasename(value).toLowerCase());
 }
@@ -334,15 +323,6 @@ export function resolveNpmCommandInvocation(
   }
 
   return { command: "npm", args: npmArgs };
-}
-
-function runNpmCommand(args: string[]): string {
-  const invocation = resolveNpmCommandInvocation({ npmArgs: args });
-  return runNpmReleaseCheckCommand(invocation, {
-    encoding: "utf8",
-    maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
 }
 
 export type NpmPackResult = {
@@ -447,7 +427,10 @@ function collectPackedTarballErrors(): string[] {
   const errors: string[] = [];
   let stdout;
   try {
-    stdout = runNpmCommand(["pack", "--json", "--dry-run", "--ignore-scripts"]);
+    stdout = runNpmReleaseCheckCommand(
+      resolveNpmCommandInvocation({ npmArgs: ["pack", "--json", "--dry-run", "--ignore-scripts"] }),
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
   } catch (error) {
     const message = describeExecFailure(error);
     errors.push(
@@ -547,7 +530,7 @@ export function collectPackedTestCargoErrors(paths: Iterable<string>): string[] 
 }
 
 async function main(): Promise<number> {
-  const pkg = loadPackageJson();
+  const pkg = JSON.parse(readFileSync("package.json", "utf8")) as PackageJson;
   const skipPackValidation = shouldSkipPackedTarballValidation();
   const metadataErrors = collectReleasePackageMetadataErrors(pkg);
   const tagErrors = collectReleaseTagErrors({

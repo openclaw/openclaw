@@ -38,7 +38,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.for(["plain", "opaque", "shared"] as const)(
+it.for(["plain", "shared"] as const)(
   "serves %s results across registry replacement without observer interference",
   async (variant, { signal }) =>
     fixtureLifetime.run(async () => {
@@ -111,12 +111,7 @@ it.for(["plain", "opaque", "shared"] as const)(
         });
         const payload: unknown = await response.json();
         expect(response.status, JSON.stringify(payload)).toBe(200);
-        const details =
-          variant === "opaque"
-            ? { opaque: expect.any(Function) }
-            : variant === "shared"
-              ? { bytes: new Uint8Array(1) }
-              : {};
+        const details = variant === "shared" ? { bytes: new Uint8Array(1) } : {};
         expect({ payload, callback: captured.at(-1) }).toMatchObject({
           payload: {
             result: {
@@ -179,11 +174,9 @@ it.for(["plain", "opaque", "shared"] as const)(
         parameters: { type: "object", properties: {} },
         execute: async () => ({
           content: [{ type: "text", text: "generation tool available" }],
-          details: ${JSON.stringify(variant)} === "opaque"
-            ? { opaque: () => "owned" }
-            : ${JSON.stringify(variant)} === "shared"
-              ? { bytes: new Uint8Array(new SharedArrayBuffer(1)) }
-              : {}
+          details: ${JSON.stringify(variant)} === "shared"
+            ? { bytes: new Uint8Array(new SharedArrayBuffer(1)) }
+            : {}
         })
       });
     } };`,

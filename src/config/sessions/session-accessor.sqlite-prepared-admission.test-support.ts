@@ -10,6 +10,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 
 export function holdReclamationAdmission(databasePath: string) {
@@ -254,7 +255,7 @@ export function observePreparedWorkerAdmission({
   let heldWorker: Worker | undefined;
   let heldCompleted = false;
   hooks.worker = (worker, owner) => {
-    if (owner === "reclamation") {
+    if (owner !== "other") {
       workers.push(worker);
     }
   };
@@ -291,6 +292,7 @@ export function observePreparedWorkerAdmission({
     async expectHealthy(expected: Record<PreparedIntegrityOwner, number>) {
       expectParentHealthy();
       await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      await closeOpenClawStateDatabaseAsync();
       expect(checking).toEqual(expected);
       expect(checked).toEqual(expected);
       expect(Atomics.load(new Int32Array(counts), 0)).toBe(

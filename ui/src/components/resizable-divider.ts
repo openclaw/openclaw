@@ -216,10 +216,6 @@ class ResizableDivider extends OpenClawLitElement {
       this.flushPointerMove();
       this.emitResize(this.dragRatio, "resize-end");
     }
-    this.stopDragging();
-  };
-
-  private stopDragging() {
     const pointerId = this.activePointerId;
     if (pointerId === null) {
       return;
@@ -245,7 +241,7 @@ class ResizableDivider extends OpenClawLitElement {
     for (const type of DRAG_END_EVENTS) {
       window.removeEventListener(type, this.finishDragging);
     }
-  }
+  };
 
   private emitResize(nextRatio: number, type: "resize" | "resize-end" = "resize") {
     const splitRatio = this.clampRatio(nextRatio);
@@ -273,17 +269,13 @@ class ResizableDivider extends OpenClawLitElement {
     }
     const previousBounds = this.previousElementSibling?.getBoundingClientRect();
     const nextBounds = this.nextElementSibling?.getBoundingClientRect();
-    const siblingSize =
-      this.orientation === "horizontal"
-        ? (previousBounds?.height ?? 0) + (nextBounds?.height ?? 0)
-        : (previousBounds?.width ?? 0) + (nextBounds?.width ?? 0);
+    const dimension = this.orientation === "horizontal" ? "height" : "width";
+    const siblingSize = (previousBounds?.[dimension] ?? 0) + (nextBounds?.[dimension] ?? 0);
     if (siblingSize > 0) {
       return siblingSize;
     }
     const containerBounds = this.parentElement?.getBoundingClientRect();
-    return this.orientation === "horizontal"
-      ? (containerBounds?.height ?? 0)
-      : (containerBounds?.width ?? 0);
+    return containerBounds?.[dimension] ?? 0;
   }
 
   private currentRatio() {

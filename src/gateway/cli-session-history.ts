@@ -16,6 +16,7 @@ import {
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
 } from "../sessions/transcript-anchor-page.js";
+import { createTranscriptDisplaySource } from "../sessions/transcript-display-position.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
   dropPreSessionStartAnnouncePairs,
@@ -259,9 +260,17 @@ export async function prepareCliSessionHistoryReader(
     indexes.set(identity, cached);
   }
   const index = cached.index;
+  const indexCursorSource = createTranscriptDisplaySource([key]);
+  // Set once this request reads a closed reset interval or archive through the
+  // canonical anchor reader. Every row on that page, including rows retained into
+  // the current window, then keeps its canonical sequence.
+  let canonicalAnchorPage = false;
   const sequence = (message: unknown) => {
     const id = readChatHistoryMessageId(message);
     const seq = readChatHistoryMessageSeq(message);
+    if (canonicalAnchorPage) {
+      return seq;
+    }
     const ordinal = id
       ? index.ordinal(id)
       : seq === undefined
@@ -383,8 +392,9 @@ export async function prepareCliSessionHistoryReader(
     },
     sequence,
     applyPagination(historyPage: ChatHistoryPage) {
-      if (historyPage.pagination) {
-        historyPage.pagination.messageSequences = Object.fromEntries(
+      const pagination = historyPage.pagination ?? historyPage.anchor;
+      if (pagination) {
+        pagination.messageSequences = Object.fromEntries(
           historyPage.messages.flatMap((message) => {
             const id = readChatHistoryPaginationKey(message);
             const seq = sequence(message);
@@ -404,22 +414,30 @@ export async function prepareCliSessionHistoryReader(
         options: SessionTranscriptPageOptions,
       ) => page(options),
       readSessionMessagesAroundIdWithStatsAsync: async (
-        _scope: Parameters<Readers["readSessionMessagesPageWithStatsAsync"]>[0],
+        anchorScope: Parameters<Readers["readSessionMessagesAroundIdWithStatsAsync"]>[0],
         options: Parameters<Readers["readSessionMessagesAroundIdWithStatsAsync"]>[1],
       ) => {
         const ordinal = index.ordinal(options.messageId);
-        const range =
-          ordinal === undefined
-            ? undefined
-            : resolveHistoryAnchorPageRange(index.count, ordinal, options);
+        // The index covers only the latest reset window, and reset clears CLI bindings.
+        // Closed reset intervals and archives keep the canonical anchor contract; rows
+        // indexed here stay subject to merge and display filtering. Cursors stay on the
+        // source that issued them, because a closed interval shares its retained rows
+        // and closing reset marker with the index.
+        if (
+          ordinal === undefined ||
+          canonicalAnchorPage ||
+          (params.pageCursor !== undefined && params.pageCursor.source !== indexCursorSource)
+        ) {
+          canonicalAnchorPage = true;
+          return await readers.readSessionMessagesAroundIdWithStatsAsync(anchorScope, options);
+        }
+        const range = resolveHistoryAnchorPageRange(index.count, ordinal, options);
         return {
-          messages: range
-            ? await readRange(range.readStart, range.endExclusive, options.maxBytes)
-            : [],
+          messages: await readRange(range.readStart, range.endExclusive, options.maxBytes),
           totalMessages: index.count,
-          found: Boolean(range),
-          offset: range?.offset ?? 0,
-          hasOverreadContext: range?.hasOverreadContext ?? false,
+          found: true,
+          offset: range.offset,
+          hasOverreadContext: range.hasOverreadContext,
           displaySource: key,
         };
       },

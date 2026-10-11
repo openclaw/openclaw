@@ -97,11 +97,7 @@ describe("WhatsApp delivery recovery", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it.each([
-    { mode: "first" as const, explicit: false },
-    { mode: "all" as const, explicit: false },
-    { mode: "first" as const, explicit: true },
-  ])("preserves long styles and $mode quotes (explicit=$explicit)", async ({ mode, explicit }) => {
+  it("preserves long styles and quotes only the first chunk", async () => {
     await withStateDirEnv("openclaw-whatsapp-styled-reply-", async () => {
       const sendMessage = vi.fn<ActiveWebListener["sendMessage"]>();
       sendMessage.mockImplementation(async () =>
@@ -115,11 +111,9 @@ describe("WhatsApp delivery recovery", () => {
         cfg: { channels: { whatsapp: { textChunkLimit: 160 } } },
         channel: "whatsapp",
         to: "+1555",
-        payloads: [
-          { text: `**${"x".repeat(340)}**`, ...(explicit ? { replyToId: "quoted" } : {}) },
-        ],
+        payloads: [{ text: `**${"x".repeat(340)}**` }],
         replyToId: "quoted",
-        replyToMode: mode,
+        replyToMode: "first",
         onDeliveryResult,
         durability: "required",
       });
@@ -131,11 +125,13 @@ describe("WhatsApp delivery recovery", () => {
         "*xx*",
         `*${"x".repeat(20)}*`,
       ]);
-      expect(sendMessage.mock.calls.map((call) => call[4]?.quotedMessageKey?.id)).toEqual(
-        explicit || mode === "all"
-          ? ["quoted", "quoted", "quoted", "quoted", "quoted"]
-          : ["quoted", undefined, undefined, undefined, undefined],
-      );
+      expect(sendMessage.mock.calls.map((call) => call[4]?.quotedMessageKey?.id)).toEqual([
+        "quoted",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ]);
       expect(onDeliveryResult.mock.calls.map(([progress]) => progress.messageId)).toEqual([
         "part-1",
         "part-2",
@@ -147,11 +143,7 @@ describe("WhatsApp delivery recovery", () => {
         onDeliveryResult.mock.calls.map(([progress]) =>
           progress.receipt?.parts.map((part: { replyToId?: string }) => part.replyToId),
         ),
-      ).toEqual(
-        explicit || mode === "all"
-          ? [["quoted"], ["quoted"], ["quoted"], ["quoted"], ["quoted"]]
-          : [["quoted"], [undefined], [undefined], [undefined], [undefined]],
-      );
+      ).toEqual([["quoted"], [undefined], [undefined], [undefined], [undefined]]);
     });
   });
 

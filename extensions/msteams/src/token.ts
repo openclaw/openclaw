@@ -6,7 +6,6 @@ export {
   hasConfiguredMSTeamsCredentials,
   resolveMSTeamsCredentials,
   type MSTeamsCredentials,
-  type MSTeamsFederatedCredentials,
 } from "./token-config.js";
 
 export async function resolveDelegatedAccessToken(params: {

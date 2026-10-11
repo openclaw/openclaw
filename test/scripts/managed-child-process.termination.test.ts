@@ -11,7 +11,10 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawnSync: vi.fn(),
 }));
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 function createChild() {
   const child = new ChildProcess();
@@ -44,22 +47,22 @@ describe("managed child termination facts", () => {
   ])(
     "verifies Darwin EPERM at $phase against all group members ($rows, failed=$failed, reaped=$reaped)",
     async ({ phase, rows, failed, reaped, accepted }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
       const { child, exit } = createChild();
       spawn.mockReturnValue(child);
       vi.spyOn(child, "kill").mockReturnValue(false);
       let signaled = false;
       let inspected = false;
-      let now = 1_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
       vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
         if (signal !== 0) {
           signaled = true;
           if (!accepted) {
-            now += 100;
+            vi.setSystemTime(Date.now() + 100);
           }
         }
         if (signal === 0 && signaled && !inspected) {
-          now += 100;
+          vi.setSystemTime(Date.now() + 100);
         }
         if (phase === "signal" && !signaled) {
           return true;
@@ -88,11 +91,15 @@ describe("managed child termination facts", () => {
         requireProcessTreeExit: true,
         cleanupDrainTimeoutMs: 50,
         onReady: exit,
-      });
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await vi.runAllTimersAsync();
       if (accepted) {
-        await expect(command).resolves.toBe(0);
+        expect(await command).toEqual({ value: 0 });
       } else {
-        await expect(command).rejects.toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
+        expect(await command).toMatchObject({ error: { code: "EPROCESSGROUP_CLEANUP_FAILED" } });
       }
     },
   );

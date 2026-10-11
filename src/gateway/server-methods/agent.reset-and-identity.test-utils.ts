@@ -22,6 +22,7 @@ import {
   mockCallArg,
   expectRespondError,
   mockMainSessionEntry,
+  mockSuccessfulAgentCommand,
   setupNewYorkTimeConfig,
   resetTimeConfig,
   expectResetCall,
@@ -211,10 +212,7 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey === "main" ? "agent:main:main" : sessionKey,
     }));
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     const respond = vi.fn();
     await invokeAgent(
@@ -261,10 +259,7 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey === "main" ? "agent:main:main" : sessionKey,
     }));
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     const respond = vi.fn();
     await invokeAgent(
@@ -313,10 +308,7 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey,
     }));
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     mocks.loadVoiceWakeRoutingConfig.mockClear();
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
 
@@ -362,10 +354,7 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey,
     }));
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     mocks.loadVoiceWakeRoutingConfig.mockClear();
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
     mocks.agentCommand.mockClear();
@@ -410,10 +399,7 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey === "main" ? "agent:main:main" : sessionKey,
     }));
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     mocks.loadVoiceWakeRoutingConfig.mockClear();
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
 
@@ -473,10 +459,7 @@ describe("gateway agent handler", () => {
       capturedStore = store;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -530,10 +513,7 @@ describe("gateway agent handler", () => {
     mockSessionResetSuccess({ reason: "new", sessionId: "reset-session-id" });
     mockMainSessionEntry({ sessionId: "reset-session-id" });
     mocks.performGatewaySessionReset.mockClear();
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -832,10 +812,7 @@ describe("gateway agent handler", () => {
       canonicalKey: "global",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {

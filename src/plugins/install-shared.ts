@@ -156,14 +156,12 @@ export function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
   };
 }
 
-export function buildDirectoryInstallResult(params: {
-  pluginId: string;
-  targetDir: string;
-  manifestName?: string;
-  version?: string;
-  extensions: string[];
-  setup?: import("./manifest.js").PluginManifestSetup;
-}): InstallPluginResult {
+export function buildDirectoryInstallResult(
+  params: Pick<
+    Extract<InstallPluginResult, { ok: true }>,
+    "pluginId" | "targetDir" | "manifestName" | "version" | "extensions" | "setup"
+  >,
+): InstallPluginResult {
   return {
     ok: true,
     pluginId: params.pluginId,
@@ -337,29 +335,25 @@ export async function runInstallSourceScan(params: {
   }
 }
 
-export async function installPluginDirectoryIntoExtensions(params: {
-  sourceDir: string;
-  pluginId: string;
-  manifestName?: string;
-  version?: string;
-  extensions: string[];
-  setup?: import("./manifest.js").PluginManifestSetup;
-  targetDir: string;
-  logger: PluginInstallLogger;
-  timeoutMs: number;
-  workTimeoutMs?: number | null;
-  mode: "install" | "update";
-  dryRun: boolean;
-  copyErrorPrefix: string;
-  hasDeps: boolean;
-  sourceHardlinks?: "package-manager" | "reject";
-  depsLogMessage: string;
-  afterInstall?: (
-    installedDir: string,
-  ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
-  onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-  beforePersistentApply?: () => void;
-}): Promise<InstallPluginResult> {
+export async function installPluginDirectoryIntoExtensions(
+  params: Parameters<typeof buildDirectoryInstallResult>[0] & {
+    sourceDir: string;
+    logger: PluginInstallLogger;
+    timeoutMs: number;
+    workTimeoutMs?: number | null;
+    mode: "install" | "update";
+    dryRun: boolean;
+    copyErrorPrefix: string;
+    hasDeps: boolean;
+    sourceHardlinks?: "package-manager" | "reject";
+    depsLogMessage: string;
+    afterInstall?: (
+      installedDir: string,
+    ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
+  },
+): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const targetDir = params.targetDir;
   const availability = await ensureInstallTargetAvailableForMode({

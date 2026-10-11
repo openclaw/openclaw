@@ -4,8 +4,7 @@ import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
-  renderCloudMachineMenuItems,
-  renderCloudOsMenuItems,
+  renderCloudChoiceMenuItems,
   renderCloudProfileMenuItems,
   renderSessionMenuItem,
 } from "../pages/new-session/cloud-target.ts";
@@ -211,8 +210,9 @@ export function showSessionPlacementTargetDialog(
                                               <div class="new-session-page__menu-title">
                                                 ${t("newSession.operatingSystem")}
                                               </div>
-                                              ${renderCloudOsMenuItems({
-                                                operatingSystems,
+                                              ${renderCloudChoiceMenuItems({
+                                                kind: "os",
+                                                choices: operatingSystems,
                                                 selectedId: cloudMachines.selectedOs(profile),
                                                 submitting: false,
                                                 onSelect: (osId) =>
@@ -233,8 +233,9 @@ export function showSessionPlacementTargetDialog(
                                               <div class="new-session-page__menu-title">
                                                 ${t("newSession.machine")}
                                               </div>
-                                              ${renderCloudMachineMenuItems({
-                                                machines,
+                                              ${renderCloudChoiceMenuItems({
+                                                kind: "machine",
+                                                choices: machines,
                                                 selectedId: selectedMachineId,
                                                 submitting: false,
                                                 onSelect: (machineId) =>

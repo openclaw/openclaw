@@ -11,6 +11,8 @@ import type { FailoverReason } from "./signal.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
+export const CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE = "cli_partial_output_rejected";
+
 export type CliTimeoutContext = {
   mode: "overall" | "no-output";
   timeoutSeconds: number;
@@ -107,6 +109,17 @@ export function findErrorProperty<T>(
   );
 }
 
+/** Preserve the producer's output decision through cancellation and cleanup wrappers. */
+export function isCliPartialOutputRejected(error: unknown): boolean {
+  return (
+    findErrorProperty(error, (candidate) =>
+      isFailoverError(candidate) && candidate.code === CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE
+        ? true
+        : undefined,
+    ) === true
+  );
+}
+
 export function readDirectErrorCode(err: unknown): string | undefined {
   const candidate = asOptionalObjectRecord(err);
   if (!candidate) {
@@ -169,10 +182,7 @@ export function isTimeoutError(err: unknown): boolean {
   if (hasTimeoutHint(err)) {
     return true;
   }
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  if (readErrorName(err) !== "AbortError") {
+  if (!err || typeof err !== "object" || readErrorName(err) !== "AbortError") {
     return false;
   }
   const message = getErrorMessage(err);

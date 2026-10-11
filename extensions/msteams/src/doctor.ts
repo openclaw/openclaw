@@ -20,7 +20,7 @@ const collectMSTeamsMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "msteams",
     detector: isMSTeamsMutableAllowEntry,
-    collectLists: (scope) => collectStandardAllowlistLists(scope),
+    collectLists: collectStandardAllowlistLists,
   });
 
 function runMSTeamsWebhookDoctorSequence({

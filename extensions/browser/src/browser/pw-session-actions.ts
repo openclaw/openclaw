@@ -1,7 +1,9 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, Page, Response } from "playwright-core";
+import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -331,21 +333,20 @@ async function readPagesViaPlaywright(
           const detach = () => {
             detaching ??= session.then((owned) => owned.detach()).catch(() => {});
           };
-          const cancelled = createDeferred<never>();
-          const onAbort = () => {
-            cancelled.reject(signal.reason);
-            detach();
-          };
-          signal.addEventListener("abort", onAbort, { once: true });
-          if (signal.aborted) {
-            onAbort();
-          }
-          try {
-            const read = session.then((owned) => {
+          const read = racePromiseWithAbortSignal(
+            session.then((owned) => {
               signal.throwIfAborted();
               return owned.send("Target.getTargets");
-            });
-            const result = await Promise.race([read, cancelled.promise]);
+            }),
+            signal,
+            ({ reason }) => reason,
+          );
+          signal.addEventListener("abort", detach, { once: true });
+          if (signal.aborted) {
+            detach();
+          }
+          try {
+            const result = await read;
             signal.throwIfAborted();
             if (!Array.isArray(result.targetInfos)) {
               throw new Error("Browser target enumeration was unavailable.");
@@ -353,12 +354,14 @@ async function readPagesViaPlaywright(
             return new Set(
               result.targetInfos
                 .filter(
-                  (info) => info.type === "page" && !isBlockedTarget(opts.cdpUrl, info.targetId),
+                  (info) =>
+                    isSelectableCdpBrowserTarget(info) &&
+                    !isBlockedTarget(opts.cdpUrl, info.targetId),
                 )
                 .map((info) => info.targetId),
             );
           } finally {
-            signal.removeEventListener("abort", onAbort);
+            signal.removeEventListener("abort", detach);
             detach();
           }
         };
@@ -466,9 +469,6 @@ export async function listPagesViaPlaywright(opts: {
         : undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const controller = new AbortController();
-  const cancelled = createDeferred<never>();
-  const onCancelled = () => cancelled.reject(controller.signal.reason);
-  controller.signal.addEventListener("abort", onCancelled, { once: true });
   const onAbort = () =>
     controller.abort(
       opts.signal?.reason instanceof Error
@@ -486,13 +486,16 @@ export async function listPagesViaPlaywright(opts: {
     timer.unref?.();
   }
   try {
-    return await Promise.race([readPagesViaPlaywright(opts, controller.signal), cancelled.promise]);
+    return await racePromiseWithAbortSignal(
+      readPagesViaPlaywright(opts, controller.signal),
+      controller.signal,
+      ({ reason }) => reason,
+    );
   } finally {
     if (timer) {
       clearTimeout(timer);
     }
     opts.signal?.removeEventListener("abort", onAbort);
-    controller.signal.removeEventListener("abort", onCancelled);
   }
 }
 

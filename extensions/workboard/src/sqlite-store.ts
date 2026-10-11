@@ -6,27 +6,14 @@ import {
   runSqliteWorkerStoreOperation,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  WorkboardCardStore,
-  WorkboardKeyedStore,
-  WorkboardSessionsBoardStore,
-  WorkboardSubscriptionStore,
-  WorkboardWriteAuthority,
-} from "./persistence-types.js";
+import type { WorkboardPersistence, WorkboardWriteAuthority } from "./persistence-types.js";
 import type {
   WorkboardSqliteOperations,
   WorkboardSqliteWorkerOperations,
 } from "./sqlite-store-contract.js";
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
 
-type WorkboardSqliteStores = {
-  cards: WorkboardCardStore;
-  boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
-  sessionsBoard: WorkboardSessionsBoardStore;
-  subscriptions: WorkboardSubscriptionStore;
-  attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
+type WorkboardSqliteStores = WorkboardPersistence & {
   ready: Promise<number>;
   dataVersion(this: void): Promise<number>;
   close(this: void): Promise<void>;

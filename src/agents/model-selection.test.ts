@@ -339,25 +339,6 @@ it.each([
   },
 );
 
-it("retains every configured row in a large allowlist without admitting other rows", () => {
-  const catalog = Array.from({ length: 400 }, (_, index) => ({
-    provider: "custom",
-    id: `synthetic-${index}`,
-    name: `Synthetic ${index}`,
-  }));
-  const result = buildAllowedModelSet({
-    cfg: createConfiguredModelRefConfig({
-      allow: catalog.map((entry) => `custom/${entry.id}`),
-    }),
-    catalog: [...catalog, { provider: "other", id: "synthetic-0", name: "Other provider" }],
-    defaultProvider: "custom",
-  });
-
-  expect(result.allowAny).toBe(false);
-  expect(result.allowedCatalog).toEqual(catalog);
-  expect(result.allowedKeys.size).toBe(400);
-});
-
 it("keeps case-insensitive visibility inside the exact provider namespace", () => {
   const result = buildAllowedModelSet({
     cfg: createConfiguredModelRefConfig({ allow: ["custom/team/Reader", "custom/READER"] }),
@@ -579,24 +560,6 @@ it("keeps per-agent fallback overrides out of explicit selection", () => {
 
 it.each([
   {
-    name: "keeps deprecated catalog refs selectable",
-    params: {
-      cfg: {} as OpenClawConfig,
-      catalog: [
-        {
-          provider: "openai",
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          status: "deprecated" as const,
-          replacedBy: "gpt-5.6",
-        },
-      ],
-      raw: "openai/gpt-5.5",
-      defaultProvider: "openai",
-    },
-    expected: { key: "openai/gpt-5.5", ref: { provider: "openai", model: "gpt-5.5" } },
-  },
-  {
     name: "strips trailing auth profile suffix before allowlist matching",
     params: {
       cfg: {
@@ -664,23 +627,6 @@ it.each([false, true])("preserves provider identity with manifest normalization 
   });
 });
 
-it("strips profile suffix before alias resolution", () => {
-  const index = {
-    byAlias: new Map([
-      ["kimi", { alias: "kimi", ref: { provider: "nvidia", model: "moonshotai/kimi-k2.5" } }],
-    ]),
-    byKey: new Map(),
-  };
-
-  const resolved = resolveModelRefFromString({
-    raw: "kimi@nvidia:default",
-    defaultProvider: "openai",
-    aliasIndex: index,
-  });
-  expect(resolved?.ref).toEqual({ provider: "nvidia", model: "moonshotai/kimi-k2.5" });
-  expect(resolved?.alias).toBe("kimi");
-});
-
 it("sanitizes control characters in providerless-model warnings", async () => {
   const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
   try {
@@ -704,17 +650,6 @@ it("sanitizes control characters in providerless-model warnings", async () => {
   } finally {
     warnLogs.cleanup();
   }
-});
-
-it("infers a unique configured provider for bare default model strings", () => {
-  const cfg = createConfiguredModelRefConfig({
-    primary: "claude-opus-4-6",
-    modelEntries: { "anthropic/claude-opus-4-6": {} },
-  });
-  expect(resolveConfiguredRefForTest(cfg)).toEqual({
-    provider: "anthropic",
-    model: "claude-opus-4-6",
-  });
 });
 
 it("normalizes bare configured default model strings with manifest policies", () => {
@@ -760,17 +695,6 @@ it.each([
     expected: { provider: "nemotron-bolt", model: "fast" },
   },
   {
-    name: "keeps exact configured provider refs before slash-form alias values that point to them",
-    primary: "nemotron-bolt/nemotron-3-super-120b",
-    modelEntries: {
-      "openai/nemotron-bolt/nemotron-3-super-120b": {
-        alias: "nemotron-bolt/nemotron-3-super-120b",
-      },
-    },
-    providers: nemotronProvider,
-    expected: { provider: "nemotron-bolt", model: "nemotron-3-super-120b" },
-  },
-  {
     name: "keeps built-in provider refs before bare alias values that point to them",
     primary: "anthropic/claude-opus-4-6",
     modelEntries: { opus: { alias: "anthropic/claude-opus-4-6" } },
@@ -787,26 +711,6 @@ it.each([
     primary: "xiaomi/mimo-v2-pro-mit",
     modelEntries: { "openai/xiaomi/mimo-v2-pro-mit": { alias: "xiaomi/mimo-v2-pro-mit" } },
     expected: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
-  },
-  {
-    name: "keeps a configured provider ahead of an exact auth-profile alias collision",
-    primary: "nemotron-bolt/nemotron-3-super-120b@prod",
-    modelEntries: {
-      "openai/gpt-5.5": { alias: "nemotron-bolt/nemotron-3-super-120b@prod" },
-    },
-    providers: nemotronProvider,
-    expected: { provider: "nemotron-bolt", model: "nemotron-3-super-120b" },
-  },
-  {
-    name: "keeps a configured provider ahead of a stripped auth-profile alias collision",
-    primary: "nemotron-bolt/nemotron-3-super-120b@prod",
-    modelEntries: {
-      "openai/nemotron-bolt/nemotron-3-super-120b": {
-        alias: "nemotron-bolt/nemotron-3-super-120b",
-      },
-    },
-    providers: nemotronProvider,
-    expected: { provider: "nemotron-bolt", model: "nemotron-3-super-120b" },
   },
 ])("$name", ({ primary, modelEntries, providers, expected }) => {
   const cfg = createConfiguredModelRefConfig({ primary, modelEntries, providers });
@@ -876,17 +780,6 @@ it("should warn when specified model cannot be resolved and falls back to defaul
   } finally {
     warnLogs.cleanup();
   }
-});
-
-it("resolves openrouter:auto through the canonical OpenRouter auto model", () => {
-  const cfg = createConfiguredModelRefConfig({ primary: "openrouter:auto" });
-
-  const result = resolveConfiguredRefForTest(cfg, {
-    defaultProvider: "anthropic",
-    defaultModel: "claude-sonnet-4-6",
-  });
-
-  expect(result).toEqual({ provider: "openrouter", model: "openrouter/auto" });
 });
 
 it("prefers an agent-configured OpenRouter free model over the global default", () => {

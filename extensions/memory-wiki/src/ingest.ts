@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -11,47 +12,13 @@ import { resolveMemoryWikiTimestamp } from "./time.js";
 import { readExistingWikiPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-type IngestMemoryWikiSourceResult = {
-  sourcePath: string;
-  pageId: string;
-  pagePath: string;
-  title: string;
-  bytes: number;
-  created: boolean;
-  indexUpdatedFiles: string[];
-};
-
-function resolveSourceTitle(sourcePath: string, explicitTitle?: string): string {
-  if (explicitTitle?.trim()) {
-    return explicitTitle.trim();
-  }
-  return path.basename(sourcePath, path.extname(sourcePath)).replace(/[-_]+/g, " ").trim();
-}
-
-function assertUtf8Text(buffer: Buffer, sourcePath: string): string {
-  const preview = buffer.subarray(0, Math.min(buffer.length, 4096));
-  if (preview.includes(0)) {
-    throw new Error(`Cannot ingest binary file as markdown source: ${sourcePath}`);
-  }
-  return buffer.toString("utf8");
-}
-
-function isEmptyExistingSourcePage(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    ((error as NodeJS.ErrnoException).code === "ENOENT" ||
-      (error as NodeJS.ErrnoException).code === "EISDIR")
-  );
-}
-
 export async function ingestMemoryWikiSource(params: {
   config: ResolvedMemoryWikiConfig;
   inputPath: string;
   title?: string;
   nowMs?: number;
   signal?: AbortSignal;
-}): Promise<IngestMemoryWikiSourceResult> {
+}) {
   // Keep the source read-modify-write and nested compile under one vault mutation lease.
   return await withMemoryWikiVaultMutation(params.config.vault.path, async () => {
     await initializeMemoryWikiVault(params.config, {
@@ -62,8 +29,12 @@ export async function ingestMemoryWikiSource(params: {
     const sourcePath = path.resolve(params.inputPath);
     const buffer = await fs.readFile(sourcePath);
     params.signal?.throwIfAborted();
-    const content = assertUtf8Text(buffer, sourcePath);
-    const title = resolveSourceTitle(sourcePath, params.title);
+    if (buffer.subarray(0, 4096).includes(0)) {
+      throw new Error(`Cannot ingest binary file as markdown source: ${sourcePath}`);
+    }
+    const title =
+      params.title?.trim() ||
+      path.basename(sourcePath, path.extname(sourcePath)).replace(/[-_]+/g, " ").trim();
     const slug = slugifyWikiSegment(title);
     const pageStem = slugifyWikiPageStem(title);
     const pageId = `source.${slug}`;
@@ -90,13 +61,19 @@ export async function ingestMemoryWikiSource(params: {
         `- Bytes: ${buffer.byteLength}`,
         `- Updated: ${timestamp}`,
       ],
-      content,
+      content: buffer.toString("utf8"),
       language: "text",
     });
 
     const existing = created
       ? ""
-      : await readExistingWikiPage(() => fs.readFile(pagePath, "utf8"), isEmptyExistingSourcePage);
+      : await readExistingWikiPage(
+          () => fs.readFile(pagePath, "utf8"),
+          (error) => {
+            const code = asNullableRecord(error)?.code;
+            return code === "ENOENT" || code === "EISDIR";
+          },
+        );
     params.signal?.throwIfAborted();
     await fs.writeFile(
       pagePath,

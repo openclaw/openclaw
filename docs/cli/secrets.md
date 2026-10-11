@@ -64,6 +64,8 @@ Naming and value rules:
 - Known redaction placeholders such as `__OPENCLAW_REDACTED__` cannot be stored as values. CLI `set` and `import` skip redacted inputs for existing usable entries with an explicit unchanged message; a placeholder without a usable existing entry exits `2`.
 - `--kind secret|env` explicitly changes an entry's kind. Otherwise `set` and `import` preserve the entry's current kind when saving, including protection changes made while input or confirmation is pending. Only new names use automatic detection: names ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
 
+File paths passed to `--value-file` or `--from` must identify regular files. Named pipes and device paths are rejected; use stdin for streamed input.
+
 ### Set values safely
 
 `--value` is accepted only when the resolved kind is `env`:

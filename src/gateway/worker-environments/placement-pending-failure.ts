@@ -6,7 +6,7 @@ import {
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import { getRequired, query, transitionValues } from "./placement-row-codec.js";
+import { getRequired, query, transitionValues, turnClaimValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
@@ -79,13 +79,7 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
         };
         if (transitioning.state === "active") {
           const values = transitionValues(transitioning, "draining", {}, terminalAtMs);
-          if (persisted) {
-            values.turn_claim_owner = persisted.owner;
-            values.turn_claim_id = persisted.claimId;
-            values.turn_claim_run_id = persisted.runId;
-            values.turn_claim_generation = persisted.generation;
-            values.turn_claim_owner_epoch = persisted.ownerEpoch;
-          }
+          Object.assign(values, turnClaimValues(persisted));
           transition(values, "drain");
           transitioning = getRequired(db, sessionId);
         }

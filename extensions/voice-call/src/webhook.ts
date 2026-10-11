@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
-import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -27,7 +26,6 @@ import {
   sendHttpRequestRejection,
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
-import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
   normalizeVoiceCallConfig,
   resolveVoiceCallEffectiveConfig,
@@ -46,11 +44,13 @@ import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { acceptRealtimeInboundRequest } from "./webhook/realtime-inbound-admission.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 import {
   StreamDisconnectGrace,
   type StreamDisconnectLifecycle,
 } from "./webhook/stream-disconnect-grace.js";
+import { appendRecentTalkEventMetadata } from "./webhook/talk-event-metadata.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
 const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
@@ -63,31 +63,6 @@ const loadRealtimeTranscriptionRuntime = createLazyRuntimeModule(
 const loadResponseGeneratorModule = createLazyRuntimeModule(
   () => import("./response-generator.js"),
 );
-
-function appendRecentTalkEventMetadata(
-  metadata: CallRecord["metadata"],
-  event: TalkEvent,
-): CallRecord["metadata"] {
-  const previous = metadata ?? {};
-  const recent = Array.isArray(previous.recentTalkEvents)
-    ? previous.recentTalkEvents.filter(
-        (entry): entry is { at: string; type: string; sessionId: string; turnId?: string } =>
-          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
-      )
-    : [];
-  recent.push({
-    at: event.timestamp,
-    type: event.type,
-    sessionId: event.sessionId,
-    turnId: event.turnId,
-  });
-  return {
-    ...previous,
-    lastTalkEventAt: event.timestamp,
-    lastTalkEventType: event.type,
-    recentTalkEvents: recent.slice(-10),
-  };
-}
 
 function buildRequestUrl(requestUrl: string | undefined): URL {
   return new URL(requestUrl ?? "/", "http://localhost");
@@ -398,7 +373,7 @@ export class VoiceCallWebhookServer {
           void this.manager
             .updateCallMetadata(current.call, (metadata) =>
               this.getCurrentStream(providerCallId, streamSid)
-                ? appendRecentTalkEventMetadata(metadata, event)
+                ? appendRecentTalkEventMetadata(metadata, event, "streaming")
                 : metadata,
             )
             .catch((error: unknown) => {
@@ -733,7 +708,15 @@ export class VoiceCallWebhookServer {
           const isInboundRealtimeRequest = !direction || direction === "inbound";
           if (
             isInboundRealtimeRequest &&
-            !this.shouldAcceptRealtimeInboundRequest(realtimeParams)
+            !(await acceptRealtimeInboundRequest({
+              request: ctx,
+              form: realtimeParams,
+              verifiedRequestKey: verification.verifiedRequestKey,
+              config: this.config,
+              manager: this.manager,
+              provider: this.provider,
+              processEvents: (events) => this.processParsedEvents(events),
+            }))
           ) {
             this.logger.info("Realtime inbound call rejected before stream setup");
             return buildTwilioResponse('<Reject reason="rejected" />');
@@ -910,7 +893,7 @@ export class VoiceCallWebhookServer {
       return null;
     }
 
-    if (ctx.query?.type === "status") {
+    if (ctx.query?.type === "status" || ctx.query?.type === "amd") {
       return null;
     }
 
@@ -922,21 +905,6 @@ export class VoiceCallWebhookServer {
     // Initial TwiML fetches without gathered input may enter realtime handling.
     // Replay checks run before this helper so retries cannot mint new stream tokens.
     return !params.get("SpeechResult") && !params.get("Digits") ? params : null;
-  }
-
-  private shouldAcceptRealtimeInboundRequest(params: URLSearchParams): boolean {
-    switch (this.config.inboundPolicy) {
-      case "open":
-        return true;
-      case "allowlist":
-      case "pairing":
-        return isAllowlistedCaller(
-          normalizePhoneNumber(params.get("From") ?? undefined),
-          this.config.allowFrom,
-        );
-      default:
-        return false;
-    }
   }
 
   private async processParsedEvents(events: NormalizedEvent[]): Promise<boolean> {

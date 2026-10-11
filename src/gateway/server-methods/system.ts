@@ -339,10 +339,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       const normalizedReason = normalizeLowercaseStringOrEmpty(reasonValue);
       const ignoreReason =
         normalizedReason.startsWith("periodic") ||
-        normalizedReason === "heartbeat" ||
-        normalizedReason === "connect" ||
-        normalizedReason === "launch" ||
-        normalizedReason === "instances-refresh";
+        ["heartbeat", "connect", "launch", "instances-refresh"].includes(normalizedReason);
       const hostChanged = changed.has("host");
       const ipChanged = changed.has("ip");
       const versionChanged = changed.has("version");

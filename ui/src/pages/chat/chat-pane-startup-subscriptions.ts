@@ -8,10 +8,8 @@ import { admitChatSubmission } from "./history-merge.ts";
 import { resolveChatSnapshotKey } from "./session-message-cache.ts";
 import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 
-type ChatPaneStartupContext = Pick<ApplicationContext, "placementStartup">;
-
 export function subscribeChatPaneStartup(
-  context: ChatPaneStartupContext,
+  context: Pick<ApplicationContext, "placementStartup">,
   getState: () => ChatPageHost | undefined,
 ): () => void {
   return context.placementStartup.subscribe(() => {

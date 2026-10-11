@@ -3,7 +3,11 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicySandboxPostureEvidence } from "../policy-state.js";
 import { CHECK_IDS } from "./check-ids.js";
 import { SANDBOX_CONTAINER_POLICY_RULES } from "./metadata.js";
-import { policyEvidenceFinding as sandboxPostureFinding } from "./policy-evidence-finding.js";
+import {
+  policyEvidenceFinding as sandboxPostureFinding,
+  policyEvidenceRuleFindings,
+  type PolicyEvidenceRule,
+} from "./policy-evidence-finding.js";
 import { agentScopedPolicyTargets, scopedAgentIdMatches } from "./policy-scope.js";
 import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
@@ -170,31 +174,14 @@ function sandboxPostureFindingsForRule(
         `${sandboxPostureLabel(entry)} enables sandbox browser without cdpSourceRange.`,
       fixHint: "Set agents.*.sandbox.browser.cdpSourceRange or update policy after review.",
     },
-  ] satisfies readonly {
-    path: readonly string[];
-    kind: PolicySandboxPostureEvidence["kind"];
-    violates: (entry: PolicySandboxPostureEvidence) => boolean;
-    checkId: Parameters<typeof sandboxPostureFinding>[1]["checkId"];
-    message: (entry: PolicySandboxPostureEvidence) => string;
-    fixHint: string;
-  }[];
+  ] satisfies readonly PolicyEvidenceRule<PolicySandboxPostureEvidence>[];
   findings.push(
-    ...rules.flatMap((rule) => {
-      if (readPolicyBoolean(sandboxPolicy, rule.path) !== true) {
-        return [];
-      }
-      return entries
-        .filter((entry) => entry.kind === rule.kind)
-        .filter(rule.violates)
-        .map((entry) =>
-          sandboxPostureFinding(entry, {
-            checkId: rule.checkId,
-            message: rule.message(entry),
-            requirement: `oc://${policyDocName}/${requirementBase}/${rule.path.join("/")}`,
-            fixHint: rule.fixHint,
-          }),
-        );
-    }),
+    ...policyEvidenceRuleFindings(
+      entries,
+      rules.filter((rule) => readPolicyBoolean(sandboxPolicy, rule.path) === true),
+      policyDocName,
+      requirementBase,
+    ),
   );
   return findings;
 }

@@ -9,8 +9,7 @@ export async function finalizeReplyAgentRun(
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const accounting = await accountAgentTurn(context);
   const prepared = await prepareReplyAgentPayloads({ context, accounting });
-  if (prepared.kind === "return") {
-    return prepared.value;
-  }
-  return await completeReplyAgentRun({ context, accounting, prepared });
+  return prepared.kind === "return"
+    ? prepared.value
+    : await completeReplyAgentRun({ context, accounting, prepared });
 }

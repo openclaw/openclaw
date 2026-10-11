@@ -28,11 +28,13 @@ import * as rowProjection from "./session-utils-row.js";
 import { writeResidentEntries } from "./session-utils.perf.test-support.js";
 
 const stateWorker = vi.hoisted(() => ({
-  read: vi.fn<(input: OpenClawStateReadRequest) => OpenClawStateReadReply>(),
+  read: vi.fn<(input: OpenClawStateReadRequest) => Promise<OpenClawStateReadReply>>(),
 }));
 vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/worker-task-server.js")>()),
-  serveOwnedWorkerTasks(handler: (input: OpenClawStateReadRequest) => OpenClawStateReadReply) {
+  serveOwnedWorkerTasks(
+    handler: (input: OpenClawStateReadRequest) => Promise<OpenClawStateReadReply>,
+  ) {
     stateWorker.read.mockImplementation(handler);
   },
 }));
@@ -169,7 +171,7 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       ];
       const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
       try {
-        const reply = stateWorker.read({
+        const reply = await stateWorker.read({
           context: { environment: { OPENCLAW_STATE_DIR: stateDir } },
           databasePath: database.path,
           location: database.path,

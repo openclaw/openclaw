@@ -24,11 +24,11 @@ import {
   readCodexNativeSubagentSubmissions,
   type CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
-import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import {
   legacyAppPolicyEntrySchema,
   readStoredCodexAppServerBinding,
   type CodexAppServerThreadBinding,
+  type PluginAppPolicyContext,
   type StoredCodexAppServerBinding,
 } from "./session-binding-record-codec.js";
 
@@ -178,11 +178,8 @@ export function preserveCodexNativeSubagentSubmissions(
   nextBinding: CodexAppServerThreadBinding,
   value: unknown,
 ): unknown {
-  return currentBinding.threadId === nextBinding.threadId &&
-    codexNativeSubagentHistoryConnectionFingerprint(currentBinding) ===
-      codexNativeSubagentHistoryConnectionFingerprint(nextBinding) &&
-    isDeepStrictEqual(currentBinding.pendingSupervisionBranch, nextBinding.pendingSupervisionBranch)
-    ? value
+  return currentBinding.threadId === nextBinding.threadId
+    ? preserveNativePendingAssignments(currentBinding, nextBinding, value)
     : undefined;
 }
 

@@ -1,6 +1,5 @@
 import type {
   SystemAgentChatHistoryResult,
-  SystemAgentChatHistoryTurn,
   SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
@@ -23,9 +22,10 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
-import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
+import "../../components/option-card.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
@@ -168,6 +168,14 @@ export class CustodianTranscriptLoader {
     return this.inFlight !== null;
   }
 
+  get available(): boolean {
+    const snapshot = this.getGatewaySnapshot();
+    return (
+      snapshot !== undefined &&
+      isGatewayMethodAdvertised(snapshot, "openclaw.chat.history") === true
+    );
+  }
+
   deferRecovery(): void {
     this.recoveryPending = true;
   }
@@ -262,9 +270,22 @@ export class CustodianTranscriptLoader {
   ): Promise<{ messages: CustodianMessage[]; nextMessageId: number } | null> {
     this.clearRecovery();
     const result = await this.read(client, epoch, isCurrent);
-    return result?.ok && isCurrent()
-      ? createCustodianTranscriptMessages(result.turns, firstMessageId)
-      : null;
+    if (!result?.ok || !isCurrent()) {
+      return null;
+    }
+    let nextMessageId = firstMessageId;
+    const messages = result.turns.map((turn) => ({
+      id: nextMessageId++,
+      role: turn.role,
+      text:
+        turn.role === "user" && turn.text === SERVER_SENSITIVE_MASK
+          ? t("custodian.sensitiveReply")
+          : turn.text,
+      at: turn.at,
+      question: null,
+      step: null,
+    }));
+    return { messages, nextMessageId };
   }
 }
 
@@ -275,36 +296,6 @@ export class CustodianTranscriptLoader {
  * same display text live sensitive replies use.
  */
 const SERVER_SENSITIVE_MASK = "<redacted secret>";
-
-function createCustodianTranscriptMessages(
-  turns: readonly SystemAgentChatHistoryTurn[],
-  firstMessageId: number,
-): { messages: CustodianMessage[]; nextMessageId: number } {
-  let nextMessageId = firstMessageId;
-  const messages = turns.map((turn) => ({
-    id: nextMessageId++,
-    role: turn.role,
-    text:
-      turn.role === "user" && turn.text === SERVER_SENSITIVE_MASK
-        ? t("custodian.sensitiveReply")
-        : turn.text,
-    at: turn.at,
-    question: null,
-    step: null,
-  }));
-  return { messages, nextMessageId };
-}
-
-function renderCustodianEarlierDivider(message: CustodianMessage, boundaryAfterId: number | null) {
-  return message.id === boundaryAfterId
-    ? renderChatDivider({
-        kind: "divider",
-        key: "custodian-earlier",
-        label: t("custodian.earlier"),
-        timestamp: message.at,
-      })
-    : nothing;
-}
 
 export function renderCustodianTranscriptEntry(params: {
   message: CustodianMessage;
@@ -336,15 +327,35 @@ export function renderCustodianTranscriptEntry(params: {
           })
         : nothing
     }
-    ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}
+    ${
+      params.message.id === params.boundaryAfterId
+        ? renderChatDivider({
+            kind: "divider",
+            key: "custodian-earlier",
+            label: t("custodian.earlier"),
+            timestamp: params.message.at,
+          })
+        : nothing
+    }
     ${
       params.showQuestion && question
-        ? renderCustodianQuestionCard({
-            question,
-            disabled: params.questionDisabled,
-            onSelect: params.onSelect,
-            onSkip: params.onSkip,
-          })
+        ? html`<div class="custodian__option-card">
+            <openclaw-option-card
+              .props=${{
+                header: question.header,
+                question: question.question,
+                options: question.options.map((option) => ({
+                  value: option.label,
+                  label: option.label,
+                  description: option.description,
+                  recommended: option.recommended,
+                })),
+                disabled: params.questionDisabled,
+                onSelect: params.onSelect,
+                onSkip: params.onSkip,
+              }}
+            ></openclaw-option-card>
+          </div>`
         : nothing
     }
     ${

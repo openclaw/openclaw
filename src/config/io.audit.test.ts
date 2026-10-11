@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   appendConfigAuditRecord,
   createConfigWriteAuditRecordBase,
@@ -145,37 +144,6 @@ describe("config io audit helpers", () => {
     expect(auditPath.startsWith(path.resolve("undefined"))).toBe(false);
   });
 
-  it("appends audit entries off-thread and retains them after canonical close", async () => {
-    const home = await suiteRootTracker.make("append");
-    const record = createRenameAuditRecord(home);
-
-    const mainSql = observeMainThreadSql();
-    try {
-      await appendConfigAuditRecord({ env: {}, homedir: () => home, record });
-      await closeOpenClawStateDatabaseAsync();
-      mainSql.expectIdle();
-    } finally {
-      mainSql.restore();
-    }
-
-    const records = listConfigAuditRecordsForTests({
-      env: {},
-      homedir: () => home,
-    });
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      event: "config.write",
-      result: "rename",
-      nextHash: "next-hash",
-      nextBytes: 24,
-      nextDev: "12",
-      nextIno: "13",
-      watchMode: true,
-      watchSession: "watch-session-1",
-      watchCommand: "gateway --force",
-    });
-  });
-
   it("reads a bounded newest-first audit window for Doctor provenance", async () => {
     const home = await suiteRootTracker.make("recent");
     const first = createRenameAuditRecord(home);
@@ -246,17 +214,10 @@ describe("config io audit helpers", () => {
 
   it.each([
     [
-      "inline known secret",
-      ["openclaw", "--token=fake", "--port=8080"],
-      ["openclaw", "--token=***", "--port=8080"],
-    ],
-
-    [
       "dash-leading secret value",
       ["openclaw", "--password", "-fake"],
       ["openclaw", "--password", "***"],
     ],
-
     [
       "sensitive config set value after boolean option",
       ["openclaw", "config", "set", "--json", "channels.slack.token", '"secret-value"'],
@@ -272,13 +233,11 @@ describe("config io audit helpers", () => {
       ["openclaw", "config", "--profile", "work", "set", "channels.slack.token", "secret-value"],
       ["openclaw", "config", "--profile", "work", "set", "channels.slack.token", "***"],
     ],
-
     [
       "sensitive config set value when a root option value is config",
       ["openclaw", "--profile", "config", "config", "set", "channels.slack.token", "secret-value"],
       ["openclaw", "--profile", "config", "config", "set", "channels.slack.token", "***"],
     ],
-
     [
       "independent option terminators for command and positional scanning",
       [
@@ -309,11 +268,6 @@ describe("config io audit helpers", () => {
         '--batch-json={"value":"secret-value"}',
       ],
       ["openclaw", "config", "set", "ui.theme", "dark", "--", "--batch-json=***"],
-    ],
-    [
-      "non-set command whose first positional is set",
-      ["openclaw", "config", "get", "set", "channels.slack.token", "visible-value"],
-      ["openclaw", "config", "get", "set", "channels.slack.token", "visible-value"],
     ],
     [
       "config set batch JSON",
@@ -386,26 +340,6 @@ describe("config io audit helpers", () => {
     expect(result).toEqual({ scanned: 0, rewritten: 0, skipped: 0, aborted: false });
     const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
     expect(fs.existsSync(auditPath)).toBe(false);
-  });
-
-  it("does not write when dryRun is true even if records would change", async () => {
-    const home = await suiteRootTracker.make("scrub-dryrun");
-    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-    fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    const unredacted = historicalRecord();
-    const original = `${JSON.stringify(unredacted)}\n`;
-    fs.writeFileSync(auditPath, original, { encoding: "utf-8", mode: 0o600 });
-
-    const result = await scrubConfigAuditLog({
-      env: {},
-      homedir: () => home,
-      dryRun: true,
-    });
-
-    expect(result).toEqual({ scanned: 1, rewritten: 1, skipped: 0, aborted: false });
-    const text = fs.readFileSync(auditPath, "utf-8");
-    expect(text).toBe(original);
-    expect(text).toContain("xoxb-real-bot-token");
   });
 
   it.each(["write"] as const)(

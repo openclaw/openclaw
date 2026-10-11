@@ -856,7 +856,11 @@ describe("node worker bundle installer", () => {
         gatewayNamespace: fixture.input.gatewayNamespace,
         environments: { list: () => [environment] },
         placements: {
-          list: () => [],
+          prepareMaintenancePlacements: async () => ({
+            placements: [],
+            assertCurrent: () => {},
+            release: () => {},
+          }),
           prepareRuntimeRefresh: async () => ({
             placement: undefined,
             move: undefined,

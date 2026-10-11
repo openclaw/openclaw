@@ -1516,7 +1516,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(result.queuedFinal).toBe(false);
     expect(operation?.result).toMatchObject({
       kind: "aborted",
-      code: "aborted_for_restart",
+      code: "aborted_by_user",
     });
     expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
     expect(mutationRan).toBe(true);

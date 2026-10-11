@@ -1,4 +1,3 @@
-// Lazy command implementations for routes that can bypass full Commander registration.
 import { defaultRuntime } from "../../runtime.js";
 import {
   parseAgentsListRouteArgs,
@@ -26,7 +25,6 @@ function defineRoutedCommand<TArgs>(
   };
 }
 
-/** Route id to lazy parser/runner definition. */
 export const routedCommandDefinitions = {
   health: defineRoutedCommand(parseHealthRouteArgs, async (args) => {
     const { healthCommand } = await import("../../commands/health.js");

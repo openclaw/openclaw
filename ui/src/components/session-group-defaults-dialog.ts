@@ -158,7 +158,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
 
     const showBrowser = () => {
       browserVisible = true;
-      void browser.navigate(cwd || undefined);
+      void browser.navigate(cwd || undefined, "initial");
     };
 
     function paint() {

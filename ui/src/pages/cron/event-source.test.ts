@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildCronSchedule, hasUnchangedCronSchedule } from "../../lib/cron/form-schedule.ts";
 import { createInitialCronState, startCronEdit, validateCronForm } from "../../lib/cron/index.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   CronEventSourceController,
+  resolveCronEventPatch,
   validateCronEventSelection,
   type McpEventDefinition,
 } from "./event-source.ts";
@@ -43,6 +44,21 @@ const source = {
 };
 
 describe("Automation event source", () => {
+  it("resets dependent selection only when its server or event changes", () => {
+    expect(resolveCronEventPatch(form, { eventServer: "other", name: "Renamed" })).toEqual({
+      eventServer: "other",
+      name: "Renamed",
+      eventName: "",
+      eventArguments: "{}",
+    });
+    expect(resolveCronEventPatch(form, { eventName: "release.published" })).toEqual({
+      eventName: "release.published",
+      eventArguments: "{}",
+    });
+    const unchanged = { eventServer: form.eventServer, eventName: form.eventName, name: "Renamed" };
+    expect(resolveCronEventPatch(form, unchanged)).toEqual(unchanged);
+  });
+
   it("round-trips event options through the existing form without synthesizing a timed schedule", () => {
     const schedule = buildCronSchedule(form);
     expect(schedule).toEqual({
@@ -101,7 +117,7 @@ describe("Automation event source", () => {
         serverName: "new",
         events: [{ ...definition, name: "release.published" }],
       });
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = createTestGatewayClient(request);
     const controller = new CronEventSourceController(vi.fn());
     const old = controller.load({
       client,
@@ -138,7 +154,7 @@ describe("Automation event source", () => {
     });
     const controller = new CronEventSourceController(vi.fn());
     await controller.load({
-      client: { request } as unknown as GatewayBrowserClient,
+      client: createTestGatewayClient(request),
       agentId: "main",
       serverName: "server",
       jobId: "job",

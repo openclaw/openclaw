@@ -247,27 +247,60 @@ describe("tryDispatchAcpReplyHook", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
     let shouldSendToolSummaries = true;
+    let fullToolDetails = false;
     const eventWithGetter = {
       ...event,
       get shouldSendToolSummaries() {
         return shouldSendToolSummaries;
       },
+      get shouldSendFullToolDetails() {
+        return fullToolDetails;
+      },
     };
 
     await tryDispatchAcpReplyHook(eventWithGetter, ctx);
 
-    expectDispatchPayloadFields({
-      shouldSendToolSummaries: true,
-      shouldSendFullToolDetails: false,
-    });
     const [payload] = dispatchMock.mock.calls[0] ?? [];
-    const livePredicate = (payload as { shouldSendToolSummariesNow?: () => boolean })
-      .shouldSendToolSummariesNow;
+    const livePredicate = (payload as { shouldSendToolSummaries: () => Promise<boolean> })
+      .shouldSendToolSummaries;
     expect(livePredicate).toBeTypeOf("function");
-    expect(livePredicate?.()).toBe(true);
+    expect(await livePredicate()).toBe(true);
 
     shouldSendToolSummaries = false;
-    expect(livePredicate?.()).toBe(false);
+    expect(await livePredicate()).toBe(false);
+    fullToolDetails = true;
+    expect(
+      await (
+        payload as { shouldSendFullToolDetails: () => Promise<boolean> }
+      ).shouldSendFullToolDetails(),
+    ).toBe(false);
+  });
+
+  it("uses awaited visibility without touching deprecated event getters", async () => {
+    bypassMock.mockResolvedValue(false);
+    let summaries = false;
+    dispatchMock.mockImplementationOnce(async (params) => {
+      expect(await params.shouldSendToolSummaries()).toBe(false);
+      summaries = true;
+      expect(await params.shouldSendToolSummaries()).toBe(true);
+      expect(await params.shouldSendFullToolDetails()).toBe(true);
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+    await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        get shouldSendToolSummaries(): boolean {
+          throw new Error("deprecated synchronous read");
+        },
+        get shouldSendFullToolDetails(): boolean {
+          throw new Error("deprecated synchronous read");
+        },
+        shouldSendToolSummariesAsync: async () => summaries,
+        shouldSendFullToolDetailsAsync: async () => true,
+      },
+      ctx,
+    );
+    expect(dispatchMock).toHaveBeenCalledOnce();
   });
 
   it("passes runtime toolsAllow through to ACP dispatch", async () => {

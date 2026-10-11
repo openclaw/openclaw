@@ -3,7 +3,7 @@ import { ref } from "lit/directives/ref.js";
 import "../styles/hub-tabs.css";
 import { syncTabGroupLabel } from "./web-awesome-tabs.ts";
 
-export type HubTabOption<T extends string> = {
+type HubTabOption<T extends string> = {
   value: T;
   label: unknown;
   badge?: unknown;

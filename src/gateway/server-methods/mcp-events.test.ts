@@ -1,27 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
 import { mcpEventsHandlers } from "./mcp-events.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-} from "./types.js";
+import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   request: vi.fn<typeof import("../../agents/mcp-event-request.js").requestMcpEvent>(),
   prepare: vi.fn<typeof import("../../plugins/service-mcp-events.js").prepareMcpEventConnection>(),
   release: vi.fn(),
 }));
-vi.mock("../../agents/mcp-event-request.js", () => ({
+vi.mock("../../agents/mcp-event-request.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/mcp-event-request.js")>()),
   requestMcpEvent: mocks.request,
   MCP_EVENTS_PROTOCOL_VERSION: "2026-07-28",
 }));
-vi.mock("../../plugins/service-mcp-events.js", () => ({
+vi.mock("../../plugins/service-mcp-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/service-mcp-events.js")>()),
   prepareMcpEventConnection: mocks.prepare,
 }));
-vi.mock("./cron-caller-scope.js", () => ({ readCronCallerScope: () => undefined }));
-vi.mock("./agent-runtime-authority.js", () => ({ assertActiveAgentRuntimeAuthority: () => {} }));
-vi.mock("./agent-id-shared.js", () => ({
+vi.mock("./cron-caller-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cron-caller-scope.js")>()),
+  readCronCallerScope: () => undefined,
+}));
+vi.mock("./agent-runtime-authority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runtime-authority.js")>()),
+  assertActiveAgentRuntimeAuthority: () => {},
+}));
+vi.mock("./agent-id-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-id-shared.js")>()),
   resolveAgentIdOrRespondError: ({ cfg }: { cfg: unknown }) => ({ cfg, agentId: "main" }),
 }));
 
@@ -34,10 +41,16 @@ const event = {
 };
 function fixture() {
   const respond = vi.fn();
-  const client = {
-    connect: { scopes: ["operator.read"] },
+  const client: GatewayClient = {
+    connId: "catalog-client",
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+      scopes: ["operator.read"],
+    },
     authenticatedUserId: "alice@example.test",
-  } as GatewayClient;
+  };
   let current = true;
   const cfg = {};
   const registry = createGatewayMethodRegistry([
@@ -48,17 +61,19 @@ function fixture() {
       handler: () => {},
     },
   ]);
-  const context = {
-    getRuntimeConfig: () => cfg,
-    getGatewayMethodRegistry: () => registry,
-  } as unknown as GatewayRequestContext;
-  const options = {
+  const runtime = makeContextParams({ getAttachedGatewayMethodRegistry: () => registry });
+  onTestFinished(() => runtime.runtime.scheduler.stop());
+  const context = createGatewayRequestContext(runtime);
+  context.getRuntimeConfig = () => cfg;
+  const options: GatewayRequestHandlerOptions = {
+    req: { type: "req", id: "catalog", method: "mcp.events.list" },
+    isWebchatConnect: () => false,
     params: { serverName: "calendar" },
     client,
     context,
     respond,
     hasCurrentClientAuthority: () => current,
-  } as unknown as GatewayRequestHandlerOptions;
+  };
   return {
     options,
     respond,

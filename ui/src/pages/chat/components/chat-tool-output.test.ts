@@ -269,74 +269,82 @@ describe("tool output inspection", () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it("retrieves and exports exact text beyond the inherited detail and Markdown caps", async () => {
-    const text =
-      "  \r\n" + "x".repeat(600_000) + "\r\n\x60\x60\x60\n<strong>literal</strong> 🦞 TAIL\r\n";
-    const pending = createDeferred();
-    const request = vi.fn(async (_method: string, params: { maxChars: number }) => {
-      await pending.promise;
-      const response = result(text.slice(0, params.maxChars));
-      return {
-        ...response,
-        message: {
-          ...response.message,
-          __openclaw: {
-            ...response.message["__openclaw"],
-            truncated: text.length > params.maxChars,
+  it.each([
+    { name: "inline output", length: 600_000, outputTruncated: false, maxChars: 2_000_000 },
+    { name: "referenced output", length: 5_000_000, outputTruncated: true, maxChars: 8_000_000 },
+  ])(
+    "retrieves and exports exact $name beyond the detail and Markdown caps",
+    async ({ length, outputTruncated, maxChars }) => {
+      const text =
+        "  \r\n" + "x".repeat(length) + "\r\n\x60\x60\x60\n<strong>literal</strong> 🦞 TAIL\r\n";
+      const pending = createDeferred();
+      const request = vi.fn(async (_method: string, params: { maxChars: number }) => {
+        await pending.promise;
+        const response = result(text.slice(0, params.maxChars));
+        return {
+          ...response,
+          message: {
+            ...response.message,
+            __openclaw: {
+              ...response.message["__openclaw"],
+              truncated: text.length > params.maxChars,
+            },
           },
-        },
-      };
-    });
-    const { state, pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-    });
-    const loader = createSidebarFullMessageLoader(state, pane.context.gateway)!;
-    const panel = mount(outputCard(), loader);
-    try {
-      await expect(panel.updateComplete).resolves.toBe(true);
-      expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("true");
-      expect(panel.querySelector(".chat-tool-output__actions")).toBeNull();
-    } finally {
-      pending.resolve();
-    }
-    await vi.waitFor(() =>
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent?.length).toBe(text.length),
-    );
-    expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
-    expect(button(panel, t("chat.toolCards.copyOutput"))).toBeDefined();
-    expect(button(panel, t("chat.toolCards.downloadOutput"))).toBeDefined();
-    expect(request).toHaveBeenCalledWith("chat.message.get", {
-      sessionKey: "global",
-      agentId: "work",
-      messageId: "result-b",
-      maxChars: 2_000_000,
-    });
-    expect(panel.textContent).not.toContain("wrong sibling");
-    expect(panel.querySelector("strong")).toBeNull();
-    expect(panel.textContent).not.toContain("Captured before context processing");
+        };
+      });
+      const { state, pane } = createTestChatPane({
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+      const loader = createSidebarFullMessageLoader(state, pane.context.gateway)!;
+      const panel = mount(outputCard({ outputTruncated }), loader);
+      try {
+        await expect(panel.updateComplete).resolves.toBe(true);
+        expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("true");
+        expect(panel.querySelector(".chat-tool-output__actions")).toBeNull();
+      } finally {
+        pending.resolve();
+      }
+      await vi.waitFor(() =>
+        expect(panel.querySelector(".chat-tool-output__text")?.textContent?.length).toBe(
+          text.length,
+        ),
+      );
+      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
+      expect(button(panel, t("chat.toolCards.copyOutput"))).toBeDefined();
+      expect(button(panel, t("chat.toolCards.downloadOutput"))).toBeDefined();
+      expect(request).toHaveBeenCalledWith("chat.message.get", {
+        sessionKey: "global",
+        agentId: "work",
+        messageId: "result-b",
+        maxChars,
+      });
+      expect(panel.textContent).not.toContain("wrong sibling");
+      expect(panel.querySelector("strong")).toBeNull();
+      expect(panel.textContent).not.toContain("Captured before context processing");
 
-    const copy = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
-    button(panel, t("chat.toolCards.copyOutput")).click();
-    await vi.waitFor(() => expect(copy).toHaveBeenCalledWith(text));
-    // Use the same native Blob fixture as outbox tests; E2E covers browser downloads.
-    vi.stubGlobal("Blob", NodeBlob);
-    const create = vi.fn((_blob: Blob) => "blob:output-fixture");
-    const revoke = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = create;
-        static override revokeObjectURL = revoke;
-      },
-    );
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    button(panel, t("chat.toolCards.downloadOutput")).click();
-    const blob = create.mock.calls[0]?.[0];
-    expect(blob).toBeInstanceOf(Blob);
-    expect(await blob!.text()).toBe(text);
-    expect(revoke).toHaveBeenCalledWith("blob:output-fixture");
-  });
+      const copy = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
+      button(panel, t("chat.toolCards.copyOutput")).click();
+      await vi.waitFor(() => expect(copy).toHaveBeenCalledWith(text));
+      // Use the same native Blob fixture as outbox tests; E2E covers browser downloads.
+      vi.stubGlobal("Blob", NodeBlob);
+      const create = vi.fn((_blob: Blob) => "blob:output-fixture");
+      const revoke = vi.fn();
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = create;
+          static override revokeObjectURL = revoke;
+        },
+      );
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      button(panel, t("chat.toolCards.downloadOutput")).click();
+      const blob = create.mock.calls[0]?.[0];
+      expect(blob).toBeInstanceOf(Blob);
+      expect(await blob!.text()).toBe(text);
+      expect(revoke).toHaveBeenCalledWith("blob:output-fixture");
+    },
+  );
 
   it.each(["legacy capture", "recorded capture", "oversized", "not_found"] as const)(
     "keeps available output when full output is unavailable: %s",

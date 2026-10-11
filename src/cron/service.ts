@@ -1,5 +1,5 @@
-import type { CronEventRunOptions } from "./event-source.js";
 /** Stateful CronService facade around the locked service operation helpers. */
+import type { CronEventRunOptions } from "./event-source.js";
 import type {
   CronServiceContract,
   CronServiceRunOptions,

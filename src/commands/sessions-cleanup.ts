@@ -33,10 +33,7 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
-  action: ReturnType<typeof resolveSessionCleanupAction>;
-  label?: string;
-};
+type SessionCleanupActionRow = ReturnType<typeof buildActionRows>[number];
 
 type SessionCleanupLabelSummary = {
   label: string;
@@ -72,7 +69,7 @@ function formatCleanupActionCell(
 
 function buildActionRows(
   params: Awaited<ReturnType<typeof runSessionsCleanup>>["previewResults"][number],
-): SessionCleanupActionRow[] {
+) {
   // Recompute row actions from the preview sets so dry-run output uses the same
   // action labels as the cleanup engine without mutating the preview store.
   return toSessionDisplayRows(params.beforeStore).map((row) =>
@@ -159,7 +156,7 @@ function renderStoreDryRunPlan(params: {
   );
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
-  params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
+  params.runtime.log(`Would prune stale model-run checks: ${params.summary.modelRunPruned}`);
   params.runtime.log(`Would archive inactive sessions: ${params.summary.archived ?? 0}`);
   params.runtime.log(`Would archive cap overflow: ${params.summary.capArchived ?? 0}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);

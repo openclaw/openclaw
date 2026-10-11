@@ -193,7 +193,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     const images = [
       {
         type: "image" as const,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8Dwn4GBgYGJAQoAHxcCAr7cGDwAAAAASUVORK5CYII=",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=",
         mimeType: "image/png",
       },
     ];
@@ -224,7 +224,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     const images = [
       {
         type: "image" as const,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8Dwn4GBgYGJAQoAHxcCAr7cGDwAAAAASUVORK5CYII=",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=",
         mimeType: "image/png",
       },
     ];
@@ -322,6 +322,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     followupRun.run.senderName = "Sender Static";
     followupRun.run.senderUsername = "sender-static-user";
     followupRun.run.senderE164 = "+15550002222";
+    followupRun.run.conversationToolPolicy = { allow: ["read", "sessions_spawn"], deny: ["exec"] };
     followupRun.run.execOverrides = { host: "node", node: "mac-a" };
     followupRun.run.bashElevated = {
       enabled: true,
@@ -349,6 +350,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       senderName: "Sender Static",
       senderUsername: "sender-static-user",
       senderE164: "+15550002222",
+      conversationToolPolicy: { allow: ["read", "sessions_spawn"], deny: ["exec"] },
       execOverrides: { host: "node", node: "mac-a" },
       bashElevated: { enabled: true, allowed: true, defaultLevel: "full" },
       groupId: "group-static",

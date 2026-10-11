@@ -77,7 +77,7 @@ async function expectWorkerFailure(
   } = await import("./sqlite-readonly-worker-protocol.js");
   let received: unknown;
   try {
-    readSqliteReadOnlyWorkerValue({ stdout, stderr: "" }, mode);
+    readSqliteReadOnlyWorkerValue({ kind: "launched", stdout, stderr: "", status: 0 }, mode);
   } catch (cause) {
     received = cause;
   }
@@ -219,8 +219,10 @@ it.each([
     try {
       readSqliteReadOnlyWorkerValue(
         {
+          kind: "launched",
           stdout,
           stderr: "",
+          status: 0,
           ...(kind === "transport-failure" ? { failure: "native transport failed" } : {}),
           ...(kind === "empty-failure" ? { failure: "" } : {}),
         },

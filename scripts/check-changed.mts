@@ -343,7 +343,10 @@ function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
 }
 
 function shouldRunControlUiI18nVerify(paths: string[]) {
-  return paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath));
+  return (
+    detectChangedScope(paths).runControlUiI18n ||
+    paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath))
+  );
 }
 
 function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {

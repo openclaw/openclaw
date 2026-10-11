@@ -19,7 +19,7 @@ binary presence.
     Build and test a custom skill from scratch.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
-    Review and approve agent-drafted skill proposals.
+    Skills your agent learns on its own, with change history and undo.
   </Card>
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
     Full `skills.*` config schema and agent allowlists.
@@ -73,7 +73,7 @@ source kind, with the skill count and up to three example names. Workspace or
 project skills overriding bundled skills, and managed-worktree skills overriding
 project checkout skills, are warnings; other collisions are informational.
 Worktree provenance uses the configured `worktreeRoot` (the state directory's
-`worktrees/` by default), without probing Git. Identical content stays silent.
+`worktrees/` by default), without checking Git. Identical content stays silent.
 Unchanged root-pair summaries are not repeated on refresh; changes to content,
 declared metadata, or collision membership update the summary. Precedence is unchanged.
 
@@ -314,22 +314,22 @@ skill from model-initiated selection.
 
 ## Skill Workshop
 
-[Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent
-and its `<state-dir>/agents/<agentId>/agent/workshop-skills` directory. When the agent spots
-reusable work, it drafts a proposal instead of writing directly to `SKILL.md`.
-The scheduled weekly collection review is the scoped exception: its normal
-isolated turn may edit `SKILL.md` files directly inside the Workshop directory.
-Operators edit skills outside that directory through their owning tools or files.
+[Skill Workshop](/tools/skill-workshop) lets an agent save and update its own
+skills in `<state-dir>/agents/<agentId>/agent/workshop-skills`. Every change
+applies immediately, is announced, and saves the previous version so it can be
+undone. Learned skills are always visible to their agent; archive one to hide
+it. Operators edit skills outside that directory through their owning tools or
+files.
 
 ```bash
 openclaw skills workshop list
-openclaw skills workshop inspect <proposal-id>
-openclaw skills workshop evaluate <proposal-id>
-openclaw skills workshop apply <proposal-id>
+openclaw skills workshop changes
+openclaw skills workshop archive <name>
+openclaw skills workshop restore <name>
 ```
 
-See [Skill Workshop](/tools/skill-workshop) for the full lifecycle, CLI
-reference, and configuration.
+See [Skill Workshop](/tools/skill-workshop) for how agents learn skills and
+[`openclaw skills workshop`](/cli/skills#skill-workshop) for the CLI reference.
 
 ## Installing from ClawHub
 
@@ -754,7 +754,11 @@ command identities. Other CLI backends use the prompt catalog only.
 ## Snapshots and refresh
 
 OpenClaw snapshots eligible skills **when a session starts** and reuses that
-list until a refresh trigger below applies.
+list until a refresh trigger below applies. New sessions recheck skill
+prerequisites, including binaries installed into an existing `PATH` directory,
+even when the skill files have not changed.
+Existing snapshots keep their selected skill sources: a newly eligible skill
+with the same name does not replace another source's implementation during hydration.
 
 Managed library selections keep their exact revisions until an explicit
 attach or refresh, including across Gateway restarts. The refresh triggers
@@ -857,10 +861,10 @@ the total number of operating-system file watches.
     skills via the `exec` tool with `host=node`.
 
     Offline nodes do **not** make remote-only skills visible. If a node stops
-    answering bin probes, OpenClaw clears its cached bin matches.
+    answering bin checks, OpenClaw clears its cached bin matches.
 
-    Connect-time bin probes wait briefly for the node's command handlers.
-    Gateway shutdown cancels this readiness wait and still joins probes that
+    Connect-time bin checks wait briefly for the node's command handlers.
+    Gateway shutdown cancels this readiness wait and still joins checks that
     have already started.
 
   </Accordion>
@@ -974,7 +978,7 @@ read every admitted skill. Native harnesses retain their own prompt policy.
     Step-by-step guide to authoring a custom skill.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
-    Proposal queue for agent-drafted skills.
+    Skills your agent saves and updates on its own, with undo.
   </Card>
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
     Full `skills.*` config schema and agent allowlists.

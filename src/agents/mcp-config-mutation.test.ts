@@ -4,7 +4,10 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withContendedConfigMutation } from "../../test/helpers/config-mutation-lock.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import {
+  readConfigFileSnapshot,
+  setRuntimeConfigSnapshotRefreshHandler,
+} from "../config/config.js";
 import { listConfiguredMcpServers, mcpConfigInternal } from "../config/mcp-config.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -78,6 +81,44 @@ async function withMcpConfigHome(run: () => Promise<void>): Promise<void> {
 }
 
 describe("configured MCP OAuth cleanup", () => {
+  it("preserves config and OAuth credentials when deletion authority expires during preflight", async () => {
+    await withMcpConfigHome(async () => {
+      const initial = await setConfiguredMcpServer({
+        name: "fixture",
+        server: PER_REQUESTER_SERVER,
+      });
+      expect(initial.ok).toBe(true);
+      const { operator, requester } = seedOAuthState("fixture");
+      const raw = await fs.readFile(initial.path, "utf8");
+      let active = true;
+      setRuntimeConfigSnapshotRefreshHandler({
+        preflight: () => {
+          active = false;
+        },
+        refresh: () => true,
+      });
+      try {
+        await expect(
+          unsetConfiguredMcpServer({
+            name: "fixture",
+            assertCurrentAsync: async () => {
+              if (!active) {
+                throw new Error("deletion authority expired");
+              }
+            },
+          }),
+        ).rejects.toThrow("deletion authority expired");
+        expect(await fs.readFile(initial.path, "utf8")).toBe(raw);
+        expect((await readMcpOAuthStore(operator.storeKey)).tokens?.access_token).toBe("operator");
+        expect((await readMcpOAuthStore(requester.storeKey)).tokens?.access_token).toBe(
+          "requester",
+        );
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+      }
+    });
+  });
+
   it.each([
     {
       name: "set replacement",

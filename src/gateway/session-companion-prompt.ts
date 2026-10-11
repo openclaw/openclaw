@@ -41,7 +41,7 @@ export function formatObserverDigest(snapshot: SessionObserverCompanionSnapshot)
 
 export function buildReferenceContext(params: {
   thread: SessionCompanionThread;
-  deltaNotes: Array<{ sequence: number; text: string }>;
+  deltaNotes: SessionObserverCompanionSnapshot["notes"];
 }): string {
   const history =
     params.thread.context.messages.length === 0
@@ -74,7 +74,7 @@ export function selectDeltaNotes(
   snapshot: SessionObserverCompanionSnapshot,
   afterSequence: number,
 ): {
-  notes: Array<{ sequence: number; text: string }>;
+  notes: SessionObserverCompanionSnapshot["notes"];
   lastSequence: number;
 } {
   const candidates = snapshot.notes
@@ -110,13 +110,9 @@ export function composePromptMessages(params: {
   return messages;
 }
 
-function isPrivateReferenceEcho(value: string): boolean {
-  return value.includes(PRIVATE_REFERENCE_BEGIN) || value.includes(PRIVATE_REFERENCE_END);
-}
-
 export function sanitizeAnswer(value: string): string {
   const redacted = redactToolPayloadText(value).trim();
-  if (isPrivateReferenceEcho(redacted)) {
+  if (redacted.includes(PRIVATE_REFERENCE_BEGIN) || redacted.includes(PRIVATE_REFERENCE_END)) {
     return "";
   }
   return truncateUtf16Safe(redacted, ANSWER_MAX_CHARS);

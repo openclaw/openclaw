@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
   writeBuildStamp,
@@ -106,6 +106,25 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
       sourceRoots: [],
       configFiles: [],
     };
+    const originalRead = fsSync.readFileSync;
+    const read = vi.spyOn(fsSync, "readFileSync").mockImplementation((...args) => {
+      const contents = originalRead(...args);
+      if (args[0] === path.join(cwd, "src/stable.ts")) {
+        fsSync.writeFileSync(path.join(cwd, "src/index.ts"), "export const value = 2;\n");
+        fsSync.writeFileSync(path.join(cwd, "src/index.ts"), "export const value = 1;\n");
+      }
+      return contents;
+    });
+    let changedDuringCapture;
+    try {
+      changedDuringCapture = captureRunNodeInputState(deps, "build");
+    } finally {
+      read.mockRestore();
+    }
+    expect(changedDuringCapture).not.toBeNull();
+    expect(() => writeBuildStamp({ cwd, inputState: changedDuringCapture })).toThrow(
+      "Build inputs changed",
+    );
     await write("src/index.ts", "export const value = 2;\n");
     const inputState = captureRunNodeInputState(deps, "build");
     expect(inputState?.signature).toMatch(/^[a-f0-9]{64}$/u);

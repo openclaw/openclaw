@@ -328,16 +328,20 @@ type QueuedCronRunReservation = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
-  /** One prepared list, invalidated by committed revisions and service mutations. */
-  listPageSnapshot?: {
+  /** Read facts share one generation across committed and scheduler-local mutations. */
+  readSnapshot?: {
     storeRevision: number;
-    filteredJobs: CronJob[];
-    sortBy: CronJobsSortBy;
-    sortDir: CronSortDir;
-    jobs: CronJob[];
+    source: CronJob[] | undefined;
+    status: CronStatusSummary;
+    list?: {
+      filteredJobs: CronJob[];
+      sortBy: CronJobsSortBy;
+      sortDir: CronSortDir;
+      jobs: CronJob[];
+      snapshotRevision: string;
+    };
     /** Requested rows are detached and frozen once for this list generation. */
     readJobs: WeakMap<CronJob, CronJob>;
-    snapshotRevision: string;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
@@ -478,6 +482,7 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  sourceConversation?: CronStoredJob["sourceConversation"];
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;

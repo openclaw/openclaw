@@ -791,7 +791,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
   const obsidian = wiki.command("obsidian").description("Run official Obsidian CLI helpers");
   obsidian
     .command("status")
-    .description("Probe the Obsidian CLI")
+    .description("Check the Obsidian CLI")
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       requireCommandContext();

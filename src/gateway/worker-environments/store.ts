@@ -32,7 +32,6 @@ import type {
 
 export type {
   PreparedEnvironmentPlacementBinding,
-  PreparedEnvironmentSelection,
   WorkerEnvironmentRecord,
 } from "./environment-record.js";
 export type { WorkerEnvironmentTransitionPatch } from "./store-write-types.js";

@@ -75,7 +75,6 @@ export async function resolveMatrixIngressContent(config: {
 
   const {
     cfg,
-    liveDmAllowFrom,
     content: accessContent,
     messageId,
     audioPreflightMode,
@@ -93,12 +92,9 @@ export async function resolveMatrixIngressContent(config: {
     allowBotsMode,
     isConfiguredBotSender,
     selfUserId,
-    botLoopProtection,
     roomMatchMeta,
     getSenderName,
     accessState,
-    effectiveGroupAllowFrom,
-    effectiveRoomUsers,
   } = access;
   const { resolveMessageIngress } = accessState;
   let content = accessContent;
@@ -467,14 +463,10 @@ export async function resolveMatrixIngressContent(config: {
     : undefined;
 
   return {
-    cfg,
-    liveDmAllowFrom,
+    ...access,
     resolveMessageIngress,
     route: _route,
     hasExplicitSessionBinding,
-    roomConfig,
-    isDirectMessage,
-    isRoom,
     shouldRequireMention,
     wasMentioned,
     effectiveWasMentioned,
@@ -487,15 +479,8 @@ export async function resolveMatrixIngressContent(config: {
     commandBodyText,
     media,
     preflightAudioTranscript,
-    locationPayload,
-    messageId,
     triggerSnapshot: preparedTrigger,
-    threadRootId,
     threadContext,
-    thread,
-    botLoopProtection,
-    effectiveGroupAllowFrom,
-    effectiveRoomUsers,
   };
 }
 

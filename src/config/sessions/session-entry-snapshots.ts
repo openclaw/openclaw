@@ -121,12 +121,18 @@ export function writeSessionEntrySnapshots(
         ),
       ),
   );
-  for (const snapshot of snapshots) {
+  if (snapshots.length > 0) {
     executeSqliteQuerySync(
       database.db,
       db
         .insertInto("session_entry_snapshots")
-        .values({ session_key: sessionKey, field: snapshot.field, value_json: snapshot.valueJson })
+        .values(
+          snapshots.map((snapshot) => ({
+            session_key: sessionKey,
+            field: snapshot.field,
+            value_json: snapshot.valueJson,
+          })),
+        )
         .onConflict((conflict) =>
           conflict
             .columns(["session_key", "field"])

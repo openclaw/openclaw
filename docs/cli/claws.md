@@ -339,7 +339,7 @@ canonical Claw reader before success.
 ## Inspect and preview
 
 Validate the source without planning local changes. For OpenClaw profile
-extensions, inspect also performs the canonical read-only artifact probe and
+extensions, inspect also performs the canonical read-only artifact check and
 reports mapped and unavailable components:
 
 ```bash

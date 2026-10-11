@@ -236,6 +236,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
       providers: [anthropic],
+      providerIds: ["anthropic"],
     });
     expect(prepared.providers).toEqual([openai, anthropic]);
   });
@@ -254,7 +255,10 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       staticCatalogProviderIds: ["byteplus-plan"],
     });
 
-    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({ providers: [byteplus] });
+    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
+      providers: [byteplus],
+      providerIds: ["byteplus-plan"],
+    });
   });
 
   it("treats an explicit empty provider scope as no discovery", async () => {

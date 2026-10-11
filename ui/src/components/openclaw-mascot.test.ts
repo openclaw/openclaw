@@ -1,21 +1,21 @@
-/* @vitest-environment jsdom */
-
 import type { LitElement } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { setCurrentThemeBranding } from "../app/theme-branding.ts";
 import "./openclaw-mascot.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
   delete document.documentElement.dataset.themeMascot;
-  setCurrentThemeBranding({ mascot: "claw", critters: [] });
+  setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 it("replaces the animated mascot with a same-size neutral mark and restores it on theme changes", async () => {
   delete document.documentElement.dataset.themeMascot;
-  setCurrentThemeBranding({ mascot: "claw", critters: [] });
+  setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
   const requestFrame = vi.fn(() => 1);
   const cancelFrame = vi.fn();
   vi.stubGlobal("requestAnimationFrame", requestFrame);
@@ -28,7 +28,7 @@ it("replaces the animated mascot with a same-size neutral mark and restores it o
   expect(mascot.shadowRoot?.querySelector("canvas")).not.toBeNull();
   expect(requestFrame).toHaveBeenCalledOnce();
 
-  setCurrentThemeBranding({ mascot: "none", critters: [] });
+  setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));
   document.documentElement.dataset.themeMascot = "none";
   await Promise.resolve();
   await mascot.updateComplete;
@@ -37,7 +37,7 @@ it("replaces the animated mascot with a same-size neutral mark and restores it o
   expect(mascot.style.getPropertyValue("--openclaw-mascot-size")).toBe("48px");
   expect(cancelFrame).toHaveBeenCalledWith(1);
 
-  setCurrentThemeBranding({ mascot: "claw", critters: [] });
+  setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
   document.documentElement.dataset.themeMascot = "claw";
   await Promise.resolve();
   await mascot.updateComplete;

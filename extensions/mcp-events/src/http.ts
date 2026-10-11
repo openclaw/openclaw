@@ -8,7 +8,6 @@ import {
 import { CALLBACK_PREFIX, CallbackError, MAX_EVENT_BYTES } from "./protocol.js";
 import type { McpEventsService } from "./service.js";
 
-/** The only unauthenticated route is authenticated by per-binding Standard Webhooks signatures. */
 export function createCallbackHandler(
   getService: () => McpEventsService | undefined,
 ): OpenClawPluginHttpRouteHandler {
@@ -42,8 +41,7 @@ export function createCallbackHandler(
       return true;
     }
     try {
-      // The shared body reader bounds bytes/time. Base64 preserves the exact original bytes
-      // including invalid UTF-8, which must not authenticate against a replacement-decoded body.
+      // Preserve invalid UTF-8: replacement decoding must not change the authenticated bytes.
       const raw = await readRequestBodyWithLimit(req, {
         maxBytes: MAX_EVENT_BYTES,
         timeoutMs: 5_000,

@@ -59,15 +59,10 @@ export async function resolveInspectedChannelAccount(params: {
     };
   }
   const sourceInspectedAccount = await inspectChannelAccount({
-    plugin: params.plugin,
+    ...params,
     cfg: params.sourceConfig,
-    accountId: params.accountId,
   });
-  const resolvedInspectedAccount = await inspectChannelAccount({
-    plugin: params.plugin,
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
+  const resolvedInspectedAccount = await inspectChannelAccount(params);
   const resolvedInspection = asNullableRecord(resolvedInspectedAccount);
   const sourceInspection = asNullableRecord(sourceInspectedAccount);
   // When a source config says a credential exists but this process cannot resolve it, keep the

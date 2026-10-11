@@ -26,7 +26,12 @@ vi.mock("./cli-auth-seam.js", () => {
 
 import { CLAUDE_CLI_NATIVE_AUTH_MARKER } from "./cli-constants.js";
 import anthropicPlugin from "./index.js";
-import { claude5ContractCases } from "./model-contract-cases.test-support.js";
+import {
+  claude5ContractCases,
+  createModelRegistry,
+  expectFields,
+  levelIds,
+} from "./model-contract-cases.test-support.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
 
 beforeEach(() => {
@@ -38,37 +43,11 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function createModelRegistry(models: ProviderRuntimeModel[]) {
-  return {
-    find(providerId: string, modelId: string) {
-      return (
-        models.find(
-          (model) =>
-            model.provider === providerId && model.id.toLowerCase() === modelId.toLowerCase(),
-        ) ?? null
-      );
-    },
-  };
-}
-
 const requireRecord = createRequireRecord("object", "expected-label");
-
-function expectFields(value: unknown, fields: Record<string, unknown>) {
-  const record = requireRecord(value, "record");
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(record[key]).toEqual(expected);
-  }
-}
 
 function expectModelParams(models: unknown, modelId: string, params: Record<string, unknown>) {
   const model = requireRecord(requireRecord(models, "models")[modelId], modelId);
   expectFields(model.params, params);
-}
-
-function levelIds(profile: unknown): Array<unknown> {
-  const levels = requireRecord(profile, "thinking profile").levels;
-  expect(Array.isArray(levels), "thinking levels").toBe(true);
-  return (levels as Array<{ id?: unknown }>).map((level) => level.id);
 }
 
 const ANTHROPIC_SETUP_TOKEN = `sk-ant-oat01-${"a".repeat(80)}`;
@@ -701,7 +680,19 @@ describe("anthropic provider replay hooks", () => {
           ...(checksCliPolicy
             ? {}
             : { contextWindow: 200_000, contextTokens: 200_000, maxTokens: 64_000 }),
-          ...(restoresMissingCost ? { cost: undefined } : {}),
+          ...(restoresMissingCost
+            ? {
+                cost:
+                  restoresMissingCost === "tiers" && cost
+                    ? {
+                        input: cost.input,
+                        output: cost.output,
+                        cacheRead: cost.cacheRead,
+                        cacheWrite: cost.cacheWrite,
+                      }
+                    : undefined,
+              }
+            : {}),
         } as ProviderRuntimeModel,
       } as never);
       expectFields(normalized, {

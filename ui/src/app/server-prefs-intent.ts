@@ -48,7 +48,7 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
     }
     if (nextValue === undefined) {
       // JSON merge patch removes keys via explicit null.
-      if (specification.clearable) {
+      if (specification.write) {
         prefs[key] = null;
       }
       continue;

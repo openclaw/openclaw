@@ -76,6 +76,7 @@ describe("installed plugin update config migration", () => {
     "rules-only-pending-ready",
     "transform-failure",
     "state-migration",
+    "state-migration-install",
     "write-failure",
     "revoked",
   ] as const)("preserves listener settings and completion authority: %s", async (scenario) => {
@@ -86,6 +87,8 @@ describe("installed plugin update config migration", () => {
       },
       async (state) => {
         const pluginId = "listener-fixture";
+        const pendingState =
+          scenario === "state-migration" || scenario === "state-migration-install";
         const packageName = "@acme/listener-fixture";
         const retainsOther =
           scenario === "unrelated-pending" ||
@@ -116,6 +119,7 @@ describe("installed plugin update config migration", () => {
         const installScenario =
           scenario === "install-replacement" ||
           scenario === "disabled-install" ||
+          scenario === "state-migration-install" ||
           scenario === "accepted-install-failure" ||
           scenario === "accepted-install-superseded";
         const incompleteContract =
@@ -179,7 +183,7 @@ describe("installed plugin update config migration", () => {
             path.join(root, "setup-entry.mjs"),
             `export default {
           kind: "bundled-channel-setup-entry", features: {}, loadSetupPlugin() { return {}; },
-          ${inactive && version === "2.0.0" ? 'loadLegacyStateMigrationDetector() { throw new Error("disabled state work must not run"); },' : scenario === "state-migration" && version === "2.0.0" ? 'loadLegacyStateMigrationDetector() { return () => { throw new Error("data migration must use Doctor maintenance"); }; },' : ""}
+          ${inactive && version === "2.0.0" ? 'loadLegacyStateMigrationDetector() { throw new Error("disabled state work must not run"); },' : pendingState && version === "2.0.0" ? 'loadLegacyStateMigrationDetector() { return () => { throw new Error("data migration must use Doctor maintenance"); }; },' : ""}
         };`,
           );
           fs.writeFileSync(
@@ -310,7 +314,7 @@ describe("installed plugin update config migration", () => {
                 pluginId,
                 reason: "The previous updater retained the installed package.",
                 command: "openclaw doctor --fix",
-                ...(inactive ? { requiresStateMigration: true as const } : {}),
+                ...(inactive || pendingState ? { requiresStateMigration: true as const } : {}),
                 configPaths: [["plugins", "entries", pluginId, "config", "oldPort"]],
                 validationExcludedPaths: [["plugins", "entries", pluginId, "config", "oldPort"]],
               },
@@ -402,12 +406,15 @@ describe("installed plugin update config migration", () => {
           "include-rollback-postverify-failure",
           "rollback-generation-conflict",
           "transform-failure",
-          "state-migration",
           "write-failure",
           "revoked",
         ].includes(scenario);
         gateway.online =
-          failure || acceptedFailure || scenario === "unchanged" || scenario === "partial-update";
+          failure ||
+          acceptedFailure ||
+          pendingState ||
+          scenario === "unchanged" ||
+          scenario === "partial-update";
         gateway.call.mockReset().mockImplementation(async (method: string) => {
           if (method === "plugins.refresh") {
             const current = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
@@ -588,6 +595,7 @@ describe("installed plugin update config migration", () => {
             });
           }
         }
+        const applyRuntime = vi.fn();
         const command = installScenario
           ? (async () => {
               const prepared = await configIo.readConfigFileSnapshotForWrite();
@@ -600,6 +608,7 @@ describe("installed plugin update config migration", () => {
                 pluginId,
                 install: nextRecords[pluginId],
                 invalidateRuntimeCache: false,
+                ...(pendingState ? { applyRuntime } : {}),
                 ...(acceptedFailure ? { transaction: payload } : {}),
                 ...(scenario === "disabled-install" ? { enable: false } : {}),
               });
@@ -654,13 +663,11 @@ describe("installed plugin update config migration", () => {
                 ? "Plugin config repair could not be inspected"
                 : scenario === "transform-failure"
                   ? "fixture transform refused"
-                  : scenario === "state-migration"
-                    ? "Plugin settings are not ready for activation"
-                    : scenario === "write-failure"
-                      ? "fixture publication refused"
-                      : scenario === "include-post-publish-failure"
-                        ? "failed to verify plugin lifecycle lease"
-                        : undefined;
+                  : scenario === "write-failure"
+                    ? "fixture publication refused"
+                    : scenario === "include-post-publish-failure"
+                      ? "failed to verify plugin lifecycle lease"
+                      : undefined;
           await expect(command).rejects.toThrow(reason);
           if (scenario === "rollback-generation-conflict") {
             expect(
@@ -711,7 +718,7 @@ describe("installed plugin update config migration", () => {
           expect(saved.plugins).toEqual({ $include: state.statePath("plugins.json") });
         }
         expect(plugins.entries[pluginId].config).toEqual({
-          ...(inactive ? { oldPort: 57597 } : {}),
+          ...(inactive || pendingState ? { oldPort: 57597 } : {}),
           listener: {
             port: 57597,
             ...(scenario === "env-reference" || ready ? { host: "${LISTENER_HOST}" } : {}),
@@ -725,7 +732,7 @@ describe("installed plugin update config migration", () => {
           });
         }
         expect(readDeferredPluginMigrations({ env: state.env })).toEqual(
-          inactive ? beforePending : retainsOther ? [unrelated] : [],
+          inactive || pendingState ? beforePending : retainsOther ? [unrelated] : [],
         );
         expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
           nextRecords,
@@ -736,7 +743,14 @@ describe("installed plugin update config migration", () => {
         if (scenario === "partial-update") {
           expect(fs.existsSync(unselectedMarker)).toBe(false);
         }
-        if (settled) {
+        if (pendingState) {
+          expect(applyRuntime).not.toHaveBeenCalled();
+          expect(gateway.call.mock.calls.map(([method]) => method)).toEqual(
+            installScenario ? [] : ["plugins.list"],
+          );
+          expect(log.mock.calls.flat().join("\n")).toContain("openclaw doctor --fix");
+          expect(fs.existsSync(previousPath)).toBe(true);
+        } else if (settled) {
           expect(fs.readFileSync(state.configPath, "utf8")).toBe(beforeConfig);
           expect(log).not.toHaveBeenCalledWith(
             "Updates saved; they will load on the next Gateway start.",

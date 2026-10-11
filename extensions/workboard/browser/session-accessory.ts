@@ -7,7 +7,7 @@ import type { WorkboardCapability } from "./lib/workboard/capability.ts";
 import { isActiveWorkboardCard } from "./lib/workboard/card-state.ts";
 import { findWorkboardSessionCard } from "./lib/workboard/session-links.ts";
 import { matchesAgentScope } from "./pages/workboard/agent-filter.ts";
-import { workboardPageTarget } from "./pages/workboard/workboard-page.ts";
+import { workboardPageTarget } from "./pages/workboard/page-target.ts";
 
 export function createWorkboardSessionAccessory(
   workboard: WorkboardCapability,

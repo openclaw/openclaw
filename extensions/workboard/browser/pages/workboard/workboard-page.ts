@@ -28,6 +28,7 @@ import { createWorkboardSessionResolver } from "../../lib/workboard/session-reso
 import type { WorkboardBoardMetadata } from "../../lib/workboard/types.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+import { workboardPageTarget } from "./page-target.ts";
 import { createSessionsBoardController } from "./sessions-board-controller.ts";
 import { loadBoardAutomation, renderBoardAutomationHeading } from "./view-automation.ts";
 import {
@@ -44,13 +45,6 @@ import {
 } from "./view-helpers.ts";
 import { renderSessionsBoard } from "./view-sessions-board.ts";
 import { renderWorkboard } from "./view.ts";
-
-export function workboardPageTarget(boardId?: string) {
-  return {
-    id: "workboard",
-    path: boardId && boardId !== WORKBOARD_ALL_BOARDS_FILTER ? [boardId] : [],
-  };
-}
 
 function reconcileCardOverlays(state: WorkboardUiState, visible: (card: WorkboardCard) => boolean) {
   const remainsVisible = (id: string) =>

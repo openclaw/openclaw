@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
-import { setChromeMcpProcessCleanupDepsForTest } from "./chrome-mcp-process.js";
 import {
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -17,6 +16,10 @@ import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition } from "./server-context.lifecycle.js";
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
 
+const { mockChromeMcpProcesses, resetChromeMcpProcessMocks } = await vi.hoisted(
+  () => import("./chrome-mcp-process.test-support.js"),
+);
+
 beforeEach(() => {
   getChromeMcpModule.clear();
 });
@@ -24,6 +27,7 @@ beforeEach(() => {
 afterEach(async () => {
   getChromeMcpModule.clear();
   await resetChromeMcpSessionsForTest();
+  resetChromeMcpProcessMocks();
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
@@ -49,7 +53,7 @@ function createExistingSessionProcessFixture(
   const listProcesses = vi.fn(async () =>
     [...alive].map((pid) => ({ pid, ppid: 1, identity: `fixture:${pid}` })),
   );
-  setChromeMcpProcessCleanupDepsForTest({
+  mockChromeMcpProcesses({
     platform: "linux",
     listProcesses,
     sleep: async () => {},

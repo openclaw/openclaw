@@ -1,6 +1,9 @@
 import type { SkillsDetailResult } from "@openclaw/gateway-protocol";
 // ClawHub skill metadata, trust, install resolution, cards, and telemetry.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { SkillsSearchResult } from "../../packages/gateway-protocol/src/schema/skills-search.js";
 import {
   ClawHubRequestError,
   createClawHubError,
@@ -8,6 +11,10 @@ import {
   fetchClawHubJson,
   parseClawHubJsonBody,
   readClawHubBytes,
+  readClawHubBooleanField,
+  readClawHubStringField,
+  readRequiredClawHubStringField,
+  readRequiredClawHubNumberField,
   withClawHubResponse,
   resolveClawHubBaseUrl,
   resolveClawHubImageUrl,
@@ -25,33 +32,7 @@ export const CLAWHUB_SKILLS_SH_TRUST_LABEL = "Not scanned by ClawHub" as const;
 export const CLAWHUB_SKILLS_SH_REF_PREFIX = "skills-sh:" as const;
 export type ClawHubSkillsShTrustState = typeof CLAWHUB_SKILLS_SH_TRUST_STATE;
 
-export type ClawHubSkillSearchResult = {
-  score: number;
-  slug: string;
-  registry: string;
-  /**
-   * Reference install must send back. Search returns the same slug for several publishers, so
-   * the bare slug alone resolves to 409 AMBIGUOUS_SKILL_SLUG. This names the result's own
-   * source: rewriting an external reference into `@owner/slug` would install a different skill.
-   */
-  installRef: string;
-  /**
-   * Set only for sources ClawHub serves install-only, so clients install directly instead of
-   * opening a detail card that cannot resolve. Absence means the ordinary review-then-install
-   * flow, which is what every released Gateway already implies by omitting this field.
-   */
-  installOnly?: true;
-  trustState?: ClawHubSkillsShTrustState;
-  // Search may return the same slug for multiple publishers; exact install refs need this handle.
-  ownerHandle?: string | null;
-  /** Official status comes from ClawHub's canonical search result, never the handle. */
-  official?: boolean;
-  displayName: string;
-  summary?: string;
-  icon?: string | null;
-  version?: string;
-  updatedAt?: number;
-};
+export type ClawHubSkillSearchResult = SchemaContract<SkillsSearchResult["results"][number]>;
 
 /** Source variants ClawHub resolves search results from. Anything else is unidentifiable. */
 const CLAWHUB_NATIVE_SOURCE_KIND = "clawhub";
@@ -186,14 +167,11 @@ function buildVersionOrTagSearch(params: {
 }): { version?: string; tag?: string; ownerHandle?: string } | undefined {
   const version = normalizeOptionalString(params.version);
   const ownerHandle = normalizeOptionalString(params.ownerHandle);
-  if (version) {
-    return { version, ...(ownerHandle ? { ownerHandle } : {}) };
-  }
-  const tag = normalizeOptionalString(params.tag);
-  if (tag) {
-    return { tag, ...(ownerHandle ? { ownerHandle } : {}) };
-  }
-  return ownerHandle ? { ownerHandle } : undefined;
+  const tag = version ? undefined : normalizeOptionalString(params.tag);
+  const selection = version ? { version } : tag ? { tag } : undefined;
+  return selection || ownerHandle
+    ? { ...selection, ...(ownerHandle ? { ownerHandle } : {}) }
+    : undefined;
 }
 
 export async function searchClawHubSkills(
@@ -236,10 +214,127 @@ export async function searchClawHubSkills(
       updatedAt: entry.metrics?.updatedAt ?? undefined,
     }));
   }
-  return entries.flatMap((entry) => {
-    const mapped = toClawHubSkillSearchResult(entry, registry);
-    return mapped ? [mapped] : [];
+  return entries.flatMap((entry) => mapClawHubSkillSearchEntry(entry, registry));
+}
+
+export async function fetchClawHubSkillCatalog(
+  params: ClawHubFetchOptions & {
+    query?: string;
+    feed?: "catalog" | "trending";
+    officialOnly?: boolean;
+    cursor?: string;
+    limit?: number;
+  },
+): Promise<{ items: ClawHubSkillSearchResult[]; nextCursor?: string }> {
+  const query = params.query?.trim();
+  if (query && params.cursor) {
+    throw new Error("ClawHub skill search does not support a cursor.");
+  }
+  const registry = resolveClawHubBaseUrl(params.baseUrl);
+  const trending = !query && params.feed === "trending";
+  const result = await fetchClawHubJson<unknown>({
+    ...params,
+    baseUrl: registry,
+    path: query ? "/api/v1/packages/search" : trending ? "/api/v1/trending" : "/api/v1/packages",
+    search: {
+      ...(trending
+        ? { kind: "skills" }
+        : {
+            family: "skill",
+            ...(query ? { q: query } : { sort: "downloads" }),
+            isOfficial: params.officialOnly ? "true" : undefined,
+          }),
+      limit: String(Math.min(params.limit ?? 100, 100)),
+      cursor: params.cursor,
+    },
   });
+  const rows = isRecord(result) ? result[query ? "results" : "items"] : undefined;
+  if (!isRecord(result) || !Array.isArray(rows)) {
+    throw new Error("Malformed ClawHub skill catalog: expected a result array.");
+  }
+  const nextCursor = readClawHubStringField(result, "nextCursor", "skill catalog");
+  const entries = rows.map((row, index): ClawHubSkillSearchWireEntry => {
+    const context = `skill catalog item ${index}`;
+    if (!isRecord(row)) {
+      throw new Error(`Malformed ClawHub ${context}: expected an object.`);
+    }
+    const value = query ? row.package : row;
+    if (!isRecord(value)) {
+      throw new Error(`Malformed ClawHub ${context}: expected a package object.`);
+    }
+    const slug = readRequiredClawHubStringField(value, trending ? "slug" : "name", context);
+    const displayName = readRequiredClawHubStringField(value, "displayName", context);
+    const official = readClawHubBooleanField(value, trending ? "official" : "isOfficial", context);
+    const summary = readClawHubStringField(value, "summary", context) ?? undefined;
+    const icon = readClawHubStringField(value, "icon", context);
+    const entry = { score: 0, slug, displayName, official, summary, icon };
+    if (trending) {
+      const publisher = value.publisher;
+      const metrics = value.metrics;
+      const install = value.install;
+      if (
+        (publisher !== null && publisher !== undefined && !isRecord(publisher)) ||
+        (metrics !== undefined && !isRecord(metrics)) ||
+        !isRecord(install)
+      ) {
+        throw new Error(`Malformed ClawHub ${context}: invalid trending identity or metrics.`);
+      }
+      return Object.assign(entry, {
+        source: readRequiredClawHubStringField(value, "source", context),
+        install: {
+          kind: readRequiredClawHubStringField(install, "kind", context),
+          reference: readRequiredClawHubStringField(install, "reference", context),
+        },
+        ownerHandle: publisher ? readClawHubStringField(publisher, "handle", context) : undefined,
+        updatedAt: metrics
+          ? readRequiredClawHubNumberField(metrics, "updatedAt", context)
+          : undefined,
+      });
+    }
+    if (value.family !== "skill") {
+      throw new Error(`Malformed ClawHub ${context}: expected skill family.`);
+    }
+    entry.score = query ? readRequiredClawHubNumberField(row, "score", context) : 0;
+    return Object.assign(entry, {
+      source: CLAWHUB_NATIVE_SOURCE_KIND,
+      ownerHandle: readClawHubStringField(value, "ownerHandle", context),
+      version: readClawHubStringField(value, "latestVersion", context) ?? undefined,
+      updatedAt: readRequiredClawHubNumberField(value, "updatedAt", context),
+    });
+  });
+  const items = entries.flatMap((entry) => mapClawHubSkillSearchEntry(entry, registry));
+  if (trending) {
+    // Canonical trending combines publisher and listing official status. Bulk discovery
+    // needs the listing flag, which only the package metadata endpoint exposes.
+    for (let offset = 0; offset < items.length; offset += 4) {
+      await Promise.all(
+        items.slice(offset, offset + 4).map(async (item) => {
+          if (item.installOnly) {
+            item.official = undefined;
+            return;
+          }
+          const detail = await fetchClawHubJson<unknown>({
+            ...params,
+            baseUrl: registry,
+            path: `/api/v1/packages/${encodeURIComponent(item.slug)}`,
+            search: { family: "skill", ownerHandle: item.ownerHandle ?? undefined },
+          });
+          if (!isRecord(detail) || !isRecord(detail.package)) {
+            throw new Error("Malformed ClawHub skill listing: expected a package object.");
+          }
+          // This route resolves packages before skills, even with family=skill.
+          const listing = detail.package;
+          item.official =
+            listing.family === "skill" &&
+            listing.name === item.slug &&
+            listing.ownerHandle === item.ownerHandle
+              ? readClawHubBooleanField(listing, "isOfficial", "skill listing")
+              : undefined;
+        }),
+      );
+    }
+  }
+  return { items, ...(nextCursor ? { nextCursor } : {}) };
 }
 
 /**
@@ -247,10 +342,10 @@ export async function searchClawHubSkills(
  * unknown, or whose external reference is missing, is dropped rather than published under
  * `@owner/slug`: that spelling would point install at a different publisher's skill.
  */
-function toClawHubSkillSearchResult(
+function mapClawHubSkillSearchEntry(
   entry: ClawHubSkillSearchWireEntry,
   registry: string,
-): ClawHubSkillSearchResult | undefined {
+): ClawHubSkillSearchResult | [] {
   const { install: _install, source: _source, ...rest } = entry;
   const base = { ...rest, registry, icon: resolveClawHubImageUrl(entry.icon, registry) };
   const source = normalizeOptionalString(entry.source);
@@ -259,14 +354,14 @@ function toClawHubSkillSearchResult(
   // Source identifies the catalog row. Install kind only describes how ClawHub will deliver it:
   // native ClawHub rows may legitimately be GitHub-backed.
   if (installKind && !CLAWHUB_SUPPORTED_INSTALL_KINDS.has(installKind)) {
-    return undefined;
+    return [];
   }
   switch (source) {
     case CLAWHUB_SKILLS_SH_SOURCE_KIND: {
       // An external row is only installable as itself. Without its own reference there is no
       // identity to install, so the row cannot be offered at all.
       if (!reference?.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)) {
-        return undefined;
+        return [];
       }
       return {
         ...base,
@@ -279,10 +374,10 @@ function toClawHubSkillSearchResult(
       // Native rows report `owner/slug`; this repo's reference grammar is `@owner/slug`. Without
       // a publisher the bare slug answers 409 AMBIGUOUS_SKILL_SLUG for every action.
       const ownerHandle = normalizeOptionalString(entry.ownerHandle);
-      return ownerHandle ? { ...base, installRef: `@${ownerHandle}/${entry.slug}` } : undefined;
+      return ownerHandle ? { ...base, installRef: `@${ownerHandle}/${entry.slug}` } : [];
     }
     default:
-      return undefined;
+      return [];
   }
 }
 

@@ -576,11 +576,9 @@ export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {
       throw err;
     }
     const message = `Failed to write update.run restart sentinel: ${String(err)}`;
-    if (params.jsonMode) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(theme.warn(message));
-    }
+    defaultRuntime[params.jsonMode ? "error" : "log"](
+      params.jsonMode ? message : theme.warn(message),
+    );
   }
 }
 
@@ -597,11 +595,9 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
     await markControlPlaneUpdateRestartSentinelFailure(params.reason, params.meta, params.env);
   } catch (err) {
     const message = `Failed to mark update.run restart sentinel failed: ${String(err)}`;
-    if (params.jsonMode) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(theme.warn(message));
-    }
+    defaultRuntime[params.jsonMode ? "error" : "log"](
+      params.jsonMode ? message : theme.warn(message),
+    );
   }
 }
 

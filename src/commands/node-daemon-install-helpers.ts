@@ -35,14 +35,8 @@ export async function buildNodeInstallPlan(params: {
 }): Promise<Omit<GatewayInstallPlan, "runtime"> & { description?: string }> {
   const wrapperPath = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
-    env: params.env,
-    runtime: params.runtime,
-    runtimeExplicit: params.runtimeExplicit,
-    devMode: params.devMode,
-    runtimePath: params.runtimePath,
-    pinnedRuntimePath: params.pinnedRuntimePath,
+    ...params,
     wrapperPath,
-    warn: params.warn,
   });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,

@@ -6,16 +6,14 @@ import { readSourceConfigSnapshot } from "../config/io.js";
 import * as configMutate from "../config/mutate.js";
 import { withTempHomeConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  beginAgentDeletionJournal,
-  readAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
 import {
@@ -283,6 +281,7 @@ describe("Claw MCP removal", () => {
       expectedServer: sourceServer,
       recordIndependentOwner: false,
       assertCurrent: expect.any(Function),
+      assertCurrentAsync: expect.any(Function),
     });
     expect(result).toMatchObject({
       status: "complete",
@@ -390,6 +389,7 @@ describe("Claw MCP removal", () => {
         expectedServer: sourceServer,
         recordIndependentOwner: false,
         assertCurrent: expect.any(Function),
+        assertCurrentAsync: expect.any(Function),
       });
       expect(result).toMatchObject({
         status: "complete",

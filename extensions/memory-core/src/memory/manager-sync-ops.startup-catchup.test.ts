@@ -18,6 +18,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -478,8 +479,34 @@ describe("session startup catch-up", () => {
       true,
     );
 
-    await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
-    await harness.waitForSessionSync();
+    const observed = observeHostDataSql();
+    const cpuStart = process.threadCpuUsage();
+    const started = performance.now();
+    try {
+      await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
+      await harness.waitForSessionSync();
+      const sourceSql = observed.queries.filter((sql) =>
+        /\b(?:from|update)\s+["`]?memory_index_sources\b/i.test(sql),
+      );
+      if (process.env.OPENCLAW_MEMORY_RETRIEVAL_BENCH === "1") {
+        const cpu = process.threadCpuUsage(cpuStart);
+        console.log(
+          "MEMORY_PUBLICATION_BENCH",
+          JSON.stringify({
+            operation: "source-refresh",
+            cohortSqlObservations: sourceSql.length,
+            wholeMainSqlCalls: observed.calls
+              .slice(1)
+              .reduce((total, call) => total + call.mock.calls.length, 0),
+            wholeMainCpuMs: (cpu.user + cpu.system) / 1000,
+            endToEndMs: performance.now() - started,
+          }),
+        );
+      }
+      expect(sourceSql).toEqual([]);
+    } finally {
+      observed.restore();
+    }
 
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
     expect(harness.indexedPaths).toEqual([]);

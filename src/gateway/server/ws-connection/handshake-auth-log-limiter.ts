@@ -1,11 +1,4 @@
-// Rate limiter for noisy websocket handshake auth logs.
 import { pruneMapToMaxSize } from "../../../infra/map-size.js";
-
-/** Decision returned for a handshake auth log attempt. */
-type HandshakeAuthLogDecision = {
-  shouldLog: boolean;
-  suppressedSinceLastLog: number;
-};
 
 type HandshakeAuthLogState = {
   lastLoggedAtMs: number;
@@ -16,8 +9,7 @@ type HandshakeAuthLogState = {
 export class HandshakeAuthLogLimiter {
   private readonly entries = new Map<string, HandshakeAuthLogState>();
 
-  /** Register one auth event key and decide whether it should be logged now. */
-  register(key: string, nowMs = Date.now()): HandshakeAuthLogDecision {
+  register(key: string, nowMs = Date.now()) {
     const entry = this.entries.get(key);
     if (!entry) {
       pruneMapToMaxSize(this.entries, 255);
@@ -40,7 +32,6 @@ export class HandshakeAuthLogLimiter {
   }
 }
 
-/** Build the limiter key from auth failure context. */
 export function buildHandshakeAuthLogKey(params: {
   reason?: string;
   remoteAddr?: string;
@@ -57,7 +48,6 @@ export function buildHandshakeAuthLogKey(params: {
   ].join("|");
 }
 
-/** Return whether a missing-credential failure should use log rate limiting. */
 export function shouldLimitMissingCredentialAuthLog(params: {
   reason?: string;
   authProvided?: string;

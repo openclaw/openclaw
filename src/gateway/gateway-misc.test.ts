@@ -126,7 +126,7 @@ describe("GatewayClient", () => {
   }
 
   function startGatewayClient(params: { url: string; tlsFingerprint?: string }) {
-    const client = new GatewayClient(params);
+    const client = new GatewayClient({ ...params, deviceIdentity: null });
     client.start();
     return wsMockState.last;
   }

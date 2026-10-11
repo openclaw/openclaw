@@ -38,11 +38,16 @@ function query(database: DatabaseSync) {
   return getNodeSqliteKysely<TurnDatabase>(database);
 }
 
-const turnSchema = createSqliteSchemaEnsurer(() =>
-  extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_turns", {
-    endMarker: "\n  WHERE state = 'running';",
-    errorMessage: "OpenClaw node worker turn schema marker is missing.",
-  }),
+const turnSchema = createSqliteSchemaEnsurer(
+  () =>
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_turns", {
+      endMarker: "\n  WHERE state = 'running';",
+      errorMessage: "OpenClaw node worker turn schema marker is missing.",
+    }),
+  {
+    tables: ["node_worker_turns"],
+    indexes: ["idx_node_worker_turns_terminal_completed", "idx_node_worker_turns_active_owner"],
+  },
 );
 
 function readRow(database: DatabaseSync, turnId: string): TurnRow | undefined {
@@ -133,25 +138,18 @@ export class NodeWorkerTurnKernel {
   ) {}
 
   private write<T>(operationLabel: string, operation: (database: DatabaseSync) => T): T {
-    let initialized: DatabaseSync | undefined;
-    const result = runOpenClawStateWriteTransaction(
+    return runOpenClawStateWriteTransaction(
       ({ db }) => {
         requestSqliteWorkerOperationAdmission({
           stage: "transaction",
           facts: { kind: "node-worker-journal" },
         });
-        if (turnSchema.ensure(db)) {
-          initialized = db;
-        }
+        turnSchema(db);
         return operation(db);
       },
       this.databaseOptions,
       { operationLabel },
     );
-    if (initialized) {
-      turnSchema.recordCommitted(initialized);
-    }
-    return result;
   }
 
   claim(params: {

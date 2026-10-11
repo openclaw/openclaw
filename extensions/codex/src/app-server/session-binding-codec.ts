@@ -19,18 +19,6 @@ export function hashCodexAppServerBindingFingerprint(canonical: string): string 
   return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
 }
 
-function normalizeLegacyBindingFingerprint(value: unknown): unknown {
-  if (
-    typeof value !== "string" ||
-    value === "" ||
-    value === "[]" ||
-    BOUNDED_BINDING_FINGERPRINT_PATTERN.test(value)
-  ) {
-    return value;
-  }
-  return hashCodexAppServerBindingFingerprint(value);
-}
-
 function normalizeLegacyBindingFingerprints<
   T extends {
     dynamicToolsFingerprint?: unknown;
@@ -42,7 +30,13 @@ function normalizeLegacyBindingFingerprints<
   let normalized = record;
   for (const key of ["dynamicToolsFingerprint", "userMcpServersFingerprint"] as const) {
     const value = record[key];
-    const next = normalizeLegacyBindingFingerprint(value);
+    const next =
+      typeof value === "string" &&
+      value !== "" &&
+      value !== "[]" &&
+      !BOUNDED_BINDING_FINGERPRINT_PATTERN.test(value)
+        ? hashCodexAppServerBindingFingerprint(value)
+        : value;
     if (next === value) {
       continue;
     }

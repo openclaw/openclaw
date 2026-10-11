@@ -273,24 +273,15 @@ export class OpenAIQuicksilverDelegationController {
   }
 
   stop(reason: Error): void {
-    if (this.stopped) {
-      return;
+    if (this.retire()) {
+      this.consultController?.abort(reason);
+      this.consultController = undefined;
     }
-    this.publicDelegations?.stop();
-    this.flushTranscript();
-    this.markStopped();
-    this.consultController?.abort(reason);
-    this.consultController = undefined;
   }
 
   /** Releases sideband ownership without canceling work already accepted by the host. */
   detach(): void {
-    if (this.stopped) {
-      return;
-    }
-    this.publicDelegations?.stop();
-    this.flushTranscript();
-    this.markStopped();
+    this.retire();
   }
 
   flushTranscript(): void {
@@ -452,12 +443,18 @@ export class OpenAIQuicksilverDelegationController {
     this.steeringPromise = completion;
   }
 
-  private markStopped(): void {
+  private retire(): boolean {
+    if (this.stopped) {
+      return false;
+    }
+    this.publicDelegations?.stop();
+    this.flushTranscript();
     this.stopped = true;
     this.revokeRequesterFinal();
     this.options.signal.removeEventListener("abort", this.onSessionAbort);
     this.pendingDelegation = undefined;
     this.transcript.clear();
+    return true;
   }
 
   private async runDelegation(

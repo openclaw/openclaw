@@ -87,7 +87,7 @@ export class MemorySourceIndexKernel {
       });
       writeChunk(id, chunk, embedding);
       if (vectorReady && embedding.length > 0) {
-        writeVector ??= createMemoryVectorWriter(this.database, MEMORY_INDEX_VECTOR_TABLE);
+        writeVector ??= createMemoryVectorWriter(this.database);
         writeVector(id, embedding);
       }
     }

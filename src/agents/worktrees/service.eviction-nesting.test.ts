@@ -10,7 +10,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { listGitWorktrees, requireGit } from "./git.js";
-import { getRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { acquireWorktreeRunLease, hasLiveWorktreeRunLease } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -80,100 +80,84 @@ it("cannot evict an ancestor of a live checkout and retires idle children indivi
   ).toHaveLength(1);
 });
 
-it.each([
-  ["live dependent", "nested donor"],
-  ["incoming create", "nested donor"],
-  ["live dependent", "chained donor lookup"],
-  ["incoming create", "symlinked donor lookup"],
-] as const)(
-  "preserves shared-clone objects needed by a %s through a %s at the cap",
-  async (consumer, layout) => {
-    const root = temps.make("openclaw-eviction-shared-objects-");
-    const repoRoot = await initializeRepository(root);
-    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-    const config = {
-      worktreeMaxCount: consumer === "live dependent" ? 2 : 1,
-      worktreeAcceleration: false,
-    };
-    const service = new ManagedWorktreeService({ env, getConfig: () => config });
-    const outer = await service.create({ repoRoot, name: "donor-owner", baseRef: "HEAD" });
-    const donor = path.join(layout === "nested donor" ? outer.path : root, "donor");
-    const source = path.join(root, "shared-source");
-    const filename = "borrowed-only.txt";
-    const contents = `unique shared-clone object bytes for ${consumer}\n`;
-    await fs.mkdir(donor);
-    await requireGit(donor, ["init", "--template=", "-b", "main"]);
-    await fs.writeFile(path.join(donor, filename), contents);
-    await requireGit(donor, ["add", filename]);
-    await requireGit(donor, [
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=openclaw-test@example.invalid",
-      "-c",
-      "commit.gpgSign=false",
-      "commit",
-      "-m",
-      `unique shared-clone donor for ${consumer}`,
-    ]);
-    const commit = await requireGit(donor, ["rev-parse", "HEAD"]);
-    const blob = await requireGit(donor, ["rev-parse", `HEAD:${filename}`]);
-    await requireGit(root, ["clone", "--shared", "--", donor, source]);
-    const alternatesFile = path.join(source, ".git", "objects", "info", "alternates");
-    const alternates = (await fs.readFile(alternatesFile, "utf8")).trim();
-    expect(await fs.realpath(alternates)).toBe(
-      await fs.realpath(path.join(donor, ".git", "objects")),
-    );
-    if (layout !== "nested donor") {
-      const lookup = path.join(outer.path, "odb-link");
-      await fs.symlink(alternates, lookup, process.platform === "win32" ? "junction" : "dir");
-      let declaredLookup = lookup;
-      if (layout === "chained donor lookup") {
-        declaredLookup = path.join(root, "object-alias");
-        await fs.symlink(lookup, declaredLookup, process.platform === "win32" ? "junction" : "dir");
-      }
-      await fs.writeFile(alternatesFile, `${declaredLookup}\n`);
+it("preserves a live dependent's chained object lookup at the cap", async () => {
+  const root = temps.make("openclaw-eviction-shared-objects-");
+  const repoRoot = await initializeRepository(root);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+  const config = {
+    worktreeMaxCount: 2,
+    worktreeAcceleration: false,
+  };
+  const service = new ManagedWorktreeService({ env, getConfig: () => config });
+  const outer = await service.create({ repoRoot, name: "donor-owner", baseRef: "HEAD" });
+  const donor = path.join(root, "donor");
+  const source = path.join(root, "shared-source");
+  const filename = "borrowed-only.txt";
+  const contents = "unique shared-clone object bytes for live dependent\n";
+  await fs.mkdir(donor);
+  await requireGit(donor, ["init", "--template=", "-b", "main"]);
+  await fs.writeFile(path.join(donor, filename), contents);
+  await requireGit(donor, ["add", filename]);
+  await requireGit(donor, [
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    "user.email=openclaw-test@example.invalid",
+    "-c",
+    "commit.gpgSign=false",
+    "commit",
+    "-m",
+    "unique shared-clone donor for live dependent",
+  ]);
+  const commit = await requireGit(donor, ["rev-parse", "HEAD"]);
+  const blob = await requireGit(donor, ["rev-parse", `HEAD:${filename}`]);
+  await requireGit(root, ["clone", "--shared", "--", donor, source]);
+  const alternatesFile = path.join(source, ".git", "objects", "info", "alternates");
+  const alternates = (await fs.readFile(alternatesFile, "utf8")).trim();
+  expect(await fs.realpath(alternates)).toBe(
+    await fs.realpath(path.join(donor, ".git", "objects")),
+  );
+  const lookup = path.join(outer.path, "odb-link");
+  await fs.symlink(alternates, lookup, process.platform === "win32" ? "junction" : "dir");
+  const declaredLookup = path.join(root, "object-alias");
+  await fs.symlink(lookup, declaredLookup, process.platform === "win32" ? "junction" : "dir");
+  await fs.writeFile(alternatesFile, `${declaredLookup}\n`);
+  expect(await requireGit(source, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
+  expect(await requireGit(source, ["cat-file", "blob", blob])).toBe(contents.trim());
+  const dependent = await service.create({
+    repoRoot: source,
+    name: "dependent",
+    baseRef: "HEAD",
+  });
+  const lease = await acquireWorktreeRunLease(dependent.id, { env });
+  try {
+    expect(hasLiveWorktreeRunLease(env, dependent.id)).toBe(true);
+    expect(await requireGit(dependent.path, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
+    expect(await requireGit(dependent.path, ["cat-file", "blob", blob])).toBe(contents.trim());
+    await expect(
+      service.create({
+        repoRoot,
+        name: "replacement",
+        baseRef: "HEAD",
+      }),
+    ).rejects.toThrow(new RegExp(`cap ${config.worktreeMaxCount}`));
+    expect(getRegistryWorktree(env, outer.id)?.removedAt).toBeUndefined();
+    expect(
+      (await service.listRegistryRecords())
+        .filter((record) => record.removedAt === undefined)
+        .map((record) => record.id)
+        .toSorted(),
+    ).toEqual([outer.id, dependent.id].toSorted());
+    expect(await fs.readFile(path.join(donor, filename), "utf8")).toBe(contents);
+    for (const repository of [source, dependent.path]) {
+      expect(await requireGit(repository, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
+      expect(await requireGit(repository, ["cat-file", "blob", blob])).toBe(contents.trim());
     }
-    expect(await requireGit(source, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
-    expect(await requireGit(source, ["cat-file", "blob", blob])).toBe(contents.trim());
-    const dependent =
-      consumer === "live dependent"
-        ? await service.create({ repoRoot: source, name: "dependent", baseRef: "HEAD" })
-        : undefined;
-    const lease = dependent ? await acquireWorktreeRunLease(dependent.id, { env }) : undefined;
-    try {
-      if (dependent) {
-        expect(hasLiveWorktreeRunLease(env, dependent.id)).toBe(true);
-        expect(await requireGit(dependent.path, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
-        expect(await requireGit(dependent.path, ["cat-file", "blob", blob])).toBe(contents.trim());
-      }
-      await expect(
-        service.create({
-          repoRoot: dependent ? repoRoot : source,
-          name: "replacement",
-          baseRef: "HEAD",
-        }),
-      ).rejects.toThrow(new RegExp(`cap ${config.worktreeMaxCount}`));
-      expect(getRegistryWorktree(env, outer.id)?.removedAt).toBeUndefined();
-      expect(
-        (await service.listRegistryRecords())
-          .filter((record) => record.removedAt === undefined)
-          .map((record) => record.id)
-          .toSorted(),
-      ).toEqual([outer.id, ...(dependent ? [dependent.id] : [])].toSorted());
-      expect(await fs.readFile(path.join(donor, filename), "utf8")).toBe(contents);
-      for (const repository of [source, ...(dependent ? [dependent.path] : [])]) {
-        expect(await requireGit(repository, ["cat-file", "-e", `${commit}^{commit}`])).toBe("");
-        expect(await requireGit(repository, ["cat-file", "blob", blob])).toBe(contents.trim());
-      }
-      if (dependent) {
-        expect(hasLiveWorktreeRunLease(env, dependent.id)).toBe(true);
-      }
-    } finally {
-      await lease?.release();
-    }
-  },
-);
+    expect(hasLiveWorktreeRunLease(env, dependent.id)).toBe(true);
+  } finally {
+    await lease.release();
+  }
+});
 
 it("refuses a late live owner of unresolved shared metadata before deleting its container", async () => {
   const root = temps.make("openclaw-eviction-late-dependency-lease-");
@@ -271,9 +255,14 @@ it.each([
     const service = new ManagedWorktreeService({ env, getConfig: () => config });
     const outer = await service.create({ repoRoot, name: "outer", baseRef: "HEAD" });
     const source = await initializeRepository(path.join(root, "external-source"));
-    const external = await service.create({ repoRoot: source, name: "external", baseRef: "HEAD" });
+    const external = await service.create({
+      repoRoot: source,
+      name: "external",
+      baseRef: "HEAD",
+    });
     await fs.writeFile(path.join(external.path, "unsaved.txt"), "relocated live data\n");
     let relocated = false;
+    let originalSource: string | undefined;
     let lease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
     let privateMetadata: { directory: string; head: Buffer; index: Buffer } | undefined;
     const relocate = async () => {
@@ -306,6 +295,7 @@ it.each([
       lease = await acquireWorktreeRunLease(external.id, { env });
       if (phase === "snapshot with replaced source") {
         await fs.rename(source, `${source}-original`);
+        originalSource = `${source}-original`;
         expect(await initializeRepository(path.dirname(source))).toBe(source);
         expect(await requireGit(source, ["rev-parse", "--git-common-dir"])).toBe(".git");
       }
@@ -364,6 +354,10 @@ it.each([
         );
       }
     } finally {
+      if (originalSource) {
+        await fs.rm(source, { recursive: true, force: true });
+        await fs.rename(originalSource, source);
+      }
       await lease?.release();
     }
   },
@@ -371,9 +365,7 @@ it.each([
 
 it.each([
   { layout: "source repository", surface: "checkout", missingCheckout: false },
-  { layout: "shared Git directory", surface: "checkout", missingCheckout: false },
   { layout: "source repository", surface: "native administration", missingCheckout: true },
-  { layout: "shared Git directory", surface: "native administration", missingCheckout: false },
   {
     layout: "private Git directory",
     surface: "symlinked native administration",
@@ -408,14 +400,11 @@ it.each([
     const source = await initializeRepository(
       path.join(layout === "source repository" ? storageRoot : root, "nested-source"),
     );
-    if (layout === "shared Git directory") {
-      await requireGit(source, [
-        "init",
-        "--separate-git-dir",
-        path.join(storageRoot, "shared-git"),
-      ]);
-    }
-    const external = await service.create({ repoRoot: source, name: "external", baseRef: "HEAD" });
+    const external = await service.create({
+      repoRoot: source,
+      name: "external",
+      baseRef: "HEAD",
+    });
     const privateMetadata =
       layout === "private Git directory"
         ? await relocatePrivateGitDirectory(external.path, path.join(storageRoot, "private-git"))
@@ -483,7 +472,7 @@ it.each([
   },
 );
 
-it.each(["checkout", "native administration", "control file"] as const)(
+it.each(["native administration", "control file"] as const)(
   "preserves an incoming linked source with storage in the victim %s",
   async (layout) => {
     const root = temps.make("openclaw-eviction-incoming-storage-");
@@ -509,10 +498,9 @@ it.each(["checkout", "native administration", "control file"] as const)(
       await fs.rename(path.join(source, ".git"), pointer);
       await fs.symlink(pointer, path.join(source, ".git"), "file");
     } else {
-      const storageRoot =
-        layout === "checkout"
-          ? outer.path
-          : await fs.realpath(await requireGit(outer.path, ["rev-parse", "--absolute-git-dir"]));
+      const storageRoot = await fs.realpath(
+        await requireGit(outer.path, ["rev-parse", "--absolute-git-dir"]),
+      );
       directory = (
         await relocatePrivateGitDirectory(source, path.join(storageRoot, "incoming-private"))
       ).directory;

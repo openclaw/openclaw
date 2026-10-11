@@ -62,6 +62,7 @@ import {
   FeishuStreamingSession,
   mergeStreamingText,
 } from "./streaming-card.js";
+import { queueFeishuStreamingUpdate } from "./streaming-update.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -189,7 +190,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const allowTopLevelReplyFallback =
-    effectiveReplyInThread === true &&
     threadReplyMode &&
     rootId !== undefined &&
     sendReplyToMessageId !== undefined &&
@@ -289,8 +289,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // A preview exists before modifying hooks accept the logical payload, so suppress all eager
   // CardKit activity whenever either hook could rewrite or cancel the eventual send.
   const previewStreamingEnabled = streamingEnabled && !modifyingHooksRegistered;
-  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
-  const coreBlockStreamingEnabled = blockStreamingEnabled === true;
+  const coreBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config) === true;
   const reasoningPreviewEnabled = previewStreamingEnabled && params.allowReasoningPreview === true;
 
   let streaming: FeishuStreamingSession | null = null;
@@ -365,18 +364,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const flushStreamingCardUpdate = (combined: string) => {
-    const session = streaming;
-    const generation = activeStreamingGeneration;
-    const startPromise = streamingStartPromise;
-    partialUpdateQueue = partialUpdateQueue.then(async () => {
-      if (startPromise) {
-        await startPromise;
-      }
-      // Updates queued before close owns the captured session; updates queued after the
-      // generation is sealed have no owner and cannot race provider finalization.
-      if (generation !== undefined && session?.isActive()) {
-        await session.update(combined);
-      }
+    partialUpdateQueue = queueFeishuStreamingUpdate({
+      queue: partialUpdateQueue,
+      session: streaming,
+      generation: activeStreamingGeneration,
+      startPromise: streamingStartPromise,
+      text: combined,
+      accountId: account.accountId,
+      runtime: params.runtime,
     });
   };
 
@@ -954,7 +949,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           const ownsCurrentClose = (completion: PendingStreamingDelivery) =>
             closeOutcome.generation !== undefined &&
             completion.streamingGeneration === closeOutcome.generation;
-          if (completions.some((completion) => ownsCurrentClose(completion))) {
+          if (completions.some(ownsCurrentClose)) {
             claimClosedStreamingResult(closeOutcome.generation, undefined);
           }
           for (const completion of completions) {
@@ -1207,9 +1202,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (previewStreamingEnabled && renderMode === "card") {
         startStreaming();
       }
-      await Promise.resolve(typingCallbacks?.onReplyStart?.());
+      await typingCallbacks?.onReplyStart?.();
     },
-    onIdle: () => queueIdleSideEffects(),
+    onIdle: queueIdleSideEffects,
     onCleanup: () => {
       typingCallbacks?.onCleanup?.();
     },
@@ -1515,8 +1510,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     delivery,
     replyOptions: {
       onModelSelected,
-      disableBlockStreaming:
-        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : true,
+      disableBlockStreaming: !coreBlockStreamingEnabled,
       onPartialReply: previewStreamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {

@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -32,7 +31,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         rawAgentId: params.agentId,
         respond,
         cfg: context.getRuntimeConfig(),
-        normalize: normalizeOptionalString,
       });
       if (!resolved) {
         return;
@@ -56,7 +54,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         rawAgentId: params.agentId,
         respond,
         cfg: context.getRuntimeConfig(),
-        normalize: normalizeOptionalString,
       });
       if (!resolved) {
         return;
@@ -143,7 +140,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         rawAgentId: params.agentId,
         respond,
         cfg: context.getRuntimeConfig(),
-        normalize: normalizeOptionalString,
       });
       if (!resolved) {
         return;

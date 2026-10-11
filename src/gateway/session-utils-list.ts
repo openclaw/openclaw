@@ -26,8 +26,7 @@ import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
   filterSessionEntries,
-  matchesSessionArchiveFilter,
-  type SessionListFilteredEntries,
+  type SessionEntrySelection,
   type SessionListFilterParams,
 } from "./session-list-filters.js";
 import {
@@ -50,15 +49,6 @@ import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
-type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntries"> & {
-  ownerCount: number;
-  totalCount: number;
-  limitApplied?: number;
-  offset: number;
-  nextOffset: number | null;
-  hasMore: boolean;
-};
-
 function resolveSessionsListWindowLimit(limit: number | undefined, offset: number) {
   if (limit === undefined) {
     return undefined;
@@ -67,7 +57,7 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
   return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
 }
 
-function* selectSessionEntries(
+export function* selectSessionEntries(
   params: SessionListFilterParams & { defaultLimit?: number },
 ): SynchronousWork<SessionEntrySelection> {
   const { ownerEntries, entries: filtered, ...facets } = yield* filterSessionEntries(params);
@@ -161,6 +151,7 @@ function buildSessionsListResult(
     owners: list.ownerFacet,
     ...(list.ownerSessionCounts ? { ownerSessionCounts: list.ownerSessionCounts } : {}),
     involvingProfileId: list.involvingProfileId,
+    ...(list.activityExpiresAt !== undefined ? { activityExpiresAt: list.activityExpiresAt } : {}),
     ...(list.activityPulse ? { activityPulse: list.activityPulse } : {}),
     ...(list.people
       ? {
@@ -262,22 +253,29 @@ function createSessionRowSelection(
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
       update(change.id, keyFor(change), change.row);
     },
-    read(sortBy?: SessionsListParams["sortBy"]) {
+    read(
+      sortBy?: SessionsListParams["sortBy"],
+      candidates?: Iterable<Pick<SelectionTarget, "key" | "agentId">>,
+    ) {
       for (const key of duplicates) {
         throw canonicalSessionKeyMigrationRequiredError(
           `duplicate rows resolve to canonical session key ${key}`,
         );
       }
-      let entries = sortBy && orders.get(sortBy);
+      let entries = !candidates && sortBy && orders.get(sortBy);
       if (!entries) {
-        const targets = [...winners.values()];
+        const targets = candidates
+          ? [...new Set(Array.from(candidates, keyFor))].flatMap((key) => winners.get(key) ?? [])
+          : [...winners.values()];
         if (!sortBy) {
           targets.sort((a, b) => a.position - b.position);
         }
         entries = targets.map((target) => target.pair);
         if (sortBy) {
           entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));
-          orders.set(sortBy, entries);
+          if (!candidates) {
+            orders.set(sortBy, entries);
+          }
         }
       }
       return { entries, get: (key: string) => winners.get(key)?.row };
@@ -300,6 +298,7 @@ export function prepareSessionRowSelection(
     rowContext?: SessionListRowContext;
     metadataPrepared?: boolean;
     ordered?: boolean;
+    candidateSessionIdsOrKeys?: ReadonlySet<string>;
   },
 ) {
   const { cfg, modelCatalog, scope, rowContext: residentContext } = projection.state;
@@ -356,7 +355,18 @@ export function prepareSessionRowSelection(
       variants.set(activeOnly, selection);
     }
   }
-  const selected = selection.read(prepared?.ordered ? (opts.sortBy ?? "updatedAt") : undefined);
+  const candidates =
+    prepared?.candidateSessionIdsOrKeys &&
+    Array.from(prepared.candidateSessionIdsOrKeys).flatMap((sessionIdOrKey) =>
+      projection.selectEntries(
+        { agentId: selectedScope.agentId, sessionIdOrKey, sortBy: null },
+        prepared.metadataPrepared === true,
+      ),
+    );
+  const selected = selection.read(
+    prepared?.ordered ? (opts.sortBy ?? "updatedAt") : undefined,
+    candidates,
+  );
   const { entries } = selected;
   return {
     cfg,
@@ -367,31 +377,16 @@ export function prepareSessionRowSelection(
     storePath: selectedScope.path,
     userProfileIdentityById: rowContext.userProfileIdentityById,
     getRowContext: () => rowContext,
-    getTarget: (
-      key: string,
-    ):
-      | (SelectionTarget & {
-          storeKey?: string;
-          getModelFacts?: () => ReturnType<SessionRowProjection["modelFacts"]>;
-        })
-      | undefined => {
+    getTarget: (key: string): (SelectionTarget & { storeKey?: string }) | undefined => {
       const winner = selected.get(key);
-      if (!winner || (!opts.search && key === winner.key)) {
-        return winner;
-      }
-      const query = {
-        agentId: winner.agentId,
-        key: winner.key,
-        storePath: winner.storeTarget.storePath,
-      };
-      return {
-        ...winner,
-        ...(opts.search && projection.isMaterialized(query)
-          ? { materialized: projection.capture(query)?.materialized }
-          : {}),
-        ...(key !== winner.key ? { storeKey: winner.key } : {}),
-        getModelFacts: () => projection.modelFacts(query, prepared?.metadataPrepared === true),
-      };
+      return !winner || key === winner.key ? winner : { ...winner, storeKey: winner.key };
+    },
+    getModelFacts: (key: string) => {
+      const winner = selected.get(key)!;
+      return projection.modelFacts(
+        { agentId: winner.agentId, key: winner.key, storePath: winner.storeTarget.storePath },
+        prepared?.metadataPrepared === true,
+      );
     },
   };
 }
@@ -446,26 +441,29 @@ export function prepareProjectedSessionList(params: {
   now: number;
   metadataPrepared?: boolean;
   searchIdentities?: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>>;
+  /** Reused only within one admitted caller/configuration/profile authority epoch. */
+  visibility?: WeakMap<object, boolean>;
 }) {
   const { projection, opts, key: exactKey, context, client, now } = params;
   if (params.searchIdentities && params.searchIdentities.cfg !== projection.state.cfg) {
     throw new Error("Session identity configuration changed while reading; retry the request");
   }
-  const presentation = prepareSessionRowPublication(projection, now)(
-    client,
-    context
-      ? createVisibleActiveSessionRunProjector(
-          context,
-          projection.state.rowContext.projectedAgentRuns,
-        )
-      : undefined,
-  );
+  const projectRun = context
+    ? createVisibleActiveSessionRunProjector(
+        context,
+        projection.state.rowContext.projectedAgentRuns,
+      )
+    : undefined;
+  const presentation = prepareSessionRowPublication(projection, now)(client, projectRun);
   const prepared = prepareSessionRowSelection(projection, opts, {
     key: exactKey,
     now,
     rowContext: presentation.rowContext,
     metadataPrepared: params.metadataPrepared,
     ordered: true,
+    candidateSessionIdsOrKeys: opts.activeOnly
+      ? projectRun?.candidateSessionIdsOrKeys()
+      : undefined,
   });
   const { getTarget } = prepared;
   const { active } = presentation;
@@ -482,10 +480,14 @@ export function prepareProjectedSessionList(params: {
       : undefined,
     entryFilter: (key, entry) => {
       const row = getTarget(key);
-      const visible = Boolean(
-        row &&
-        (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
-      );
+      let visible = params.visibility?.get(entry);
+      if (visible === undefined) {
+        visible = Boolean(
+          row &&
+          (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
+        );
+        params.visibility?.set(entry, visible);
+      }
       return (
         visible &&
         (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&
@@ -503,8 +505,9 @@ export async function listProjectedSessions(params: {
   key?: string;
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
+  acceptsSerializedJson?: boolean;
   diagnostics?: SessionListDiagnostics;
-  onResult?: (result: SessionsListResult, sharedRows: readonly GatewaySessionRow[]) => void;
+  onResult?: (result: SessionsListResult) => void;
 }): Promise<SessionsListResult> {
   const { projection, opts, key: exactKey, context, client, diagnostics } = params;
   return projection.withSelectionPreparation(async () => {
@@ -542,9 +545,14 @@ export async function listProjectedSessions(params: {
           metadataPrepared: true,
         });
         diagnostics?.mark("filterSetup");
-        const selection = withAgentRosterFactsBatch(prepared.cfg, () =>
-          runSynchronousWork(selectSessionEntries({ ...filters, defaultLimit: 100 })),
-        );
+        const select = () =>
+          withAgentRosterFactsBatch(prepared.cfg, () =>
+            runSynchronousWork(selectSessionEntries({ ...filters, defaultLimit: 100 })),
+          );
+        const selection =
+          params.acceptsSerializedJson && exactKey === undefined
+            ? presentation.select(opts, select)
+            : select();
         return { now, presentation, prepared, selection };
       } finally {
         diagnostics?.finishSyncCpu("prepareThreadCpuMs", syncCpu);
@@ -584,7 +592,6 @@ export async function listProjectedSessions(params: {
         try {
           let materializedRowCount = 0;
           projection.setArchivePageSize(selection.entries.length);
-          const sharedRows: GatewaySessionRow[] = [];
           const sessions = selection.entries.flatMap(([key], index) => {
             const target = getTarget(key);
             const record =
@@ -605,34 +612,26 @@ export async function listProjectedSessions(params: {
               includeActivitySummary: opts.includeActivitySummary === true,
               rowMode: opts.rowMode,
               omitSentinelChildren: opts.activeOnly && sentinel(record.key),
+              childArchiveFilter: opts.archived ?? false,
             });
             if (!sharedRow) {
               return [];
             }
-            const row = { ...sharedRow };
-            if (row.childSessions?.length && opts.archived !== "all") {
-              let excluded: Set<string> | undefined;
-              for (const { key: childKey, entry } of record.materialized.source.childLinks ?? []) {
-                if (!matchesSessionArchiveFilter(entry, opts.archived)) {
-                  (excluded ??= new Set()).add(childKey);
-                }
-              }
-              if (excluded) {
-                row.childSessions = row.childSessions.filter((childKey) => !excluded.has(childKey));
-              }
-            }
-            sharedRows.push(row.childSessions === sharedRow.childSessions ? sharedRow : row);
-            bindSessionListRowRead(row, { projection, record, client });
             if ((record.materializedSequence ?? 0) > materializedBefore) {
               materializedRowCount++;
             }
+            if (params.acceptsSerializedJson) {
+              return [sharedRow];
+            }
+            const row = { ...sharedRow };
+            bindSessionListRowRead(row, { projection, record, client });
             return [row];
           });
           diagnostics?.mark("decoration");
           const result = buildSessionsListResult(
             prepared,
             { ...selection, now, storePath: prepared.storePath },
-            sessions,
+            params.acceptsSerializedJson ? presentation.list(sessions, opts) : sessions,
             context?.getCommittedRuntimeConfig?.() ?? cfg,
             client,
           );
@@ -657,7 +656,7 @@ export async function listProjectedSessions(params: {
           }
           diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
           syncCpu = undefined;
-          params.onResult?.(result, sharedRows);
+          params.onResult?.(result);
           return result;
         } finally {
           diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);

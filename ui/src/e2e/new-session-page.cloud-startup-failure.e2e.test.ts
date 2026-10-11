@@ -88,13 +88,15 @@ suite.define(() => {
         );
         expect(await retained.textContent()).not.toContain("temporary session was cleaned up");
         expect(page.url()).toBe(route);
-        expect(await retained.locator("textarea").count()).toBe(0);
+        expect(await retained.locator("textarea").isDisabled()).toBe(true);
         if (outcome === "cancelled") {
           await gateway.setMethodResponse("sessions.describe", { session: null });
           await gateway.resolveDeferred("sessions.dispatch", {});
           await pollLocatorText(retained).toContain("Your prompt is kept here");
           await expect.poll(() => working.count()).toBe(0);
-          expect(await retained.getByRole("button").count()).toBe(0);
+          expect(await retained.locator(".agent-chat__composer-shell button:enabled").count()).toBe(
+            0,
+          );
           expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
           await captureUiProof(suite, page, "interrupted-incognito-prompt.png");
         } else {
@@ -139,6 +141,8 @@ suite.define(() => {
           }
         }
         await pollLocatorText(retained).toContain(message);
+        expect(await retained.locator("textarea").isDisabled()).toBe(true);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(page.url()).toBe(route);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       });

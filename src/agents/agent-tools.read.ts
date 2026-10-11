@@ -1,7 +1,3 @@
-// Read/write/edit tool wrappers for host and sandbox workspaces.
-// Adds workspace-root guards, adaptive read paging, image validation, memory
-// append-only writes, and parameter cleanup around the session file tools.
-
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
@@ -178,10 +174,9 @@ function withToolResultText(
   text: string,
   fileContent?: string,
 ): AgentToolResult<unknown> {
-  const content = Array.isArray(result.content) ? result.content : [];
   let replaced = false;
-  const nextContent: ToolContentBlock[] = content.map((block) => {
-    if (!replaced && block && typeof block === "object" && block.type === "text") {
+  const nextContent: ToolContentBlock[] = result.content.map((block) => {
+    if (!replaced && block.type === "text") {
       replaced = true;
       return Object.assign({}, block, { text });
     }
@@ -439,16 +434,8 @@ async function normalizeReadImageResult(
   result: AgentToolResult<unknown>,
   filePath: string,
 ): Promise<AgentToolResult<unknown>> {
-  const content = Array.isArray(result.content) ? result.content : [];
-
-  const image = content.find(
-    (b): b is ImageContentBlock =>
-      Boolean(b) &&
-      typeof b === "object" &&
-      b.type === "image" &&
-      typeof b.data === "string" &&
-      typeof b.mimeType === "string",
-  );
+  const content = result.content;
+  const image = content.find((block): block is ImageContentBlock => block.type === "image");
   if (!image) {
     return result;
   }
@@ -473,15 +460,10 @@ async function normalizeReadImageResult(
   }
 
   const nextContent = content.map((block) => {
-    if (block && typeof block === "object" && block.type === "image") {
+    if (block.type === "image") {
       return Object.assign({}, block, { mimeType: sniffed });
     }
-    if (
-      block &&
-      typeof block === "object" &&
-      block.type === "text" &&
-      typeof block.text === "string"
-    ) {
+    if (block.type === "text") {
       return Object.assign({}, block, { text: rewriteReadImageHeader(block.text, sniffed) });
     }
     return block;
@@ -513,15 +495,8 @@ function normalizeReadResultDetails(
     };
   }
 
-  const content = Array.isArray(result.content) ? result.content : [];
   const displayText = getToolResultText(result) ?? "";
-  const image = content.find(
-    (block): block is ImageContentBlock =>
-      Boolean(block) &&
-      typeof block === "object" &&
-      block.type === "image" &&
-      typeof block.mimeType === "string",
-  );
+  const image = result.content.find((block): block is ImageContentBlock => block.type === "image");
   if (image) {
     return {
       ...result,
@@ -601,7 +576,6 @@ function mapContainerPathToWorkspaceRoot(params: {
   return mapped?.hostPath ?? candidate;
 }
 
-/** Resolve a model-supplied file path against the host workspace root. */
 function resolveToolPathAgainstWorkspaceRoot(params: {
   filePath: string;
   root: string;
@@ -981,7 +955,6 @@ export function wrapSandboxFileToolPath(
   };
 }
 
-/** Create a sandbox-backed read tool with OpenClaw result normalization. */
 export function createSandboxedReadTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
     createReadTool(params.root, {
@@ -999,7 +972,6 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
   });
 }
 
-/** Create a sandbox-backed write tool with required-parameter validation. */
 export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
     createWriteTool(params.root, {
@@ -1012,7 +984,6 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   );
 }
 
-/** Create a sandbox-backed edit tool with required-parameter validation. */
 export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = eraseSessionFileTool(
     createEditTool(params.root, {
@@ -1022,7 +993,6 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamValidation(wrapSandboxFileToolPath(base, params), REQUIRED_PARAM_GROUPS.edit);
 }
 
-/** Create a host workspace write tool using guarded filesystem operations. */
 export function createHostWorkspaceWriteTool(
   root: string,
   options?: {
@@ -1040,7 +1010,6 @@ export function createHostWorkspaceWriteTool(
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, root);
 }
 
-/** Create a host workspace edit tool using guarded filesystem operations. */
 export function createHostWorkspaceEditTool(
   root: string,
   options?: {
@@ -1058,7 +1027,6 @@ export function createHostWorkspaceEditTool(
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, root);
 }
 
-/** Wrap the base read tool with OpenClaw paging, MIME, and image handling. */
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
@@ -1273,7 +1241,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
       params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
         ? decodeWindowsTextFileBuffer({ buffer })
-        : buffer.toString("utf8"),
+        : decodeWindowsTextFileBuffer({ buffer, platform: "linux" }),
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),

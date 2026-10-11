@@ -147,14 +147,8 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
       ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
       : undefined;
-  const hasRemoteConfig = Boolean(
-    overrideRemote?.baseUrl ||
-    overrideRemote?.apiKey ||
-    overrideRemote?.headers ||
-    defaultRemote?.baseUrl ||
-    defaultRemote?.apiKey ||
-    defaultRemote?.headers ||
-    false,
+  const hasRemoteConfig = [overrideRemote, defaultRemote].some(
+    (remote) => remote?.baseUrl || remote?.apiKey || remote?.headers,
   );
   const includeRemote =
     hasRemoteConfig ||

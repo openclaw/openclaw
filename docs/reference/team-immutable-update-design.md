@@ -49,7 +49,7 @@ predecessor without restarting it.
 The startup-only canary runs before drain and again on a fresh private state
 copy after live readiness, while the selected Gateway serves. Accepted startup
 config migration protection is persisted before that second canary. A final
-probe must observe the same live PID and boot before the owner retires the
+check must observe the same live PID and boot before the owner retires the
 operation. These receipts prove the existing canary contract, not a native model
 marker turn. Ordinary `update.status` requests refresh verified immutable
 installation facts through the existing refresh owner and bypass private

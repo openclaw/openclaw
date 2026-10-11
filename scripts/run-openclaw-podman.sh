@@ -95,7 +95,6 @@ if [[ "$(id -u)" -eq 0 ]]; then
   fail "Run run-openclaw-podman.sh as your normal user so Podman stays rootless."
 fi
 
-# Legacy: setup-host -> run the Podman setup script
 if [[ "${1:-}" == "setup-host" ]]; then
   shift
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

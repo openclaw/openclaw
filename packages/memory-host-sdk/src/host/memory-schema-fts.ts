@@ -102,81 +102,60 @@ function dropMismatchedFtsTable(params: {
   params.db.exec(`DROP TABLE ${params.tableName}`);
 }
 
+function buildMemoryFtsTriggers<
+  Name extends string,
+  Table extends string,
+  Columns extends string,
+  Insert extends string,
+  Delete extends string,
+>(name: Name, table: Table, columns: Columns, insert: Insert, remove: Delete) {
+  const trigger = <Event extends string, Clause extends string, Body extends string>(
+    event: Event,
+    clause: Clause,
+    body: Body,
+  ) =>
+    ({
+      name: `${name}_after_${event}`,
+      sql: `
+      CREATE TRIGGER IF NOT EXISTS main.${name}_after_${event}
+      AFTER ${clause} ON ${table}
+      BEGIN
+${body}
+      END;
+    `,
+    }) as const;
+  return [
+    trigger("insert", "INSERT", insert),
+    trigger(
+      "update",
+      `UPDATE OF ${columns}`,
+      `${remove}
+${insert}`,
+    ),
+    trigger("delete", "DELETE", remove),
+  ] as const;
+}
+
 /** Optional canonical triggers owned by the derived path FTS index. */
-export const MEMORY_PATH_FTS_TRIGGER_DEFINITIONS = [
-  {
-    name: "memory_index_paths_fts_after_insert",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_insert
-      AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
-      BEGIN
-        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-        VALUES (NEW.id, NEW.path, NEW.source);
-      END;
-    `,
-  },
-  {
-    name: "memory_index_paths_fts_after_update",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_update
-      AFTER UPDATE OF id, path, source ON ${MEMORY_INDEX_SOURCES_TABLE}
-      BEGIN
-        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
-        WHERE rowid = OLD.id;
-        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-        VALUES (NEW.id, NEW.path, NEW.source);
-      END;
-    `,
-  },
-  {
-    name: "memory_index_paths_fts_after_delete",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_delete
-      AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
-      BEGIN
-        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
-        WHERE rowid = OLD.id;
-      END;
-    `,
-  },
-] as const;
+export const MEMORY_PATH_FTS_TRIGGER_DEFINITIONS = buildMemoryFtsTriggers(
+  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_SOURCES_TABLE,
+  "id, path, source",
+  `        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+        VALUES (NEW.id, NEW.path, NEW.source);`,
+  `        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
+        WHERE rowid = OLD.id;`,
+);
 
 /** Canonical chunks own the optional body index; every mutation addresses its rowid. */
-export const MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS = [
-  {
-    name: "memory_index_chunks_fts_after_insert",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_chunks_fts_after_insert
-      AFTER INSERT ON ${MEMORY_INDEX_CHUNKS_TABLE}
-      BEGIN
-        INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (rowid, text, id, path, source, model, start_line, end_line)
-        VALUES (NEW.chunk_rowid, NEW.text, NEW.id, NEW.path, NEW.source, NEW.model, NEW.start_line, NEW.end_line);
-      END;
-    `,
-  },
-  {
-    name: "memory_index_chunks_fts_after_update",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_chunks_fts_after_update
-      AFTER UPDATE OF chunk_rowid, text, id, path, source, model, start_line, end_line ON ${MEMORY_INDEX_CHUNKS_TABLE}
-      BEGIN
-        DELETE FROM ${MEMORY_INDEX_FTS_TABLE} WHERE rowid = OLD.chunk_rowid;
-        INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (rowid, text, id, path, source, model, start_line, end_line)
-        VALUES (NEW.chunk_rowid, NEW.text, NEW.id, NEW.path, NEW.source, NEW.model, NEW.start_line, NEW.end_line);
-      END;
-    `,
-  },
-  {
-    name: "memory_index_chunks_fts_after_delete",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_chunks_fts_after_delete
-      AFTER DELETE ON ${MEMORY_INDEX_CHUNKS_TABLE}
-      BEGIN
-        DELETE FROM ${MEMORY_INDEX_FTS_TABLE} WHERE rowid = OLD.chunk_rowid;
-      END;
-    `,
-  },
-] as const;
+export const MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS = buildMemoryFtsTriggers(
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_CHUNKS_TABLE,
+  "chunk_rowid, text, id, path, source, model, start_line, end_line",
+  `        INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (rowid, text, id, path, source, model, start_line, end_line)
+        VALUES (NEW.chunk_rowid, NEW.text, NEW.id, NEW.path, NEW.source, NEW.model, NEW.start_line, NEW.end_line);`,
+  `        DELETE FROM ${MEMORY_INDEX_FTS_TABLE} WHERE rowid = OLD.chunk_rowid;`,
+);
 
 export function dropMemoryChunkFtsTriggers(db: DatabaseSync): void {
   for (const trigger of MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS) {

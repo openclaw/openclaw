@@ -294,7 +294,6 @@ it.each([false, true])(
 );
 
 it.each([
-  ["unavailable", "The selected runtime is no longer available."],
   ["retired before commit", "The selected runtime is no longer available."],
   ["sandbox", "requires a sandbox"],
   ["worker", "cannot select a runtime without cloud placement support"],

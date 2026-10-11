@@ -157,10 +157,6 @@ export type PluginHttpRouteRegistration = {
   source?: string;
 };
 
-type PluginHostedMediaResolverRegistration = PluginRegistrationOwner & {
-  resolver: OpenClawPluginHostedMediaResolver;
-};
-
 export type PluginChannelRegistration = PluginRegistrationOwner & {
   plugin: AnyChannelPlugin;
   /** Prepared views retain the exact transport donor in addition to their local admission. */
@@ -252,10 +248,6 @@ export type PluginGatewayDiscoveryServiceRegistration = PluginRegistrationOwner 
   instance?: PluginInstanceExecution;
 };
 
-type PluginReloadRegistration = PluginRegistrationOwner & {
-  registration: OpenClawPluginReloadRegistration;
-};
-
 export type PluginNodeHostCommandRegistration = PluginRegistrationOwner & {
   command: import("./types.js").OpenClawPluginNodeHostCommand;
 };
@@ -265,16 +257,8 @@ type PluginNodeInvokePolicyRegistration = PluginRegistrationOwner & {
   pluginConfig?: Record<string, unknown>;
 };
 
-type PluginGatewayAccessPolicyRegistration = PluginRegistrationOwner & {
-  policy: PluginGatewayAccessPolicy;
-};
-
 export type PluginWidgetPresenterRegistration = PluginRegistrationOwner & {
   presenter: import("./plugin-registration.types.js").WidgetPresenter;
-};
-
-type PluginSecurityAuditCollectorRegistration = PluginRegistrationOwner & {
-  collector: OpenClawPluginSecurityAuditCollector;
 };
 
 export type PluginCommandRegistration = PluginRegistrationOwner & {
@@ -300,29 +284,9 @@ type PluginInteractiveHandlerRegistryRegistration = PluginInteractiveHandlerRegi
   pluginRoot?: string;
 };
 
-type PluginSessionExtensionRegistryRegistration = PluginRegistrationOwner & {
-  extension: PluginSessionExtensionRegistration;
-};
-
 export type PluginTrustedToolPolicyRegistryRegistration = PluginRegistrationOwner & {
   policy: PluginTrustedToolPolicyRegistration;
   origin?: PluginRecord["origin"];
-};
-
-type PluginToolMetadataRegistryRegistration = PluginRegistrationOwner & {
-  metadata: PluginToolMetadataRegistration;
-};
-
-type PluginControlUiDescriptorRegistryRegistration = PluginRegistrationOwner & {
-  descriptor: PluginControlUiDescriptor;
-};
-
-type PluginRuntimeLifecycleRegistryRegistration = PluginRegistrationOwner & {
-  lifecycle: PluginRuntimeLifecycleRegistration;
-};
-
-type PluginAgentEventSubscriptionRegistryRegistration = PluginRegistrationOwner & {
-  subscription: PluginAgentEventSubscriptionRegistration;
 };
 
 type PluginSessionSchedulerJobRegistryRegistration = PluginRegistrationOwner & {
@@ -470,25 +434,35 @@ export type PluginRegistry = {
   boardWidgetContentKinds: Map<string, PluginBoardWidgetContentKindRegistration>;
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
-  hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
+  hostedMediaResolvers: Array<
+    PluginRegistrationOwner & { resolver: OpenClawPluginHostedMediaResolver }
+  >;
   widgetPresenters: PluginWidgetPresenterRegistration[];
   mcpServerConnectionResolvers: PluginMcpServerConnectionResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
-  reloads: PluginReloadRegistration[];
+  reloads: Array<PluginRegistrationOwner & { registration: OpenClawPluginReloadRegistration }>;
   nodeHostCommands: PluginNodeHostCommandRegistration[];
   nodeInvokePolicies: PluginNodeInvokePolicyRegistration[];
-  gatewayAccessPolicies: PluginGatewayAccessPolicyRegistration[];
-  securityAuditCollectors: PluginSecurityAuditCollectorRegistration[];
+  gatewayAccessPolicies: Array<PluginRegistrationOwner & { policy: PluginGatewayAccessPolicy }>;
+  securityAuditCollectors: Array<
+    PluginRegistrationOwner & { collector: OpenClawPluginSecurityAuditCollector }
+  >;
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
   interactiveHandlers: PluginInteractiveHandlerRegistryRegistration[];
-  sessionExtensions: PluginSessionExtensionRegistryRegistration[];
+  sessionExtensions: Array<
+    PluginRegistrationOwner & { extension: PluginSessionExtensionRegistration }
+  >;
   trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
-  toolMetadata: PluginToolMetadataRegistryRegistration[];
-  controlUiDescriptors: PluginControlUiDescriptorRegistryRegistration[];
-  runtimeLifecycles: PluginRuntimeLifecycleRegistryRegistration[];
-  agentEventSubscriptions: PluginAgentEventSubscriptionRegistryRegistration[];
+  toolMetadata: Array<PluginRegistrationOwner & { metadata: PluginToolMetadataRegistration }>;
+  controlUiDescriptors: Array<PluginRegistrationOwner & { descriptor: PluginControlUiDescriptor }>;
+  runtimeLifecycles: Array<
+    PluginRegistrationOwner & { lifecycle: PluginRuntimeLifecycleRegistration }
+  >;
+  agentEventSubscriptions: Array<
+    PluginRegistrationOwner & { subscription: PluginAgentEventSubscriptionRegistration }
+  >;
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistryRegistration[];
   sessionActions: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];

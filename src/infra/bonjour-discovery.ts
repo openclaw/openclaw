@@ -322,7 +322,7 @@ async function discoverWideAreaViaTailnetDns(
       return;
     }
     const budget = remainingMs();
-    if (budget <= 0 || !ip) {
+    if (budget <= 0) {
       return;
     }
     try {
@@ -497,26 +497,22 @@ export async function discoverGatewayBeacons(
   if (!discover) {
     return [];
   }
-  try {
-    const perDomain = await Promise.allSettled(
-      domains.map((domain) => discover(domain, timeoutMs, run)),
+  const perDomain = await Promise.allSettled(
+    domains.map((domain) => discover(domain, timeoutMs, run)),
+  );
+  const discovered = perDomain.flatMap((result) =>
+    result.status === "fulfilled" ? result.value : [],
+  );
+  if (
+    platform === "darwin" &&
+    wideAreaDomain &&
+    domains.includes(wideAreaDomain) &&
+    !discovered.some((beacon) => beacon.domain === wideAreaDomain)
+  ) {
+    const fallback = await discoverWideAreaViaTailnetDns(wideAreaDomain, timeoutMs, run).catch(
+      () => [],
     );
-    const discovered = perDomain.flatMap((result) =>
-      result.status === "fulfilled" ? result.value : [],
-    );
-    if (
-      platform === "darwin" &&
-      wideAreaDomain &&
-      domains.includes(wideAreaDomain) &&
-      !discovered.some((beacon) => beacon.domain === wideAreaDomain)
-    ) {
-      const fallback = await discoverWideAreaViaTailnetDns(wideAreaDomain, timeoutMs, run).catch(
-        () => [],
-      );
-      return [...discovered, ...fallback];
-    }
-    return discovered;
-  } catch {
-    return [];
+    return [...discovered, ...fallback];
   }
+  return discovered;
 }

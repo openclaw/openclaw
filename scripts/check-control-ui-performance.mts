@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Reports and enforces compressed Control UI asset budgets after a production build.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -65,7 +64,6 @@ const controlUiPerformanceBudgets = {
   // Allow 3 above the maximum while catching the roughly 19-request facade regression.
   routeBootJsRequests: 35,
   startupCssRequests: 1,
-  // Native sidebar bridge after main reconciliation; retain fixed growth and variance allowances.
   startupJsGzipBytes: 372_878,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
@@ -73,10 +71,6 @@ const controlUiPerformanceBudgets = {
   largestJsGzipBytes: 215 * KIB,
   // Composer multiline surface (stack #124301) legitimately grew boot CSS;
   // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
-  // 53.0 KiB was exhausted by organic growth (main sat at 99.94% by 2026-08-29);
-  // bumped to 53.5 KiB with operator approval on PR #132054. 2026-09-02: side
-  // panel, workboard chip, and Lobsterdex styles moved to their lazy owners,
-  // measured boot sheet 52,337 B; ceiling lowered to keep ~1 KiB headroom.
   largestCssGzipBytes: 53_400,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);

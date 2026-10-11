@@ -190,11 +190,7 @@ export async function prepareGatewayRestartIteration(
   runtime: typeof import("./lifecycle.runtime.js"),
   logger: Pick<SubsystemLogger, "warn">,
 ): Promise<void> {
-  // After an in-process restart (SIGUSR2), reset command-queue lane state.
-  // Interrupted tasks from the previous lifecycle may have left `active`
-  // counts elevated (their finally blocks never ran), permanently blocking
-  // new work from draining. The same boundary also discards stale restart
-  // deferral timers. Execution owners restore only their own durable work.
+  // Retire stale activity counts and timers; execution owners restore durable work.
   const {
     abortActiveCronTaskRuns,
     advanceCronActiveJobGeneration,
@@ -226,8 +222,7 @@ export async function prepareGatewayRestartIteration(
   resetAllLanes();
   clearRuntimeConfigSnapshot();
   resetGatewayRestartStateForInProcessRestart();
-  // Rent: a failed startup has no server close handle, and restart hooks can
-  // recreate shared slots after close. Reset the same lifecycle before boot.
+  // Failed startup has no close handle; restart hooks can also recreate shared slots.
   try {
     await drainGlobalSingletonLifecycleState("restart");
   } catch (error) {

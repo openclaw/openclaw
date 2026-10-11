@@ -116,7 +116,7 @@ async function startWatcher(runningRunId?: string) {
         expect.objectContaining({ runId: runningRunId }),
       );
     }
-    return log;
+    return { log, broadcast };
   } finally {
     scheduling.mockRestore();
   }
@@ -127,7 +127,7 @@ describe("Gateway schema publication timer", () => {
     const { db, runId } = createDeferredState();
     finishUpdateRun(runId, { status: "succeeded" });
     clock.setTime(now + 2 * 60_000);
-    const log = await startWatcher();
+    const { log } = await startWatcher();
     expectVersion(db, 15);
     await clock.advanceBy(3 * 60_000 - 1);
     expectVersion(db, 15);
@@ -138,9 +138,17 @@ describe("Gateway schema publication timer", () => {
 
   it("publishes after observing the old updater finish without another database open", async () => {
     const { db, runId } = createDeferredState();
-    const log = await startWatcher(runId);
-    await clock.advanceBy(10_000);
+    const { log, broadcast } = await startWatcher(runId);
+    const terminalObserved = createDeferredCore();
+    broadcast.mockImplementationOnce(() => terminalObserved.resolve());
+    clock.setTime(now + 10_000);
     finishUpdateRun(runId, { status: "succeeded" });
+    await clock.wake();
+    await terminalObserved.promise;
+    expect(broadcast).toHaveBeenLastCalledWith(
+      "update.run.changed",
+      expect.objectContaining({ runId, status: "succeeded" }),
+    );
     await clock.advanceBy(graceMs - 1);
     expectVersion(db, 15);
     await clock.advanceBy(1);
@@ -151,7 +159,7 @@ describe("Gateway schema publication timer", () => {
   it("rechecks new running rows at the deadline and reschedules for their terminal grace", async () => {
     const { db, runId } = createDeferredState();
     finishUpdateRun(runId, { status: "succeeded" });
-    const log = await startWatcher();
+    const { log } = await startWatcher();
     await clock.advanceBy(graceMs - 1);
     const next = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
     // No wake: the already scheduled timer must discover this new driver itself.
@@ -169,7 +177,7 @@ describe("Gateway schema publication timer", () => {
   it("cancels pending publication when the watcher stops", async () => {
     const { db, runId } = createDeferredState();
     finishUpdateRun(runId, { status: "succeeded" });
-    const log = await startWatcher();
+    const { log } = await startWatcher();
     await watcher?.stop();
     wakeUpdateRunWatcher();
     await clock.advanceBy(graceMs + 1);

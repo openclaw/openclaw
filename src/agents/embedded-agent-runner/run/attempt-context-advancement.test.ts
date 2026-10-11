@@ -188,12 +188,12 @@ describe("context advancement through embedded attempt guards", () => {
         getCompactionReplayEnabled: () => false,
         getServerToolClearingEnabled: () => false,
         toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-        getSystemPrompt: () => "",
+        getSystemPrompt: () => "system boundary text ".repeat(64),
         isOpenAIResponsesApi: false,
         repairToolUseResultPairing: false,
         sessionAgentId: "synthetic",
         sessionManager: {},
-        settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 64 },
+        settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 1024 },
       } as never);
       try {
         await agent.prompt("Read the fixture.");
@@ -220,8 +220,9 @@ describe("context advancement through embedded attempt guards", () => {
         expect(assemble.mock.calls[1]?.[0]).toMatchObject({
           prompt: "Read the fixture.",
           availableTools: new Set(["read_fixture"]),
+          // 8192 context - 1024 reserve - 432 system pressure - 14 pending exchange.
+          tokenBudget: 6722,
         });
-        expect(assemble.mock.calls[1]?.[0].tokenBudget).toBeLessThan(8192);
         expect(commitTurn).not.toHaveBeenCalled();
         expect(remembered).toEqual([]);
         expect(guards.getAfterTurnCheckpoint()).toBeNull();

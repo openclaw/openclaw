@@ -127,7 +127,7 @@ describe("qa channel transport", () => {
     );
   });
 
-  it("surfaces the last probe error on timeout", async () => {
+  it("surfaces the last check error on timeout", async () => {
     const transport = createQaChannelTransport(createQaBusState());
     const call = vi.fn().mockRejectedValue(new Error("channels.status exploded"));
 
@@ -137,7 +137,7 @@ describe("qa channel transport", () => {
         timeoutMs: 5,
         pollIntervalMs: 1,
       }),
-    ).rejects.toThrow("last probe error: channels.status exploded");
+    ).rejects.toThrow("last check error: channels.status exploded");
   });
 
   it("uses the shared normalized message state", async () => {

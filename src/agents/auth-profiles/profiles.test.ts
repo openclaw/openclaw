@@ -26,6 +26,7 @@ import { reloadSharedAuthStoreOwnership } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   expectOAuthCredentialFields,
+  failNextRuntimeAuthSnapshotPublication,
   withAuthProfileTestState,
 } from "./profile-mutations.test-support.js";
 import {
@@ -63,7 +64,6 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   restoreAuthProfileStorePersistenceSnapshot,
 } from "./store.js";
-import { testing as storeTesting } from "./store.test-support.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
@@ -81,7 +81,7 @@ vi.mock("../provider-auth-aliases.js", async (importOriginal) => {
 });
 
 afterEach(() => {
-  storeTesting.resetRuntimeSnapshotPublisherForTest();
+  vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
@@ -296,10 +296,7 @@ describe("promoteAuthProfileInOrder", () => {
           { agentDir: savingAgentDir, store: loadAuthProfileStoreForRuntime(savingAgentDir) },
           { agentDir: siblingAgentDir, store: siblingStore },
         ]);
-        storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-          publish();
-          throw new Error("postcommit publication failed");
-        });
+        failNextRuntimeAuthSnapshotPublication();
 
         saveAuthProfileStore(
           {
@@ -423,20 +420,8 @@ describe("promoteAuthProfileInOrder", () => {
       replaceRuntimeAuthProfileStoreSnapshots([
         { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
       ]);
-      storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-        publish();
-        throw new Error("postcommit publication failed");
-      });
-      let result: ReturnType<typeof saveAuthProfileStore> = undefined;
-      try {
-        expect(() => {
-          result = saveAuthProfileStore(store("sk-new"), agentDir);
-        }).not.toThrow();
-      } finally {
-        storeTesting.resetRuntimeSnapshotPublisherForTest();
-      }
-
-      expect(result).toBeUndefined();
+      failNextRuntimeAuthSnapshotPublication();
+      expect(saveAuthProfileStore(store("sk-new"), agentDir)).toBeUndefined();
       expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:default"]).toMatchObject({
         key: "sk-new",
       });
@@ -736,11 +721,7 @@ describe("promoteAuthProfileInOrder", () => {
             },
           });
           if (mutationTiming === "before publication") {
-            storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-              storeTesting.resetRuntimeSnapshotPublisherForTest();
-              mutateRuntimeStore();
-              publish();
-            });
+            mutateRuntimeStore();
           }
           expect(committed.publishRuntimeSnapshots()).toBe(true);
           const { owned } = committed;

@@ -41,10 +41,7 @@ export function validateSessionUnreadAck(
   patch: { unread?: boolean },
   target: Pick<SessionPatchTargetIdentity, "expectedMarkedUnreadAt">,
 ): string | undefined {
-  if (target.expectedMarkedUnreadAt === undefined) {
-    return undefined;
-  }
-  if (isSessionUnreadAckOnlyPatch(patch)) {
+  if (target.expectedMarkedUnreadAt === undefined || isSessionUnreadAckOnlyPatch(patch)) {
     return undefined;
   }
   return "expectedMarkedUnreadAt requires unread=false as the only mutation.";

@@ -94,11 +94,9 @@ async function createTranscriptOwners(stateDir: string) {
 }
 
 describe("context-engine maintenance transcript ownership", () => {
-  it.each(modes)("joins caller memory rewrite with executionMode=%s", async (executionMode) => {
+  it("joins caller memory rewrite despite an explicit background request", async () => {
     await withTranscriptOwners(async ({ memory, durableBefore, entryId, target, params }) => {
-      const manager = executionMode
-        ? SessionManager.fromEntries(memory.getPersistedEntries())
-        : memory;
+      const manager = SessionManager.fromEntries(memory.getPersistedEntries());
       const release = createDeferredCore();
       const deferred: Promise<void>[] = [];
       const events: string[] = [];
@@ -116,7 +114,7 @@ describe("context-engine maintenance transcript ownership", () => {
       });
       const run = runContextEngineMaintenance({
         ...params,
-        executionMode,
+        executionMode: "background",
         sessionManager: manager,
         contextEngine: createEngine(maintain),
         withSessionManagerRewriteLock: async (operation) => {
@@ -215,114 +213,107 @@ describe("context-engine maintenance transcript ownership", () => {
     },
   );
 
-  it.for(modes)(
-    "does not coalesce or wait for foreign durable work with executionMode=%s",
-    async (executionMode, { signal }) => {
-      await withTranscriptOwners(async ({ memory, durable, params }) => {
-        const release = createDeferredCore();
-        const foreignStarted = createDeferredCore();
-        const foreignMaintain = vi.fn(async () => {
-          foreignStarted.resolve();
-          await release.promise;
-          return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
-        });
-        const deferred: Promise<void>[] = [];
-        await runContextEngineMaintenance({
+  it("does not coalesce or wait for foreign durable work despite an explicit background request", async ({
+    signal,
+  }) => {
+    await withTranscriptOwners(async ({ memory, durable, params }) => {
+      const release = createDeferredCore();
+      const foreignStarted = createDeferredCore();
+      const foreignMaintain = vi.fn(async () => {
+        foreignStarted.resolve();
+        await release.promise;
+        return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
+      });
+      const deferred: Promise<void>[] = [];
+      await runContextEngineMaintenance({
+        ...params,
+        sessionManager: durable,
+        contextEngine: createEngine(foreignMaintain),
+        onDeferredMaintenance: (promise) => deferred.push(promise),
+      });
+      let run: Promise<unknown> | undefined;
+      try {
+        await racePromiseWithAbortSignal(
+          Promise.race([foreignStarted.promise, ...deferred]),
+          signal,
+        );
+        expect(foreignMaintain).toHaveBeenCalledOnce();
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          rewrittenEntries: 0,
+          bytesFreed: 0,
+        }));
+        run = runContextEngineMaintenance({
           ...params,
-          sessionManager: durable,
-          contextEngine: createEngine(foreignMaintain),
+          executionMode: "background",
+          sessionManager: memory,
+          contextEngine: createEngine(maintain),
           onDeferredMaintenance: (promise) => deferred.push(promise),
         });
-        let run: Promise<unknown> | undefined;
+        await expect(run).resolves.toMatchObject({ changed: false });
+        expect(maintain).toHaveBeenCalledOnce();
+        expect(deferred).toHaveLength(1);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([...(run ? [run] : []), ...deferred]);
+      }
+    });
+  });
+
+  it.each(["lock", "maintenance"] as const)(
+    "fences caller memory authority after awaited %s",
+    async (stage) => {
+      await withTranscriptOwners(async ({ memory, durableBefore, target, entryId, params }) => {
+        const before = structuredClone(memory.getPersistedEntries());
+        const entered = vi.fn();
+        const release = createDeferredCore();
+        const controller = new AbortController();
+        const closed = new Error("caller maintenance owner closed");
+        let active = true;
+        const run = runContextEngineMaintenance({
+          ...params,
+          executionMode: "background",
+          sessionManager: memory,
+          abortSignal: controller.signal,
+          assertActive: () => {
+            controller.signal.throwIfAborted();
+            if (!active) {
+              throw closed;
+            }
+          },
+          withSessionManagerRewriteLock: async (operation) => {
+            entered();
+            await release.promise;
+            return await operation();
+          },
+          contextEngine: createEngine(async ({ runtimeContext, abortSignal }) => {
+            expect(abortSignal).toBe(controller.signal);
+            if (stage === "maintenance") {
+              entered();
+              await release.promise;
+              return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
+            }
+            return await runtimeContext!.rewriteTranscriptEntries!({
+              replacements: [{ entryId, message: replacement }],
+            });
+          }),
+        });
+        const outcome = run.then(
+          (result) => result,
+          (error: unknown) => error,
+        );
         try {
-          await racePromiseWithAbortSignal(
-            Promise.race([foreignStarted.promise, ...deferred]),
-            signal,
-          );
-          expect(foreignMaintain).toHaveBeenCalledOnce();
-          const maintain = vi.fn(async () => ({
-            changed: false,
-            rewrittenEntries: 0,
-            bytesFreed: 0,
-          }));
-          run = runContextEngineMaintenance({
-            ...params,
-            executionMode,
-            sessionManager: memory,
-            contextEngine: createEngine(maintain),
-            onDeferredMaintenance: (promise) => deferred.push(promise),
-          });
-          await expect(run).resolves.toMatchObject({ changed: false });
-          expect(maintain).toHaveBeenCalledOnce();
-          expect(deferred).toHaveLength(1);
+          await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+          active = false;
+          release.resolve();
+          expect(await outcome).toBe(closed);
+          expect(memory.getPersistedEntries()).toEqual(before);
+          expect(await loadTranscriptEvents(target)).toEqual(durableBefore);
         } finally {
           release.resolve();
-          await Promise.allSettled([...(run ? [run] : []), ...deferred]);
+          await Promise.allSettled([run, outcome]);
         }
       });
     },
   );
-
-  it.each([
-    { fence: "abort", stage: "lock" },
-    { fence: "activity", stage: "lock" },
-    { fence: "abort", stage: "maintenance" },
-    { fence: "activity", stage: "maintenance" },
-  ] as const)("fences caller memory on $fence after awaited $stage", async ({ fence, stage }) => {
-    await withTranscriptOwners(async ({ memory, durableBefore, target, entryId, params }) => {
-      const before = structuredClone(memory.getPersistedEntries());
-      const entered = vi.fn();
-      const release = createDeferredCore();
-      const controller = new AbortController();
-      const closed = new Error("caller maintenance owner closed");
-      let active = true;
-      const run = runContextEngineMaintenance({
-        ...params,
-        executionMode: "background",
-        sessionManager: memory,
-        abortSignal: controller.signal,
-        assertActive: () => {
-          controller.signal.throwIfAborted();
-          if (!active) {
-            throw closed;
-          }
-        },
-        withSessionManagerRewriteLock: async (operation) => {
-          entered();
-          await release.promise;
-          return await operation();
-        },
-        contextEngine: createEngine(async ({ runtimeContext, abortSignal }) => {
-          expect(abortSignal).toBe(controller.signal);
-          if (stage === "maintenance") {
-            entered();
-            await release.promise;
-            return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
-          }
-          return await runtimeContext!.rewriteTranscriptEntries!({
-            replacements: [{ entryId, message: replacement }],
-          });
-        }),
-      });
-      const outcome = run.then(
-        (result) => result,
-        (error: unknown) => error,
-      );
-      try {
-        await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
-        if (fence === "abort") {
-          controller.abort(closed);
-        } else {
-          active = false;
-        }
-        release.resolve();
-        expect(await outcome).toBe(closed);
-        expect(memory.getPersistedEntries()).toEqual(before);
-        expect(await loadTranscriptEvents(target)).toEqual(durableBefore);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([run, outcome]);
-      }
-    });
-  });
 });

@@ -6,6 +6,7 @@ import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { currentAttachments } from "./chat-attachment-draft.ts";
 import { stagedAttachmentBytes } from "./chat-attachments.ts";
 import { resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
@@ -48,10 +49,6 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
     this.requestUpdate("props");
   }
 
-  private currentAttachments() {
-    return this.props.getAttachments?.() ?? this.props.attachments ?? [];
-  }
-
   private readonly retireEditor = () => {
     this.editorOwner?.abort();
     this.editorOwner = undefined;
@@ -77,7 +74,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
       !this.presented ||
       this.disabled ||
       (this.editingId &&
-        !currentChatComments(this.currentAttachments(), this.sessionKey).some(
+        !currentChatComments(currentAttachments(this.props), this.sessionKey).some(
           (item) => item.id === this.editingId,
         ))
     ) {
@@ -151,7 +148,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
       this.clearComments();
       return;
     }
-    const attachment = currentChatComments(this.currentAttachments(), this.sessionKey).find(
+    const attachment = currentChatComments(currentAttachments(this.props), this.sessionKey).find(
       (item) => item.id === event.detail?.id,
     );
     if (!attachment) {
@@ -183,12 +180,12 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
 
   private clearComments() {
     this.retireEditor();
-    const removed = currentChatComments(this.currentAttachments(), this.sessionKey);
+    const removed = currentChatComments(currentAttachments(this.props), this.sessionKey);
     if (removed.length === 0) {
       return;
     }
     const ids = new Set(removed.map((item) => item.id));
-    const current = this.currentAttachments();
+    const current = currentAttachments(this.props);
     this.changeAttachments(
       current,
       current.filter((item) => !ids.has(item.id)),
@@ -200,10 +197,10 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
     this.retireEditor();
     const signal = this.props.readSignal;
     const sessionKey = this.sessionKey;
-    const comments = currentChatComments(this.currentAttachments(), sessionKey);
+    const comments = currentChatComments(currentAttachments(this.props), sessionKey);
     const index = comments.findIndex((item) => item.id === id);
     const next = comments[index + 1] ?? comments[index - 1];
-    const current = this.currentAttachments();
+    const current = currentAttachments(this.props);
     this.changeAttachments(
       current,
       current.filter((item) => item.id !== id),
@@ -260,7 +257,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
         if (!this.canChange(signal)) {
           return true;
         }
-        const current = this.currentAttachments();
+        const current = currentAttachments(this.props);
         const selected = current.find((item) => item.id === attachment.id);
         if (!selected?.selectionAnnotation) {
           return true;

@@ -1,4 +1,3 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -60,8 +59,8 @@ export function readSessionRowModelFacts(params: {
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId,
-    provider: provider ?? DEFAULT_PROVIDER,
-    model: model ?? DEFAULT_MODEL,
+    provider,
+    model,
     sessionKey: key,
     entry: params.entry,
     preparedAcpMeta: params.preparedAcpMeta,

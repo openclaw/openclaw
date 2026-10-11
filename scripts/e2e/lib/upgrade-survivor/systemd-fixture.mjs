@@ -310,6 +310,7 @@ function inspectLoadedRuntime(args) {
     writeProperties([["o", [object]]]);
     return true;
   }
+  const startPolicy = request.includes("UnitFileState");
   for (const scope of ["Unit", "Service"]) {
     if (
       matches([
@@ -317,29 +318,34 @@ function inspectLoadedRuntime(args) {
         paths.owner,
         object,
         `${manager}.${scope}`,
-        ...commandPropertyNames(scope),
+        ...commandPropertyNames(scope, startPolicy),
       ])
     ) {
-      writeCommandProperties(readUnit(false, true), scope);
+      writeCommandProperties(readUnit(false, true), scope, startPolicy);
       return true;
     }
   }
   const runtime = nativeRuntime();
-  if (
-    matches([
-      "get-property",
-      paths.owner,
-      object,
-      `${manager}.Unit`,
-      "Id",
-      "LoadState",
-      "ActiveState",
-      "SubState",
-      "StartLimitBurst",
-      "ActiveEnterTimestampMonotonic",
-      "InactiveEnterTimestampMonotonic",
-    ])
-  ) {
+  const unitRuntimeQuery = [
+    "get-property",
+    paths.owner,
+    object,
+    `${manager}.Unit`,
+    "Id",
+    "LoadState",
+    "ActiveState",
+    "SubState",
+    "StartLimitBurst",
+    "ActiveEnterTimestampMonotonic",
+    "InactiveEnterTimestampMonotonic",
+  ];
+  const runtimeStartPolicy = matches([
+    ...unitRuntimeQuery,
+    "UnitFileState",
+    "RefuseManualStart",
+    "CanStart",
+  ]);
+  if (matches(unitRuntimeQuery) || runtimeStartPolicy) {
     writeProperties([
       ["s", unitName],
       ["s", "loaded"],
@@ -348,6 +354,13 @@ function inspectLoadedRuntime(args) {
       ["u", 5],
       ["t", runtime.pid ? runtime.generation : 0],
       ["t", runtime.pid ? 0 : runtime.generation],
+      ...(runtimeStartPolicy
+        ? [
+            ["s", "disabled"],
+            ["b", false],
+            ["b", true],
+          ]
+        : []),
     ]);
     return true;
   }
@@ -391,13 +404,19 @@ function writeProperties(properties) {
   }
 }
 
-function commandPropertyNames(scope) {
+function commandPropertyNames(scope, startPolicy = false) {
   return scope === "Unit"
-    ? ["FragmentPath", "DropInPaths", "NeedDaemonReload", "LoadState"]
+    ? [
+        "FragmentPath",
+        "DropInPaths",
+        "NeedDaemonReload",
+        "LoadState",
+        ...(startPolicy ? ["UnitFileState", "ActiveState", "CanStart", "RefuseManualStart"] : []),
+      ]
     : ["ExecStart", "WorkingDirectory", "Environment", "EnvironmentFiles", "UnsetEnvironment"];
 }
 
-function writeCommandProperties(unit, scope) {
+function writeCommandProperties(unit, scope, startPolicy = false) {
   if (!unit) {
     fail("Fixture unit is not loaded.");
   }
@@ -408,6 +427,14 @@ function writeCommandProperties(unit, scope) {
           ["as", []],
           ["b", unit.reloadPending],
           ["s", "loaded"],
+          ...(startPolicy
+            ? [
+                ["s", "disabled"],
+                ["s", nativeRuntime().active],
+                ["b", true],
+                ["b", false],
+              ]
+            : []),
         ]
       : [
           [
@@ -653,6 +680,7 @@ function run() {
     "s",
     unitName,
   ]);
+  const startPolicy = args.includes("UnitFileState");
   const commandScope = ["Unit", "Service"].find((scope) =>
     matches([
       ...prefix,
@@ -660,7 +688,7 @@ function run() {
       manager,
       object,
       `${manager}.${scope}`,
-      ...commandPropertyNames(scope),
+      ...commandPropertyNames(scope, startPolicy),
     ]),
   );
   if (!load && !commandScope) {
@@ -676,7 +704,7 @@ function run() {
   if (load) {
     writeProperties([["o", [object]]]);
   } else {
-    writeCommandProperties(unit, commandScope);
+    writeCommandProperties(unit, commandScope, startPolicy);
   }
 }
 

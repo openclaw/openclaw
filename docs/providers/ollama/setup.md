@@ -43,7 +43,7 @@ sidebarTitle: "Setup"
         openclaw onboard
         ```
 
-        Select **Ollama**, then pick a mode: **Cloud + Local**, **Cloud only**, or **Local only**.
+        Select **Ollama**, then pick a mode: **Cloud + Local** or **Local only**. For hosted models without a local Ollama host, choose **Ollama Cloud** instead.
 
         On a fresh guided setup, OpenClaw first checks the default or configured
         Ollama host. Automatic discovery considers only models already loaded in
@@ -59,7 +59,7 @@ sidebarTitle: "Setup"
         check without requiring it to be loaded already.
       </Step>
       <Step title="Select a model">
-        `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` prompt for an Ollama base URL and inspect installed models. If no tools-capable model is found, setup can ask permission to pull a recommended model. An installed `:latest` tag such as `gemma4:latest` is shown once instead of duplicating `gemma4`. `Cloud + Local` also checks whether the host is signed in for cloud access.
+        `Cloud + Local` and `Local only` prompt for an Ollama base URL and inspect installed models; an `ollama.com` URL is rejected there because hosted access belongs to **Ollama Cloud**. If no tools-capable model is found, setup can ask permission to pull a recommended model. An installed `:latest` tag such as `gemma4:latest` is shown once instead of duplicating `gemma4`. `Cloud + Local` also checks whether the host is signed in for cloud access.
       </Step>
       <Step title="Verify">
         ```bash
@@ -155,8 +155,6 @@ openclaw onboard --auth-choice ollama-cloud
 openclaw models set ollama-cloud/minimax-m2.7:cloud
 ```
 
-The cloud model list shown during `openclaw onboard` is populated live from
-`https://ollama.com/api/tags`, capped at 500 entries, so the picker reflects
-the current hosted catalog. If `ollama.com` is unreachable or returns no
-models at setup time, OpenClaw falls back to its hardcoded suggested list so
-onboarding still completes.
+The Ollama Cloud model list comes from live `https://ollama.com/api/tags`
+discovery with your key, so the picker reflects the current hosted catalog.
+Without a usable key, OpenClaw shows its bundled Ollama Cloud catalog.

@@ -87,7 +87,7 @@ for (const file of [
 }
 const changed = [
   ...new Set(
-    (git("diff", "--name-only") + "\n" + git("ls-files", "--others", "--exclude-standard"))
+    (git("diff", "HEAD", "--name-only") + "\n" + git("ls-files", "--others", "--exclude-standard"))
       .split("\n")
       .filter(Boolean),
   ),
@@ -368,7 +368,6 @@ async function startGateway() {
   await save();
 }
 try {
-  // The operator, not this runner, provides HTTPS forwarding for only the callback prefix.
   for (const route of ["/", "/readyz"]) {
     const denied = await fetch(callbackOrigin + route, {
       redirect: "error",

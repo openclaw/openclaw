@@ -232,7 +232,7 @@ export async function sendPluginSessionAttachment(
     return { ok: false, error: validated.error };
   }
   const resolvedThreadId =
-    normalizeOptionalThreadId(resolvedDelivery.threadId) ??
+    resolvedDelivery.threadId ??
     normalizeOptionalThreadId(params.threadId) ??
     normalizeOptionalThreadId(threadId) ??
     normalizeOptionalThreadId(deliveryContext.threadId);

@@ -53,28 +53,32 @@ export type SynologyHostedMediaUrl = string & {
   readonly [synologyHostedMediaUrlBrand]: true;
 };
 
-type PreparedSynologyHostedMedia = {
-  url: SynologyHostedMediaUrl;
-  cleanup: () => Promise<void>;
-};
+type ServedByteWindow = { startedAt: number; bytes: number };
 
-const preparationLimiter = createWebhookInFlightLimiter({
-  maxInFlightPerKey: SYNOLOGY_OUTBOUND_MEDIA_MAX_PREPARATIONS,
-  maxTrackedKeys: 128,
-});
-const servingLimiter = createWebhookInFlightLimiter({
-  maxInFlightPerKey: SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVES,
-  maxTrackedKeys: 128,
-});
+function createHostedMediaLimits() {
+  return {
+    preparationLimiter: createWebhookInFlightLimiter({
+      maxInFlightPerKey: SYNOLOGY_OUTBOUND_MEDIA_MAX_PREPARATIONS,
+      maxTrackedKeys: 128,
+    }),
+    servingLimiter: createWebhookInFlightLimiter({
+      maxInFlightPerKey: SYNOLOGY_OUTBOUND_MEDIA_MAX_SERVES,
+      maxTrackedKeys: 128,
+    }),
+    servedByteWindows: new Map<string, ServedByteWindow>(),
+  };
+}
+
+let hostedMediaLimits = createHostedMediaLimits();
 const hostedMediaStores = new Map<string, HostedOutboundMediaStore>();
-const servedByteWindows = new Map<string, { startedAt: number; bytes: number }>();
 let hostedMediaRuntime: ReturnType<typeof getSynologyRuntime> | undefined;
 
 function reserveServedBytes(
+  servedByteWindows: Map<string, ServedByteWindow>,
   accountId: string,
   byteLength: number,
-  now = Date.now(),
 ): (() => void) | undefined {
+  const now = Date.now();
   const existing = servedByteWindows.get(accountId);
   const active =
     existing && now - existing.startedAt < SYNOLOGY_OUTBOUND_MEDIA_SERVED_BYTES_WINDOW_MS
@@ -103,7 +107,7 @@ function reserveServedBytes(
 
 function holdServingLeaseUntilResponseDone(
   res: ServerResponse,
-  accountId: string,
+  releaseServingSlot: () => void,
 ): { isActive: () => boolean; release: () => void } {
   let released = false;
   const release = () => {
@@ -114,7 +118,7 @@ function holdServingLeaseUntilResponseDone(
     clearTimeout(timeout);
     res.off("finish", release);
     res.off("close", release);
-    servingLimiter.release(accountId);
+    releaseServingSlot();
   };
   // `res.end()` only queues the body. Keep the account slot until the socket
   // finishes or closes so slow readers cannot bypass the response concurrency cap.
@@ -190,9 +194,7 @@ function getHostedMediaStore(accountId: string): HostedOutboundMediaStore {
   if (hostedMediaRuntime !== runtime) {
     hostedMediaRuntime = runtime;
     hostedMediaStores.clear();
-    preparationLimiter.clear();
-    servingLimiter.clear();
-    servedByteWindows.clear();
+    hostedMediaLimits = createHostedMediaLimits();
   }
   const existing = hostedMediaStores.get(accountId);
   if (existing) {
@@ -444,12 +446,12 @@ export async function prepareSynologyHostedMedia(params: {
   mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
-}): Promise<PreparedSynologyHostedMedia> {
+}) {
   const route = resolveSynologyHostedMediaRoute(params.account);
-  // Synchronize runtime-owned stores and counters before admitting work. A
-  // runtime change clears stale leases, so doing this after acquisition would
-  // erase the current request's slot.
+  // Capture limits after synchronizing the runtime; old work settles against
+  // the same counter owner that admitted it, even after runtime replacement.
   const store = getHostedMediaStore(params.account.accountId);
+  const { preparationLimiter } = hostedMediaLimits;
   if (!preparationLimiter.tryAcquire(params.account.accountId)) {
     throw new Error(
       "Synology Chat attachment preparation is busy. Retry after the current attachments finish preparing.",
@@ -533,6 +535,7 @@ export async function tryHandleSynologyHostedMediaRequest(
   // Runtime replacement resets the process-local limiter state. Resolve the
   // matching store first so the lease acquired below belongs to that runtime.
   const store = getHostedMediaStore(account.accountId);
+  const { servingLimiter, servedByteWindows } = hostedMediaLimits;
   if (!servingLimiter.tryAcquire(account.accountId)) {
     res.statusCode = 503;
     res.setHeader("Retry-After", "1");
@@ -542,7 +545,9 @@ export async function tryHandleSynologyHostedMediaRequest(
   let responseOwnsServingLease = false;
   let rollbackServedBytes: (() => void) | undefined;
   let entry: HostedOutboundMediaEntry | null | undefined;
-  const servingLease = holdServingLeaseUntilResponseDone(res, account.accountId);
+  const servingLease = holdServingLeaseUntilResponseDone(res, () =>
+    servingLimiter.release(account.accountId),
+  );
   try {
     const routePath = toSynologyHostedMediaStoreRoutePath(url.pathname);
     const metadata = await store.readMetadata(candidate.id);
@@ -562,7 +567,11 @@ export async function tryHandleSynologyHostedMediaRequest(
     if (method === "GET") {
       // Authenticate and reserve from metadata before reading stored chunks.
       // Rejected over-budget requests must not force SQLite payload reads.
-      rollbackServedBytes = reserveServedBytes(account.accountId, metadata.byteLength);
+      rollbackServedBytes = reserveServedBytes(
+        servedByteWindows,
+        account.accountId,
+        metadata.byteLength,
+      );
       if (!rollbackServedBytes) {
         res.statusCode = 429;
         res.setHeader("Retry-After", "60");

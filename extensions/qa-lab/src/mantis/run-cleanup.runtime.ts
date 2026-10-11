@@ -84,10 +84,8 @@ async function pathExistsBeforeDeadline(
   deadline: MantisCleanupDeadline,
 ): Promise<boolean> {
   try {
-    await runBeforeMantisCleanupDeadline(
-      deadline,
-      "checking the worktree path",
-      async () => await fs.lstat(filePath),
+    await runBeforeMantisCleanupDeadline(deadline, "checking the worktree path", () =>
+      fs.lstat(filePath),
     );
     return true;
   } catch (error) {
@@ -104,14 +102,11 @@ async function verifyMantisDirectoryOwnershipBeforeDeadline(params: {
   repoRoot: string;
   worktreeDir: string;
 }): Promise<boolean> {
-  await runBeforeMantisCleanupDeadline(
-    params.deadline,
-    "verifying worktree path containment",
-    async () =>
-      await assertNoSymlinkParents({
-        rootDir: path.resolve(params.repoRoot),
-        targetPath: path.resolve(params.worktreeDir),
-      }),
+  await runBeforeMantisCleanupDeadline(params.deadline, "verifying worktree path containment", () =>
+    assertNoSymlinkParents({
+      rootDir: path.resolve(params.repoRoot),
+      targetPath: path.resolve(params.worktreeDir),
+    }),
   );
   let matches = true;
   for (const [directory, operation, dev, ino] of [
@@ -157,7 +152,7 @@ async function normalizeWorktreePath(
     return await runBeforeMantisCleanupDeadline(
       deadline,
       "normalizing a registered worktree path",
-      async () => await fs.realpath(resolvedPath),
+      () => fs.realpath(resolvedPath),
     );
   } catch (error) {
     if (!isNotFoundError(error)) {
@@ -169,7 +164,7 @@ async function normalizeWorktreePath(
   const canonicalRepoRoot = await runBeforeMantisCleanupDeadline(
     deadline,
     "normalizing the repository root",
-    async () => await fs.realpath(resolvedRepoRoot),
+    () => fs.realpath(resolvedRepoRoot),
   );
   if (!isPathWithinOrEqual(resolvedRepoRoot, resolvedPath)) {
     return resolvedPath;
@@ -459,8 +454,8 @@ export async function removeLegacyMantisWorktrees(params: {
     const ownership = await runBeforeMantisCleanupDeadline(
       laneDeadline,
       "capturing a legacy worktree identity",
-      async () =>
-        await captureMantisDirectoryOwnership({
+      () =>
+        captureMantisDirectoryOwnership({
           directoryPath: worktreeDir,
           repoRoot: params.repoRoot,
         }),

@@ -15,7 +15,7 @@ import { listRetiredCronStateFiles } from "../infra/state-migrations.retired-cro
 import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
-import { listLegacyOAuthSidecarPaths } from "./doctor-auth-legacy-paths.js";
+import { listReferencedLegacyOAuthSidecarPaths } from "./doctor-auth-legacy-paths.js";
 import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
 import {
   canPlanAutomaticConfigRepair,
@@ -34,12 +34,11 @@ export function createDoctorConfigRepairPlanner(params: {
   skipLegacyParentConfigWrite: boolean;
   runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
 }) {
-  const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) => {
-    return params.runWithPluginMetadataSnapshot(
+  const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) =>
+    params.runWithPluginMetadataSnapshot(
       { config: snapshot.sourceConfig ?? snapshot.config ?? {} },
       () => planAutomaticConfigRepair(snapshot),
     );
-  };
   const planAdmittedConfigRepair = (
     snapshot: ConfigFileSnapshot,
     prepared: ReturnType<typeof planAutomaticConfigRepair> = null,
@@ -87,7 +86,7 @@ export async function prepareDoctorConfigRecovery(params: {
     }
     assertNoRetiredStateFiles(
       "OAuth credential sidecars",
-      listLegacyOAuthSidecarPaths(process.env, coerceConfig(config)),
+      listReferencedLegacyOAuthSidecarPaths(process.env, coerceConfig(config)),
     );
   };
   assertSupportedConfig(snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig);

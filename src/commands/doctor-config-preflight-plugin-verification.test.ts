@@ -63,7 +63,7 @@ describe("update canary plugin verification", () => {
         migrationInspection: {
           requiredPluginIds: [],
           inspectionRequiredPluginIds: [],
-          statelessPluginIds: [],
+          statelessPlugins: [],
           runtimePluginAliases: [],
         },
         deferredPlugins: [

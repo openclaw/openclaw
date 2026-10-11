@@ -9,6 +9,7 @@ import {
   createUserTurnInputController,
 } from "./chat-send-user-turn.test-support.js";
 import {
+  authenticatedProfileUnavailableError,
   gatewayClientSenderFields,
   gatewayClientSessionCreator,
   resolveChatSendCallerContext,
@@ -79,6 +80,17 @@ describe("gateway client identity", () => {
 
     expect(gatewayClientSenderFields(client)).toEqual({});
     expect(gatewayClientSessionCreator(client)).toBeUndefined();
+  });
+
+  it("reports unavailable profiles without loading the GitHub plugin surface", () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    for (const cause of [undefined, new Error("profile store unavailable")]) {
+      expect(authenticatedProfileUnavailableError(cause)).toMatchObject({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("Authenticated profile verification is unavailable"),
+        retryAfterMs: 1_000,
+      });
+    }
   });
 });
 
@@ -218,7 +230,7 @@ describe("chat send command authority", () => {
     "admission",
     "synthetic",
     "owner",
-  ] as const)("retires verified requester context after %s changes", async (change) => {
+  ] as const)("retires verified requester context after %s changes", (change) => {
     const lifetime = new AbortController();
     const client = createClient({
       authenticatedUserId: change === "owner" ? undefined : "ada@example.test",
@@ -227,7 +239,7 @@ describe("chat send command authority", () => {
     });
     let current = true;
     const { controller } = createUserTurnInputController("Change my theme");
-    const { ctx } = await prepareChatSendUserTurn({
+    const { ctx } = prepareChatSendUserTurn({
       request: {
         inboundMessage: "Change my theme",
         clientInfo: client.connect.client,

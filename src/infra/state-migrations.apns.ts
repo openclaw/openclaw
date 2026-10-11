@@ -339,38 +339,31 @@ export async function migrateLegacyApnsRegistrations(params: {
           ],
         };
       }
-      const activePath = hasSource ? sourcePath : hasClaim ? source.claimPath : null;
-      if (!activePath) {
+      if (!hasSource && !hasClaim) {
         return { changes, warnings };
       }
 
-      let snapshot: LegacySourceSnapshot;
       const registrations = new Map<string, ApnsRegistration>();
-      try {
-        snapshot = await readLegacySourceSnapshot(
-          stateRoot,
-          params.stateDir,
-          activePath,
-          (rawNodeId, rawRegistration) => {
-            const [nodeId, registration] = parseLegacyApnsRegistration(
-              rawNodeId,
-              rawRegistration,
-              env,
-            );
-            if (registrations.has(nodeId)) {
-              throw new Error("legacy APNs registration has a duplicate node id");
-            }
-            registrations.set(nodeId, registration);
-          },
-        );
-      } catch (error) {
-        warnings.push(`Failed reading legacy APNs state: ${String(error)}`);
-        return { changes, warnings };
-      }
+      let snapshot = await readLegacySourceSnapshot(
+        stateRoot,
+        params.stateDir,
+        hasSource ? sourcePath : source.claimPath,
+        (rawNodeId, rawRegistration) => {
+          const [nodeId, registration] = parseLegacyApnsRegistration(
+            rawNodeId,
+            rawRegistration,
+            env,
+          );
+          if (registrations.has(nodeId)) {
+            throw new Error("legacy APNs registration has a duplicate node id");
+          }
+          registrations.set(nodeId, registration);
+        },
+      );
 
       let result: ReturnType<typeof importAndRecordReceipt>;
       try {
-        if (activePath === sourcePath) {
+        if (hasSource) {
           snapshot = await source.claim({
             snapshot,
             mismatchMessage: "legacy APNs source changed before Doctor could claim it",

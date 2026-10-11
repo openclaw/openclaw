@@ -8,6 +8,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
 import * as migration from "./legacy-source-diagnostic.js";
+import * as persistedStore from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   clearRuntimeAuthProfileStoreSnapshotCore,
@@ -51,6 +52,45 @@ function createRuntime(overlayExternalAuthProfiles = (store: AuthProfileStore) =
     overlayExternalAuthProfiles,
   });
 }
+
+it.each(["snapshot", "requested", "shared", "absent"] as const)(
+  "prepares the %s provider from recorded facts without synchronous persisted reads",
+  async (source) => {
+    const root = tempDirs.make("openclaw-auth-provider-facts-");
+    const agentDir = path.join(root, "agents/worker/agent");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const profileId = "team:account";
+    const store = (provider?: string): AuthProfileStore => ({
+      version: 1,
+      profiles: provider ? { [profileId]: { type: "api_key", provider, key: "fixture" } } : {},
+    });
+    reader.read.mockResolvedValueOnce(
+      readableRows(store(source === "requested" ? "requested" : undefined)),
+    );
+    reader.read.mockResolvedValue(readableRows(store(source === "absent" ? undefined : "shared")));
+    vi.spyOn(sqliteRead, "readSharedAuthProfileRows").mockResolvedValue(
+      readableRows(store(source === "absent" ? undefined : "shared")),
+    );
+    if (source === "snapshot") {
+      setRuntimeAuthProfileStoreSnapshot(store("snapshot"), agentDir);
+    }
+    const syncRead = vi
+      .spyOn(persistedStore, "loadPersistedAuthProfileStore")
+      .mockImplementation(() => {
+        throw new Error("synchronous persisted read");
+      });
+    const overlay = vi.fn(() => store("overlay"));
+    const runtime = createRuntime(overlay);
+    await expect(runtime.prepareAuthProfileProvider({ agentDir, profileId })).resolves.toEqual({
+      provider: source === "absent" ? undefined : source,
+    });
+    expect(syncRead).not.toHaveBeenCalled();
+    expect(overlay).not.toHaveBeenCalled();
+    if (source === "snapshot") {
+      expect(reader.read).not.toHaveBeenCalled();
+    }
+  },
+);
 
 it("keeps cached credentials and selection state separate from mutable runtime views", async () => {
   const root = tempDirs.make("openclaw-auth-cached-mutation-");

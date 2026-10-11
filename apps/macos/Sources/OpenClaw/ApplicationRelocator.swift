@@ -304,12 +304,7 @@ enum ApplicationRelocator {
         fileManager: FileManager = .default,
         processInfo: ProcessInfo = .processInfo) -> Bool
     {
-        #if DEBUG
-        let debugBuild = true
-        #else
-        let debugBuild = false
-        #endif
-        if debugBuild || processInfo.isRunningTests || processInfo.isPreview {
+        if CLIInstallBuild.isDebug || processInfo.isRunningTests || processInfo.isPreview {
             return true
         }
 
@@ -343,10 +338,6 @@ extension ApplicationRelocator {
         homeDirectory: URL) -> KeepAliveSupervisor?
     {
         guard let serviceName = xpcServiceName?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !serviceName.isEmpty,
-              serviceName != "0",
-              !serviceName.hasPrefix("application."),
-              URL(fileURLWithPath: serviceName).lastPathComponent == serviceName,
               let executableURL
         else {
             return nil
@@ -561,11 +552,6 @@ extension ApplicationRelocator {
                 } ?? false,
                 identity: installedBundle.flatMap(self.identity(for:)))
         }
-        #if DEBUG
-        let debugBuild = true
-        #else
-        let debugBuild = false
-        #endif
         let isReadOnlyVolume = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
             .volumeIsReadOnly ?? false
         return Environment(
@@ -574,7 +560,7 @@ extension ApplicationRelocator {
             currentIdentity: self.identity(for: bundle),
             candidates: candidates,
             isReadOnlyVolume: isReadOnlyVolume,
-            isDebugOrTesting: debugBuild || processInfo.isRunningTests || processInfo.isPreview)
+            isDebugOrTesting: CLIInstallBuild.isDebug || processInfo.isRunningTests || processInfo.isPreview)
     }
 
     private static func identity(for bundle: Bundle) -> ApplicationIdentity? {
@@ -1180,6 +1166,11 @@ extension ApplicationRelocator {
         guard pipe(&descriptors) == 0 else { return nil }
         let readDescriptor = descriptors[0]
         let writeDescriptor = descriptors[1]
+        var spawnResult: Int32 = -1
+        defer {
+            if spawnResult != 0 { Darwin.close(readDescriptor) }
+            Darwin.close(writeDescriptor)
+        }
 
         var environmentAssignments = [
             "\(replacementSourceBundleEnvironmentKey)=\(sourceBundleURL.path)",
@@ -1198,68 +1189,37 @@ extension ApplicationRelocator {
         }
         // The detached child is no longer owned by the current launchd job. Do not
         // let it inherit that job's identity and attempt a second bootout later.
-        let arguments = [
-            "/usr/bin/env",
-            "-u",
+        let arguments = ["/usr/bin/env"] + [
             "XPC_SERVICE_NAME",
-            "-u",
             replacementSourceBundleEnvironmentKey,
-            "-u",
             replacementParentPIDEnvironmentKey,
-            "-u",
             replacementCodeHashEnvironmentKey,
-            "-u",
             replacementReadyFDEnvironmentKey,
-            "-u",
             replacementBootoutTargetEnvironmentKey,
-            "-u",
             replacementSupervisorLabelEnvironmentKey,
-            "-u",
             replacementSupervisorPlistEnvironmentKey,
-        ] + environmentAssignments +
+        ].flatMap { ["-u", $0] } + environmentAssignments +
             [launchReference.executableURL.path] + forwardedArguments
         var cArguments = arguments.map { strdup($0) } + [nil]
         defer { cArguments.compactMap(\.self).forEach { free($0) } }
 
         var fileActions: posix_spawn_file_actions_t?
+        guard posix_spawn_file_actions_init(&fileActions) == 0 else { return nil }
+        defer { posix_spawn_file_actions_destroy(&fileActions) }
         var attributes: posix_spawnattr_t?
-        guard posix_spawn_file_actions_init(&fileActions) == 0,
-              posix_spawnattr_init(&attributes) == 0
-        else {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
-        defer {
-            posix_spawn_file_actions_destroy(&fileActions)
-            posix_spawnattr_destroy(&attributes)
-        }
+        guard posix_spawnattr_init(&attributes) == 0 else { return nil }
+        defer { posix_spawnattr_destroy(&attributes) }
         guard posix_spawn_file_actions_adddup2(&fileActions, writeDescriptor, childReadyDescriptor) == 0,
               posix_spawnattr_setflags(
                   &attributes,
                   Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0
-        else {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
-        if readDescriptor != childReadyDescriptor,
-           posix_spawn_file_actions_addclose(&fileActions, readDescriptor) != 0
-        {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
-        if writeDescriptor != childReadyDescriptor,
-           posix_spawn_file_actions_addclose(&fileActions, writeDescriptor) != 0
-        {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
+        else { return nil }
+        for descriptor in descriptors where descriptor != childReadyDescriptor {
+            guard posix_spawn_file_actions_addclose(&fileActions, descriptor) == 0 else { return nil }
         }
 
         var processIdentifier = pid_t()
-        let spawnResult = cArguments.withUnsafeMutableBufferPointer { buffer in
+        spawnResult = cArguments.withUnsafeMutableBufferPointer { buffer in
             posix_spawn(
                 &processIdentifier,
                 "/usr/bin/env",
@@ -1268,11 +1228,7 @@ extension ApplicationRelocator {
                 buffer.baseAddress,
                 environ)
         }
-        Darwin.close(writeDescriptor)
-        guard spawnResult == 0 else {
-            Darwin.close(readDescriptor)
-            return nil
-        }
+        guard spawnResult == 0 else { return nil }
         return (processIdentifier, readDescriptor)
     }
 

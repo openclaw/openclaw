@@ -282,6 +282,7 @@ async function fixture({
     "update-command-terminal",
     "update-command-terminal-publication",
     "../daemon-cli/restart-health-deadline",
+    "../../../packages/retry/src/index",
     "../daemon-cli/restart-health-probe",
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",

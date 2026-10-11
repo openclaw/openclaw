@@ -6,6 +6,7 @@ import {
   completePromptCacheObservation,
   type PromptCacheChange,
 } from "./prompt-cache-observability.js";
+import type { ProviderPromptState } from "./provider-prompt-state.js";
 
 type PromptCacheObservationStart = ReturnType<typeof beginPromptCacheObservation>;
 type PromptCacheSnapshot = PromptCacheObservationStart["snapshot"];
@@ -17,6 +18,9 @@ export type PromptCacheRequestObservation = {
   cacheRead?: number;
   cacheWrite?: number;
   previousCacheRead?: number;
+  requestGapMs?: number;
+  providerPrefix?: string;
+  promptTokens?: number;
   changes: PromptCacheChange[] | null;
 };
 
@@ -52,15 +56,22 @@ export function createPromptCacheRequestObserver(
       });
       onRequest?.({ ...request, requestIndex });
     },
-    onModelUsage: (usage: NormalizedUsage | undefined) => {
+    onModelUsage: (
+      usage: NormalizedUsage | undefined,
+      providerPrompt?: ProviderPromptState["lastAttempt"],
+    ) => {
       if (!request) {
         return;
       }
-      const cacheBreak = completePromptCacheObservation({ ...params, usage });
+      const cacheBreak = completePromptCacheObservation({ ...params, usage, providerPrompt });
       observation = {
         requestIndex,
         broke: Boolean(cacheBreak),
         previousCacheRead: request.previousCacheRead ?? undefined,
+        requestGapMs: request.requestGapMs,
+        providerPrefix: cacheBreak?.providerPrefix,
+        promptTokens:
+          usage?.contextUsage?.state === "available" ? usage.contextUsage.promptTokens : undefined,
         input: usage?.input,
         cacheRead: usage?.cacheRead,
         cacheWrite: usage?.cacheWrite,

@@ -76,6 +76,12 @@ export class CronEventEditorController {
       (cron.cronCreateOpen || cron.cronEditingJob) &&
       form.scheduleKind === "event" &&
       form.eventSource === "mcp-events";
+    if (!active || !this.available) {
+      if (force || this.scopeKey) {
+        this.reset();
+      }
+      return;
+    }
     const agentId =
       form.agentId.trim() || this.host.context().agentSelection.state.selectedId || "main";
     const serverName = form.eventServer;
@@ -83,23 +89,20 @@ export class CronEventEditorController {
     const sourceIdentity = editingJob?.state.sourceIdentity;
     const jobRevision = editingJob?.configRevision;
     const jobEnabled = editingJob?.enabled;
-    const key =
-      active && this.available
-        ? JSON.stringify([
-            agentId,
-            serverName,
-            editingJob?.id,
-            jobRevision,
-            sourceIdentity,
-            jobEnabled,
-          ])
-        : "";
+    const key = JSON.stringify([
+      agentId,
+      serverName,
+      editingJob?.id,
+      jobRevision,
+      sourceIdentity,
+      jobEnabled,
+    ]);
     if (!force && key === this.scopeKey) {
       return;
     }
     this.scopeKey = key;
     this.source.reset();
-    if (!key || !connection) {
+    if (!connection) {
       return;
     }
     if (this.host.canManage()) {

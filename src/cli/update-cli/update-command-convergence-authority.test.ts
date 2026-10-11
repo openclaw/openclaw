@@ -3,11 +3,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { readGitRuntimeArtifactIdentity } from "../../infra/update-git-runtime.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import * as pluginRecords from "../../plugins/installed-plugin-index-records.js";
 import * as pluginLifecycle from "../../plugins/plugin-lifecycle-lease.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { VERSION } from "../../version.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
@@ -133,6 +135,87 @@ function doctorOperation(args: string[]) {
 }
 
 describe("candidate convergence Doctor dispatch authority", () => {
+  it("cancels runtime classification with its enclosing command scope", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("Update command was cancelled");
+    vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockImplementationOnce(
+      async (_root, options) => {
+        await Promise.resolve();
+        controller.abort(cancellation);
+        options?.signal?.throwIfAborted();
+        return "package";
+      },
+    );
+    await expect(
+      withCommandProcessScope(
+        () => sourceRuntime.completeSourceUpdateRuntime({ root: "/isolated", timeoutMs: 1_000 }),
+        controller.signal,
+      ),
+    ).rejects.toBe(cancellation);
+  });
+
+  it.each(["prepared", "classified"] as const)(
+    "checks current updater authority before returning %s runtime completion",
+    async (noOp) => {
+      let current = noOp !== "prepared";
+      const refusal = new Error("Runtime completion no longer belongs to this updater");
+      vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockImplementationOnce(async () => {
+        await Promise.resolve();
+        current = false;
+        return "package";
+      });
+      await expect(
+        sourceRuntime.completeSourceUpdateRuntime({
+          root: "/isolated",
+          timeoutMs: 1_000,
+          sourceRuntimePrepared: noOp === "prepared" ? true : undefined,
+          assertCurrent: () => {
+            if (!current) {
+              throw refusal;
+            }
+          },
+        }),
+      ).rejects.toBe(refusal);
+    },
+  );
+
+  it.each(["prepared source", "package"] as const)(
+    "leaves unused plugin state untouched during %s runtime completion",
+    async (installation) => {
+      const root = tempDirs.make("openclaw-runtime-completion-");
+      const state = path.join(root, "unavailable-state");
+      await fs.writeFile(state, "not a state directory");
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: VERSION }));
+      vi.stubEnv("OPENCLAW_STATE_DIR", state);
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
+      vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", undefined);
+      vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
+      mocks.convergeCandidate.mockResolvedValue({
+        pluginUpdate: { ...pluginUpdate, changed: false },
+        configSnapshot: snapshot,
+      });
+
+      const { resultWithPostUpdate } = await convergeUpdatePlugins(
+        convergenceParams({
+          root,
+          candidateRuntime: true,
+          coreAlreadyCurrent: true,
+          result: {
+            root,
+            status: "skipped",
+            reason: "already-current",
+            mode: installation === "package" ? "npm" : "git",
+            sourceRuntimePrepared: installation === "prepared source" ? true : undefined,
+          },
+        }),
+      );
+
+      expect(resultWithPostUpdate).toMatchObject({ status: "skipped", reason: "already-current" });
+      expect(mocks.convergeCandidate).toHaveBeenCalledOnce();
+      expect(await fs.readFile(state, "utf8")).toBe("not a state directory");
+    },
+  );
+
   it.each([
     { candidateRuntime: false, scenario: "changed-during" },
     { candidateRuntime: true, scenario: "unchanged" },
@@ -297,8 +380,8 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       const delegate = vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess");
       const runtime = vi
         .spyOn(sourceRuntime, "completeSourceUpdateRuntime")
-        .mockImplementation(async ({ lease }) => {
-          lease.assertOwned();
+        .mockImplementation(async ({ assertCurrent }) => {
+          assertCurrent?.();
           events.push("source-published");
           return { changed: true };
         });
@@ -373,7 +456,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.9.4");
           if (changed === "runtime") {
             await params.beforePublication?.();
-            await params.beforePersistentEffect?.();
+            params.assertCurrent?.();
             events.push("publish");
           }
           return { changed: changed === "runtime" };

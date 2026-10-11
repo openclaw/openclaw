@@ -1,6 +1,10 @@
 // Registered reset/delete must join transports already retired by the MCP idle sweep.
 import { afterEach, expect, test } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { startCatalogRecoveryMcpServer } from "../agents/agent-bundle-mcp-catalog-recovery.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -26,9 +30,9 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-test.each(["sessions.reset", "sessions.delete"] as const)(
+test.for(["sessions.reset", "sessions.delete"] as const)(
   "%s joins MCP idle disposal before mutating the session",
-  async (method) => {
+  async (method, { signal }) => {
     const { dir, storePath } = await createSessionStoreDir();
     const sessionId = `idle-mcp-${method}`;
     const sessionKey = "agent:main:idle-mcp-cleanup";
@@ -101,13 +105,30 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
       }
       clock.setTime(lease.runtime.lastUsedAt + 1);
       sweep = manager.sweepIdleRuntimes();
-      await withTestTimeout(server.terminationStarted, 2_000, "MCP idle disposal did not start");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          server.terminationStarted,
+          sweep,
+          "MCP idle sweep settled before disposal started",
+        ),
+        signal,
+      );
       expect(manager.peekSession({ sessionId })).toBeUndefined();
       mutation = directSessionReq(method, { key: sessionKey }).then((result) => {
         mutationFinished = true;
+        if (!result.ok) {
+          throw new Error(`${method} failed: ${JSON.stringify(result.error)}`);
+        }
         return result;
       });
-      await withTestTimeout(retirementStarted.promise, 2_000, "Session cleanup did not retire MCP");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          retirementStarted.promise,
+          mutation,
+          "Session cleanup settled before retiring MCP",
+        ),
+        signal,
+      );
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -117,8 +138,8 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
       expect(pendingEntry?.sessionId).toBe(sessionId);
       expect(pendingEntry?.lifecycleRevision).toBe(initialEntry?.lifecycleRevision);
       terminate.resolve();
-      await expect(sweep).resolves.toBe(1);
-      expect(await mutation).toMatchObject({ ok: true });
+      await expect(withinTest(sweep, signal)).resolves.toBe(1);
+      expect(await withinTest(mutation, signal)).toMatchObject({ ok: true });
       const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
       if (method === "sessions.delete") {
         expect(entry).toBeUndefined();

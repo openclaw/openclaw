@@ -18,6 +18,7 @@ import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -193,6 +194,7 @@ export function setup(
     accountCatalog?: PreparedAccountCatalogAccess;
     metadataSnapshot?: preparedRuntime.PreparedModelRuntimeSnapshot["metadataSnapshot"];
     pluginRegistry?: PluginRegistry;
+    configuredRuntimeModel?: ProviderRuntimeModel;
     afterModelPreparation?: () => void;
     observeStage?: (
       stage: "factory" | "policy" | "wrapper" | "execution",
@@ -230,7 +232,7 @@ export function setup(
       routeVariants: [],
     },
     configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
+    findConfiguredRuntimeModel: () => options.configuredRuntimeModel,
     inlineProviderModels: [],
     createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
   } satisfies preparedRuntime.PreparedModelRuntimeSnapshot;

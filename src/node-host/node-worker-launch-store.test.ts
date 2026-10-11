@@ -136,7 +136,7 @@ describe("node worker launch admitted schema", () => {
             if (/sqlite_(?:schema|master)/iu.test(sql)) {
               return "schema";
             }
-            if (/^PRAGMA data_version$/iu.test(sql)) {
+            if (/^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)) {
               return "dataVersion";
             }
             return sql.startsWith("select ") && sql.includes('from "node_worker_launches"')

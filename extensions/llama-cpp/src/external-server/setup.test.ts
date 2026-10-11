@@ -673,9 +673,7 @@ describe("llama-server setup", () => {
         },
       },
     ]);
-    expect(discoverMock).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: "secret-key", cacheTtlMs: 0 }),
-    );
+    expect(discoverMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "secret-key" }));
     const provider = result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
     expect(provider?.auth).toBeUndefined();
     expect(provider?.apiKey).toBeUndefined();

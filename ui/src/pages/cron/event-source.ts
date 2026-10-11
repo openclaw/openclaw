@@ -145,6 +145,19 @@ export class CronEventSourceController {
   }
 }
 
+export function resolveCronEventPatch(
+  current: CronFormState,
+  patch: Partial<CronFormState>,
+): Partial<CronFormState> {
+  if (patch.eventServer !== undefined && patch.eventServer !== current.eventServer) {
+    return { ...patch, eventName: "", eventArguments: "{}" };
+  }
+  if (patch.eventName !== undefined && patch.eventName !== current.eventName) {
+    return { ...patch, eventArguments: "{}" };
+  }
+  return patch;
+}
+
 export function validateCronEventSelection(
   form: CronFormState,
   view: Pick<CronEventSourceView, "available" | "loading" | "events" | "error">,

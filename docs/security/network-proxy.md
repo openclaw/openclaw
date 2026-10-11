@@ -102,12 +102,12 @@ without activating it.
 
 The implicit bypass covers `localhost` and literal loopback IP URLs. LAN, tailnet, private-network, and public hosts continue through the managed proxy. Application-level SSRF checks still apply to untrusted destinations.
 
-Local Gateway HTTP health probes follow this policy too, including HTTPS probes
-used by Doctor and restart checks. HTTPS probes verify the configured Gateway
+Local Gateway HTTP health checks follow this policy too, including HTTPS checks
+used by Doctor and restart checks. HTTPS checks verify the configured Gateway
 certificate fingerprint on each connection; enabling a proxy does not disable
 that verification.
 
-Update canary `/startupz` and `/readyz` probes use the same loopback routing policy. If a running canary never answers within the validation budget, the update records the observed failure as a warning, including the next troubleshooting step, and continues best effort.
+Update canary `/startupz` and `/readyz` checks use the same loopback routing policy. If a running canary never answers within the validation budget, the update records the observed failure as a warning, including the next troubleshooting step, and continues best effort.
 
 Environment-only HTTP proxy routing honors `no_proxy`/`NO_PROXY` (lowercase takes precedence). These environment bypass lists do not override managed proxy policy.
 
@@ -165,8 +165,8 @@ openclaw proxy validate --proxy-url https://proxy.corp.example:8443 --proxy-ca-f
 | `--proxy-ca-file <path>` | CA bundle for an HTTPS proxy endpoint.                               |
 | `--allowed-url <url>`    | Destination expected to succeed (repeatable).                        |
 | `--denied-url <url>`     | Destination expected to be blocked (repeatable).                     |
-| `--apns-reachable`       | Also verify the proxy can tunnel a direct sandbox APNs HTTP/2 probe. |
-| `--apns-authority <url>` | Override the APNs authority probed with `--apns-reachable`.          |
+| `--apns-reachable`       | Also verify the proxy can tunnel a direct sandbox APNs HTTP/2 check. |
+| `--apns-authority <url>` | Override the APNs authority checked with `--apns-reachable`.         |
 | `--timeout-ms <ms>`      | Per-request timeout.                                                 |
 | `--json`                 | Machine-readable output.                                             |
 

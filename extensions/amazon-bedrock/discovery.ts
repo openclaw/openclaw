@@ -198,8 +198,6 @@ export async function discoverBedrockModels(params: {
   region: string;
   discoveryMode?: "strict";
   config?: BedrockDiscoveryConfig;
-  now?: () => number;
-  clientFactory?: (region: string) => BedrockClient;
 }): Promise<ModelDefinitionConfig[]> {
   const refreshIntervalSeconds = Math.max(
     0,
@@ -220,7 +218,7 @@ export async function discoverBedrockModels(params: {
     defaultContextWindow,
     defaultMaxTokens,
   });
-  const now = params.now?.() ?? Date.now();
+  const now = Date.now();
 
   if (refreshIntervalSeconds > 0) {
     const cached = discoveryCache.get(cacheKey);
@@ -231,8 +229,7 @@ export async function discoverBedrockModels(params: {
   }
 
   const sdk = await loadBedrockControlPlaneSdk();
-  const clientFactory = params.clientFactory ?? ((region: string) => sdk.createClient(region));
-  const client = clientFactory(params.region);
+  const client = sdk.createClient(params.region);
 
   const discoveryPromise = (async () => {
     try {
@@ -423,7 +420,6 @@ export async function resolveImplicitBedrockProvider(params: {
   pluginConfig?: { discovery?: BedrockDiscoveryConfig };
   discoveryMode?: "strict";
   env?: NodeJS.ProcessEnv;
-  clientFactory?: (region: string) => BedrockClient;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
   const discoveryConfig = params.pluginConfig?.discovery;
@@ -445,7 +441,6 @@ export async function resolveImplicitBedrockProvider(params: {
     region,
     discoveryMode: params.discoveryMode,
     config: discoveryConfig,
-    clientFactory: params.clientFactory,
   });
   if (models.length === 0 && params.discoveryMode !== "strict") {
     return null;

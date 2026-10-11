@@ -133,7 +133,6 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
       {
         sessionId: "cold-child",
         updatedAt: 1,
-        status: "running",
         archivedAt: 1,
         parentSessionKey: parent,
         spawnedBy: parent,

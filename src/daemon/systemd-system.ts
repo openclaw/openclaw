@@ -2,11 +2,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
+import { formatServiceInspectionDetail } from "./service-runtime.js";
+import {
+  readSystemdBusOwner,
+  readSystemdUnitObjectPath,
+  systemdUnitCallArgs,
+} from "./systemd-bus-query.js";
 import {
   execBusctlSystem,
   execSystemctl,
@@ -26,11 +30,6 @@ type SystemSystemdOwnership =
     };
 
 type SystemSystemdConflict = Exclude<SystemSystemdOwnership, { status: "absent" }>;
-
-function formatUnknownError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return truncateUtf16Safe(sanitizeForLog(raw), 500);
-}
 
 function unverifiableSystemOwnership(
   unitName: string,
@@ -99,7 +98,7 @@ async function findInstalledSystemUnitInPaths(
       if (isMissingPathError(error)) {
         continue;
       }
-      const detail = `${unitPath}: ${formatUnknownError(error)}`;
+      const detail = `${unitPath}: ${formatServiceInspectionDetail(error)}`;
       return unverifiableSystemOwnership(unitName, detail, "filesystem");
     }
   }
@@ -112,7 +111,6 @@ async function inspectLoadedSystemOwnership(
   timeoutMs?: number,
 ): Promise<SystemSystemdOwnership> {
   const manager = "org.freedesktop.systemd1";
-  const bus = "org.freedesktop.DBus";
   const missingUnit = Symbol("affirmative native absence");
   const deadline =
     performance.now() +
@@ -149,51 +147,22 @@ async function inspectLoadedSystemOwnership(
     }
     return parsed.data;
   };
-  const readOwner = async () => {
-    const value = await query(
-      ["call", bus, "/org/freedesktop/DBus", bus, "GetNameOwner", "s", manager],
-      "s",
+  const readOwner = () =>
+    readSystemdBusOwner(
+      async (args, signatures) => [await query(args, signatures[0]!)],
+      unavailable,
     );
-    if (
-      !Array.isArray(value) ||
-      value.length !== 1 ||
-      typeof value[0] !== "string" ||
-      !/^:[0-9]+\.[0-9]+$/.test(value[0])
-    ) {
-      throw unavailable();
-    }
-    return value[0];
-  };
   try {
     if (path.posix.basename(unitName) !== unitName) {
       throw unavailable();
     }
     const owner = await readOwner();
     const readLoaded = async () => {
-      const value = await query(
-        [
-          "call",
-          owner,
-          "/org/freedesktop/systemd1",
-          `${manager}.Manager`,
-          "GetUnit",
-          "s",
-          unitName,
-        ],
-        "o",
-        true,
-      );
+      const value = await query(systemdUnitCallArgs(owner, unitName, "GetUnit"), "o", true);
       if (value === missingUnit) {
         return false;
       }
-      if (
-        !Array.isArray(value) ||
-        value.length !== 1 ||
-        typeof value[0] !== "string" ||
-        !/^\/org\/freedesktop\/systemd1\/unit\/[A-Za-z0-9_]+$/.test(value[0])
-      ) {
-        throw unavailable();
-      }
+      readSystemdUnitObjectPath(value, unavailable);
       return true;
     };
     if (await readLoaded()) {
@@ -225,7 +194,7 @@ async function inspectLoadedSystemOwnership(
     }
     return { status: "absent", unitName };
   } catch (error) {
-    return unverifiableSystemOwnership(unitName, formatUnknownError(error), "busctl");
+    return unverifiableSystemOwnership(unitName, formatServiceInspectionDetail(error), "busctl");
   }
 }
 

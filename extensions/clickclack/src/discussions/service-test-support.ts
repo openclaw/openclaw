@@ -151,6 +151,9 @@ export function createHarness(
         getSessionEntry: vi.fn(() =>
           sessionEntry ? { sessionId: "session-id", updatedAt: 1, ...sessionEntry } : undefined,
         ),
+        getSessionEntryAsync: vi.fn(async () =>
+          sessionEntry ? { sessionId: "session-id", updatedAt: 1, ...sessionEntry } : undefined,
+        ),
       },
     },
   });

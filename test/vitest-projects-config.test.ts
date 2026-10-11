@@ -529,17 +529,21 @@ describe("projects vitest config", () => {
     },
   );
 
-  it.each(["extensions/agentsapi/agentsapi-attempt.test.ts"])(
-    "routes real extension database consumer %s to its fork owner",
-    (file) => {
-      const project = "test/vitest/vitest.extension-database-workers.config.ts";
-      const config = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
-      expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
-      expect(config.include).toContain(file.replace(/^extensions\//u, ""));
-      expect(config.pool).toBe(diagnosticForksPool);
-      expect(config.isolate).toBe(true);
-    },
-  );
+  it.each([
+    "extensions/agentsapi/agentsapi-attempt.test.ts",
+    "extensions/litellm/index.test.ts",
+    "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts",
+    "extensions/qa-lab/src/gateway-child-artifacts.test.ts",
+    "extensions/qa-lab/src/gateway-child.test.ts",
+    "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
+  ])("routes real extension database consumer %s to its fork owner", (file) => {
+    const project = "test/vitest/vitest.extension-database-workers.config.ts";
+    const config = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
+    expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
+    expect(config.include).toContain(file.replace(/^extensions\//u, ""));
+    expect(config.pool).toBe(diagnosticForksPool);
+    expect(config.isolate).toBe(true);
+  });
 
   it.each([
     {

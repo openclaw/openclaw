@@ -19,6 +19,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
 import { listSubagentRunsForRequester } from "../subagents/registry/subagent-registry-read.js";
 import {
   buildSubagentRestartRecoveryRoster,
@@ -44,9 +45,9 @@ import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
-import { dispatchRestartRecoveryWithinCapacity } from "./main-session-restart-dispatch-capacity.js";
 import { settleAcceptedRestartRecovery } from "./main-session-restart-dispatch-settlement.js";
 import {
+  dispatchRestartRecoveryUntilStarted,
   normalizeRestartRecoveryTerminalStatus,
   probeRestartRecoveryTerminalStatus,
 } from "./main-session-restart-dispatch-start.js";
@@ -58,13 +59,10 @@ import {
 import { mainSessionRecoveryLog as log } from "./main-session-restart-recovery-shared.js";
 
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
-  "Your previous turn was interrupted by a gateway restart while " +
-    "OpenClaw was waiting on tool/model work. The restart did not cancel the user's task. " +
+  `${RESTART_RECOVERY_INTERRUPTION_NOTE} The restart did not cancel the user's task. ` +
     "Continue from the existing transcript: check the current state, recover interrupted work, " +
     "and finish the task without asking the user to repeat the request. " +
-    `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} Treat a tool result ` +
-    "marked interrupted or missing as having an unknown outcome; verify what happened before " +
-    `repeating an action. ${TOOL_FAILURE_INSTRUCTION}`,
+    `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`,
 );
 
 const RESTART_SAFE_TOOLS_NOTICE =
@@ -174,7 +172,6 @@ type ResumeMainSessionParams = {
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
-  recoveryCapacity?: Parameters<typeof dispatchRestartRecoveryWithinCapacity>[0]["capacity"];
 };
 
 export async function resumeMainSession(
@@ -370,7 +367,6 @@ async function resumeMainSessionWithinAdmission(
           (harnessCompletion &&
             (entry.lifecycleRevision !== harnessCompletion.lifecycleRevision ||
               entry.restartRecoveryHarnessCompletion?.taskId !== harnessCompletion.taskId)) ||
-          entry.status !== "running" ||
           entry.abortedLastRun !== true ||
           normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId ||
           normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
@@ -400,7 +396,6 @@ async function resumeMainSessionWithinAdmission(
       }
       const current = rollback?.entry;
       return current?.sessionId === params.entry.sessionId &&
-        current.status === "running" &&
         current.abortedLastRun === true &&
         !current.mainRestartRecovery?.reservation &&
         !current.mainRestartRecovery?.tombstone
@@ -467,25 +462,36 @@ async function resumeMainSessionWithinAdmission(
     if (params.forceRestartSafeTools) {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
+    if (!params.recoveryAdmission.beginDispatch()) {
+      await rollbackReservation("cancel_reservation");
+      return "skipped";
+    }
     dispatchStarted = true;
     let dispatchSettled = false;
     let stopTyping: (() => void) | undefined;
-    const dispatchOutcome = await dispatchRestartRecoveryWithinCapacity({
+    const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
-      capacity: params.recoveryCapacity,
-      beginDispatch: params.recoveryAdmission.beginDispatch,
       gatewayRuntime: params.gatewayRuntime,
+      ...(sourceRunId && params.entry.restartRecoveryOperatorSource
+        ? {
+            restartRecoveryOperatorTarget: {
+              ...target,
+              sessionId: params.entry.sessionId,
+              sourceRunId,
+              recoveryRunId,
+            },
+          }
+        : {}),
+      assertAdmissionCurrent: () => {
+        if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
+          throw new Error("Restart recovery admission is no longer current.");
+        }
+      },
       onSettled: () => {
         dispatchSettled = true;
         stopTyping?.();
       },
-      shouldContinue: () => params.shouldContinue?.() !== false,
     });
-    if (!dispatchOutcome) {
-      dispatchStarted = false;
-      await rollbackReservation("cancel_reservation");
-      return "skipped";
-    }
     ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
       dispatchOutcome.observation);
     if (dispatchOutcome.kind === "failed") {

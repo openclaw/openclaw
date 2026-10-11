@@ -436,13 +436,13 @@ describe("native service command inspection", () => {
       failure: "malformed HRESULT",
       response: { status: 1, stdout: "-2147024894 native-secret-canary" },
       diagnostic: { kind: "native", exitCode: 1 },
-      reported: "Task Scheduler probe failed (exit 1)",
+      reported: "Task Scheduler check failed (exit 1)",
     },
     {
       failure: "invalid response",
       response: { status: 0, stdout: "native-secret-canary" },
       diagnostic: { kind: "invalid-response" },
-      reported: "Task Scheduler probe returned an invalid response",
+      reported: "Task Scheduler check returned an invalid response",
     },
   ])(
     "preserves safe Windows $failure diagnostics through strict inspection",

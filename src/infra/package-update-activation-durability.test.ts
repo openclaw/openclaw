@@ -340,6 +340,7 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
       const before = first ? openPackageActivationJournal(first.anchor).read() : undefined;
       let anchor = "";
       let helperFd: number | undefined;
+      let helperIdentity: fs.BigIntStats | undefined;
       const open = fs.openSync;
       const sync = fs.fsyncSync;
       const failure = new Error("helper persistence failed");
@@ -348,12 +349,17 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
         const fd = open(file, ...args);
         if (String(file).endsWith(".mjs") && String(file).includes(".activation-")) {
           helperFd = fd;
+          helperIdentity = fs.fstatSync(fd, { bigint: true });
         }
         return fd;
       });
       vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
-        if (fd === helperFd) {
-          throw failure;
+        if (fd === helperFd && helperIdentity) {
+          const current = fs.fstatSync(fd, { bigint: true });
+          // A closed helper fd can be reused by unrelated cleanup writes.
+          if (current.dev === helperIdentity.dev && current.ino === helperIdentity.ino) {
+            throw failure;
+          }
         }
         sync(fd);
       });

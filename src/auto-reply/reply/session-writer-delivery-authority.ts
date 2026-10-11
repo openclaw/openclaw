@@ -31,29 +31,28 @@ function isAuthorityCurrent(
         storePath,
       })
     : undefined;
-  const writerIsCurrent = Boolean(
-    current &&
-    current.sessionId === authority.expectedSessionId &&
-    (authority.expectedLifecycleRevision === undefined ||
-      current.lifecycleRevision === authority.expectedLifecycleRevision) &&
-    (authority.expectedWriterRunId === undefined ||
-      current.activeWriterRunId === authority.expectedWriterRunId),
-  );
-  if (!writerIsCurrent || !authority.harnessCompletion) {
-    return writerIsCurrent;
+  if (
+    !current ||
+    current.sessionId !== authority.expectedSessionId ||
+    (authority.expectedLifecycleRevision !== undefined &&
+      current.lifecycleRevision !== authority.expectedLifecycleRevision) ||
+    (authority.expectedWriterRunId !== undefined &&
+      current.activeWriterRunId !== authority.expectedWriterRunId)
+  ) {
+    return false;
   }
   const claim = authority.harnessCompletion;
   if (
-    !current ||
-    claim.requesterSessionKey !== authority.sessionKey ||
-    (authority.agentId !== undefined && claim.requesterAgentId !== authority.agentId)
+    claim &&
+    (claim.requesterSessionKey !== authority.sessionKey ||
+      (authority.agentId !== undefined && claim.requesterAgentId !== authority.agentId))
   ) {
     return false;
   }
   try {
     // A queued final owns transport custody after execution cleanup. Keep the
     // exact task/outcome and session fence, not the now-retired input claim.
-    return Boolean(getOwedHarnessCompletionTask(claim, current));
+    return !claim || Boolean(getOwedHarnessCompletionTask(claim, current));
   } catch {
     return false;
   }

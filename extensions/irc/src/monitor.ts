@@ -12,6 +12,7 @@ import {
   type IrcIngressLifecycle,
   type IrcIngressMonitor,
 } from "./irc-ingress.js";
+import { createIrcReconnectBackoff } from "./reconnect-backoff.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
@@ -24,8 +25,6 @@ type IrcMonitorOptions = {
   onMessage?: (message: IrcInboundMessage, client: IrcClient) => void | Promise<void>;
   ingressQueue?: NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 };
-
-const IRC_MONITOR_RECONNECT_DELAY_MS = 1000;
 
 export async function monitorIrcProvider(
   opts: IrcMonitorOptions,
@@ -57,6 +56,7 @@ export async function monitorIrcProvider(
   let activeConnectionEpoch: string | null = null;
   let ingressPause: Promise<void> = Promise.resolve();
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  const reconnectBackoff = createIrcReconnectBackoff();
   let stopped = false;
   const monitorAbort = new AbortController();
   const abortSignal = opts.abortSignal
@@ -125,11 +125,12 @@ export async function monitorIrcProvider(
     },
   });
 
-  function scheduleReconnect() {
+  function scheduleReconnect(): number | undefined {
     if (stopped || abortSignal.aborted || reconnectTimer) {
-      return;
+      return undefined;
     }
     opts.statusSink?.({ lifecycle: "recovering" });
+    const delayMs = reconnectBackoff.nextDelayMs();
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       void connect().catch((error: unknown) => {
@@ -140,7 +141,8 @@ export async function monitorIrcProvider(
         logger.error(`[${account.accountId}] IRC reconnect failed: ${message}`);
         scheduleReconnect();
       });
-    }, IRC_MONITOR_RECONNECT_DELAY_MS);
+    }, delayMs);
+    return delayMs;
   }
 
   async function connect() {
@@ -174,10 +176,12 @@ export async function monitorIrcProvider(
             activeConnectionEpoch = null;
           }
           client = null;
-          logger.warn?.(
-            `[${account.accountId}] IRC connection closed; reconnecting in ${IRC_MONITOR_RECONNECT_DELAY_MS}ms`,
-          );
-          scheduleReconnect();
+          const delayMs = scheduleReconnect();
+          if (delayMs !== undefined) {
+            logger.warn?.(
+              `[${account.accountId}] IRC connection closed; reconnecting in ${delayMs}ms`,
+            );
+          }
         },
         onPrivmsg: async (event) => {
           await ingressConnection.accept(event.rawLine, event.connectedNick);
@@ -210,6 +214,7 @@ export async function monitorIrcProvider(
       return;
     }
     ingress.start();
+    reconnectBackoff.markConnected();
     opts.statusSink?.(channelReadyPatch());
 
     logger.info(

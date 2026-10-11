@@ -62,9 +62,6 @@ type ResolvedNodeMediaActionParams = ExecuteNodeMediaActionParams & { node: Node
 export async function executeNodeMediaAction(
   input: ExecuteNodeMediaActionParams & { action: keyof typeof NODE_MEDIA_ACTIONS },
 ): Promise<AgentToolResult<unknown>> {
-  if (!Object.hasOwn(NODE_MEDIA_ACTIONS, input.action)) {
-    throw new Error("Unsupported node media action");
-  }
   const node = await resolveAgentNode(
     input.gatewayOpts,
     readToolStringParam(input.params, "node", { required: true }),

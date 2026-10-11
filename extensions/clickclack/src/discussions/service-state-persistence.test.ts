@@ -20,11 +20,15 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel } from "../types.js";
-import type { ClickClackDiscussionBinding } from "./binding-store.js";
+import {
+  getClickClackDiscussionBindingStore,
+  type ClickClackDiscussionBinding,
+} from "./binding-store.js";
 import { getClickClackDiscussionInstallationId } from "./installation.js";
 import { resolveClickClackDiscussionRoute } from "./routing.js";
 import { discussionChannel, createHarness, testExternalRef } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
+import { enforceClickClackDiscussionToolTarget } from "./tool-policy.js";
 
 function legacyCreateResponse(
   input: Parameters<ClickClackClient["createChannel"]>[1],
@@ -195,6 +199,79 @@ function generationFixture(
   };
   return { ...harness, nativeNamespaces, env };
 }
+
+it("rejects stale discussion indexes after native binding replacement and removal", async () => {
+  const f = generationFixture();
+  const initialSessionKey = "agent:main:reverse-index-source";
+  try {
+    await f.service.open(initialSessionKey);
+    const bindings = getClickClackDiscussionBindingStore(f.runtime);
+    const initialBinding = bindings.get(initialSessionKey);
+    if (!initialBinding) {
+      throw new Error("Expected the persisted discussion binding");
+    }
+    const native = f.runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>({
+      namespace: "discussion-bindings",
+      maxEntries: 10_000,
+      overflowPolicy: "reject-new",
+    });
+    for (const mutation of ["replace", "delete", "clear"] as const) {
+      native.clear();
+      const sessionKey = `agent:main:reverse-index-${mutation}`;
+      const previous = { ...initialBinding, channelId: `chn_previous_${mutation}` };
+      const successor = { ...initialBinding, channelId: `chn_successor_${mutation}` };
+      bindings.set(sessionKey, previous);
+      const routeParams = {
+        runtime: f.runtime,
+        accountId: previous.accountId,
+        serverBaseUrl: previous.serverBaseUrl,
+        workspaceId: previous.workspaceId,
+        channelId: previous.channelId,
+      };
+      const previousRoute = await resolveClickClackDiscussionRoute(routeParams);
+      if (previousRoute.state !== "active") {
+        throw new Error("Expected the original discussion route to be active");
+      }
+      const checkToolTarget = (sideSessionKey: string) =>
+        enforceClickClackDiscussionToolTarget({
+          runtime: f.runtime,
+          context: { toolName: "sessions_history", sessionKey: sideSessionKey },
+          event: { toolName: "sessions_history", params: { sessionKey } },
+        });
+      expect(checkToolTarget(previousRoute.route.sessionKey)).toBeUndefined();
+
+      if (mutation === "delete") {
+        expect(native.delete(sessionKey)).toBe(true);
+      } else if (mutation === "clear") {
+        native.clear();
+      }
+      if (mutation !== "replace") {
+        expect(native.lookup(sessionKey)).toBeUndefined();
+      }
+      native.register(sessionKey, successor);
+      // The owning wrapper sees the successor row, so it cannot unindex its predecessor.
+      bindings.set(sessionKey, successor);
+
+      expect(checkToolTarget(previousRoute.route.sessionKey)?.block).toBe(true);
+      await expect(resolveClickClackDiscussionRoute(routeParams)).resolves.toEqual({
+        state: "unbound",
+      });
+      const successorRoute = await resolveClickClackDiscussionRoute({
+        ...routeParams,
+        channelId: successor.channelId,
+      });
+      if (successorRoute.state !== "active") {
+        throw new Error("Stale-index cleanup removed the successor discussion route");
+      }
+      expect(successorRoute.route.sessionKey).not.toBe(previousRoute.route.sessionKey);
+      expect(checkToolTarget(successorRoute.route.sessionKey)).toBeUndefined();
+    }
+  } finally {
+    await f.service.cleanup();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  }
+});
 
 describe("ClickClack pending generation persistence", () => {
   it.each(["no-observe", "no-compare"] as const)(

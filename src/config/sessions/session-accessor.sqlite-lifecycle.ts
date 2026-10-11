@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
@@ -10,7 +11,11 @@ import {
 import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "../../state/github-personal-publication-lifecycle.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  createOpenClawAgentDatabaseClaim,
+  readOpenClawAgentDatabaseIdentity,
+} from "../../state/openclaw-agent-db-identity.js";
+import { retainAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   deferOpenClawAgentPostCommitPublication,
@@ -40,6 +45,7 @@ import {
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { publishCommittedSessionEntryRemoval } from "./session-accessor.sqlite-identity.js";
@@ -67,9 +73,14 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
 import { deleteIncognitoSessionLifecycle } from "./session-incognito-lifecycle-operations.js";
 import { resetSessionEntryInWorker } from "./session-reset.js";
 import { applySessionResetInDatabase } from "./session-reset.kernel.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: reset, guarded delete, and trusted rollback.
@@ -103,7 +114,6 @@ async function withCommittedHistoryMaintenance<T>(
   }
 }
 
-/** Resets one persisted session entry using SQLite session rows. */
 export async function resetSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<ResetSessionEntryLifecycleResult> {
@@ -188,7 +198,29 @@ export async function resetSessionEntryLifecycle(
               sessionKeys: [params.target.canonicalKey],
             },
           });
-          await params.afterEntryMutation?.(mutation);
+          const identity = readOpenClawAgentDatabaseIdentity(database);
+          const claim = createOpenClawAgentDatabaseClaim(
+            database,
+            retainAgentDatabase(database.db),
+          );
+          try {
+            await params.afterEntryMutation?.(mutation, {
+              env: Object.freeze({ ...resolved.env }),
+              source: { agentId: resolved.agentId, path: database.path },
+              assertCurrent() {
+                claim.assertCurrent();
+                if (typeof identity.identity === "string") {
+                  assertExistingDatabaseIdentity(
+                    database.path,
+                    `file:${identity.identity}`,
+                    identity.birthtime,
+                  );
+                }
+              },
+            });
+          } finally {
+            claim.release();
+          }
           return {
             ...mutation,
             archivedTranscripts: [],
@@ -536,7 +568,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   }
 }
 
-/** Deletes one persisted session entry using SQLite session rows. */
 export async function deleteSessionEntryLifecycle(
   params:
     | DeleteSessionEntryLifecycleParams
@@ -545,7 +576,82 @@ export async function deleteSessionEntryLifecycle(
   if ("kind" in params) {
     return deleteIncognitoSessionLifecycle(params);
   }
-  return await deleteSqliteSessionEntryLifecycleInternal(params, false);
+  return (
+    deleteCapturedIncognitoSession(params) ??
+    deleteSqliteSessionEntryLifecycleInternal(params, false)
+  );
+}
+
+function deleteCapturedIncognitoSession(
+  params: DeleteSessionEntryLifecycleParams,
+  expectedPluginOwnerId?: string,
+): Promise<DeleteSessionEntryLifecycleResult> | undefined {
+  const source = captureIncognitoSessionSource({
+    ...params,
+    sessionKey: params.target.canonicalKey,
+  });
+  if (source && "kind" in source) {
+    params.commitGuard?.();
+    source.assertCurrent();
+    return Promise.resolve({
+      deleted: false,
+      archivedTranscripts: [],
+      ...((params.expectedEntry ||
+        params.expectedSessionId != null ||
+        params.expectedLifecycleRevision !== undefined ||
+        params.expectedUpdatedAt !== undefined) && { expectedEntryMismatch: true as const }),
+    });
+  }
+  const binding = captureIncognitoSessionOperation({
+    ...params,
+    sessionKey: params.target.canonicalKey,
+  });
+  if (binding) {
+    const captured = {
+      ...params,
+      target: structuredClone(params.target),
+      expectedEntry: params.expectedEntry && structuredClone(params.expectedEntry),
+      env: captureSessionTranscriptStorageEnvironment(params.env ?? process.env),
+    };
+    const authority = {
+      assertCurrent() {
+        binding.authority.assertCurrent();
+        captured.commitGuard?.();
+      },
+    };
+    return binding.actor.sessions.withSharedState(async () => {
+      const { entry } = await binding.actor.sessions.read(
+        authority,
+        { sessionKey: captured.target.canonicalKey },
+        binding.admissionSignal,
+      );
+      if (
+        (captured.expectedEntry && !sqliteSessionEntriesEqual(entry, captured.expectedEntry)) ||
+        (captured.expectedSessionId !== undefined &&
+          (entry?.sessionId ?? null) !== captured.expectedSessionId) ||
+        (captured.expectedLifecycleRevision !== undefined &&
+          entry?.lifecycleRevision !== captured.expectedLifecycleRevision) ||
+        (captured.expectedUpdatedAt !== undefined &&
+          entry?.updatedAt !== captured.expectedUpdatedAt)
+      ) {
+        return { deleted: false, archivedTranscripts: [], expectedEntryMismatch: true as const };
+      }
+      if (!entry) {
+        return { deleted: false, archivedTranscripts: [] };
+      }
+      binding.admissionSignal?.throwIfAborted();
+      return deleteIncognitoSessionLifecycle({
+        actor: binding.actor,
+        authority,
+        env: captured.env ?? process.env,
+        ownerStorePath: captured.storePath,
+        target: { sessionKey: captured.target.canonicalKey, entry },
+        reason: "deleted",
+        expectedPluginOwnerId,
+      });
+    });
+  }
+  return undefined;
 }
 
 /** Disk-budget owner: delete one exact archived row without recursively scheduling another pass. */
@@ -618,5 +724,8 @@ export async function rollbackPluginOwnedSessionEntryLifecycle(
   ) {
     throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
-  return await deleteSqliteSessionEntryLifecycleInternal(params, true, expectedPluginOwner);
+  return (
+    deleteCapturedIncognitoSession(params, expectedPluginOwner) ??
+    deleteSqliteSessionEntryLifecycleInternal(params, true, expectedPluginOwner)
+  );
 }

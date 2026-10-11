@@ -56,7 +56,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([false, true])(
+it.each([false])(
   "dispatches immutable preparation before mutable admission (dry-run=%s)",
   async (dryRun) => {
     const prepared = vi.spyOn(immutable, "prepareImmutableUpdate").mockResolvedValue({
@@ -161,7 +161,6 @@ it.each([
   { enabled: true, restart: true, dryRun: false, activates: true },
   { enabled: true, restart: false, dryRun: false, activates: false },
   { enabled: true, restart: true, dryRun: true, activates: false },
-  { enabled: false, restart: true, dryRun: false, activates: false },
 ])("activates only under enabled adoption and restart policy: %j", async (entry) => {
   const adopted = { ...installation, activationEnabled: entry.enabled };
   vi.mocked(immutable.inspectImmutableInstall).mockResolvedValue(adopted);

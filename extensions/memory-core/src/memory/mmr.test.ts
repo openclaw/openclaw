@@ -1,6 +1,7 @@
 // Memory Core tests cover MMR behavior through the production result adapter.
 import { describe, expect, it } from "vitest";
-import { applyMMRToHybridResults, DEFAULT_MMR_CONFIG } from "./mmr.js";
+import { mergeHybridResults } from "./hybrid.js";
+import { applyMMRToHybridResults } from "./mmr.js";
 import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
 
 describe("memory MMR", () => {
@@ -98,7 +99,7 @@ describe("memory MMR", () => {
     }));
     const scores = new Map(candidates.map((result) => [result.path, result.score]));
 
-    const reranked = applyMMRToHybridResults(candidates, { enabled: true, lambda: 0.7 });
+    const reranked = applyMMRToHybridResults(candidates, 0.7);
 
     expect(reranked.map((result) => result.path)).toEqual(expected);
     expect(reranked.map((result) => result.score)).toEqual(
@@ -121,19 +122,36 @@ describe("memory MMR", () => {
       { path: "/tail.md", startLine: 1, score: 0.1, snippet: "garden compost schedule" },
     ];
 
-    expect(
-      applyMMRToHybridResults(results, { enabled: true, lambda: 0.7 }).map((entry) => entry.path),
-    ).toEqual(["/primary.md", "/distinct.md", "/weak.md", "/tail.md"]);
+    expect(applyMMRToHybridResults(results, 0.7).map((entry) => entry.path)).toEqual([
+      "/primary.md",
+      "/distinct.md",
+      "/weak.md",
+      "/tail.md",
+    ]);
   });
 
-  it("keeps input order when disabled", () => {
+  it.each([
+    { mmr: undefined, paths: ["/a", "/b", "/c", "/d"] },
+    { mmr: { enabled: false }, paths: ["/a", "/b", "/c", "/d"] },
+    { mmr: { enabled: true }, paths: ["/a", "/c", "/b", "/d"] },
+  ])("applies hybrid MMR defaults for $mmr", async ({ mmr, paths }) => {
     const results = [
       { path: "/a", startLine: 1, endLine: 1, score: 1, snippet: "same", source: "memory" },
       { path: "/b", startLine: 1, endLine: 1, score: 0.9, snippet: "same", source: "memory" },
+      { path: "/c", startLine: 1, endLine: 1, score: 0.85, snippet: "different", source: "memory" },
+      { path: "/d", startLine: 1, endLine: 1, score: 0.1, snippet: "tail", source: "memory" },
     ];
 
-    expect(applyMMRToHybridResults(results, { enabled: false })).toEqual(results);
-    expect(DEFAULT_MMR_CONFIG).toEqual({ enabled: false, lambda: 0.7 });
+    const merged = await mergeHybridResults({
+      vector: results.map((result) => ({ ...result, id: result.path, vectorScore: result.score })),
+      keyword: [],
+      vectorWeight: 1,
+      textWeight: 0,
+      mmr,
+    });
+    expect(merged).toEqual(
+      paths.map((path) => expect.objectContaining(results.find((result) => result.path === path)!)),
+    );
   });
 
   it("preserves repeated result objects and locations without mutating inputs", () => {
@@ -144,7 +162,7 @@ describe("memory MMR", () => {
     const results = [primary, duplicate, diverse, primary, tail];
     Object.freeze(results);
 
-    const reranked = applyMMRToHybridResults(results, { enabled: true, lambda: 0.7 });
+    const reranked = applyMMRToHybridResults(results, 0.7);
 
     expect(reranked).toHaveLength(results.length);
     for (const [index, expected] of [primary, diverse, primary, duplicate, tail].entries()) {
@@ -215,7 +233,7 @@ describe("memory MMR", () => {
         content: r.snippet,
       }));
       const expected = referenceMmrRerank(refItems, lambda).map((item) => item.id);
-      const actual = applyMMRToHybridResults(results, { enabled: true, lambda }).map((r) => r.path);
+      const actual = applyMMRToHybridResults(results, lambda).map((r) => r.path);
       expect(actual, `lambda=${lambda}`).toEqual(expected);
     }
   });

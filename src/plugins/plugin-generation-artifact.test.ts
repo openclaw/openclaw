@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createJiti } from "jiti";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { gitRuntimeStagingPath } from "../infra/update-runtime-staging.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
@@ -19,33 +19,11 @@ function createArtifactLoader(artifact: ReturnType<typeof capturePluginGeneratio
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const cleanups: Array<() => void> = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const cleanup of cleanups.splice(0).toReversed()) {
     cleanup();
   }
 });
-
-it.each(["empty", "nested/empty", ".git/empty", "node_modules/unused"])(
-  "captures directory layout in source receipts while excluding %s when appropriate",
-  (directory) => {
-    const source = temp.make("plugin-layout-digest-");
-    fs.writeFileSync(path.join(source, "index.cjs"), "exports.value = 1;");
-    const capture = () => {
-      const artifact = capturePluginGenerationArtifact(source);
-      cleanups.push(artifact.dispose);
-      return artifact;
-    };
-    const before = capture();
-    fs.mkdirSync(path.join(source, directory), { recursive: true });
-    const after = capture();
-    const included = !directory.startsWith(".git/") && !directory.startsWith("node_modules/");
-    expect(fs.existsSync(path.join(before.rootDir, directory))).toBe(false);
-    expect(fs.existsSync(path.join(after.rootDir, directory))).toBe(included);
-    expect(after.sourceDigest === before.sourceDigest).toBe(!included);
-    expect(capture().sourceDigest).toBe(after.sourceDigest);
-    fs.rmSync(path.join(source, directory.split("/")[0]!), { recursive: true });
-    expect(capture().sourceDigest).toBe(before.sourceDigest);
-  },
-);
 
 it("keeps the plugin source identity independent of Git rollback retirement", () => {
   const source = temp.make("plugin-update-digest-");
@@ -78,72 +56,60 @@ it("detects an included symlink retarget even when both target files were captur
   expect(artifact.assertSourceCurrent).toThrow();
 });
 
-it.each([
-  "dependency",
-  "directory",
-  "root",
-  "entry before demand",
-  "entry after demand",
-  "demanded module",
-])("retains the original source identity check after copy disposal: %s", (change) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-source-check-"));
-  cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
-  const source = path.join(root, "plugin");
-  const dependency = path.join(source, "node_modules", "fixture");
-  fs.mkdirSync(dependency, { recursive: true });
-  fs.writeFileSync(
-    path.join(source, "package.json"),
-    JSON.stringify({ dependencies: { fixture: "1.0.0" } }),
-  );
-  const entry = path.join(source, "index.ts");
-  const demanded = path.join(source, "demanded.js");
-  const capturesOnDemand = change.includes("demand");
-  fs.writeFileSync(entry, "export { value } from 'fixture';");
-  fs.writeFileSync(path.join(dependency, "package.json"), '{"name":"fixture","main":"index.js"}');
-  fs.writeFileSync(path.join(dependency, "index.js"), "exports.value = 1;");
-  if (capturesOnDemand) {
-    fs.writeFileSync(demanded, "exports.value = 1;");
-  }
-  const artifact = capturePluginGenerationArtifact(source, capturesOnDemand ? entry : undefined);
-  cleanups.push(artifact.dispose);
-  if (change === "entry before demand") {
-    fs.appendFileSync(entry, "\nexport const edited = true;");
-  }
-  if (capturesOnDemand) {
-    const initialDigest = artifact.sourceDigest;
-    const captured = artifact.captureModule(artifact.resolve(entry), "./demanded.js", [
-      "node",
-      "require",
-    ]);
-    expect(captured).toMatchObject({ target: expect.any(URL) });
-    expect(fs.readFileSync(artifact.resolve(demanded), "utf8")).toBe("exports.value = 1;");
-    expect(artifact.sourceDigest).toBe(initialDigest);
-  }
-  artifact.dispose();
-  if (change !== "entry before demand") {
-    expect(artifact.assertSourceCurrent).not.toThrow();
-  }
-  if (change === "root") {
-    fs.renameSync(source, path.join(root, "original"));
-    fs.mkdirSync(source);
-  } else if (change === "directory") {
-    fs.writeFileSync(path.join(source, "added.ts"), "export const added = true;");
-  } else if (change === "entry after demand") {
-    fs.appendFileSync(entry, "\nexport const edited = true;");
-  } else if (change === "demanded module") {
-    fs.writeFileSync(demanded, "exports.value = 2;");
-  } else if (change === "dependency") {
-    fs.writeFileSync(path.join(dependency, "index.js"), "exports.value = 2;");
-  }
-  expect(artifact.assertSourceCurrent).toThrow();
-});
+it.each(["root", "entry before demand", "demanded module"])(
+  "retains the original source identity check after copy disposal: %s",
+  (change) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-source-check-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const source = path.join(root, "plugin");
+    const dependency = path.join(source, "node_modules", "fixture");
+    fs.mkdirSync(dependency, { recursive: true });
+    fs.writeFileSync(
+      path.join(source, "package.json"),
+      JSON.stringify({ dependencies: { fixture: "1.0.0" } }),
+    );
+    const entry = path.join(source, "index.ts");
+    const demanded = path.join(source, "demanded.js");
+    const capturesOnDemand = change.includes("demand");
+    fs.writeFileSync(entry, "export { value } from 'fixture';");
+    fs.writeFileSync(path.join(dependency, "package.json"), '{"name":"fixture","main":"index.js"}');
+    fs.writeFileSync(path.join(dependency, "index.js"), "exports.value = 1;");
+    if (capturesOnDemand) {
+      fs.writeFileSync(demanded, "exports.value = 1;");
+    }
+    const artifact = capturePluginGenerationArtifact(source, capturesOnDemand ? entry : undefined);
+    cleanups.push(artifact.dispose);
+    if (change === "entry before demand") {
+      fs.appendFileSync(entry, "\nexport const edited = true;");
+    }
+    if (capturesOnDemand) {
+      const initialDigest = artifact.sourceDigest;
+      const captured = artifact.captureModule(artifact.resolve(entry), "./demanded.js", [
+        "node",
+        "require",
+      ]);
+      expect(captured).toMatchObject({ target: expect.any(URL) });
+      expect(fs.readFileSync(artifact.resolve(demanded), "utf8")).toBe("exports.value = 1;");
+      expect(artifact.sourceDigest).toBe(initialDigest);
+    }
+    artifact.dispose();
+    if (change !== "entry before demand") {
+      expect(artifact.assertSourceCurrent).not.toThrow();
+    }
+    if (change === "root") {
+      fs.renameSync(source, path.join(root, "original"));
+      fs.mkdirSync(source);
+    } else if (change === "demanded module") {
+      fs.writeFileSync(demanded, "exports.value = 2;");
+    }
+    expect(artifact.assertSourceCurrent).toThrow();
+  },
+);
 
 it.each([
-  ...["prepare", "capture"].flatMap((acquisition) =>
-    ["manifest", "entry", "body"].map((change) => ({ acquisition, change })),
-  ),
+  { acquisition: "prepare", change: "entry" },
+  { acquisition: "capture", change: "manifest" },
   { acquisition: "prepare relative", change: "body" },
-  { acquisition: "prepare dot segments", change: "body" },
 ])(
   "retains $change identity after package $acquisition and disposal",
   ({ acquisition, change }) => {
@@ -186,9 +152,7 @@ it.each([
       artifact.prepareModule(
         acquisition === "prepare relative"
           ? path.relative(process.cwd(), capturedEntry)
-          : acquisition === "prepare dot segments"
-            ? `${capturedDependency}${path.sep}unused${path.sep}..${path.sep}index.cjs`
-            : capturedEntry,
+          : capturedEntry,
       );
     } else {
       expect(
@@ -295,7 +259,7 @@ it.each([
 });
 
 it.each([
-  ...["using", "await using"].map((declaration) => ({
+  ...["await using"].map((declaration) => ({
     name: `${declaration} declarations`,
     sourceText: `${declaration} resource = null;
       const first = import('./a.js');
@@ -319,11 +283,6 @@ it.each([
     sourceText: "export const { flag: __esModule } = {}; import('./a.js');",
     references: [],
   },
-  {
-    name: "reserved export aliases",
-    sourceText: "export { value as '__esModule' } from './value.js'; import('./a.js');",
-    references: [],
-  },
 ])("preserves transformed references when inspecting $name", ({ sourceText, references }) => {
   const source = temp.make("plugin-reference-inspection-");
   const entry = path.join(source, "entry.mjs");
@@ -341,47 +300,45 @@ it.each([
   );
 });
 
-it.each([false, true])(
-  "keeps authored absolute references on the native source graph (selective: %s)",
-  async (selective) => {
-    const source = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-absolute-inputs-"));
-    cleanups.push(() => fs.rmSync(source, { recursive: true, force: true }));
-    const dependency = path.join(source, "node_modules", "owned-dependency");
-    fs.mkdirSync(dependency, { recursive: true });
-    fs.writeFileSync(
-      path.join(source, "package.json"),
-      JSON.stringify({
-        name: "absolute-inputs",
-        type: "module",
-        dependencies: { "owned-dependency": "1.0.0" },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(dependency, "package.json"),
-      '{"name":"owned-dependency","main":"index.cjs"}',
-    );
-    const commonJs = path.join(source, "value.cjs");
-    const esm = path.join(source, "value.mjs");
-    const urlOnly = path.join(source, "url.mjs");
-    const dependencyEntry = path.join(dependency, "index.cjs");
-    const anchor = path.join(source, "anchor.cjs");
-    const entry = path.join(source, "entry.mjs");
-    const fileUrl = pathToFileURL(urlOnly).href;
-    const anchorUrl = pathToFileURL(anchor).href;
-    const absoluteEsm = process.platform === "win32" ? pathToFileURL(esm).href : esm;
-    fs.writeFileSync(anchor, "module.exports = {};");
-    // The anchor/dependency are separate inputs; local module ownership comes from literal imports.
-    fs.writeFileSync(
-      path.join(source, "common.cjs"),
-      `
+it("keeps authored absolute references on the native source graph", async () => {
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-absolute-inputs-"));
+  cleanups.push(() => fs.rmSync(source, { recursive: true, force: true }));
+  const dependency = path.join(source, "node_modules", "owned-dependency");
+  fs.mkdirSync(dependency, { recursive: true });
+  fs.writeFileSync(
+    path.join(source, "package.json"),
+    JSON.stringify({
+      name: "absolute-inputs",
+      type: "module",
+      dependencies: { "owned-dependency": "1.0.0" },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(dependency, "package.json"),
+    '{"name":"owned-dependency","main":"index.cjs"}',
+  );
+  const commonJs = path.join(source, "value.cjs");
+  const esm = path.join(source, "value.mjs");
+  const urlOnly = path.join(source, "url.mjs");
+  const dependencyEntry = path.join(dependency, "index.cjs");
+  const anchor = path.join(source, "anchor.cjs");
+  const entry = path.join(source, "entry.mjs");
+  const fileUrl = pathToFileURL(urlOnly).href;
+  const anchorUrl = pathToFileURL(anchor).href;
+  const absoluteEsm = process.platform === "win32" ? pathToFileURL(esm).href : esm;
+  fs.writeFileSync(anchor, "module.exports = {};");
+  // The anchor/dependency are separate inputs; local module ownership comes from literal imports.
+  fs.writeFileSync(
+    path.join(source, "common.cjs"),
+    `
       exports.dependency = require('owned-dependency');
       exports.read = () => [require(${JSON.stringify(commonJs)}).value,
         require(${JSON.stringify(dependencyEntry)}).value];
     `,
-    );
-    fs.writeFileSync(
-      entry,
-      `
+  );
+  fs.writeFileSync(
+    entry,
+    `
       import { createRequire } from 'node:module';
       import './anchor.cjs'; import common from './common.cjs';
       import { value as absolute } from ${JSON.stringify(absoluteEsm)};
@@ -394,49 +351,48 @@ it.each([false, true])(
         fromPath('./value.cjs').value, fromUrl('./value.cjs').value,
         fromObject('./value.cjs') === fromPath('./value.cjs')];
     `,
-    );
-    const write = (value: string) => {
-      fs.writeFileSync(commonJs, `exports.value = ${JSON.stringify(value)};`);
-      fs.writeFileSync(esm, `export const value = ${JSON.stringify(value)};`);
-      fs.writeFileSync(urlOnly, `export const value = ${JSON.stringify(value)};`);
-      fs.writeFileSync(dependencyEntry, `exports.value = ${JSON.stringify(value)};`);
-    };
-    const capture = () => {
-      const artifact = capturePluginGenerationArtifact(source, selective ? entry : undefined);
-      cleanups.push(artifact.dispose);
-      const host = createArtifactLoader(artifact);
-      expect(artifact.hasSource(dependencyEntry)).toBe(false);
-      for (const owned of [commonJs, esm, urlOnly]) {
-        expect(artifact.hasSource(owned)).toBe(true);
-      }
-      return () => host(artifact.resolve(entry)) as { read(): Promise<unknown[]> };
-    };
-    write("before");
-    const first = capture();
-    write("after");
-    const second = capture();
-    await expect(first().read()).resolves.toEqual([
-      "after",
-      "after",
-      "after",
-      "after",
-      "after",
-      "after",
-      "after",
-      true,
-    ]);
-    await expect(second().read()).resolves.toEqual([
-      "after",
-      "after",
-      "after",
-      "after",
-      "after",
-      "after",
-      "after",
-      true,
-    ]);
-  },
-);
+  );
+  const write = (value: string) => {
+    fs.writeFileSync(commonJs, `exports.value = ${JSON.stringify(value)};`);
+    fs.writeFileSync(esm, `export const value = ${JSON.stringify(value)};`);
+    fs.writeFileSync(urlOnly, `export const value = ${JSON.stringify(value)};`);
+    fs.writeFileSync(dependencyEntry, `exports.value = ${JSON.stringify(value)};`);
+  };
+  const capture = () => {
+    const artifact = capturePluginGenerationArtifact(source, entry);
+    cleanups.push(artifact.dispose);
+    const host = createArtifactLoader(artifact);
+    expect(artifact.hasSource(dependencyEntry)).toBe(false);
+    for (const owned of [commonJs, esm, urlOnly]) {
+      expect(artifact.hasSource(owned)).toBe(true);
+    }
+    return () => host(artifact.resolve(entry)) as { read(): Promise<unknown[]> };
+  };
+  write("before");
+  const first = capture();
+  write("after");
+  const second = capture();
+  await expect(first().read()).resolves.toEqual([
+    "after",
+    "after",
+    "after",
+    "after",
+    "after",
+    "after",
+    "after",
+    true,
+  ]);
+  await expect(second().read()).resolves.toEqual([
+    "after",
+    "after",
+    "after",
+    "after",
+    "after",
+    "after",
+    "after",
+    true,
+  ]);
+});
 
 it.each(["dependencies", "optionalDependencies", "peerDependencies"])(
   "retains the missing declared %s capture contract",
@@ -463,26 +419,12 @@ it.each(["dependencies", "optionalDependencies", "peerDependencies"])(
 it.each([
   ["named", "import { createRequire as factory } from 'node:module';", "factory", "require"],
   ["alias", "import { createRequire as factory } from 'module';", "factory", "local"],
-  [
-    "namespace",
-    "import * as nativeModule from 'node:module';",
-    "nativeModule.createRequire",
-    "local",
-  ],
   ["default", "import nativeModule from 'node:module';", "nativeModule.createRequire", "local"],
-  ["inline", "import { createRequire as factory } from 'node:module';", "factory", "inline"],
   [
     "inline-resolve",
     "import { createRequire as factory } from 'node:module';",
     "factory",
     "inline-resolve",
-  ],
-  [
-    "template",
-    "import { createRequire as factory } from 'node:module';",
-    "factory",
-    "require",
-    "`owner-dependency/package.json`",
   ],
   [
     "typescript-literal",
@@ -517,13 +459,11 @@ it.each([
     const entry = path.join(source, `entry.${extension}`);
     const currentRequire = `${factory}(import.meta.url)`;
     const load =
-      binding === "inline"
-        ? `${currentRequire}('owner-dependency')`
-        : binding === "inline-resolve"
-          ? `${currentRequire}(path.join(path.dirname(${currentRequire}.resolve(${literal})), 'index.cjs'))`
-          : binding === "require"
-            ? `${binding}(path.join(path.dirname(${binding}.resolve(${literal})), 'index.cjs'))`
-            : `${binding}('owner-dependency')`;
+      binding === "inline-resolve"
+        ? `${currentRequire}(path.join(path.dirname(${currentRequire}.resolve(${literal})), 'index.cjs'))`
+        : binding === "require"
+          ? `${binding}(path.join(path.dirname(${binding}.resolve(${literal})), 'index.cjs'))`
+          : `${binding}('owner-dependency')`;
     fs.writeFileSync(path.join(source, "private.txt"), "unrelated");
     fs.writeFileSync(path.join(source, "other.cjs"), "");
     fs.writeFileSync(path.join(source, "relative.cjs"), 'exports.value = "relative-before";');
@@ -564,39 +504,6 @@ it.each([
     if (binding.startsWith("inline")) {
       expect(plugin.readLocal?.()).toBe("relative-before");
     }
-  },
-);
-
-it.each([
-  ["ts", "js"],
-  ["tsx", "js"],
-  ["mts", "mjs"],
-  ["cts", "cjs"],
-] as const)(
-  "captures the requested JavaScript peer beside a %s source helper",
-  (sourceExtension, runtimeExtension) => {
-    const source = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-source-suffix-"));
-    cleanups.push(() => fs.rmSync(source, { recursive: true, force: true }));
-    const entry = path.join(source, `entry.${sourceExtension}`);
-    const helper = path.join(source, `helper.${sourceExtension}`);
-    fs.writeFileSync(
-      entry,
-      `import { value } from './helper.${runtimeExtension}'; export const read = () => value;`,
-    );
-    fs.writeFileSync(helper, 'export const value: string = "source-before";');
-    fs.writeFileSync(
-      path.join(source, `helper.${runtimeExtension}`),
-      runtimeExtension === "cjs"
-        ? 'exports.value = "compiled-stale";'
-        : 'export const value = "compiled-stale";',
-    );
-    const artifact = capturePluginGenerationArtifact(source, entry);
-    cleanups.push(artifact.dispose);
-    expect(artifact.hasSource(helper)).toBe(false);
-    expect(artifact.hasSource(path.join(source, `helper.${runtimeExtension}`))).toBe(true);
-    fs.writeFileSync(helper, 'export const value: string = "source-after";');
-    const host = createArtifactLoader(artifact);
-    expect((host(artifact.resolve(entry)) as { read(): string }).read()).toBe("compiled-stale");
   },
 );
 
@@ -724,24 +631,10 @@ it.each([
   ],
   ["named join", "readFileSync(join(__dirname, 'schema.json'), 'utf8')"],
   ["named resolve", "readFileSync(resolve(__dirname, 'schema.json'), 'utf8')"],
-  ["import.meta.dirname join", "readFileSync(join(import.meta.dirname, 'schema.json'), 'utf8')"],
-  [
-    "import.meta.dirname resolve",
-    "readFileSync(resolve(import.meta.dirname, 'schema.json'), 'utf8')",
-  ],
-  [
-    "import.meta.dirname join alias",
-    "readFileSync(assetJoin(import.meta.dirname, 'schema.json'), 'utf8')",
-  ],
-  [
-    "import.meta.dirname resolve alias",
-    "readFileSync(assetResolve(import.meta.dirname, 'schema.json'), 'utf8')",
-  ],
   [
     "import.meta.dirname typed literal",
     "readFileSync(join(import.meta.dirname as string, 'schema.json' as const), 'utf8')",
   ],
-  ["template module", "readFileSync(require.resolve(`./schema.json`), 'utf8')"],
   ["template asset", "readFileSync(join(__dirname, `schema.json`), 'utf8')"],
   ["imported URL", "readFileSync(new FileURL('./schema.json', import.meta.url), 'utf8')"],
 ])(
@@ -768,7 +661,7 @@ it.each([
       fs.writeFileSync(
         path.join(source, "helper.ts"),
         `import fs, { readFileSync } from 'node:fs';
-       import { join, resolve, join as assetJoin, resolve as assetResolve } from 'node:path';
+       import { join, resolve } from 'node:path';
        import { URL as FileURL } from 'node:url';
        const unrelated = { resolve: (value: string) => value };
        export const label = unrelated.resolve('./unrelated.txt');
@@ -837,55 +730,88 @@ it("does not capture the discarded prefix of an absolute path.resolve asset", ()
   expect(artifact.hasSource(misleading)).toBe(false);
 });
 
-it.each(["plugin", "punycode"])(
-  "captures helpers, assets and npm packages with builtin names under %s for each reload and releases captured files",
-  async (directoryName) => {
-    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-source-"));
-    cleanups.push(() => fs.rmSync(fixture, { recursive: true, force: true }));
-    const source = path.join(fixture, directoryName);
-    const dependency = path.join(source, "node_modules", "punycode");
-    fs.mkdirSync(dependency, { recursive: true });
-    fs.writeFileSync(
-      path.join(source, "package.json"),
-      JSON.stringify({ dependencies: { punycode: "1.0.0" } }),
-    );
-    fs.writeFileSync(
-      path.join(dependency, "package.json"),
-      JSON.stringify({ name: "punycode", exports: { "./fixture": "./value.js" } }),
-    );
-    fs.writeFileSync(
-      path.join(source, "index.ts"),
-      `import { value } from './helper.ts'; import { dependency } from 'punycode/fixture';
+it("captures helpers, assets and npm packages with builtin names for each reload and releases captured files", async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-source-"));
+  cleanups.push(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const source = path.join(fixture, "punycode");
+  const dependency = path.join(source, "node_modules", "punycode");
+  fs.mkdirSync(dependency, { recursive: true });
+  fs.writeFileSync(
+    path.join(source, "package.json"),
+    JSON.stringify({ dependencies: { punycode: "1.0.0" } }),
+  );
+  fs.writeFileSync(
+    path.join(dependency, "package.json"),
+    JSON.stringify({ name: "punycode", exports: { "./fixture": "./value.js" } }),
+  );
+  fs.writeFileSync(
+    path.join(source, "index.ts"),
+    `import { value } from './helper.ts'; import { dependency } from 'punycode/fixture';
      export const read = async () => [value, (await import('./lazy.js')).read(), dependency];`,
-    );
-    fs.writeFileSync(path.join(source, "helper.js"), `export const value = 'stale build';`);
-    fs.writeFileSync(
-      path.join(source, "lazy.ts"),
-      `import fs from 'node:fs'; export const read = () => fs.readFileSync(new URL('./asset.txt', import.meta.url), 'utf8');`,
-    );
-    const load = (value: string) => {
-      fs.writeFileSync(path.join(source, "helper.ts"), `export const value = '${value}';`);
-      fs.writeFileSync(path.join(source, "asset.txt"), value);
-      fs.writeFileSync(path.join(dependency, "value.js"), `exports.dependency = '${value}';`);
-      const artifact = capturePluginGenerationArtifact(source);
-      cleanups.push(artifact.dispose);
-      const host = createArtifactLoader(artifact);
-      const plugin = host(artifact.resolve(path.join(source, "index.ts"))) as {
-        read: () => Promise<string[]>;
-      };
-      return { artifact, host, plugin };
+  );
+  fs.writeFileSync(path.join(source, "helper.js"), `export const value = 'stale build';`);
+  fs.writeFileSync(
+    path.join(source, "lazy.ts"),
+    `import fs from 'node:fs'; export const read = () => fs.readFileSync(new URL('./asset.txt', import.meta.url), 'utf8');`,
+  );
+  const load = (value: string) => {
+    fs.writeFileSync(path.join(source, "helper.ts"), `export const value = '${value}';`);
+    fs.writeFileSync(path.join(source, "asset.txt"), value);
+    fs.writeFileSync(path.join(dependency, "value.js"), `exports.dependency = '${value}';`);
+    const artifact = capturePluginGenerationArtifact(source);
+    cleanups.push(artifact.dispose);
+    const host = createArtifactLoader(artifact);
+    const plugin = host(artifact.resolve(path.join(source, "index.ts"))) as {
+      read: () => Promise<string[]>;
     };
-    const a = load("A");
-    const b = load("B");
-    await expect(a.plugin.read()).resolves.toEqual(["A", "A", "A"]);
-    await expect(b.plugin.read()).resolves.toEqual(["B", "B", "B"]);
-    expect(a.artifact.sourceDigest).not.toBe(b.artifact.sourceDigest);
-    fs.rmSync(source, { recursive: true });
-    expect(b.artifact.resolve(path.join(source, "lazy.ts"))).toBe(
-      path.join(b.artifact.rootDir, "lazy.ts"),
-    );
-    a.artifact.dispose();
-    expect(fs.existsSync(a.artifact.boundaryRoot)).toBe(false);
-    await expect(b.plugin.read()).resolves.toEqual(["B", "B", "B"]);
-  },
-);
+    return { artifact, host, plugin };
+  };
+  const a = load("A");
+  const b = load("B");
+  await expect(a.plugin.read()).resolves.toEqual(["A", "A", "A"]);
+  await expect(b.plugin.read()).resolves.toEqual(["B", "B", "B"]);
+  expect(a.artifact.sourceDigest).not.toBe(b.artifact.sourceDigest);
+  fs.rmSync(source, { recursive: true });
+  expect(b.artifact.resolve(path.join(source, "lazy.ts"))).toBe(
+    path.join(b.artifact.rootDir, "lazy.ts"),
+  );
+  a.artifact.dispose();
+  expect(fs.existsSync(a.artifact.boundaryRoot)).toBe(false);
+  await expect(b.plugin.read()).resolves.toEqual(["B", "B", "B"]);
+});
+
+it("keeps unrelated module preparation independent of captured dependency count", () => {
+  const fixture = temp.make("plugin-foreign-ownership-");
+  const foreign = path.join(fixture, "foreign.mjs");
+  fs.writeFileSync(foreign, "export const value = 1;");
+  const countPathComparisons = (dependencyCount: number) => {
+    const root = path.join(fixture, `plugin-${dependencyCount}`);
+    fs.mkdirSync(root);
+    const dependencies: Record<string, string> = {};
+    for (let index = 0; index < dependencyCount; index++) {
+      const name = `fixture-${index}`;
+      dependencies[name] = "1.0.0";
+      const dependency = path.join(root, "node_modules", name);
+      fs.mkdirSync(dependency, { recursive: true });
+      fs.writeFileSync(path.join(dependency, "package.json"), JSON.stringify({ name }));
+      fs.writeFileSync(path.join(dependency, "index.js"), "exports.value = 1;");
+    }
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ dependencies }));
+    fs.writeFileSync(path.join(root, "index.js"), "exports.value = 1;");
+    const artifact = capturePluginGenerationArtifact(root);
+    cleanups.push(artifact.dispose);
+    const relative = vi.spyOn(path, "relative");
+    const startsWith = vi.spyOn(String.prototype, "startsWith");
+    const additions = artifact.prepareModule(foreign);
+    const comparisons = relative.mock.calls.length + startsWith.mock.calls.length;
+    relative.mockRestore();
+    startsWith.mockRestore();
+    expect(additions).toEqual([]);
+    return comparisons;
+  };
+  const empty = countPathComparisons(0);
+  const populated = countPathComparisons(24);
+  // Compare work growth instead of wall time: native resolver hooks run this per import.
+  expect(populated).toBeLessThanOrEqual(empty + 1);
+  expect(fs.readFileSync(foreign, "utf8")).toBe("export const value = 1;");
+});

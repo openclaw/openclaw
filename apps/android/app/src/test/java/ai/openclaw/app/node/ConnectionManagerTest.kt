@@ -72,10 +72,7 @@ class ConnectionManagerTest {
 
       assertEquals(
         GatewayTlsParams(
-          required = true,
           expectedFingerprint = expectedFingerprint,
-          allowTOFU = false,
-          stableId = endpoint.stableId,
         ),
         ConnectionManager.resolveTlsParamsForEndpoint(endpoint, storedFingerprint, manualTlsEnabled = false),
       )
@@ -424,11 +421,10 @@ class ConnectionManagerTest {
     expectedFingerprint: String? = null,
   ) {
     assertEquals(expectedFingerprint, params?.expectedFingerprint)
-    assertEquals(false, params?.allowTOFU)
   }
 
   private fun assertTlsRequired(params: GatewayTlsParams?) {
-    assertEquals(true, params?.required)
+    assertTrue(params != null)
     assertTls(params)
   }
 

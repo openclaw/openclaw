@@ -21,15 +21,15 @@ export class GatewayServiceAuthorityError extends Error {
   }
 }
 
-const owners = new AsyncLocalStorage<
-  | {
-      assertCurrent: () => void;
-      compensate: <T>(operation: () => Promise<T>) => Promise<T>;
-      updateOwned: boolean;
-      originalRoot?: string;
-    }
-  | undefined
->();
+type ServiceAuthority = {
+  assertCurrent: () => void;
+  compensate: <T>(operation: () => Promise<T>) => Promise<T>;
+  updateOwned: boolean;
+  originalRoot?: string;
+  nativeCommand?: GatewayServiceNativeCommand;
+  nativeDispatch?: NativeDispatch;
+};
+const owners = new AsyncLocalStorage<ServiceAuthority | undefined>();
 
 export type GatewayServiceNativeCommand = (
   argv: string[],
@@ -40,13 +40,10 @@ type NativeDispatch = (
   options: CommandOptions,
   assertSubmittedScope: () => void,
 ) => Promise<SpawnResult>;
-const nativeCommands = new WeakMap<() => void, GatewayServiceNativeCommand>();
-const nativeDispatches = new WeakMap<GatewayServiceNativeCommand, NativeDispatch>();
 
 /** Only the current update interval can supply native process custody. */
 export function getGatewayServiceUpdateNativeCommand(): GatewayServiceNativeCommand | undefined {
-  const owner = owners.getStore();
-  return owner ? nativeCommands.get(owner.assertCurrent) : undefined;
+  return owners.getStore()?.nativeCommand;
 }
 
 /** Bind the caller and every inherited update grant to this native-operation lifetime.
@@ -63,6 +60,8 @@ export async function withGatewayServiceUpdateAuthority<T>(
 ): Promise<T> {
   const parent = owners.getStore();
   const originalRoot = parent?.originalRoot ?? options?.originalRoot;
+  const closedError = () =>
+    new GatewayServiceAuthorityError(new Error("Native service authority has closed."));
   let active = true;
   let accepting = true;
   let tail: Promise<unknown> = Promise.resolve();
@@ -78,7 +77,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
   };
   const assertScope = (compensating = false) => {
     if (!active) {
-      throw new GatewayServiceAuthorityError(new Error("Native service authority has closed."));
+      throw closedError();
     }
     try {
       // Caller assertions can borrow a native lock whose checks consult this scope.
@@ -102,16 +101,26 @@ export async function withGatewayServiceUpdateAuthority<T>(
   } catch (error) {
     throw new GatewayServiceAuthorityError(error, "unchanged");
   }
+  const owner: ServiceAuthority = {
+    assertCurrent,
+    updateOwned: parent?.updateOwned || (options?.updateOwned ?? true),
+    originalRoot,
+    compensate: (restore) =>
+      owners.run(parent, () =>
+        withGatewayServiceUpdateAuthority(() => assertScope(true), restore, {
+          originalRoot,
+          nativeCommand,
+        }),
+      ),
+  };
   if (nativeCommand) {
     // Explicitly inherited runners keep one native queue. Each submission adds
     // its caller's live guard after earlier children have released the parent.
     const dispatch: NativeDispatch =
-      (nativeCommand === (parent && nativeCommands.get(parent.assertCurrent))
-        ? nativeDispatches.get(nativeCommand)
-        : undefined) ??
+      (nativeCommand === parent?.nativeCommand ? parent?.nativeDispatch : undefined) ??
       (async (argv, commandOptions, assertSubmittedScope) => {
         if (!active || !accepting) {
-          throw new GatewayServiceAuthorityError(new Error("Native service authority has closed."));
+          throw closedError();
         }
         const command = [...argv];
         const selected = {
@@ -130,9 +139,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
         const work = track(
           previous.then(async () => {
             if (!active || !accepting) {
-              throw new GatewayServiceAuthorityError(
-                new Error("Native service authority has closed."),
-              );
+              throw closedError();
             }
             assertCurrent();
             assertSubmittedScope();
@@ -166,80 +173,61 @@ export async function withGatewayServiceUpdateAuthority<T>(
       });
     const bound: GatewayServiceNativeCommand = (argv, commandOptions) => {
       if (!active || !accepting) {
-        return Promise.reject(
-          new GatewayServiceAuthorityError(new Error("Native service authority has closed.")),
-        );
+        return Promise.reject(closedError());
       }
       return track(dispatch(argv, commandOptions, assertCurrent));
     };
-    nativeCommands.set(assertCurrent, bound);
-    nativeDispatches.set(bound, dispatch);
+    owner.nativeCommand = bound;
+    owner.nativeDispatch = dispatch;
   }
   try {
-    return await owners.run(
-      {
-        assertCurrent,
-        updateOwned: parent?.updateOwned || (options?.updateOwned ?? true),
-        originalRoot,
-        compensate: (restore) =>
-          owners.run(parent, () =>
-            withGatewayServiceUpdateAuthority(() => assertScope(true), restore, {
-              originalRoot,
-              nativeCommand,
-            }),
-          ),
-      },
-      async () => {
-        const invoke = async () => {
-          try {
-            const result = await operation(assertCurrent);
-            if (!nativeCommand) {
-              assertCurrent();
-            }
-            return result;
-          } catch (error) {
-            throw retainServiceAuthorityFailure(error);
+    return await owners.run(owner, async () => {
+      const invoke = async () => {
+        try {
+          const result = await operation(assertCurrent);
+          if (!nativeCommand) {
+            assertCurrent();
           }
-        };
-        if (!nativeCommand) {
-          return await invoke();
+          return result;
+        } catch (error) {
+          throw retainServiceAuthorityFailure(error);
         }
-        const [outcome] = await Promise.allSettled([invoke()]);
-        accepting = false;
-        if (outcome.status === "rejected") {
-          active = false;
-        }
-        const failures: unknown[] = [];
-        while (pending.size) {
-          for (const settlement of await Promise.allSettled(pending)) {
-            if (settlement.status === "rejected") {
-              failures.push(settlement.reason);
-            }
+      };
+      if (!nativeCommand) {
+        return await invoke();
+      }
+      const [outcome] = await Promise.allSettled([invoke()]);
+      accepting = false;
+      if (outcome.status === "rejected") {
+        active = false;
+      }
+      const failures: unknown[] = [];
+      while (pending.size) {
+        for (const settlement of await Promise.allSettled(pending)) {
+          if (settlement.status === "rejected") {
+            failures.push(settlement.reason);
           }
         }
-        if (failures.length) {
-          throw new AggregateError(
-            outcome.status === "rejected" ? [outcome.reason, ...failures] : failures,
-            "Native command scope did not settle successfully.",
-          );
-        }
-        if (outcome.status === "rejected") {
-          throw outcome.reason;
-        }
-        assertCurrent();
-        return outcome.value;
-      },
-    );
+      }
+      if (failures.length) {
+        throw new AggregateError(
+          outcome.status === "rejected" ? [outcome.reason, ...failures] : failures,
+          "Native command scope did not settle successfully.",
+        );
+      }
+      if (outcome.status === "rejected") {
+        throw outcome.reason;
+      }
+      assertCurrent();
+      return outcome.value;
+    });
   } finally {
     accepting = false;
     active = false;
     // Revoking queued work never acknowledges the currently running child.
     await Promise.allSettled(pending);
-    const bound = nativeCommands.get(assertCurrent);
-    if (bound) {
-      nativeDispatches.delete(bound);
-    }
-    nativeCommands.delete(assertCurrent);
+    delete owner.nativeDispatch;
+    delete owner.nativeCommand;
   }
 }
 

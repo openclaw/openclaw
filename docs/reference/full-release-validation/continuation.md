@@ -47,9 +47,13 @@ a targeted retry never declares the parent recovered while blockers remain.
 
 `watch` resolves child runs from the parent's `Dispatched <workflow>: <url>
 (attempt N)` dispatch-job log lines and reports each attempt transition and
-failed job once, with runner labels. Transient GitHub failures retry on the next
-poll. A local state file under `$TMPDIR/openclaw-frv/` lets a restarted watch
-resume without repeating events.
+failed job once, with runner labels. Transient network failures retry on the next
+poll without repeating unchanged warnings. Rate-limited reads pause until GitHub's
+`Retry-After` or exhausted-primary reset boundary; headerless throttles wait at
+least one minute, with exponential backoff for repeated throttles. The watcher
+prints the next eligible check and resumes automatically. Permission-denied
+403 responses remain terminal. A local state file under `$TMPDIR/openclaw-frv/`
+retains the retry boundary and reported events across watcher restarts.
 
 `rerun --child` waits for one failed child, sends exactly one
 rerun-failed-jobs request, confirms the new attempt has no duplicate jobs, and
@@ -98,6 +102,15 @@ Each child or parent rerun mutation is sent exactly once. If GitHub returns an
 ambiguous transient error, the controller performs read-only reconciliation
 until the newer attempt becomes visible or the bounded reconciliation deadline
 expires. It never repeats the mutation, and provenance drift fails closed.
+`frv status` leads with qualification, evidence acceptance, diagnostic drain,
+workload failures, and the next supported command. A passing GitHub badge or green
+child list is not an accepted seal: terminal successful parents are checked by the
+same strict verifier used by recovery. Missing or unreadable evidence stays
+explicitly unavailable. JSON preserves child facts and marks incomplete collection.
+The candidate's admitted context ref is read freshly to label a superseded tip;
+qualification of that frozen candidate never claims qualification of a newer tip.
+Retry suggestions are dry-run previews; mutations still perform fresh admission.
+
 After a timeout or an interrupted command, inspect `frv status` and the exact
 GitHub attempts before deciding on another retry; the local process cannot
 prove that an unobserved mutation was rejected.

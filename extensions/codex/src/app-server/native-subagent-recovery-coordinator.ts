@@ -206,10 +206,8 @@ export class CodexNativeSubagentRecoveryCoordinator {
   }
 
   clearRecoveryTimers(childState: ChildState): void {
-    if (childState.recoveryTimer) {
-      clearTimeout(childState.recoveryTimer);
-      childState.recoveryTimer = undefined;
-    }
+    clearTimeout(childState.recoveryTimer);
+    childState.recoveryTimer = undefined;
   }
 }
 

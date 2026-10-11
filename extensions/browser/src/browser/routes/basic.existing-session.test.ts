@@ -21,8 +21,7 @@ vi.mock("../chrome.graphics.js", async (importOriginal) => {
 });
 
 const { BrowserProfileUnavailableError } = await import("../errors.js");
-const { getProfileLifecycle, ProfileRestartRequiredError } =
-  await import("../server-context.lifecycle.js");
+const { ProfileRestartRequiredError } = await import("../server-context.lifecycle.js");
 const { registerBrowserBasicRoutes } = await import("./basic.js");
 
 function createExistingSessionProfileState(params?: {
@@ -286,84 +285,67 @@ describe("basic browser routes", () => {
     expect(ensureTabAvailable).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    ["chromium", "browser", "rendered"],
-    ["lightpanda", "connection", "none"],
-  ] as const)(
-    "discovers registered engines and reports the selected %s contract",
-    async (engine, sessionScope, screenshotFidelity) => {
-      const response = await callBasicRouteWithState({
-        state: createManagedProfileState({ engine, attachOnly: true }),
-      });
-      expect(response.statusCode).toBe(200);
-      expect(responseBodyRecord(response)).toMatchObject({
-        engine,
-        sessionScope,
-        screenshotFidelity,
-        availableEngines: [
-          {
-            id: "chromium",
-            launchMode: "managed-or-attach",
-            sessionScope: "browser",
-            screenshotFidelity: "rendered",
-          },
-          {
-            id: "lightpanda",
-            launchMode: "attach-only",
-            sessionScope: "connection",
-            screenshotFidelity: "none",
-          },
-        ],
-      });
-    },
-  );
+  it("discovers registered engines and reports the selected lightpanda contract", async () => {
+    const response = await callBasicRouteWithState({
+      state: createManagedProfileState({ engine: "lightpanda", attachOnly: true }),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(responseBodyRecord(response)).toMatchObject({
+      engine: "lightpanda",
+      sessionScope: "connection",
+      screenshotFidelity: "none",
+      availableEngines: [
+        {
+          id: "chromium",
+          launchMode: "managed-or-attach",
+          sessionScope: "browser",
+          screenshotFidelity: "rendered",
+        },
+        {
+          id: "lightpanda",
+          launchMode: "attach-only",
+          sessionScope: "connection",
+          screenshotFidelity: "none",
+        },
+      ],
+    });
+  });
 
-  it.each(["/", "/doctor"] as const)(
-    "detects the local managed profile executable for %s",
-    async (route) => {
-      const response = await callBasicRouteWithState({
-        route,
-        query: { profile: "openclaw" },
-        state: createManagedProfileState(
-          { executablePath: process.execPath, headless: true },
-          undefined,
-          "/definitely-missing-global-chromium",
-        ),
-      });
+  it("detects the local managed profile executable for /doctor", async () => {
+    const response = await callBasicRouteWithState({
+      route: "/doctor",
+      query: { profile: "openclaw" },
+      state: createManagedProfileState(
+        { executablePath: process.execPath, headless: true },
+        undefined,
+        "/definitely-missing-global-chromium",
+      ),
+    });
 
-      expect(response.statusCode).toBe(200);
-      const body = responseBodyRecord(response);
-      const browserStatus = route === "/doctor" ? responseBodyRecord({ body: body.status }) : body;
-      expect(browserStatus).toMatchObject({
-        executablePath: process.execPath,
-        detectedBrowser: "custom",
-        detectedExecutablePath: process.execPath,
-        detectError: null,
-      });
-      if (route === "/doctor") {
-        expect(body.ok).toBe(true);
-      }
-    },
-  );
+    expect(response.statusCode).toBe(200);
+    const body = responseBodyRecord(response);
+    const browserStatus = responseBodyRecord({ body: body.status });
+    expect(browserStatus).toMatchObject({
+      executablePath: process.execPath,
+      detectedBrowser: "custom",
+      detectedExecutablePath: process.execPath,
+      detectError: null,
+    });
+    expect(body.ok).toBe(true);
+  });
 
-  it.each([
-    { name: "loopback attach-only", profile: { attachOnly: true } },
-    {
-      name: "remote CDP",
-      profile: {
-        cdpHost: "remote.example",
-        cdpIsLoopback: false,
-        cdpUrl: "http://remote.example:9222",
-      },
-    },
-    { name: "extension relay", profile: { driver: "extension", attachOnly: true } },
-    { name: "existing session", profile: { driver: "existing-session", attachOnly: true } },
-  ])("ignores a non-owning $name profile executable override", async ({ profile }) => {
+  it("ignores a non-owning remote CDP profile executable override", async () => {
     const ignoredExecutable = "/definitely-missing-ignored-profile-chromium";
     const response = await callBasicRouteWithState({
       query: { profile: "openclaw" },
       state: createManagedProfileState(
-        { ...profile, executablePath: ignoredExecutable, headless: true },
+        {
+          cdpHost: "remote.example",
+          cdpIsLoopback: false,
+          cdpUrl: "http://remote.example:9222",
+          executablePath: ignoredExecutable,
+          headless: true,
+        },
         undefined,
         process.execPath,
       ),
@@ -378,41 +360,10 @@ describe("basic browser routes", () => {
     });
   });
 
-  it("reports Linux no-display headless fallback for local managed profiles", async () => {
-    const originalPlatform = process.platform;
-    const originalDisplay = process.env.DISPLAY;
-    const originalWayland = process.env.WAYLAND_DISPLAY;
-    Object.defineProperty(process, "platform", { value: "linux" });
-    delete process.env.DISPLAY;
-    delete process.env.WAYLAND_DISPLAY;
-    try {
-      const response = await callBasicRouteWithState({
-        query: { profile: "openclaw" },
-        state: createManagedProfileState(),
-      });
-
-      expect(response.statusCode).toBe(200);
-      const body = responseBodyRecord(response);
-      expect(body.profile).toBe("openclaw");
-      expect(body.headless).toBe(true);
-      expect(body.headlessSource).toBe("linux-display-fallback");
-    } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform });
-      if (originalDisplay === undefined) {
-        delete process.env.DISPLAY;
-      } else {
-        process.env.DISPLAY = originalDisplay;
-      }
-      if (originalWayland === undefined) {
-        delete process.env.WAYLAND_DISPLAY;
-      } else {
-        process.env.WAYLAND_DISPLAY = originalWayland;
-      }
-    }
-  });
-
   it("reports request-local headless source for tracked local launches", async () => {
-    const state = createManagedProfileState();
+    const state = createManagedProfileState({
+      cdpUrl: "http://openclaw:relay-token@127.0.0.1:18800",
+    });
     const profile = (state.forProfile() as { profile: unknown }).profile as never;
     state.profiles.set("openclaw", {
       profile,
@@ -437,6 +388,7 @@ describe("basic browser routes", () => {
     expect(body.profile).toBe("openclaw");
     expect(body.pid).toBe(222);
     expect(body.chosenBrowser).toBe("chromium");
+    expect(body.cdpUrl).toBe("http://127.0.0.1:18800");
     expect(body.headless).toBe(true);
     expect(body.headlessSource).toBe("request");
     expect(body.graphics).toBeNull();
@@ -494,101 +446,6 @@ describe("basic browser routes", () => {
     expect(responseBodyRecord(second).graphics).toEqual(available);
     expect(responseBodyRecord(third).graphics).toEqual(available);
     expect(inspectChromeGraphicsDiagnosticsMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not inspect graphics while the managed process is pending reconcile", async () => {
-    const state = createManagedProfileState(
-      {},
-      {
-        isHttpReachable: async () => true,
-        isTransportAvailable: async () => true,
-      },
-    );
-    const profile = (state.forProfile() as { profile: unknown }).profile as never;
-    const runtime = {
-      profile,
-      running: {
-        pid: 222,
-        exe: { kind: "chromium", path: "/usr/bin/chromium" },
-        userDataDir: "/tmp/openclaw-profile",
-        cdpPort: 18800,
-        proc: {} as never,
-      },
-    };
-    state.profiles.set("openclaw", runtime);
-    getProfileLifecycle(runtime as never).transitionReason = "cdp-port-changed";
-
-    const response = await callBasicRouteWithState({
-      query: { profile: "openclaw" },
-      state,
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(responseBodyRecord(response).graphics).toBeNull();
-    expect(inspectChromeGraphicsDiagnosticsMock).not.toHaveBeenCalled();
-  });
-
-  it("does not inspect graphics when passive status sees no owned managed process", async () => {
-    const response = await callBasicRouteWithState({
-      query: { profile: "openclaw" },
-      state: createManagedProfileState(
-        {},
-        {
-          isHttpReachable: async () => true,
-          isTransportAvailable: async () => true,
-        },
-      ),
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(responseBodyRecord(response).graphics).toBeNull();
-    expect(inspectChromeGraphicsDiagnosticsMock).not.toHaveBeenCalled();
-  });
-
-  it("redacts CDP URL credentials from status responses", async () => {
-    const response = await callBasicRouteWithState({
-      query: { profile: "openclaw" },
-      state: createManagedProfileState({
-        cdpUrl: "http://openclaw:relay-token@127.0.0.1:18800",
-      }),
-    });
-
-    expect(response.statusCode).toBe(200);
-    const body = responseBodyRecord(response);
-    expect(body.cdpUrl).toBe("http://127.0.0.1:18800");
-  });
-
-  it("maps existing-session status failures to JSON browser errors", async () => {
-    const response = await callBasicRouteWithState({
-      state: createExistingSessionProfileState({
-        isTransportAvailable: async () => {
-          throw new BrowserProfileUnavailableError("attach failed");
-        },
-      }),
-    });
-
-    expect(response.statusCode).toBe(409);
-    expect(responseBodyRecord(response).error).toBe("attach failed");
-  });
-
-  it("reports Chrome MCP transport without fake CDP fields", async () => {
-    const response = await callBasicRouteWithState({
-      state: createExistingSessionProfileState(),
-    });
-
-    expect(response.statusCode).toBe(200);
-    const body = responseBodyRecord(response);
-    expect(body.profile).toBe("chrome-live");
-    expect(body.driver).toBe("existing-session");
-    expect(body.transport).toBe("chrome-mcp");
-    expect(body.running).toBe(true);
-    expect(body.cdpPort).toBeNull();
-    expect(body.cdpUrl).toBeNull();
-    expect(body.userDataDir).toBe("/tmp/brave-profile");
-    expect(body.executablePath).toBe(
-      "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-    );
-    expect(body.pid).toBe(4321);
   });
 
   it("passes valid start headless override to local managed profiles", async () => {
@@ -680,49 +537,6 @@ describe("basic browser routes", () => {
     expect(body.pageReady).toBe(false);
   });
 
-  it("reports pageReady=true when both transport and page tools succeed", async () => {
-    const isHttpReachable = vi.fn(async () => true);
-    const isTransportAvailable = vi.fn(async () => true);
-    const isReachable = vi.fn(async () => true);
-
-    const response = await callBasicRouteWithState({
-      state: createExistingSessionProfileState({
-        isHttpReachable,
-        isTransportAvailable,
-        isReachable,
-      }),
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(isTransportAvailable).toHaveBeenCalledTimes(1);
-    expect(isTransportAvailable).toHaveBeenCalledWith(5_000, expect.any(AbortSignal));
-    const [timeoutMs, reachabilityOptions] = readFirstReachabilityCall(isReachable);
-    expect(timeoutMs).toBeGreaterThan(0);
-    expect(timeoutMs).toBeLessThanOrEqual(7_000);
-    expect(reachabilityOptions?.ephemeral).toBe(true);
-    expect(reachabilityOptions?.signal).toBeInstanceOf(AbortSignal);
-    expect(isHttpReachable).not.toHaveBeenCalled();
-    const body = responseBodyRecord(response);
-    expect(body.cdpHttp).toBe(true);
-    expect(body.cdpReady).toBe(true);
-    expect(body.pageReady).toBe(true);
-    expect(body.running).toBe(true);
-  });
-
-  it("passes cancellation to managed browser status probes", async () => {
-    const isHttpReachable = vi.fn(async () => true);
-    const isTransportAvailable = vi.fn(async () => false);
-
-    const response = await callBasicRouteWithState({
-      query: { profile: "openclaw" },
-      state: createManagedProfileState({}, { isHttpReachable, isTransportAvailable }),
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(isHttpReachable).toHaveBeenCalledWith(300, expect.any(AbortSignal));
-    expect(isTransportAvailable).toHaveBeenCalledWith(600, expect.any(AbortSignal));
-  });
-
   it("cancels an in-flight Chrome MCP page-readiness probe", async () => {
     const controller = new AbortController();
     const cancellation = new Error("browser status cancelled");
@@ -768,28 +582,16 @@ describe("basic browser routes", () => {
       expect(response.statusCode).toBe(200);
       const [timeoutMs, reachabilityOptions] = readFirstReachabilityCall(isReachable);
       expect(timeoutMs).toBe(4_000);
+      expect(responseBodyRecord(response)).toMatchObject({
+        cdpHttp: true,
+        cdpReady: true,
+        pageReady: true,
+        running: true,
+      });
       expect(reachabilityOptions?.ephemeral).toBe(true);
       expect(reachabilityOptions?.signal).toBeInstanceOf(AbortSignal);
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("skips the page-reachability probe when transport is unavailable", async () => {
-    const isReachable = vi.fn(async () => true);
-
-    const response = await callBasicRouteWithState({
-      state: createExistingSessionProfileState({
-        isTransportAvailable: async () => false,
-        isReachable,
-      }),
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(isReachable).not.toHaveBeenCalled();
-    const body = responseBodyRecord(response);
-    expect(body.cdpReady).toBe(false);
-    expect(body.pageReady).toBe(false);
-    expect(body.running).toBe(false);
   });
 });

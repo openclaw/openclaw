@@ -1,12 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
+import { prepareGitHubPublicationContent } from "./github-publication-content.js";
 import {
   createGitHubPublicationExecutionIdentity,
   type GitHubPublicationIdentityOwner,
@@ -20,7 +18,6 @@ import {
   resolveGitHubPublicationFailure,
 } from "./github-publication-failure.js";
 import {
-  appendGitHubPublicationMessage,
   githubPublicationApiArgs,
   hasGitHubPublicationMessageFooter,
   requirePublicationCommand,
@@ -342,36 +339,27 @@ export async function executeRepositoryGitHubPublication(params: {
       assertCurrent();
     };
     assertPublicationAction();
-    const config = currentGitHubPublicationConfig();
-    const preparedAttribution = await prepareGitCoauthorAttribution({
-      agentId: row.agent_id,
-      config,
-      excludeAccountId: identity.account.accountId,
-      sessionKey: row.session_key,
-      sessionId: row.session_id,
+    const content = await prepareGitHubPublicationContent({
+      row,
       storePath: params.storePath,
+      accountId: identity.account.accountId,
+      assertCurrent: assertPublicationAction,
+      description:
+        row.body?.trim() || "Published by the Gateway from the accepted repository checkpoint.",
     });
-    const attribution = preparedAttribution.attribution;
-    const assertAction = () => {
-      assertPublicationAction();
-      if (!preparedAttribution.isCurrent()) {
-        throw new GitHubPublicationCreditChangedError();
-      }
-    };
+    const { assertAction } = content;
     assertAction();
     if (
       headCommit &&
       remoteHead !== headCommit &&
       !hasGitHubPublicationMessageFooter(
         preparedCommitMessage ?? "",
-        attribution?.trailers ?? [],
+        content.trailers,
         "OpenClaw-Publication: " + row.request_id,
       )
     ) {
       throw new GitHubPublicationCreditChangedError();
     }
-    const credit = attribution?.logins.map((login) => "- @" + login).join("\n");
-    const title = row.title?.trim() || "Publish " + branch;
     if (!headCommit) {
       const shas = [
         ...new Set(
@@ -430,11 +418,7 @@ export async function executeRepositoryGitHubPublication(params: {
         parents: [row.previous_head_commit ?? snapshot.baseCommit],
         author,
         committer: author,
-        message:
-          appendGitHubPublicationMessage(credit ? title + "\n\nWorked on by:\n" + credit : title, [
-            ...(attribution?.trailers ?? []),
-            "OpenClaw-Publication: " + row.request_id,
-          ]) + "\n",
+        message: content.commitMessage,
       });
       headCommit = verifyCommit(commit);
       execution.updateHead(headCommit);
@@ -489,21 +473,7 @@ export async function executeRepositoryGitHubPublication(params: {
     }
     let url = await findPullRequest();
     if (!url) {
-      const sessionUrl = resolveControlUiSessionUrl(config, {
-        sessionKey: row.session_key,
-        fallbackAgentId: row.agent_id,
-        exactKey: true,
-      });
-      const description =
-        row.body?.trim() || "Published by the Gateway from the accepted repository checkpoint.";
-      const body =
-        description +
-        (credit ? "\n\n## Worked on by\n\n" + credit : "") +
-        "\n\n" +
-        marker +
-        (sessionUrl?.startsWith("https://")
-          ? "\n\n---\n[View the OpenClaw team session](" + sessionUrl + ")"
-          : "");
+      const body = content.pullRequestBody();
       identity = await refreshIdentity();
       assertAction();
       execution.recordEffect("pull_request");
@@ -518,7 +488,7 @@ export async function executeRepositoryGitHubPublication(params: {
           env: identity.env,
           beforeRun: assertAction,
           input: JSON.stringify({
-            title,
+            title: content.title,
             body,
             head: pushOwner + ":" + branch,
             base: baseBranch,

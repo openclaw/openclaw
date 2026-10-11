@@ -71,7 +71,7 @@ function tool(
         phase: "end",
       },
       activity,
-    ],
+    ] satisfies AgentActivityItem[],
   };
 }
 
@@ -109,6 +109,33 @@ it("renders current operation copy through the real transcript and retains compl
   expect(labels()).toEqual(["Inspect the first file"]);
   vi.advanceTimersByTime(1);
   expect(labels()).toEqual(["Inspect the next file…"]);
+});
+
+it("retains live running activity when history contains an unfinished call", () => {
+  const call = tool("active", "Inspect the active file");
+  const history = {
+    ...call,
+    activity: [
+      call.activity[0]!,
+      {
+        ...call.activity[1]!,
+        phase: "end",
+        status: undefined,
+        summary: "Outcome unknown",
+        unpairedCall: true,
+      },
+    ] satisfies AgentActivityItem[],
+  };
+  const live = {
+    ...tool("active", "Inspect the active file"),
+    __openclawToolStreamLive: true,
+    __openclawToolStreamResultReceived: false,
+    __openclawToolStreamItemEnded: false,
+  };
+  draw([user, history], { toolMessages: [live] });
+  expect(labels()).toEqual(["Inspect the active file…"]);
+  expect(container.textContent).not.toContain("Outcome unknown");
+  expect(container.textContent).not.toContain("1 unknown");
 });
 
 it("limits live copy to the newest activity group in the active run, not history or another run", () => {

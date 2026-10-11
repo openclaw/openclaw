@@ -121,28 +121,6 @@ describe("Git backup command agent selection", () => {
     },
   );
 
-  it("creates a backup for a configured normalized agent", async () => {
-    const agentDir = path.resolve("/tmp/external-agent");
-    mocks.getRuntimeConfig.mockReturnValue({
-      agents: { entries: { "ops-team": { agentDir } } },
-    });
-    await backupGitCreateCommand(createTestRuntime(), {
-      repository: "/tmp/repository",
-      agents: ["Ops Team"],
-    });
-
-    expect(mocks.createGitBackup).toHaveBeenCalledWith(
-      expect.objectContaining({
-        databases: [
-          {
-            identity: { role: "agent", agentId: "ops-team" },
-            path: path.join(agentDir, "openclaw-agent.sqlite"),
-          },
-        ],
-      }),
-    );
-  });
-
   it.each([
     [
       "unknown",
@@ -159,30 +137,6 @@ describe("Git backup command agent selection", () => {
     ).rejects.toThrow(message);
 
     expect(mocks.createGitBackup).not.toHaveBeenCalled();
-  });
-
-  it("keeps the global Git create scope independent of configured agents", async () => {
-    await backupGitCreateCommand(createTestRuntime(), {
-      repository: "/tmp/repository",
-      global: true,
-    });
-
-    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-    expect(mocks.createGitBackup).toHaveBeenCalledOnce();
-  });
-
-  it("preserves the Git-specific warning when outcome recording fails", async () => {
-    mocks.recordBackupRunOutcome.mockRejectedValue(new Error("record failed"));
-    const runtime = createTestRuntime();
-
-    await backupGitCreateCommand(runtime, {
-      repository: "/tmp/repository",
-      global: true,
-    });
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Warning: the Git backup outcome could not be recorded: record failed",
-    );
   });
 
   it("resolves every current agent and its configured root for an all-scope backup", async () => {

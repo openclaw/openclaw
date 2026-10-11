@@ -51,10 +51,7 @@ export function isControlCommandMessage(
   options?: CommandNormalizeOptions,
 ): boolean {
   const normalizedBody = normalizeControlCommandBody(text, options);
-  return (
-    hasNormalizedControlCommand(normalizedBody, cfg) ||
-    isAbortTrigger(normalizeLowercaseStringOrEmpty(normalizedBody))
-  );
+  return hasNormalizedControlCommand(normalizedBody, cfg) || isAbortTrigger(normalizedBody);
 }
 
 /** Returns true when a command starts a new transcript rather than resetting in place. */
@@ -79,22 +76,17 @@ export function hasInlineCommandTokens(text?: string): boolean {
   return /(?:^|\s)[/!][a-z]/i.test(text ?? "");
 }
 
-function hasSpacedPluginCommand(text?: string): boolean {
-  const commandBody = text?.match(/(?:^|\s)(\/\s+[a-z][\s\S]*)/i)?.[1];
-  // Only active registered commands affect ingress authorization and mention gating.
-  // This keeps spaced syntax aligned with canonical `/name` command ownership.
-  return commandBody ? matchPluginCommand(commandBody) !== null : false;
-}
-
 /** Returns true when a message may need command authorization metadata. */
 export function shouldComputeCommandAuthorized(
   text?: string,
   cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
-  return (
-    isControlCommandMessage(text, cfg, options) ||
-    hasInlineCommandTokens(text) ||
-    hasSpacedPluginCommand(text)
-  );
+  if (isControlCommandMessage(text, cfg, options) || hasInlineCommandTokens(text)) {
+    return true;
+  }
+  const commandBody = text?.match(/(?:^|\s)(\/\s+[a-z][\s\S]*)/i)?.[1];
+  // Only active registered commands affect ingress authorization and mention gating.
+  // This keeps spaced syntax aligned with canonical `/name` command ownership.
+  return commandBody ? matchPluginCommand(commandBody) !== null : false;
 }

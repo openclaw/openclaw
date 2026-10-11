@@ -21,8 +21,6 @@ type EnsureOpenClawPathOpts = {
   platform?: NodeJS.Platform;
   /** Existing PATH value to merge with; defaults to process.env.PATH. */
   pathEnv?: string;
-  /** Opt-in to append cwd/node_modules/.bin after trusted system paths. */
-  allowProjectLocalBin?: boolean;
 };
 
 function isExecutable(filePath: string): boolean {
@@ -145,10 +143,7 @@ function candidateBinDirs(
 
   // Project-local installs are a common repo-based attack vector (bin hijacking). Keep this
   // disabled by default; if an operator explicitly enables it, only append (never prepend).
-  const allowProjectLocalBin =
-    opts.allowProjectLocalBin === true ||
-    isTruthyEnvValue(process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN);
-  if (allowProjectLocalBin && cwd) {
+  if (isTruthyEnvValue(process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN) && cwd) {
     const localBinDir = path.join(cwd, "node_modules", ".bin");
     if (isExecutable(path.join(localBinDir, "openclaw"))) {
       append.push(localBinDir);

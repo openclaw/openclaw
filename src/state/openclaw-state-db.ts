@@ -1,6 +1,9 @@
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { withStateDatabaseColdAdmission } from "../infra/gateway-state-owner.js";
+import {
+  assertStateDatabaseAccessAllowed,
+  withStateDatabaseColdAdmission,
+} from "../infra/gateway-state-owner.js";
 import {
   normalizeSqliteNonNegativeInteger,
   runWithSqliteBusyTimeout,
@@ -11,7 +14,10 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { captureSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
+import {
+  openSqliteReadOnlyDatabase,
+  prepareSqliteReadOnlyLocation,
+} from "../infra/sqlite-snapshot-source.js";
 import {
   assertTransactionUsable,
   type SqliteTransactionOptions,
@@ -22,6 +28,7 @@ import {
   StateSchemaMutationConflictError,
   withStateDatabaseSchemaMaintenance,
 } from "../infra/state-database-maintenance.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
@@ -249,21 +256,25 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     }
     throw error;
   }
+  return readOnlyStateDatabase(connection.database, connection.close);
+}
+
+function readOnlyStateDatabase(
+  database: Pick<OpenClawStateDatabase, "db" | "path">,
+  close: () => boolean,
+): OpenClawStateDatabase {
   return {
-    db,
-    path: pathname,
+    ...database,
     walMaintenance: {
       checkpoint: () => false,
       stop: async () => {},
       reclaimFreePages: createSqliteWalReclamationResult,
       // Cleanup can fail transiently after the database closes. Keep the
       // close contract retryable until one call finishes both responsibilities.
-      close: () => connection.close(),
+      close,
     },
   };
 }
-
-/** Open or return a cached shared state database after schema and migration checks. */
 
 function openOpenClawStateDatabaseWithBusyTimeout(
   options: OpenClawStateDatabaseOptions = {},
@@ -274,6 +285,15 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
   const env = options.env ?? process.env;
   const pathname = options.database?.path ?? resolveDatabasePath(options);
+  if (isArtifactPreservingStateRead("agent", pathname)) {
+    assertOpenClawStateDatabaseFreshOpenAllowed(options);
+    const db = openSqliteReadOnlyDatabase(pathname, { timeout: busyTimeoutMs });
+    assertSupportedStateSchemaVersion(db, pathname);
+    return readOnlyStateDatabase({ db, path: pathname }, () => {
+      db.close();
+      return true;
+    });
+  }
   const existingSchema = !options.database && isExistingOpenClawStateSchema(pathname);
   const cached = options.database ?? stateDbCache.getCachedOpenClawStateDatabase(pathname);
   if (cached && (options.database || cached.db.isOpen)) {
@@ -362,7 +382,6 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   }
 }
 
-/** Open or return a cached shared state database after schema and migration checks. */
 export function openOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase {
@@ -421,6 +440,11 @@ export function runWithOpenClawStateBusyTimeout<T>(
   options: OpenClawStateDatabaseOptions,
   busyTimeoutMs: number,
 ): T {
+  if (
+    isArtifactPreservingStateRead("agent", options.database?.path ?? resolveDatabasePath(options))
+  ) {
+    return operation(openOpenClawStateDatabaseWithBusyTimeout(options, busyTimeoutMs));
+  }
   getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
   const normalizedTimeoutMs = normalizeSqliteNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs");
   const existing = options.database ?? getOpenClawStateDatabaseIfOpen(options);
@@ -455,27 +479,35 @@ export function runOpenClawStateWriteTransaction<T>(
   options: OpenClawStateDatabaseOptions = {},
   transactionOptions: Pick<
     SqliteTransactionOptions,
-    "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+    "beginLockFailureReporting" | "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
   > = {},
 ): T {
+  if (
+    isArtifactPreservingStateRead("agent", options.database?.path ?? resolveDatabasePath(options))
+  ) {
+    throw new Error("Programming error: shared-state write during artifact-preserving inspection.");
+  }
   getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
   const existing = options.database ?? getOpenClawStateDatabaseIfOpen(options);
   if (existing) {
     isExistingOpenClawStateSchema(existing.path, existing.db);
+    if (options.database) {
+      assertStateDatabaseAccessAllowed(existing.path);
+    }
   }
   let database = existing;
   let callbackEntered = false;
   let committed: { database: OpenClawStateDatabase; value: T };
   const execute = (remaining?: () => number) => {
-    const acquired = options.database
-      ? openOpenClawStateDatabase(options)
-      : (database ??
-        openOpenClawStateDatabaseWithBusyTimeout(
-          options,
-          OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-          "report",
-          remaining,
-        ));
+    // A supplied writer is already selected; its authoritative rows are read after BEGIN.
+    const acquired =
+      database ??
+      openOpenClawStateDatabaseWithBusyTimeout(
+        options,
+        OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        "report",
+        remaining,
+      );
     database = acquired;
     const value = runManagedStateTransaction(
       acquired.db,
@@ -492,6 +524,9 @@ export function runOpenClawStateWriteTransaction<T>(
           schemaReady: stateDbCache.isOpenClawStateDatabaseSchemaReady(acquired),
         });
         observeOpenClawDatabaseMaintenanceResource(acquired.db);
+        if (options.database) {
+          stateDbCache.touchStateDatabase(acquired);
+        }
         callbackEntered = true;
         return operation(acquired);
       },

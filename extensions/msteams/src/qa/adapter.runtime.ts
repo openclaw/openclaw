@@ -261,8 +261,8 @@ export async function createMSTeamsQaTransportAdapter(
         .join(" "),
     }),
     createRuntimePreloads: () => [bootstrapUrl],
-    waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
-      await waitForMSTeamsChannelReady(gateway, timeoutMs, pollIntervalMs),
+    waitReady: ({ gateway, timeoutMs, pollIntervalMs }) =>
+      waitForMSTeamsChannelReady(gateway, timeoutMs, pollIntervalMs),
     buildAgentDelivery: ({ target }) => ({
       channel: "msteams",
       to: target,

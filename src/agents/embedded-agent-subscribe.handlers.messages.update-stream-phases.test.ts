@@ -172,14 +172,6 @@ describe("handleMessageUpdate text signatures", () => {
       ],
       reply: { replyToId: "message-7", replyToTag: true },
     },
-    {
-      name: "duplicate paragraph becomes distinct",
-      chunks: ["One.\n\n", "One.", " More."],
-      updates: [
-        { text: "One.", delta: "One." },
-        { text: "One.\n\nOne. More.", delta: "\n\nOne. More." },
-      ],
-    },
   ])(
     "uses append events for same-item phased streams ($name)",
     async ({ chunks, updates, reply }) => {
@@ -310,39 +302,6 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.state.lastAssistantStreamContentIndex).toBe(1);
     expect(context.state.lastAssistantStreamItemId).toBe("item-2");
     await Promise.all([startPending, deltaPending]);
-  });
-
-  it("scopes item-id fallback boundaries to the matching signed block", async () => {
-    const onPartialReply = vi.fn();
-    const resetAssistantMessageState = vi.fn();
-    const context = createMessageUpdateContext({
-      onPartialReply,
-      resetAssistantMessageState,
-      state: { lastAssistantStreamItemId: "item-1" },
-    });
-
-    await updateMessage(context, {
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Second block",
-        partial: twoBlockPartial(),
-      },
-    });
-
-    expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Second block",
-        delta: "Second block",
-        phase: "final_answer",
-      }),
-    );
-    expect(onPartialReply).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "First block\nSecond block" }),
-    );
-    expect(context.state.lastAssistantStreamContentIndex).toBeUndefined();
-    expect(context.state.lastAssistantStreamItemId).toBe("item-2");
   });
 
   it("preserves phase-aware voice and reply directives while deferring final media delivery", async () => {

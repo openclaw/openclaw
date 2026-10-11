@@ -5,10 +5,15 @@ import type { AuthProfileCredential, AuthProfileSecretsStore } from "./types.js"
 
 /** Private metadata in the existing secrets row. Absent-profile entries fence inheritance ABA. */
 export type AuthProfileAuthorizationLifetimes = Record<string, string>;
-type WriteIntent = { used: boolean } & (
+type AuthorizationWriteIntent =
   | { kind: "replace" }
-  | { kind: "refresh"; previous: AuthProfileCredential }
-);
+  | { kind: "refresh"; previous: AuthProfileCredential };
+type WriteIntent = AuthorizationWriteIntent & { used: boolean };
+export type AuthProfileAuthorizationWriteIntents = Array<{
+  profileId: string;
+  inherited: boolean;
+  intent: AuthorizationWriteIntent;
+}>;
 const intents = new WeakMap<object, WriteIntent>();
 const prepared = new WeakMap<object, unknown>();
 const inheritedContinuations = new WeakMap<object, Map<string, WriteIntent>>();
@@ -52,6 +57,41 @@ export function copyAuthProfileAuthorizationIntent(source: object, target: objec
   const intent = intents.get(source);
   if (intent) {
     intents.set(target, intent);
+  }
+}
+
+/** Transfer native callback intent separately from caller-controlled credential JSON. */
+export function takeAuthProfileAuthorizationWriteIntents(
+  profiles: Record<string, AuthProfileCredential>,
+): AuthProfileAuthorizationWriteIntents {
+  const captured: AuthProfileAuthorizationWriteIntents = [];
+  const take = (profileId: string, inherited: boolean, intent: WriteIntent | undefined) => {
+    if (intent && !intent.used) {
+      const { used: _used, ...value } = intent;
+      captured.push({ profileId, inherited, intent: value });
+      intent.used = true;
+    }
+  };
+  for (const [profileId, credential] of Object.entries(profiles)) {
+    take(profileId, false, intents.get(credential));
+  }
+  for (const [profileId, intent] of inheritedContinuations.get(profiles) ?? []) {
+    take(profileId, true, intent);
+  }
+  return captured;
+}
+
+/** Only the private host/worker exchange may reattach transferred write intent. */
+export function restoreAuthProfileAuthorizationWriteIntents(
+  profiles: Record<string, AuthProfileCredential>,
+  captured: AuthProfileAuthorizationWriteIntents,
+): void {
+  for (const { profileId, inherited, intent } of captured) {
+    if (inherited && intent.kind === "refresh") {
+      continueAuthProfileAuthorizationInheritance(profiles, profileId, intent.previous);
+    } else if (!inherited && Object.hasOwn(profiles, profileId)) {
+      intents.set(profiles[profileId]!, { ...intent, used: false });
+    }
   }
 }
 

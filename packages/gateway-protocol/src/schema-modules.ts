@@ -51,7 +51,6 @@ export * from "./schema/sessions-sharing.js";
 export * from "./schema/sessions-suggestions.js";
 export * from "./schema/sessions-reactions.js";
 export * from "./schema/sessions-catalog.js";
-export * from "./schema/skill-history.js";
 export * from "./schema/snapshot.js";
 export * from "./schema/storage.js";
 export * from "./schema/backup.js";
@@ -72,3 +71,5 @@ export * from "./schema/worker-inference.js";
 export * from "./schema/worktrees.js";
 export * from "./schema/tools-catalog.js";
 export * from "./schema/transcripts.js";
+
+export * from "./schema/catalog.js";

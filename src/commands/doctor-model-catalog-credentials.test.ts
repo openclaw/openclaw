@@ -114,6 +114,7 @@ describe("doctor model catalog credential migration", () => {
     )}\n`;
     await replacePersistedPluginModelCatalogs({
       agentDir,
+      env: state.env,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("plugin-owner")]: pluginContents,
       },

@@ -177,6 +177,7 @@ describe("update.run unexpected-error diagnostics", () => {
               location: "src/infra/update-managed-service-handoff.ts:42:7",
               message: expect.stringContaining("Connection refused"),
             }),
+            expect.objectContaining({ code: "handoff-permission-denied" }),
           ],
         }),
       );

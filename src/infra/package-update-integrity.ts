@@ -148,7 +148,7 @@ function metadata(stat: BigIntStats) {
   };
 }
 
-function unchanged(left: BigIntStats, right: BigIntStats): boolean {
+export function packageStatUnchanged(left: BigIntStats, right: BigIntStats): boolean {
   return (
     left.ino !== 0n &&
     left.dev === right.dev &&
@@ -286,7 +286,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       (late) => late.close(),
     );
     try {
-      if (!unchanged(stat, await read(() => handle.stat({ bigint: true })))) {
+      if (!packageStatUnchanged(stat, await read(() => handle.stat({ bigint: true })))) {
         throw new Error("Package rollback file changed before reading");
       }
       const hash = createHash("sha256");
@@ -304,7 +304,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         position += bytesRead;
         hash.update(buffer.subarray(0, bytesRead));
       }
-      if (!unchanged(stat, await read(() => handle.stat({ bigint: true })))) {
+      if (!packageStatUnchanged(stat, await read(() => handle.stat({ bigint: true })))) {
         throw new Error("Package rollback file changed while reading");
       }
       return { digest: hash.digest("hex"), bytes: position };
@@ -522,7 +522,12 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         throw new Error("Package rollback version is unavailable");
       }
       for (const entry of observed) {
-        if (!unchanged(entry.stat, await read(() => fs.lstat(entry.file, { bigint: true })))) {
+        if (
+          !packageStatUnchanged(
+            entry.stat,
+            await read(() => fs.lstat(entry.file, { bigint: true })),
+          )
+        ) {
           throw new Error("Package rollback tree changed during verification");
         }
       }
@@ -547,7 +552,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       return { kind: "directory", tree: await tree(root, originalRoot) };
     }
     const target = await read(() => fs.readlink(root));
-    if (!unchanged(stat, await read(() => fs.lstat(root, { bigint: true })))) {
+    if (!packageStatUnchanged(stat, await read(() => fs.lstat(root, { bigint: true })))) {
       throw new Error("Package rollback link changed while reading");
     }
     // npm owns this pointer, not the external checkout it names. A sibling
@@ -564,7 +569,10 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       throw new Error("Package rollback filesystem identity is unavailable");
     }
     const version = await read(() => readPackageVersion(root, { maxBytes: MAX_MANIFEST_BYTES }));
-    if (!version || !unchanged(stat, await read(() => fs.lstat(root, { bigint: true })))) {
+    if (
+      !version ||
+      !packageStatUnchanged(stat, await read(() => fs.lstat(root, { bigint: true })))
+    ) {
       throw new Error("Package rollback identity changed or version is unavailable");
     }
     return { identity: identity(stat), version };
@@ -587,7 +595,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         );
       }
       stat = current;
-    } else if (!unchanged(stat, current)) {
+    } else if (!packageStatUnchanged(stat, current)) {
       throw new Error("Package rollback launcher changed during verification");
     }
     return {

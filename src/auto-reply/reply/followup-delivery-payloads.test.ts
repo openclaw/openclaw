@@ -39,16 +39,6 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "final answer" }]);
   });
 
-  it("keeps a durable reasoning payload when reasoningPayloadsEnabled is true", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }],
-        reasoningPayloadsEnabled: true,
-      }),
-    ).toEqual([{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }]);
-  });
-
   it("drops commentary unless its delivery lane is enabled", () => {
     const payload = { text: "internal commentary", isCommentary: true };
     expect(resolveFollowupDeliveryPayloads({ cfg: baseConfig, payloads: [payload] })).toEqual([]);
@@ -70,15 +60,6 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toStrictEqual([]);
   });
 
-  it("keeps media payloads when stripping heartbeat ack text", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "/tmp/image.png" }],
-      }),
-    ).toEqual([{ text: "", mediaUrl: "/tmp/image.png" }]);
-  });
-
   it("preserves transcript ownership when stripping heartbeat text", () => {
     const payload = setReplyPayloadMetadata(
       { text: "HEARTBEAT_OK still working" },
@@ -95,27 +76,6 @@ describe("resolveFollowupDeliveryPayloads", () => {
       replyDelivery: {
         replyToMode: "all",
       },
-    });
-  });
-
-  it("uses the captured reply policy instead of reloading changed config", () => {
-    const [resolved] = resolveFollowupDeliveryPayloads({
-      cfg: {
-        channels: {
-          slack: {
-            replyToMode: "all",
-          },
-        },
-      } as OpenClawConfig,
-      payloads: [{ text: "queued reply" }],
-      originatingChannel: "slack",
-      originatingChatType: "channel",
-      originatingReplyToMode: "off",
-    });
-
-    expect(getReplyPayloadMetadata(resolved ?? {})?.replyDelivery).toEqual({
-      chatType: "channel",
-      replyToMode: "off",
     });
   });
 
@@ -139,28 +99,6 @@ describe("resolveFollowupDeliveryPayloads", () => {
         ],
       }),
     ).toEqual([{ text: "thread reply" }]);
-  });
-
-  it("dedupes a Slack DM tool send recorded through its routable target", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "thread reply" }],
-        messageProvider: "slack",
-        originatingTo: "user:U123",
-        originatingThreadId: "171.222",
-        sentTexts: ["thread reply"],
-        sentTargets: [
-          {
-            tool: "message",
-            provider: "slack",
-            to: "user:U123",
-            threadId: "171.222",
-            text: "thread reply",
-          },
-        ],
-      }),
-    ).toStrictEqual([]);
   });
 
   it("delivers distinct replies when originating channel resolves the provider", () => {

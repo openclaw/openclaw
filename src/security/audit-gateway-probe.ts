@@ -37,14 +37,8 @@ export async function probeSecurityAuditGateway(params: {
     timeoutMs: params.timeoutMs,
   }).catch((err: unknown) => ({
     ok: false,
-    url,
-    connectLatencyMs: null,
     error: String(err),
     close: null,
-    health: null,
-    status: null,
-    presence: null,
-    configSnapshot: null,
   }));
 
   if (authResolution.warning && !res.ok) {

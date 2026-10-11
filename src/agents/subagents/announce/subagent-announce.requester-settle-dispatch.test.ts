@@ -505,7 +505,7 @@ describe("requester settle dispatch deadline", () => {
     await replaceSessionEntry(target, {
       sessionId: "requester-session",
       updatedAt: 100,
-      status: "running",
+      status: undefined,
       abortedLastRun: false,
       restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],
       mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 1 },

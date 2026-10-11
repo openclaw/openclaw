@@ -1,7 +1,6 @@
-import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ToolsGitHubStatusResult } from "../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   inspectGitHubOAuthRecord,
@@ -21,11 +20,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { writeHiddenGitHubSecretRecord } from "../secrets/store/secret-store.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
-import {
-  beginAgentDeletionJournal,
-  removeAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
-import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -94,15 +88,18 @@ import {
   installActiveGitHubOAuthLifecycle,
   requestCurrentGitHubOAuthRefresh,
 } from "./github-oauth-lifecycle.js";
+import { registerGitHubOAuthRetirementTests } from "./github-oauth-lifecycle.retirement.test-support.js";
 import {
   ACCOUNT,
   configForScope,
+  configWithSelectedIdentity,
   identity,
   NEW_PROFILE,
   NOW,
   oauthRecord,
   OLD_PROFILE,
   OTHER_PROFILE,
+  statusResult,
   TOKENS,
 } from "./github-oauth-lifecycle.test-support.js";
 
@@ -131,46 +128,15 @@ function setSelectedIdentity(
   agentId: string,
   nextIdentity: GitHubToolIdentityConfig,
 ): void {
-  const next = structuredClone(currentConfig);
-  if (scope === "system") {
-    next.tools ??= {};
-    next.tools.github = structuredClone(nextIdentity);
-  } else {
-    next.agents ??= {};
-    next.agents.entries ??= {};
-    const entry = (next.agents.entries[agentId] ??= {});
-    entry.tools ??= {};
-    entry.tools.github = structuredClone(nextIdentity);
-  }
-  currentConfig = next;
-}
-
-function statusResult(scope: GitHubIdentityScope): ToolsGitHubStatusResult {
-  return {
-    agentId: "main",
-    selectedScope: scope,
-    selected: { scope, configured: true, identity: null },
-    effective: {
-      source: scope === "agent" ? "agent-override" : "system-configured",
-      credentialKind: "managed-oauth",
-      credentialState: "available",
-      account: { login: ACCOUNT.login },
-      gitAuthor: { name: ACCOUNT.login, email: null },
-      evidence: "github-api",
-      accessExpiresAtMs: NOW + TOKENS.expiresInSeconds * 1_000,
-      refreshState: "available",
-      oauthScopes: [...TOKENS.scopes],
-      repositoryGrants: "unknown",
-    },
-  };
+  currentConfig = configWithSelectedIdentity(currentConfig, scope, agentId, nextIdentity);
 }
 
 function createLifecycle(
-  options: { getPersistedConfig?: () => OpenClawConfig } = {},
+  options: { getPersistedConfig?: () => Promise<OpenClawConfig> } = {},
 ): GitHubOAuthLifecycle {
   const lifecycle = createGitHubOAuthLifecycle({
     getConfig: () => currentConfig,
-    getPersistedConfig: options.getPersistedConfig ?? (() => currentConfig),
+    getPersistedConfig: options.getPersistedConfig ?? (async () => currentConfig),
     warn: vi.fn(),
     scheduler: createTestGatewayScheduler(time.clock),
   });
@@ -263,6 +229,17 @@ describe("GitHub OAuth authorization lifecycle", () => {
     expect(mocks.clearVerificationCache).not.toHaveBeenCalled();
     await lifecycle.stop();
     expect(mocks.clearVerificationCache).toHaveBeenCalledOnce();
+  });
+
+  registerGitHubOAuthRetirementTests({
+    createLifecycle: () => {
+      currentConfig = configForScope("agent");
+      return createLifecycle();
+    },
+    replaceIdentity: () => setSelectedIdentity("agent", "main", identity(OTHER_PROFILE)),
+    getConfig: () => currentConfig,
+    advanceToPoll,
+    mocks,
   });
 
   it.each(["system", "agent"] as const)(
@@ -578,24 +555,34 @@ describe("GitHub OAuth authorization lifecycle", () => {
     },
   );
 
-  it("preserves an initial OAuth generation when config committed before throwing", async () => {
-    const lifecycle = createLifecycle();
-    const started = await startAuthorization(lifecycle, "system");
-    mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
-    mocks.updateConfig.mockImplementationOnce(async (params) => {
-      setSelectedIdentity(params.scope, params.agentId, params.identity);
-      throw new Error("config write outcome unknown");
-    });
-    await advanceToPoll(started.requestId);
+  it.each(["config write", "staging cleanup"] as const)(
+    "preserves an initial OAuth generation when %s throws after config committed",
+    async (failure) => {
+      const lifecycle = createLifecycle();
+      const started = await startAuthorization(lifecycle, "system");
+      mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
+      if (failure === "config write") {
+        mocks.updateConfig.mockImplementationOnce(async (params) => {
+          setSelectedIdentity(params.scope, params.agentId, params.identity);
+          throw new Error("config write outcome unknown");
+        });
+      } else {
+        mocks.installProfile.mockImplementationOnce(async ({ commitConfig }) => {
+          await commitConfig(ACCOUNT);
+          throw new Error("staging cleanup failed after commit");
+        });
+      }
+      await advanceToPoll(started.requestId);
 
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "success",
-      githubStatus: statusResult("system"),
-    });
-    expect(selectedIdentity("system")).toMatchObject({ profileId: NEW_PROFILE, kind: "oauth" });
-    expect(inspectGitHubOAuthRecord(NEW_PROFILE)).toMatchObject({ state: "valid" });
-    expect(mocks.removeProfile).not.toHaveBeenCalled();
-  });
+      await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
+        status: "success",
+        githubStatus: statusResult("system"),
+      });
+      expect(selectedIdentity("system")).toMatchObject({ profileId: NEW_PROFILE, kind: "oauth" });
+      expect(inspectGitHubOAuthRecord(NEW_PROFILE)).toMatchObject({ state: "valid" });
+      expect(mocks.removeProfile).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains an ambiguous initial commit until authoritative config becomes readable", async () => {
     const runtimeBefore = configForScope("system");
@@ -603,7 +590,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
     let persisted = runtimeBefore;
     let persistedReadable = false;
     const lifecycle = createLifecycle({
-      getPersistedConfig: () => {
+      getPersistedConfig: async () => {
         if (!persistedReadable) {
           throw new Error("persisted config temporarily unreadable");
         }
@@ -651,7 +638,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it("rolls back an ambiguous initial candidate when authoritative config proves no commit", async () => {
     const persisted = configForScope("system");
     currentConfig = persisted;
-    const lifecycle = createLifecycle({ getPersistedConfig: () => persisted });
+    const lifecycle = createLifecycle({ getPersistedConfig: async () => persisted });
     const started = await startAuthorization(lifecycle, "system");
     mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
     mocks.updateConfig.mockRejectedValueOnce(new Error("config CAS failed"));
@@ -664,53 +651,87 @@ describe("GitHub OAuth authorization lifecycle", () => {
     expect(mocks.removeProfile).toHaveBeenCalledWith(expect.stringContaining(NEW_PROFILE));
   });
 
-  it("rejects an agent authorization after the agent enters deletion", async () => {
-    currentConfig = configForScope("agent");
-    const lifecycle = createLifecycle();
-    const started = await startAuthorization(lifecycle, "agent");
-    const deletion = beginAgentDeletionJournal({
-      agentId: "main",
-      operationId: randomUUID(),
-      agentDir: "/agents/main",
-      workspaceDir: "/workspaces/main",
-      sessionsDir: "/sessions/main",
-      deleteFiles: true,
-    });
-    try {
-      await advanceToPoll(started.requestId);
-
-      await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-        status: "failed",
-        reason: "identity_changed",
+  it.each([
+    { entry: "failed commit", change: "runtime config" },
+    { entry: "failed commit", change: "in-place config" },
+    { entry: "failed commit", change: "pending record" },
+    { entry: "maintenance", change: "runtime config" },
+    { entry: "maintenance", change: "in-place config" },
+    { entry: "maintenance", change: "pending record" },
+  ] as const)(
+    "preserves newer $change while $entry awaits persisted config",
+    async ({ entry, change }) => {
+      const readStarted = deferred();
+      const persistedRead = deferred<OpenClawConfig>();
+      const lifecycle = createLifecycle({
+        getPersistedConfig: () => {
+          readStarted.resolve();
+          return persistedRead.promise;
+        },
       });
-      expect(mocks.pollDeviceToken).not.toHaveBeenCalled();
-      expect(mocks.installProfile).not.toHaveBeenCalled();
-    } finally {
-      removeAgentDeletionJournal(deletion.agentId, deletion.operationId);
-    }
-  });
-
-  it("rejects an agent authorization after same-id recreation gets fresh provenance", async () => {
-    currentConfig = configForScope("agent");
-    const lifecycle = createLifecycle();
-    const started = await startAuthorization(lifecycle, "agent");
-    recordAgentProvenance("main", { createdVia: "operator" }, { nowMs: NOW + 1 });
-    await advanceToPoll(started.requestId);
-
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "failed",
-      reason: "identity_changed",
-    });
-    expect(mocks.installProfile).not.toHaveBeenCalled();
-    expect(mocks.updateConfig).not.toHaveBeenCalled();
-    expect(
-      resolveConfiguredGitHubToolIdentity({
-        config: currentConfig,
-        scope: "agent",
-        agentId: "main",
-      }),
-    ).toBeUndefined();
-  });
+      let operation: Promise<unknown>;
+      if (entry === "failed commit") {
+        const started = await startAuthorization(lifecycle, "system");
+        mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
+        mocks.updateConfig.mockImplementationOnce(async (params) => {
+          setSelectedIdentity(params.scope, params.agentId, params.identity);
+          throw new Error("config write outcome unknown");
+        });
+        await advanceToPoll(started.requestId);
+        operation = lifecycle.pollAuthorization(started.requestId);
+      } else {
+        currentConfig = configForScope("system", identity(NEW_PROFILE, { oauth: true }));
+        writeGitHubOAuthRecord(
+          oauthRecord(NEW_PROFILE, {
+            pendingInitial: {
+              requestId: `github-device-${"4".repeat(32)}`,
+              scope: "system",
+              agentId: "main",
+              expectedIdentity: null,
+            },
+          }),
+        );
+        operation = lifecycle.maintain();
+      }
+      await awaitGateBeforeSettlement(
+        readStarted.promise,
+        operation,
+        "initial reconciliation settled before reading persisted config",
+      );
+      const persisted = structuredClone(currentConfig);
+      try {
+        if (change === "runtime config") {
+          setSelectedIdentity("system", "main", identity(OTHER_PROFILE, { oauth: true }));
+        } else if (change === "in-place config") {
+          currentConfig.tools ??= {};
+          currentConfig.tools.github = identity(OTHER_PROFILE, { oauth: true });
+        } else {
+          const current = inspectGitHubOAuthRecord(NEW_PROFILE);
+          if (current.state !== "valid" || !current.record.pendingInitial) {
+            throw new Error("expected pending initial record");
+          }
+          writeGitHubOAuthRecord({
+            ...current.record,
+            pendingInitial: {
+              ...current.record.pendingInitial,
+              requestId: `github-device-${"5".repeat(32)}`,
+            },
+          });
+        }
+        const expected = inspectGitHubOAuthRecord(NEW_PROFILE);
+        persistedRead.resolve(persisted);
+        const result = await operation;
+        if (entry === "failed commit") {
+          expect(result).toEqual({ status: "failed", reason: "setup_failed" });
+        }
+        expect(inspectGitHubOAuthRecord(NEW_PROFILE)).toEqual(expected);
+        expect(mocks.removeProfile).not.toHaveBeenCalled();
+      } finally {
+        persistedRead.resolve(persisted);
+        await operation;
+      }
+    },
+  );
 
   it("replaces an older pending authorization for the same exact scope only", async () => {
     const lifecycle = createLifecycle();

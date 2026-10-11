@@ -52,8 +52,7 @@ import {
   POST_CORE_UPDATE_RESULT_PATH_ENV,
 } from "./update-post-core-context.js";
 import {
-  createManagedUpdateRequesterAuthority,
-  createManagedUpdateRequesterContinuationAuthority,
+  createDelegatedUpdateRequesterAuthority,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
 import { adoptUpdateRun, getUpdateRun } from "./update-run-ledger.js";
@@ -247,14 +246,9 @@ async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
       input.runId,
       input.root,
       async (fence) => {
-        const requesterAuthority = input.requester?.authorizationSource?.startsWith("profile:")
-          ? await createManagedUpdateRequesterContinuationAuthority(input.requester, {
-              runId: input.runId,
-              executor: fence,
-            })
-          : input.requester
-            ? await createManagedUpdateRequesterAuthority(input.requester)
-            : undefined;
+        const requesterAuthority = input.requester
+          ? await createDelegatedUpdateRequesterAuthority(input.requester, input.runId, fence)
+          : undefined;
         const { updateCommand } = await import("../cli/update-cli/update-command.js");
         fence.assertCurrent();
         if (requesterAuthority?.isCurrent() === false) {
@@ -291,14 +285,9 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
     input.runId,
     input.root,
     async (fence, commandAuthority) => {
-      const requester = input.requester?.authorizationSource?.startsWith("profile:")
-        ? await createManagedUpdateRequesterContinuationAuthority(input.requester, {
-            runId: input.runId,
-            executor: fence,
-          })
-        : input.requester
-          ? await createManagedUpdateRequesterAuthority(input.requester)
-          : undefined;
+      const requester = input.requester
+        ? await createDelegatedUpdateRequesterAuthority(input.requester, input.runId, fence)
+        : undefined;
       const assertCurrent = () => {
         try {
           fence.assertCurrent();
@@ -398,13 +387,12 @@ async function finalizeInput(
     executorFence,
     ...(descriptor
       ? {
-          requesterAuthority: descriptor.requester.authorizationSource?.startsWith("profile:")
-            ? await createManagedUpdateRequesterContinuationAuthority(
-                descriptor.requester,
-                { runId: runIdentity.runId, executor: executorFence },
-                runIdentity.env,
-              )
-            : await createManagedUpdateRequesterAuthority(descriptor.requester, runIdentity.env),
+          requesterAuthority: await createDelegatedUpdateRequesterAuthority(
+            descriptor.requester,
+            runIdentity.runId,
+            executorFence,
+            runIdentity.env,
+          ),
         }
       : {}),
   };

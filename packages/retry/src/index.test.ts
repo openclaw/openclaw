@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -27,20 +28,106 @@ function createRetryOperation() {
 }
 
 describe("raceWithTimeout", () => {
-  it("arms the deadline before starting work and clears it on a synchronous throw", async () => {
+  it("observes an existing abort when the operation factory throws synchronously", async () => {
     vi.useFakeTimers();
     const failure = new Error("failed to start");
+    const signal = AbortSignal.abort("stopped");
     await expect(
       raceWithTimeout(
         () => {
-          expect(vi.getTimerCount()).toBe(1);
           throw failure;
         },
         1_000,
         () => "expired",
+        { signal },
       ),
     ).rejects.toBe(failure);
+    await vi.advanceTimersByTimeAsync(0);
     expect(vi.getTimerCount()).toBe(0);
+    expect(getEventListeners(signal, "abort")).toHaveLength(0);
+  });
+
+  it.each(["operation", "timeout", "abort"] as const)(
+    "releases both cancellation and deadline observation when %s wins",
+    async (winner) => {
+      vi.useFakeTimers();
+      const source = createDeferred<string>();
+      const controller = new AbortController();
+      const failure = new Error("cancelled");
+      const pending = raceWithTimeout(source.promise, 10, () => "expired", {
+        signal: controller.signal,
+        onAbort: (signal) => {
+          throw signal.reason;
+        },
+      });
+      const outcome = pending.catch((error: unknown) => error);
+      if (winner === "operation") {
+        source.resolve("done");
+      } else if (winner === "timeout") {
+        await vi.advanceTimersByTimeAsync(10);
+      } else {
+        controller.abort(failure);
+      }
+      expect(await outcome).toBe(
+        winner === "operation" ? "done" : winner === "timeout" ? "expired" : failure,
+      );
+      expect(vi.getTimerCount()).toBe(0);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      source.reject(new Error("late operation rejection"));
+    },
+  );
+
+  it("keeps source-first race order while arming cancellation before work", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const pending = raceWithTimeout(
+      () => {
+        controller.abort();
+        return Promise.resolve("done");
+      },
+      10,
+      () => "expired",
+      { signal: controller.signal },
+    );
+    await expect(pending).resolves.toBe("done");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  });
+
+  it("observes an existing abort without skipping an already-started operation", async () => {
+    vi.useFakeTimers();
+    const source = createDeferred<string>();
+    const signal = AbortSignal.abort("stopped");
+    await expect(
+      raceWithTimeout(source.promise, 10, () => "expired", {
+        signal,
+        onAbort: () => "cancelled",
+      }),
+    ).resolves.toBe("cancelled");
+    source.reject(new Error("late operation rejection"));
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getEventListeners(signal, "abort")).toHaveLength(0);
+  });
+
+  it("arms the deadline before starting work and clears it on a synchronous throw", async () => {
+    vi.useFakeTimers();
+    const failure = new Error("failed to start");
+    const controller = new AbortController();
+    const onAbort = vi.fn(() => "cancelled");
+    const pending = raceWithTimeout(
+      () => {
+        expect(vi.getTimerCount()).toBe(1);
+        throw failure;
+      },
+      1_000,
+      () => "expired",
+      { signal: controller.signal, onAbort },
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    controller.abort();
+    expect(onAbort).not.toHaveBeenCalled();
+    await expect(pending).rejects.toBe(failure);
   });
 
   it.each(["fulfilled", "rejected"] as const)(

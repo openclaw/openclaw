@@ -1,4 +1,3 @@
-// Shared type contracts for exec approval policy and durable persistence.
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { ExecApprovalsSnapshot, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
 import type { AllowAlwaysPattern, ExecAllowlistEntry } from "./exec-approvals.types.js";

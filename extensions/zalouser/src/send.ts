@@ -104,15 +104,9 @@ export async function sendImageZalouser(
   });
 }
 
-export async function sendReactionZalouser(params: {
-  threadId: string;
-  msgId: string;
-  cliMsgId: string;
-  emoji: string;
-  remove?: boolean;
-  profile?: string;
-  isGroup?: boolean;
-}): Promise<ZaloSendResult> {
+export async function sendReactionZalouser(
+  params: Parameters<typeof sendZaloReaction>[0],
+): Promise<ZaloSendResult> {
   const result = await sendZaloReaction(params);
   return {
     ok: result.ok,

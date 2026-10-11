@@ -7,7 +7,7 @@ import { readBoardHtml } from "../boards/board-store.test-support.js";
 import { buildWidgetDocument } from "../canvas/wrap.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
-import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -277,43 +277,51 @@ it("reopens separate boards and progress cards in a shared database owned by ano
   closeOpenClawStateDatabaseForTest();
 
   const { invoke } = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
-  const create = admission.createSqliteWorkerOperationAdmission;
+  const create = historyReaders.createSessionHistoryWorkerReaders;
   const resolverSql: string[] = [];
-  const stages = new Set<string>();
+  const observations: ReturnType<typeof observeHostDataSql>[] = [];
+  let reads = 0;
+  const finishObservation = () => {
+    for (const host of observations.splice(0)) {
+      resolverSql.push(
+        ...host.queries.filter((sql) =>
+          /\bfrom\s+"?(?:agent_databases|schema_meta)"?\b/iu.test(sql),
+        ),
+      );
+      host.restore();
+    }
+  };
   const interception = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      create((request, grant) => {
-        if (request.stage !== "transaction" && request.stage !== "commit") {
-          admit(request, grant);
-          return;
-        }
-        stages.add(request.stage);
-        invalidateRegisteredAgentDatabasesMemo({});
-        const host = observeHostDataSql();
-        try {
-          admit(request, grant);
-        } finally {
-          resolverSql.push(
-            ...host.queries.filter((sql) =>
-              /\bfrom\s+"?(?:agent_databases|schema_meta)"?\b/iu.test(sql),
-            ),
-          );
-          host.restore();
-        }
-      }, attachment),
-    );
+    .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+    .mockImplementation((run) => {
+      const readers = create(run);
+      return {
+        ...readers,
+        async readBoardSnapshot(input) {
+          reads++;
+          invalidateRegisteredAgentDatabasesMemo({});
+          observations.push(observeHostDataSql());
+          const snapshot = await readers.readBoardSnapshot(input);
+          invalidateRegisteredAgentDatabasesMemo({});
+          return snapshot;
+        },
+      };
+    });
   try {
     for (const agentId of ["alpha", "beta"]) {
-      const response = await invoke("board.get", { sessionKey: `agent:${agentId}:main` });
-      expect(response).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          widgets: [expect.objectContaining({ name: agentId, revision: 1 })],
-        }),
-      );
+      try {
+        const response = await invoke("board.get", { sessionKey: `agent:${agentId}:main` });
+        expect(response).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            widgets: [expect.objectContaining({ name: agentId, revision: 1 })],
+          }),
+        );
+      } finally {
+        finishObservation();
+      }
     }
-    expect(stages).toEqual(new Set(["transaction", "commit"]));
+    expect(reads).toBe(2);
     expect(resolverSql).toEqual([]);
   } finally {
     interception.mockRestore();
@@ -331,18 +339,26 @@ it("reopens separate boards and progress cards in a shared database owned by ano
     });
   }
 
-  for (const stage of ["transaction", "commit"] as const) {
+  for (const stage of ["before-read", "after-read"] as const) {
     const replacement = { ...cfg, session: { store: path.join(stateDir, "replacement.sqlite") } };
     const revoked = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        create((request, grant) => {
-          if (request.stage === stage) {
-            setRuntimeConfigSnapshot(replacement, replacement);
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+      .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+      .mockImplementation((run) => {
+        const readers = create(run);
+        return {
+          ...readers,
+          async readBoardSnapshot(input) {
+            if (stage === "before-read") {
+              setRuntimeConfigSnapshot(replacement, replacement);
+            }
+            const snapshot = await readers.readBoardSnapshot(input);
+            if (stage === "after-read") {
+              setRuntimeConfigSnapshot(replacement, replacement);
+            }
+            return snapshot;
+          },
+        };
+      });
     try {
       const response = await invoke("board.get", { sessionKey: "agent:beta:main" });
       expect(response).toHaveBeenCalledWith(

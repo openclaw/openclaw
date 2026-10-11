@@ -11,9 +11,7 @@ import {
 
 const filters: DashboardGalleryFilters = { query: "", ownerId: "", sort: "updated" };
 const handlers = {
-  onQueryChange: vi.fn(),
-  onOwnerChange: vi.fn(),
-  onSortChange: vi.fn(),
+  onFilterChange: vi.fn(),
 };
 
 function routeData(sessions: SessionsListResult["sessions"], basePath = ""): DashboardsRouteData {
@@ -105,9 +103,7 @@ describe("dashboards index", () => {
           ),
           filters,
           {
-            onQueryChange: vi.fn(),
-            onOwnerChange: vi.fn(),
-            onSortChange: vi.fn(),
+            onFilterChange: vi.fn(),
             onNavigate,
           },
         ),

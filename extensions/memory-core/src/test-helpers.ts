@@ -12,9 +12,10 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, beforeAll } from "vitest";
+import { afterAll, beforeAll, vi } from "vitest";
 import { consolidateMemory } from "./dreaming-consolidation.js";
 import { readDailyIngestionState, readSessionIngestionState } from "./dreaming-ingestion-state.js";
+import type { DreamingCompletion } from "./dreaming-narrative.js";
 import {
   configureMemoryCoreDreamingState,
   memoryCoreWorkspaceStateKey,
@@ -38,6 +39,12 @@ import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 const MEMORY_CORE_TEST_AGENT_ID = "memory-core-test";
+
+export function createDreamingCompletion(
+  text = "The repository whispered of forgotten endpoints.",
+) {
+  return { complete: vi.fn<DreamingCompletion["complete"]>().mockResolvedValue({ text }) };
+}
 
 export function seedMemoryForgetTombstones(
   params: Parameters<typeof recordMemorySessionTombstonesInDatabase>[1],

@@ -47,11 +47,13 @@ export function deleteIncognitoSessionLifecycle(
   params: IncognitoLifecycleTarget & {
     target: IncognitoLifecycleEntry;
     reason: "reset" | "deleted";
+    expectedPluginOwnerId?: string;
   },
 ): Promise<IncognitoLifecycleOperations["session.lifecycle.delete"]["output"]> {
   const { actor, authority, scope } = captureLifecycle(params);
   const target = structuredClone(params.target);
   const reason = params.reason;
+  const expectedPluginOwnerId = params.expectedPluginOwnerId;
   return actor.sessions.withSharedState(async () => {
     const [
       { withSqliteSessionDeletions },
@@ -95,6 +97,7 @@ export function deleteIncognitoSessionLifecycle(
             input: {
               target,
               reason,
+              expectedPluginOwnerId,
               admissionIdentities: [
                 ...(collectActiveSessionWorkAdmissions().get(scope.ownerStorePath ?? actor.path) ??
                   []),
@@ -143,15 +146,19 @@ export function deleteIncognitoSessionLifecycle(
 export function reclaimIncognitoSessionLifecycle(
   params: IncognitoLifecycleTarget & {
     input: IncognitoLifecycleOperations["session.lifecycle.reclaim.prepare"]["input"];
+    admissionSignal?: AbortSignal;
   },
 ): Promise<IncognitoLifecycleOperations["session.lifecycle.reclaim"]["output"]> {
   const { actor, authority, scope } = captureLifecycle(params);
   const input = structuredClone(params.input);
+  const { admissionSignal } = params;
+  admissionSignal?.throwIfAborted();
   return actor.sessions.withSharedState(async () => {
-    const plan = await actor.sessions.lifecycle(authority, {
-      type: "session.lifecycle.reclaim.prepare",
-      input,
-    });
+    const plan = await actor.sessions.lifecycle(
+      authority,
+      { type: "session.lifecycle.reclaim.prepare", input },
+      admissionSignal,
+    );
     const entries = plan.entries.flatMap(({ sessionKey, expectedEntry }) =>
       expectedEntry ? [{ sessionKey, entry: expectedEntry }] : [],
     );
@@ -168,8 +175,9 @@ export function reclaimIncognitoSessionLifecycle(
     return withSqliteSessionDeletions(
       scope,
       entries,
-      (assertDeletionCurrent, capture) =>
-        actor.sessions.lifecycle(
+      (assertDeletionCurrent, capture) => {
+        admissionSignal?.throwIfAborted();
+        return actor.sessions.lifecycle(
           {
             assertCurrent() {
               authority.assertCurrent();
@@ -195,7 +203,8 @@ export function reclaimIncognitoSessionLifecycle(
               },
             };
           },
-        ),
+        );
+      },
       {
         incognito: actor,
         additionalIdentities: plan.deletePlans.map((deletePlan) => deletePlan.sessionId),

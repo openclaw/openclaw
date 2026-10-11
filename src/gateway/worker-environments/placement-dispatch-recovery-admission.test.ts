@@ -614,6 +614,7 @@ describe("placement recovery session admission with persisted placements", () =>
             enabled: true,
             capacity: { total: 1, available: 1 },
             capturedExecPolicy: true,
+            promptContext: 1,
           },
           commands: [],
         },

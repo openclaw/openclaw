@@ -295,12 +295,7 @@ describe("agent session scope continuity", () => {
       cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: ["dist/entry.js"],
-          cwd: process.cwd(),
-          usePackagedPlugins: true,
-        },
+        useRepoCli: false,
         providerBaseUrl: `${provider.baseUrl}/v1`,
         providerMode: "mock-openai",
         primaryModel: MODEL_REF,

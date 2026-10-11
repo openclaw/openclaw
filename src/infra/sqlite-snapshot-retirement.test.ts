@@ -37,7 +37,7 @@ function createFixture() {
 }
 
 function assertReadable(location: string) {
-  const database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
+  const database = nodeSqlite.openNodeSqliteDatabase(location, { readOnly: true });
   try {
     expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
   } finally {

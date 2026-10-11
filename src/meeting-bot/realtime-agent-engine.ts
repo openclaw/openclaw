@@ -1,7 +1,5 @@
 // Shared STT plus agent-consult meeting engine.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSession } from "../realtime-transcription/provider-types.js";
 import {
@@ -12,7 +10,6 @@ import {
   convertMeetingBridgeAudioForStt,
   convertMeetingTtsAudioForBridge,
 } from "./realtime-audio-format.js";
-import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import {
   formatMeetingAgentAudioModelLog,
   formatMeetingAgentTtsResultLog,
@@ -25,25 +22,16 @@ import {
   MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
   MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
   MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
-  type MeetingAgentConsultParams,
   type MeetingRealtimeAudioEngineHandle,
-  type MeetingRealtimeEngineConfig,
-  type MeetingRuntimePlatform,
+  type startMeetingRealtimeEngine,
 } from "./realtime-engine.js";
 
-export async function startMeetingAgentRealtimeEngine(params: {
-  config: MeetingRealtimeEngineConfig;
-  fullConfig: OpenClawConfig;
-  runtime: PluginRuntime;
-  platform: MeetingRuntimePlatform;
-  meetingSessionId: string;
-  requesterSessionKey?: string;
-  logPrefix?: "node";
-  transport: MeetingRealtimeAudioTransport;
-  logger: RuntimeLogger;
-  providers?: RealtimeTranscriptionProviderPlugin[];
-  consultAgent: (params: MeetingAgentConsultParams) => Promise<{ text: string }>;
-}): Promise<MeetingRealtimeAudioEngineHandle> {
+export async function startMeetingAgentRealtimeEngine(
+  params: Omit<
+    Parameters<typeof startMeetingRealtimeEngine>[0],
+    "providers" | "talkSessionId" | "talkContext" | "tools" | "handleToolCall"
+  > & { providers?: RealtimeTranscriptionProviderPlugin[] },
+): Promise<MeetingRealtimeAudioEngineHandle> {
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
   let sttSession: RealtimeTranscriptionSession | null = null;

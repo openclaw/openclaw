@@ -203,7 +203,6 @@ export async function createMatrixQaTransportAdapter(
   const roomObservers = provisioning.topology.rooms.map((room) => {
     const observerRole = resolveMatrixQaRoomObserverRole(room);
     return {
-      observedEvents,
       observer: createMatrixQaRoomObserver({
         accessToken: provisioning.observationAccounts[observerRole].accessToken,
         baseUrl: harness.baseUrl,

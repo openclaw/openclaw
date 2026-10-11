@@ -2,9 +2,6 @@
  * Standalone MCP server that exposes OpenClaw plugin-registered tools
  * (e.g. memory-lancedb's memory_recall, memory_store, memory_forget)
  * so ACP sessions running Claude Code can use them.
- *
- * Run via: node --import tsx src/mcp/plugin-tools-serve.ts
- * Or: bun src/mcp/plugin-tools-serve.ts
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -13,7 +10,6 @@ import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
-  type ToolPolicyPipelineStep,
 } from "../agents/tool-policy-pipeline.js";
 import {
   collectExplicitAllowlist,
@@ -36,14 +32,13 @@ import {
 import { resolveToolsMcpAgentId, resolveToolsMcpSessionContext } from "./agent-session-env.js";
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
-function resolvePluginToolPolicy(
-  config: OpenClawConfig,
-  context: ReturnType<typeof resolveToolsMcpSessionContext>,
-): {
-  toolAllowlist?: string[];
-  toolDenylist?: string[];
-  steps?: ToolPolicyPipelineStep[];
-} {
+export async function acquirePluginToolsForMcp(params: {
+  config: OpenClawConfig;
+  agentSessionKey?: string;
+  agentId?: string;
+}): Promise<PluginToolRegistryAcquisition> {
+  const { config } = params;
+  const context = { config, ...resolveToolsMcpSessionContext(params) };
   const effective = context.agentId
     ? resolveEffectiveToolPolicy({
         config,
@@ -73,24 +68,10 @@ function resolvePluginToolPolicy(
   const policies = steps?.map((step) => step.policy) ?? [profilePolicy, globalPolicy];
   const toolAllowlist = collectExplicitAllowlist(policies);
   const toolDenylist = collectExplicitDenylist(policies);
-  return {
-    ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
-    ...(toolDenylist.length > 0 ? { toolDenylist } : {}),
-    steps,
-  };
-}
-
-export async function acquirePluginToolsForMcp(params: {
-  config: OpenClawConfig;
-  agentSessionKey?: string;
-  agentId?: string;
-}): Promise<PluginToolRegistryAcquisition> {
-  const sessionContext = resolveToolsMcpSessionContext(params);
-  const context = { config: params.config, ...sessionContext };
-  const { steps, ...pluginToolPolicy } = resolvePluginToolPolicy(params.config, sessionContext);
   const acquisition = await acquireStandalonePluginToolRegistry({
     context,
-    ...pluginToolPolicy,
+    ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
+    ...(toolDenylist.length > 0 ? { toolDenylist } : {}),
     suppressNameConflicts: true,
   });
   return {

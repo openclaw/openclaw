@@ -1,6 +1,8 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { retainAuthProfileAuthorizationObservation } from "./auth-profiles/authorization-observation.js";
@@ -271,6 +273,56 @@ describe("MCP auth-profile authorization", () => {
       }
     });
   });
+
+  it.each(["local", "shared"])(
+    "fences %s worker commit admission and restores authorization on rollback",
+    async (profileId) => {
+      const root = await seedRoot("rollback");
+      await withEnvAsync(root.env, async () => {
+        const authority = await captureMcpAuthProfileAuthorization({
+          profileId,
+          agentDir: root.agentDir,
+          assertCurrent: source().assertCurrent,
+        });
+        const createAdmission = admission.createSqliteWorkerOperationAdmission;
+        let refused = false;
+        const spy = vi
+          .spyOn(admission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) => {
+            let updating = false;
+            return createAdmission((request, grant) => {
+              updating ||= isRecord(request.facts) && request.facts.kind === "auth-store-update";
+              if (updating && request.stage === "commit") {
+                admit(request, () => {
+                  expect(authority.assertCurrent).toThrow(
+                    expect.objectContaining({ code: "MCP_AUTHORIZATION_UNAVAILABLE" }),
+                  );
+                  refused = true;
+                  throw new Error("fixture auth commit refused");
+                });
+              } else {
+                admit(request, grant);
+              }
+            }, attachment);
+          });
+        try {
+          await expect(
+            upsertAuthProfileWithLockOrThrow({
+              profileId,
+              agentDir: profileId === "local" ? root.agentDir : undefined,
+              credential: apiKey("replacement"),
+            }),
+          ).rejects.toThrow("fixture auth commit refused");
+          expect(refused).toBe(true);
+          expect(authority.assertCurrent).not.toThrow();
+          await authority.revalidate();
+        } finally {
+          spy.mockRestore();
+          authority.dispose();
+        }
+      });
+    },
+  );
 
   it("cannot publish delayed canonical facts after disposal", async () => {
     const root = await seedRoot("inherited");

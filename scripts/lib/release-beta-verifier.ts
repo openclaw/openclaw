@@ -15,6 +15,7 @@ import { lt as semverLt, valid as validSemver } from "semver";
 import { z } from "zod";
 import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
+import { retryClawHubRead } from "../../src/infra/clawhub-retry.ts";
 import { isRecoverableOpenClawNpmRegistryReadbackFailure } from "../openclaw-npm-resume-run.mts";
 import {
   compareCodeUnits,
@@ -75,35 +76,8 @@ type ReleaseVerifyBetaArgs = {
   };
 };
 
-type NpmViewFields = {
-  version?: string;
-  distTagVersion?: string;
-  integrity?: string;
-  tarball?: string;
-};
-
-type WorkflowRunSummary = {
-  id: string;
-  runAttempt?: number;
-  label: string;
-  url?: string;
-  durationSeconds?: number;
-  bootstrapEvidence?: {
-    targetSha: string;
-    workflowSha: string;
-    workflowPath: string;
-    producerRunAttempt: string;
-    terminalRunAttempt: string;
-    readbackArtifactId: string;
-    readbackArtifactDigest: string;
-    packageArtifactId: string;
-    packageArtifactDigest: string;
-    packageCount: number;
-    clawhubToolchainIntegrity: string;
-    clawhubToolchainSha256: string;
-    clawhubToolchainVersion: string;
-  };
-};
+type WorkflowRunSummary = ReturnType<typeof verifyWorkflowRun> &
+  Partial<Pick<ReturnType<typeof validateClawHubBootstrapEvidence>, "bootstrapEvidence">>;
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
@@ -556,11 +530,7 @@ function requireString(value: unknown, label: string): string {
   return stringValue;
 }
 
-function readTrustedClawHubToolchainIdentity(): {
-  clawhubToolchainIntegrity: string;
-  clawhubToolchainSha256: string;
-  clawhubToolchainVersion: string;
-} {
+function readTrustedClawHubToolchainIdentity() {
   const lockPath = resolve(TRUSTED_TOOLING_ROOT, ".github/release/clawhub-cli/package-lock.json");
   const lockBytes = readFileSync(lockPath);
   const lock = parseJson(lockBytes.toString("utf8"), "trusted ClawHub CLI package-lock.json");
@@ -667,7 +637,7 @@ function parseJson(raw: string, label: string): unknown {
   }
 }
 
-export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields {
+export function parseNpmViewFields(raw: string, distTag: string) {
   const value = parseJson(raw, "npm view");
   const entries = resolveNpmJsonEntries(value);
   const parsed = entries.length === 1 && isJsonRecord(entries[0]) ? entries[0] : value;
@@ -835,95 +805,70 @@ async function cancelResponseBody(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined);
 }
 
+function retryReleaseClawHubRead<T extends { response: Response }>(
+  url: string,
+  request: () => Promise<T>,
+  delay?: (delayMs: number) => Promise<void>,
+): Promise<T> {
+  return retryClawHubRead(request, {
+    disposeRetry: ({ response }) => cancelResponseBody(response),
+    retryRateLimit: true,
+    sleep: delay,
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${url}: ${message}. Retry readback, not publication.`, { cause: error });
+  });
+}
+
 export async function fetchJsonWithRetry(
   url: string,
   options: {
-    attempts?: number;
     delay?: (delayMs: number) => Promise<void>;
     fetchImpl?: typeof fetch;
     timeoutMs?: number;
   } = {},
 ): Promise<unknown> {
-  const attempts = options.attempts ?? 5;
-  const delay = options.delay ?? sleep;
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const timeoutMs = options.timeoutMs ?? CLAWHUB_REQUEST_TIMEOUT_MS;
-  let lastError: unknown;
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    let response: Response | undefined;
-    let attemptError: unknown;
-    try {
-      const signal = AbortSignal.timeout(timeoutMs);
-      response = await fetchImpl(url, {
+  const { response: reply, body: text } = await retryReleaseClawHubRead(
+    url,
+    async () => {
+      const signal = AbortSignal.timeout(options.timeoutMs ?? CLAWHUB_REQUEST_TIMEOUT_MS);
+      const response = await (options.fetchImpl ?? fetch)(url, {
         headers: { accept: "application/json" },
         signal,
       });
-      if (response.status !== 429 && response.status < 500) {
-        if (!response.ok) {
-          await cancelResponseBody(response);
-          throw new Error(`${url} returned HTTP ${response.status}.`);
-        }
-        return await readBoundedJsonResponse(response, url, undefined, { signal });
-      }
-      attemptError = new Error(`HTTP ${response.status}`);
-      lastError = attemptError;
-    } catch (error) {
-      if (
-        response !== undefined &&
-        response.status !== 429 &&
-        response.status < 500 &&
-        !response.ok
-      ) {
+      try {
+        const body = response.ok
+          ? await readBoundedResponseText(response, url, CLAWHUB_RESPONSE_BODY_MAX_BYTES, {
+              signal,
+            })
+          : undefined;
+        return { response, body };
+      } catch (error) {
+        await cancelResponseBody(response);
         throw error;
       }
-      attemptError = error;
-      lastError = error;
-    } finally {
-      if (response !== undefined && attemptError !== undefined) {
-        await cancelResponseBody(response);
-      }
-    }
-    if (attempt < attempts) {
-      await delay(attempt * 1000);
-    }
+    },
+    options.delay,
+  );
+  if (!reply.ok) {
+    await cancelResponseBody(reply);
+    throw new Error(`${url} returned HTTP ${reply.status}. Retry readback, not publication.`);
   }
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${url} did not return stable JSON: ${message}`);
-}
-
-export async function readBoundedJsonResponse(
-  response: Response,
-  label: string,
-  maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
-  options: { signal?: AbortSignal } = {},
-): Promise<unknown> {
-  return parseJson(await readBoundedResponseText(response, label, maxBytes, options), label);
+  // Parsing belongs after transport recovery: a complete invalid document is
+  // terminal, not a reason to repeat publication or hide unaccepted evidence.
+  return parseJson(text ?? "", url);
 }
 
 export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    try {
-      const response = await fetch(url, {
-        method,
-        redirect: "manual",
-        signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
-      });
-      await cancelResponseBody(response);
-      if (response.status !== 429 && response.status < 500) {
-        return response.status;
-      }
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    if (attempt < 5) {
-      await sleep(attempt * 1000);
-    }
-  }
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`${url} did not return a stable response: ${message}`);
+  const { response } = await retryReleaseClawHubRead(url, async () => ({
+    response: await fetch(url, {
+      method,
+      redirect: "manual",
+      signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
+    }),
+  }));
+  await cancelResponseBody(response);
+  return response.status;
 }
 
 async function readNpmBetaFloorError(
@@ -963,11 +908,7 @@ function createNpmBetaFloorError(errors: readonly string[]): Error {
   );
 }
 
-async function verifyNpmPackage(
-  packageName: string,
-  version: string,
-  distTag: string,
-): Promise<NpmViewFields> {
+async function verifyNpmPackage(packageName: string, version: string, distTag: string) {
   const raw = await runNpmViewWithRetry([
     "view",
     `${packageName}@${version}`,
@@ -1081,7 +1022,7 @@ function verifyWorkflowRun(params: {
   rerunFailed?: boolean;
   acceptFailedRun?: (run: JsonRecord, jobs: JsonRecord[]) => boolean;
   observe?: (run: JsonRecord, failedJobCount: number) => void;
-}): WorkflowRunSummary {
+}) {
   const raw = runReleaseVerifierCommand("gh", [
     "run",
     "view",
@@ -1256,17 +1197,7 @@ function requireArtifactWorkflowRun(
   }
 }
 
-function requireClawHubBootstrapRunBinding(
-  run: unknown,
-  expectedRunId: string,
-): {
-  headSha: string;
-  run: JsonRecord;
-  runAttempt: number;
-  runId: number;
-  terminalRunAttempt: string;
-  workflowPath: string;
-} {
+function requireClawHubBootstrapRunBinding(run: unknown, expectedRunId: string) {
   if (!isJsonRecord(run)) {
     throw new Error("Plugin ClawHub New run metadata is invalid.");
   }
@@ -1308,12 +1239,7 @@ function requireClawHubBootstrapRunBinding(
 function requireClawHubReadbackArtifactBinding(
   artifact: unknown,
   run: ReturnType<typeof requireClawHubBootstrapRunBinding>,
-): {
-  artifactDigest: string;
-  artifactId: number;
-  artifactName: string;
-  artifactSizeBytes: number;
-} {
+) {
   if (!isJsonRecord(artifact)) {
     throw new Error("Plugin ClawHub New readback artifact metadata is invalid.");
   }
@@ -1415,7 +1341,7 @@ export function validateClawHubBootstrapEvidence(params: {
   readbackArchiveSha256: string;
   packageArtifact: unknown;
   evidence: unknown;
-}): WorkflowRunSummary {
+}) {
   const runBinding = requireClawHubBootstrapRunBinding(params.run, params.runId);
   const { headSha, terminalRunAttempt, workflowPath } = runBinding;
   const runId = String(runBinding.runId);
@@ -1680,7 +1606,7 @@ async function verifyClawHubBootstrapRun(params: {
   version: string;
   expectedPackages: string[];
   observeAttempt?: (run: ReturnType<typeof requireClawHubBootstrapRunBinding>) => void;
-}): Promise<WorkflowRunSummary> {
+}) {
   const run = readGitHubApiJson(
     params.repo,
     `actions/runs/${params.runId}`,
@@ -1976,34 +1902,31 @@ export async function verifyBetaRelease(
     }));
     if (args.workflowRuns.pluginClawHubBootstrap !== undefined) {
       diagnostic.start("pluginClawHubBootstrap");
-      workflowRuns.push(
-        await verifyClawHubBootstrapRun({
-          repo: args.repo,
-          runId: args.workflowRuns.pluginClawHubBootstrap,
-          releaseSha: requireCommitSha(args.releaseSha, "release SHA"),
-          version: args.version,
-          expectedPackages: args.clawHubBootstrapPlugins,
-          observeAttempt: (run) => {
-            Object.assign(diagnostic.data.children.pluginClawHubBootstrap, {
-              runAttempt: run.terminalRunAttempt,
-              status: "completed",
-              conclusion: "success",
-            });
-            diagnostic.save();
-          },
-        }),
-      );
-      const bootstrap = workflowRuns.at(-1)?.bootstrapEvidence;
-      if (bootstrap) {
-        Object.assign(diagnostic.data.children.pluginClawHubBootstrap, {
-          runAttempt: bootstrap.terminalRunAttempt,
-          producerRunAttempt: bootstrap.producerRunAttempt,
-          readbackArtifactId: bootstrap.readbackArtifactId,
-          packageArtifactId: bootstrap.packageArtifactId,
-          status: "completed",
-          conclusion: "success",
-        });
-      }
+      const run = await verifyClawHubBootstrapRun({
+        repo: args.repo,
+        runId: args.workflowRuns.pluginClawHubBootstrap,
+        releaseSha: requireCommitSha(args.releaseSha, "release SHA"),
+        version: args.version,
+        expectedPackages: args.clawHubBootstrapPlugins,
+        observeAttempt: (attempt) => {
+          Object.assign(diagnostic.data.children.pluginClawHubBootstrap, {
+            runAttempt: attempt.terminalRunAttempt,
+            status: "completed",
+            conclusion: "success",
+          });
+          diagnostic.save();
+        },
+      });
+      workflowRuns.push(run);
+      const bootstrap = run.bootstrapEvidence;
+      Object.assign(diagnostic.data.children.pluginClawHubBootstrap, {
+        runAttempt: bootstrap.terminalRunAttempt,
+        producerRunAttempt: bootstrap.producerRunAttempt,
+        readbackArtifactId: bootstrap.readbackArtifactId,
+        packageArtifactId: bootstrap.packageArtifactId,
+        status: "completed",
+        conclusion: "success",
+      });
       diagnostic.success("pluginClawHubBootstrap");
     }
     verifyChild("openclawNpm", "OpenClaw NPM Release", () => {

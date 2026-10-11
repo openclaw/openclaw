@@ -6,6 +6,7 @@ import {
   editChannelMessage,
   type RequestClient,
 } from "./internal/discord.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { resolveDiscordMessageFlags } from "./send.shared.js";
 
 /** Discord messages cap at 2000 characters. */
@@ -14,7 +15,7 @@ const DEFAULT_THROTTLE_MS = 1200;
 const DISCORD_PREVIEW_ALLOWED_MENTIONS = { parse: [] };
 
 type DiscordDraftMessage = { channelId: string; messageId: string };
-type DiscordDraftUpdate = { text: string; complete: boolean };
+type DiscordDraftUpdate = { text: string; complete: boolean; assertCurrent?: () => void };
 
 export function createDiscordDraftStream(params: {
   rest: RequestClient;
@@ -34,10 +35,6 @@ export function createDiscordDraftStream(params: {
   let channelId = params.channelId;
   const rest = params.rest;
   const flags = resolveDiscordMessageFlags({ suppressEmbeds: params.suppressEmbeds });
-  const resolveReplyToMessageId = () =>
-    typeof params.replyToMessageId === "function"
-      ? params.replyToMessageId()
-      : params.replyToMessageId;
 
   const streamState = { stopped: false, final: false };
   let streamMessage: DiscordDraftMessage | undefined;
@@ -54,7 +51,6 @@ export function createDiscordDraftStream(params: {
       return false;
     }
     if (trimmed.length > maxChars) {
-      // Discord messages cap at 2000 chars.
       // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
       params.warn?.(`discord stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
@@ -86,7 +82,11 @@ export function createDiscordDraftStream(params: {
         }
         return true;
       }
-      const replyToMessageId = resolveReplyToMessageId()?.trim();
+      const replyToMessageId = (
+        typeof params.replyToMessageId === "function"
+          ? params.replyToMessageId()
+          : params.replyToMessageId
+      )?.trim();
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
@@ -123,28 +123,32 @@ export function createDiscordDraftStream(params: {
     }
   };
 
-  const clearMessageId = () => {
-    streamMessage = undefined;
-    lastSentText = "";
-    loop.resetThrottleWindow();
-  };
   const lifecycle = createFinalizableDraftLifecycle<DiscordDraftMessage, DiscordDraftUpdate>({
     throttleMs,
     coalesceInFlight: true,
     state: streamState,
-    sendOrEditStreamMessage,
+    sendOrEditStreamMessage: (update) =>
+      withDiscordRequestAuthority(update.assertCurrent, () => sendOrEditStreamMessage(update)),
     emptyValue: { text: "", complete: false },
     isEmpty: (value) => !value.text,
     readMessageId: () => streamMessage,
-    clearMessageId,
+    clearMessageId: () => {
+      streamMessage = undefined;
+      lastSentText = "";
+      loop.resetThrottleWindow();
+    },
     isValidMessageId: (value): value is DiscordDraftMessage => value !== undefined,
     deleteMessage: (message) => deleteChannelMessage(rest, message.channelId, message.messageId),
     warn: params.warn,
     warnPrefix: "discord stream preview cleanup failed",
   });
   const { loop, update: updateDraft, stop, discardPending, seal } = lifecycle;
-  const update = (text: string, options?: { complete?: boolean }) =>
-    updateDraft({ text, complete: options?.complete === true });
+  const update = (text: string, options?: { complete?: boolean; assertCurrent?: () => void }) =>
+    updateDraft({
+      text,
+      complete: options?.complete === true,
+      assertCurrent: options?.assertCurrent,
+    });
 
   /** Move the draft to another channel, preserving its current text. */
   const retarget = async (nextChannelId: string) => {
@@ -178,6 +182,7 @@ export function createDiscordDraftStream(params: {
     flush: loop.flush,
     messageId: () => streamMessage?.messageId,
     lastDeliveredText: () => lastSentText,
+    isStopped: () => streamState.stopped,
     clear: () => lifecycle.retireCurrent(discardPending),
     deleteCurrentMessage: () =>
       lifecycle.retireCurrent(async () => {

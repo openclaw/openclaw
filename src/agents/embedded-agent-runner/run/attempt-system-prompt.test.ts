@@ -72,6 +72,7 @@ async function preparePermissionPrompt(
   requireExplicitMessageTarget?: boolean,
   session?: Pick<EmbeddedRunAttemptParams, "sessionKey" | "sandboxSessionKey">,
   skills?: { prompt: string; toolsAllow?: string[]; initialToolNames?: string[] },
+  webSearchUnconfigured?: () => boolean,
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -142,6 +143,7 @@ async function preparePermissionPrompt(
     isRawModelRun,
     modelToolsEnabled: true,
     skillsPrompt: skills?.prompt ?? "",
+    webSearchUnconfigured,
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
   });
@@ -160,6 +162,24 @@ async function preparePermissionPrompt(
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  it("carries the prepared missing-search fact into the actual initial prompt and tool refresh", async () => {
+    let missing = true;
+    const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => missing,
+    );
+    expect(prepared.systemPromptText).toContain("Web search is supported but not configured.");
+    expect(prepared.systemPromptText).toContain("openclaw configure --section web");
+    missing = false;
+    expect(await refreshSystemPrompt(prepared.systemPromptText, [read])).not.toContain(
+      "Web search is supported but not configured.",
+    );
+  });
+
   const skillsCatalog = "<available_skills><skill><name>weather</name></skill></available_skills>";
 
   it.each([undefined, ["message"]])(

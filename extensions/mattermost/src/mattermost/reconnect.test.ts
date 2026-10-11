@@ -184,19 +184,21 @@ describe("runWithReconnect", () => {
     expect(delays).toEqual([15]);
   });
 
-  it("supports strategy hook to stop reconnecting after failure", async () => {
+  it("finishes authentication on success after retrying failures", async () => {
     const onReconnect = vi.fn();
-    const connectFn = vi.fn(async () => {
-      throw new Error("fatal");
-    });
+    const connectFn = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("authentication pending"))
+      .mockResolvedValue(undefined);
 
-    await runWithReconnect(connectFn, {
+    const run = runWithReconnect(connectFn, {
       initialDelayMs: 1,
       onReconnect,
-      shouldReconnect: (params) => params.outcome !== "rejected",
+      reconnectAfterClose: false,
     });
+    await resolveReconnectRun(run);
 
-    expect(connectFn).toHaveBeenCalledTimes(1);
-    expect(onReconnect).not.toHaveBeenCalled();
+    expect(connectFn).toHaveBeenCalledTimes(2);
+    expect(onReconnect).toHaveBeenCalledExactlyOnceWith(1);
   });
 });

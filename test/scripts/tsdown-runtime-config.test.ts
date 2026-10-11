@@ -302,7 +302,6 @@ describe("tsdown config", () => {
       "agents/model-catalog.runtime",
       "agents/models-config.runtime",
       "cli/gateway-lifecycle.runtime",
-      "agents/compaction-planning.worker",
       "config/sessions/session-accessor.sqlite-archive.worker",
       "plugin-sdk/sqlite-runtime",
       "state/openclaw-database-verify.worker",

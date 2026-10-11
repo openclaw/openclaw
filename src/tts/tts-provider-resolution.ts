@@ -4,12 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
-import type {
-  OpenClawConfig,
-  ResolvedTtsPersona,
-  TtsConfig,
-  TtsProvider,
-} from "../config/types.js";
+import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { compareSpeechProviderOrder } from "./provider-registry-core.js";
 import {
@@ -206,18 +201,6 @@ export function mergeProviderConfigWithPersona(params: {
   };
 }
 
-function resolveRawProviderConfig(
-  raw: TtsConfig | undefined,
-  providerId: string,
-): SpeechProviderConfig {
-  if (!raw) {
-    return {};
-  }
-  const rawProviders = asNonArrayRecord(raw.providers);
-  const direct = rawProviders[providerId] ?? (raw as Record<string, unknown>)[providerId];
-  return asProviderConfig(direct);
-}
-
 function resolveLazyProviderConfig(
   config: ResolvedTtsConfig,
   providerId: string,
@@ -233,9 +216,9 @@ function resolveLazyProviderConfig(
   if (existing && !effectiveCfg) {
     return existing;
   }
-  const rawConfig = resolveRawProviderConfig(config.rawConfig, canonical);
   const rawBaseConfig = config.rawConfig as Record<string, unknown> | undefined;
   const rawProviders = asNonArrayRecord(config.rawConfig?.providers);
+  const rawConfig = asProviderConfig(rawProviders[canonical] ?? rawBaseConfig?.[canonical]);
   const resolvedProvider = provider ?? registry.getSpeechProvider(canonical, effectiveCfg);
   let hasRawProviderConfig =
     Object.hasOwn(rawProviders, canonical) ||
@@ -279,13 +262,15 @@ function resolveLazyProviderConfig(
       : rawProviders,
     ...(shouldInjectCanonicalProviderConfig ? { [canonical]: compatRawProviderConfig } : {}),
   };
-  const next = withSpeakerSelectionCompat(
+  const next =
     effectiveCfg && resolvedProvider?.resolveConfig
-      ? resolvedProvider.resolveConfig({
-          cfg: effectiveCfg,
-          rawConfig: rawConfigForProvider,
-          timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
-        })
+      ? withSpeakerSelectionCompat(
+          resolvedProvider.resolveConfig({
+            cfg: effectiveCfg,
+            rawConfig: rawConfigForProvider,
+            timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
+          }),
+        )
       : applyVoiceModelToSpeechProviderConfig({
           cfg: effectiveCfg,
           providerId: canonical,
@@ -293,8 +278,7 @@ function resolveLazyProviderConfig(
           provider: resolvedProvider,
           voiceModel,
           registry,
-        }),
-  );
+        });
   if (!voiceModel) {
     config.providerConfigs[canonical] = next;
   }

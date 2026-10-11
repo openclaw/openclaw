@@ -267,8 +267,7 @@ it.each(["backup", "active config"] as const)(
         plugins: { enabled: false },
         meta: { migrations: { webhookListeners: true } },
       };
-      const original =
-        kind === "backup" ? '{"update":{"channel":"stable"}}\n' : JSON.stringify(backup);
+      const original = '{"update":{"channel":"stable"}}\n';
       const replacement = JSON.stringify(
         kind === "backup"
           ? {
@@ -284,9 +283,7 @@ it.each(["backup", "active config"] as const)(
       openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
       closeOpenClawStateDatabaseForTest();
       await fs.writeFile(configPath, original);
-      if (kind === "backup") {
-        await fs.writeFile(`${configPath}.bak`, JSON.stringify(backup));
-      }
+      await fs.writeFile(`${configPath}.bak`, JSON.stringify(backup));
       const runtime = {
         log() {},
         error() {},

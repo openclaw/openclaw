@@ -90,29 +90,24 @@ enum ExecApprovalsSocketPathGuard {
     ]
 
     static func pathKind(at path: String) throws -> ExecApprovalsSocketPathKind {
-        var status = stat()
-        let result = lstat(path, &status)
-        if result != 0 {
-            if errno == ENOENT {
-                return .missing
-            }
-            throw ExecApprovalsSocketPathGuardError.lstatFailed(path: path, code: errno)
+        guard let status = try self.metadata(at: path) else { return .missing }
+        return switch status.st_mode & mode_t(S_IFMT) {
+        case mode_t(S_IFDIR): .directory
+        case mode_t(S_IFSOCK): .socket
+        case mode_t(S_IFLNK): .symlink
+        default: .other
         }
-
-        let fileType = status.st_mode & mode_t(S_IFMT)
-        if fileType == mode_t(S_IFDIR) {
-            return .directory
-        }
-        if fileType == mode_t(S_IFSOCK) {
-            return .socket
-        }
-        if fileType == mode_t(S_IFLNK) {
-            return .symlink
-        }
-        return .other
     }
 
     static func socketIdentity(at path: String) throws -> ExecApprovalsSocketPathIdentity? {
+        guard let status = try self.metadata(at: path),
+              status.st_mode & mode_t(S_IFMT) == mode_t(S_IFSOCK) else { return nil }
+        return ExecApprovalsSocketPathIdentity(
+            device: UInt64(truncatingIfNeeded: status.st_dev),
+            inode: UInt64(truncatingIfNeeded: status.st_ino))
+    }
+
+    private static func metadata(at path: String) throws -> stat? {
         var status = stat()
         let result = lstat(path, &status)
         if result != 0 {
@@ -121,10 +116,7 @@ enum ExecApprovalsSocketPathGuard {
             }
             throw ExecApprovalsSocketPathGuardError.lstatFailed(path: path, code: errno)
         }
-        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFSOCK) else { return nil }
-        return ExecApprovalsSocketPathIdentity(
-            device: UInt64(truncatingIfNeeded: status.st_dev),
-            inode: UInt64(truncatingIfNeeded: status.st_ino))
+        return status
     }
 
     static func hardenParentDirectory(for socketPath: String) throws {

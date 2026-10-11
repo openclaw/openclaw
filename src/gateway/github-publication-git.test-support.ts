@@ -92,7 +92,7 @@ export async function createRealPublicationWorkspace({
   const loaded = mocks.loadSession(sessionKey);
   const entry = { ...loaded.entry, worktree: { ...loaded.entry.worktree, repoRoot: cwd } };
   if (realWorktree) {
-    insertRegistryWorktree(process.env, {
+    await insertRegistryWorktree(process.env, {
       ...worktree,
       name: "publication",
       createdAt: Date.now(),

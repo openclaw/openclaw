@@ -2,7 +2,14 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ensureSqliteLibrarySelected, getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { isDeepStrictEqual } from "node:util";
+import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+  SQLITE_NATIVE_RUNTIME_ADMISSION_KEY,
+} from "./bun-sqlite-library.js";
 import { formatErrorMessage } from "./errors.js";
 import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
 import { compareValidSemver } from "./semver.js";
@@ -15,6 +22,7 @@ const require = createRequire(import.meta.url);
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
 let extensionLoadingSupported = false;
 let jsonbSupported = false;
+let walCheckpointNoopSupported = false;
 // Unqualified runtimes cannot confirm native disposal until the owning worker exits.
 export let bunSqliteNativeCleanupPending = false;
 
@@ -83,28 +91,112 @@ function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): 
   );
 }
 
+function sqliteNativeRuntimeIdentity() {
+  return {
+    pid: process.pid,
+    executable: process.execPath,
+    nodeVersion: process.versions.node,
+    bunVersion: process.versions.bun,
+    library: ensureSqliteLibrarySelected(),
+  };
+}
+
+type SqliteNativeRuntimeAdmission = {
+  format: 1;
+  runtime: ReturnType<typeof sqliteNativeRuntimeIdentity>;
+  version: string;
+  extensionLoadingSupported: boolean;
+};
+
+function parseSqliteNativeRuntimeAdmission(
+  value: unknown,
+): SqliteNativeRuntimeAdmission | undefined {
+  if (
+    !isRecord(value) ||
+    value.format !== 1 ||
+    typeof value.version !== "string" ||
+    typeof value.extensionLoadingSupported !== "boolean"
+  ) {
+    return undefined;
+  }
+  const runtime = sqliteNativeRuntimeIdentity();
+  if (!isDeepStrictEqual(value.runtime, runtime)) {
+    return undefined;
+  }
+  return {
+    format: 1,
+    runtime,
+    version: value.version,
+    extensionLoadingSupported: value.extensionLoadingSupported,
+  };
+}
+
+function safeSqliteNativeRuntimeAdmission(value: unknown) {
+  try {
+    const admission = parseSqliteNativeRuntimeAdmission(value);
+    return admission && isSqliteWalResetSafeVersion(admission.version) ? admission : undefined;
+  } catch {
+    // Optional transport facts must not replace an already completed database outcome.
+    return undefined;
+  }
+}
+
+/** Reuse a validated isolate fact without opening SQLite or probing the native library. */
+export function captureSqliteNativeRuntimeAdmission(): SqliteNativeRuntimeAdmission | undefined {
+  return safeSqliteNativeRuntimeAdmission(getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY));
+}
+
+/** Publish to later sibling workers; database authority remains with its existing owners. */
+export function installSqliteNativeRuntimeAdmission(value: unknown): void {
+  const admission = safeSqliteNativeRuntimeAdmission(value);
+  if (admission) {
+    setEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, admission);
+  }
+}
+
 function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
   if (validatedSqliteModule === sqlite) {
+    return;
+  }
+  const inherited = isMainThread
+    ? undefined
+    : parseSqliteNativeRuntimeAdmission(getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY));
+  // Worker isolates share the selected native library; another process must probe its own load.
+  if (inherited) {
+    assertSqliteWalResetSafeVersion(inherited.version, process.versions.node);
+    jsonbSupported = (compareValidSemver(inherited.version, "3.45.0") ?? -1) >= 0;
+    walCheckpointNoopSupported = (compareValidSemver(inherited.version, "3.53.0") ?? -1) >= 0;
+    extensionLoadingSupported = inherited.extensionLoadingSupported;
+    validatedSqliteModule = sqlite;
     return;
   }
   // Shared-SQLite Node builds can load a different library than process.versions
   // reports, so query the loaded library before callers open real state databases.
   const database = new sqlite.DatabaseSync(":memory:");
+  let version: string;
+  let extensions: boolean;
   try {
-    const row = database.prepare("SELECT sqlite_version() AS version").get() as
-      | { version?: unknown }
-      | undefined;
-    const version = typeof row?.version === "string" ? row.version : "unknown";
+    const row = database
+      .prepare(
+        "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
+      )
+      .get() as { version?: unknown; omitted?: unknown } | undefined;
+    version = typeof row?.version === "string" ? row.version : "unknown";
     assertSqliteWalResetSafeVersion(version, process.versions.node);
-    jsonbSupported = (compareValidSemver(version, "3.45.0") ?? -1) >= 0;
-    const capabilities = database
-      .prepare("SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted")
-      .get();
-    extensionLoadingSupported = capabilities?.omitted === 0;
-    validatedSqliteModule = sqlite;
+    extensions = row?.omitted === 0;
   } finally {
     database.close();
   }
+  jsonbSupported = (compareValidSemver(version, "3.45.0") ?? -1) >= 0;
+  walCheckpointNoopSupported = (compareValidSemver(version, "3.53.0") ?? -1) >= 0;
+  extensionLoadingSupported = extensions;
+  validatedSqliteModule = sqlite;
+  setEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, {
+    format: 1,
+    runtime: sqliteNativeRuntimeIdentity(),
+    version,
+    extensionLoadingSupported: extensions,
+  });
 }
 
 // node:sqlite is optional across Node versions, so callers get a clear runtime
@@ -135,6 +227,12 @@ export function supportsNodeSqliteExtensionLoading(): boolean {
 export function supportsNodeSqliteJsonb(): boolean {
   requireNodeSqlite();
   return jsonbSupported;
+}
+
+/** Older SQLite versions can interpret NOOP as a mutating checkpoint mode. */
+export function supportsNodeSqliteWalCheckpointNoop(): boolean {
+  requireNodeSqlite();
+  return walCheckpointNoopSupported;
 }
 
 /** Open node:sqlite through OpenClaw's runtime and filesystem-location boundary. */

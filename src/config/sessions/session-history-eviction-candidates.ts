@@ -8,11 +8,9 @@ import type {
   ArchivedSessionEvictionBatch,
   ArchivedSessionEvictionQuery,
 } from "./disk-budget.types.js";
+import { collectRecentSessionHistoryIds } from "./session-accessor.sqlite-history-recency.js";
 import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
-import {
-  collectRecentSessionHistoryIds,
-  collectSessionStateIdsForEntry,
-} from "./session-accessor.sqlite-references.js";
+import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
@@ -27,6 +25,7 @@ export function readDiskEvictableArchivedSessionBatchInDatabase(
 ): ArchivedSessionEvictionBatch {
   const limit = Math.max(1, params.limit ?? DISK_EVICTABLE_ARCHIVE_BATCH_SIZE);
   const candidates: ArchivedSessionEvictionBatch["candidates"] = [];
+  const preserveKeys = new Set(params.liveSessionKeys);
   let cursor = params.after;
   while (candidates.length < limit) {
     const db = getSessionKysely(database.db);
@@ -65,6 +64,7 @@ export function readDiskEvictableArchivedSessionBatchInDatabase(
           key: row.session_key,
           entry,
           preserveRecentMs: params.preserveRecentMs,
+          preserveKeys,
         })
       ) {
         candidates.push({ archivedAt: row.archived_at, entry, sessionKey: row.session_key });

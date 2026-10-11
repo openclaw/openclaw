@@ -37,15 +37,6 @@ interface OverlayItem {
   h: number;
 }
 
-interface AnnotationPlan {
-  /** Always document-space items, fed to buildOverlayInjectionScript. */
-  overlayItems: OverlayItem[];
-  /** Items projected into the capture mode's image-space coordinates. */
-  annotations: AnnotationItem[];
-  /** Refs dropped because of maxLabels truncation. */
-  skipped: number;
-}
-
 interface PlanAnnotationsParams {
   inputs: RawAnnotationInput[];
   space: CoordinateSpace;
@@ -72,7 +63,7 @@ function refToNumber(ref: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-export function planAnnotations(params: PlanAnnotationsParams): AnnotationPlan {
+export function planAnnotations(params: PlanAnnotationsParams) {
   const maxLabels = params.maxLabels ?? ANNOTATION_MAX_LABELS_DEFAULT;
 
   if (params.space === "viewport" && !params.scroll) {

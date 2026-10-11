@@ -148,6 +148,7 @@ function systemUpdateKindSql(event: Expression<unknown>): RawBuilder<string | nu
 /** Lightweight tree/state records; these never serve as persisted transcript evidence. */
 export function projectModelContextNavigationSql(
   event: Expression<string | Uint8Array>,
+  entryType: Expression<unknown> = sql`json_extract(${event}, '$.type')`,
 ): RawBuilder<string> {
   const entry = pickJsonObject(event, MODEL_CONTEXT_NAVIGATION_KEYS);
   // Binary intermediates avoid serializing and reparsing the entire message.
@@ -183,7 +184,7 @@ export function projectModelContextNavigationSql(
   const synthetic = /* kysely-allow-raw: pairing prefers real results over synthetic missing-result placeholders. */ sql<number>`COALESCE(json_extract(${event}, ${`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`}), 0) = 1 OR EXISTS (
     SELECT 1 FROM json_each(${event}, '$.message.content') WHERE type = 'object'
     AND ${contentPropertySql(event, "type")} = 'text' AND ${contentPropertySql(event, "text")} = ${LEGACY_MISSING_TOOL_RESULT_TEXT})`;
-  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE json_extract(${event}, '$.type')
+  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE ${entryType}
     WHEN 'message' THEN json_set(${entry}, '$.message', json_set(${messageFacts},
       '$.content', json(${calls}), '$.command', '', '$.output', '',
       '$.providerReplay', json_object('type', json_extract(${event}, '$.message.providerReplay.type')),

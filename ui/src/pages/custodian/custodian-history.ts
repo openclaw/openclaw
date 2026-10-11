@@ -106,11 +106,9 @@ export function renderCustodianChangeHistory(params: {
               ?disabled=${params.loadingMore}
               @click=${() => params.onLoad(false)}
             >
-              ${
-                params.loadingMore
-                  ? t("custodian.history.loadingMore")
-                  : t("custodian.history.loadMore")
-              }
+              ${t(
+                params.loadingMore ? "custodian.history.loadingMore" : "custodian.history.loadMore",
+              )}
             </button>`
           : nothing
       }

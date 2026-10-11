@@ -102,11 +102,7 @@ class PortalsPage extends OpenClawLightDomElement {
       )
     ) {
       this.requestGeneration += 1;
-      this.environmentRequestGeneration += 1;
-      this.environmentLoading = false;
-      this.pendingEnvironment = null;
-      this.environmentFailure = null;
-      this.environmentPoll.stop();
+      this.resetPendingEnvironment();
       this.loading = false;
       this.portalProbeGeneration += 1;
       this.portalProbeState = null;
@@ -221,12 +217,16 @@ class PortalsPage extends OpenClawLightDomElement {
     return canCallGatewayMethod(this.gateway.snapshot, "portal.close", "operator.write");
   }
 
-  private resetGatewayState() {
+  private resetPendingEnvironment() {
     this.environmentRequestGeneration += 1;
     this.environmentLoading = false;
     this.pendingEnvironment = null;
     this.environmentFailure = null;
     this.environmentPoll.stop();
+  }
+
+  private resetGatewayState() {
+    this.resetPendingEnvironment();
     this.requestGeneration += 1;
     this.portalSetRevision += 1;
     this.portals = [];
@@ -323,28 +323,21 @@ class PortalsPage extends OpenClawLightDomElement {
     }
     const generation = ++this.requestGeneration;
     const portalSetRevision = this.portalSetRevision;
+    const isCurrent = () => generation === this.requestGeneration && this.gateway.isCurrent(scope);
     this.loading = true;
     this.error = null;
     try {
       const result = await scope.client.request<PortalListResult>("portal.list", {});
-      if (
-        generation === this.requestGeneration &&
-        portalSetRevision === this.portalSetRevision &&
-        this.gateway.isCurrent(scope)
-      ) {
+      if (isCurrent() && portalSetRevision === this.portalSetRevision) {
         this.applyPortalSet(result.portals);
       }
     } catch (error) {
-      if (
-        generation === this.requestGeneration &&
-        this.gateway.isCurrent(scope) &&
-        this.portalListSupported
-      ) {
+      if (isCurrent() && this.portalListSupported) {
         this.error = t("portalsPage.loadFailed", { error: formatUiError(error) });
         this.loaded = true;
       }
     } finally {
-      if (generation === this.requestGeneration && this.gateway.isCurrent(scope)) {
+      if (isCurrent()) {
         this.loading = false;
       }
     }

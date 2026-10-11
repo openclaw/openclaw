@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
@@ -11,7 +11,9 @@ import type { CronEventInput } from "./event-source.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
+import * as cronStore from "./store.js";
 import { loadCronStore } from "./store.js";
+import { cronStoreKey } from "./store/key.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-event-source-" });
@@ -107,9 +109,10 @@ describe("event automation durable admission", () => {
       },
     });
     try {
-      const first = await f.claim("first");
+      const payload = { text: "original event" };
+      const first = await f.claim("first", f.job, payload);
       const run = f.cron.runEvent(f.job.id, first.options);
-      (first.options.payload as { text: string }).text = "caller mutation must not enter the turn";
+      payload.text = "caller mutation must not enter the turn";
       const receipt = await run;
       expect(receipt.kind).toBe("transferred");
       await started.promise;
@@ -179,6 +182,69 @@ describe("event automation durable admission", () => {
       f.cron.stop();
     }
   });
+
+  it.each(["partition lock", "store load"] as const)(
+    "keeps a queued event pending across a stop and restart at the %s",
+    async (boundary) => {
+      const f = await fixture();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let updating: Promise<unknown> | undefined;
+      let restarting: Promise<void> | undefined;
+      let eventRun: ReturnType<CronService["runEvent"]> | undefined;
+      try {
+        const { options } = await f.claim("restart-pending");
+        if (boundary === "partition lock") {
+          updating = f.cron.updateWithPrecondition(f.job.id, { name: "blocked edit" }, async () => {
+            entered.resolve();
+            await release.promise;
+          });
+          void updating.catch(() => {});
+          await entered.promise;
+        } else {
+          cronStore.noteCronJobsStoreCommit(cronStoreKey(f.storePath));
+          const load = cronStore.loadCronJobsStoreWithConfigJobs;
+          const delayed = vi
+            .spyOn(cronStore, "loadCronJobsStoreWithConfigJobs")
+            .mockImplementationOnce(async (...args) => {
+              const loaded = await load(...args);
+              entered.resolve();
+              await release.promise;
+              return loaded;
+            });
+          onTestFinished(() => delayed.mockRestore());
+        }
+        eventRun = f.cron.runEvent(f.job.id, options);
+        const outcome = eventRun.then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        );
+        if (boundary === "store load") {
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            eventRun,
+            "event admission did not reload",
+          );
+        }
+        f.cron.stop();
+        restarting = f.cron.start();
+        release.resolve();
+        expect(await outcome).toEqual({ result: { kind: "pending", reason: "stopped" } });
+        await Promise.allSettled([updating, restarting]);
+        expect(await f.queue.listClaims()).toMatchObject([
+          { id: "restart-pending", attempts: 0, claim: { token: options.claim.token } },
+        ]);
+        expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
+        expect(f.cron.getJob(f.job.id)?.state.queuedAtMs).toBeUndefined();
+        expect(f.cron.getJob(f.job.id)?.state.runningReceiptId).toBeUndefined();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([updating, eventRun, restarting]);
+        f.cron.stop();
+        await f.cron.waitForIdle();
+      }
+    },
+  );
 
   it("keeps paused work pending and fences disable/enable and same-definition A-B-A sources", async () => {
     const cronConfig = { triggers: { enabled: true } };

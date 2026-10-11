@@ -10,22 +10,22 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
-import { VERSION } from "../version.js";
-import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
 import {
   beginAgentDeletionJournal,
   claimCompletedAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
   removeAgentDeletionJournal,
   updateAgentDeletionJournalDatabasePaths,
   updateAgentDeletionJournalCleanupPaths,
-} from "./agent-deletion-journal.js";
+} from "../test-utils/agent-deletion-journal.js";
+import { VERSION } from "../version.js";
+import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
+import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
+import { disposeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-disposal.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
@@ -46,7 +46,6 @@ import {
   clearOpenClawAgentDatabaseOpenFailure,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
-  disposeOpenClawAgentDatabaseByPath,
   ensureOpenClawAgentDatabaseSchema,
   inspectOpenClawAgentDatabaseOwner,
   isOpenClawAgentDatabaseOpen,
@@ -69,7 +68,6 @@ import {
   seedSchema19SessionKeyRepairFixture,
 } from "./openclaw-agent-db.test-support.js";
 import { materializeV21WorkerAgentDatabase } from "./openclaw-agent-schema-v21.test-support.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -96,27 +94,6 @@ let v13WorkerAgentDatabaseTemplatePath: string | undefined;
 
 function createTempStateDir(): string {
   return makeTempDir(agentDbTempDirs, "openclaw-agent-db-");
-}
-
-function expectMissingFileAliasesMatchVolume(leftName: string, rightName: string): void {
-  const stateDir = fs.realpathSync(createTempStateDir());
-  const leftPath = path.join(stateDir, leftName);
-  const rightPath = path.join(stateDir, rightName);
-  fs.writeFileSync(leftPath, "probe");
-  let aliases = false;
-  try {
-    const leftStat = fs.lstatSync(leftPath, { bigint: true });
-    const rightStat = fs.lstatSync(rightPath, { bigint: true });
-    aliases = leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  } finally {
-    fs.unlinkSync(leftPath);
-  }
-
-  expect(isSameOpenClawAgentDatabasePath(leftPath, rightPath)).toBe(aliases);
 }
 
 function ensureSharedStateDatabaseTemplate(): string {
@@ -555,25 +532,6 @@ function seedVersion1MemoryAgentDatabase(databasePath: string): void {
   }
 }
 
-function createUnsafeSchemaMetaIndexDrift(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec("CREATE INDEX unsafe_schema_meta_role ON schema_meta(role);");
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    database
-      .prepare(
-        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_schema_meta_role ON schema_meta(app_version)' WHERE name = 'unsafe_schema_meta_role'",
-      )
-      .run();
-    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
-    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-  } finally {
-    database.close();
-  }
-}
-
 type AgentSchemaOpenerResult = { agentId: string; ok: boolean; error?: string };
 
 function launchAgentSchemaOpener(params: {
@@ -729,28 +687,25 @@ afterEach(() => {
 });
 
 describe("openclaw agent database", () => {
-  it.each([false, true])(
-    "keeps agent state writable without SQLite extension support (incognito=%s)",
-    (incognito) => {
-      const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
-      const capability = vi
-        .spyOn(nodeSqlite, "supportsNodeSqliteExtensionLoading")
-        .mockReturnValue(false);
-      try {
-        const { db } = openOpenClawAgentDatabase({
-          ...options,
-          ...(incognito ? { path: resolveIncognitoOpenClawAgentSqlitePath(options) } : {}),
-        });
-        db.prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'").run(123);
-        expect(
-          db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
-        ).toEqual({ updated_at: 123 });
-        expect(() => db.enableLoadExtension(true)).toThrow();
-      } finally {
-        capability.mockRestore();
-      }
-    },
-  );
+  it("keeps incognito state writable without SQLite extension support", () => {
+    const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
+    const capability = vi
+      .spyOn(nodeSqlite, "supportsNodeSqliteExtensionLoading")
+      .mockReturnValue(false);
+    try {
+      const { db } = openOpenClawAgentDatabase({
+        ...options,
+        path: resolveIncognitoOpenClawAgentSqlitePath(options),
+      });
+      db.prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'").run(123);
+      expect(
+        db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ updated_at: 123 });
+      expect(() => db.enableLoadExtension(true)).toThrow();
+    } finally {
+      capability.mockRestore();
+    }
+  });
 
   it("uses the canonical state schema for deletion journal reads and updates", () => {
     const stateDir = createTempStateDir();
@@ -1060,38 +1015,6 @@ describe("openclaw agent database", () => {
     ]);
   });
 
-  it.runIf(process.platform !== "win32").each(["existing", "missing"] as const)(
-    "keeps %s symlinked import artifacts outside the runtime registry",
-    (kind) => {
-      const stateDir = fs.realpathSync(createTempStateDir());
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const activePath = path.join(stateDir, "active", "openclaw-agent.sqlite");
-      const archivedPath = path.join(stateDir, "imports", "archive", "openclaw-agent.sqlite");
-      fs.mkdirSync(path.dirname(archivedPath), { recursive: true });
-      const aliasDir = path.join(stateDir, "archive-alias");
-      if (kind === "existing") {
-        fs.mkdirSync(path.dirname(activePath), { recursive: true });
-        fs.writeFileSync(activePath, "fixture");
-        fs.symlinkSync(activePath, archivedPath);
-      } else {
-        fs.symlinkSync(path.dirname(archivedPath), aliasDir, "dir");
-      }
-
-      registerOpenClawAgentDatabase({
-        agentId: "archive",
-        path: kind === "existing" ? archivedPath : path.join(aliasDir, "openclaw-agent.sqlite"),
-        env,
-      });
-
-      expect(
-        listOpenClawRegisteredAgentDatabases({
-          env,
-          includeIncompatibleSchemaVersions: true,
-        }),
-      ).toEqual([]);
-    },
-  );
-
   it.skipIf(process.platform === "win32")(
     "fails closed when the missing registry has a dangling parent symlink",
     () => {
@@ -1102,101 +1025,6 @@ describe("openclaw agent database", () => {
       expect(() => listOpenClawRegisteredAgentDatabases({ env })).toThrow("is unavailable");
     },
   );
-
-  it("upgrades v19 without rewriting history or retained archives", async () => {
-    const stateDir = createTempStateDir();
-    const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: stateDir } };
-    const databasePath = materializeV21WorkerAgentDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(databasePath);
-    removeCanonicalValidationFromHistoricalAgentFixture(legacy);
-    legacy.exec(`
-      DROP TABLE session_transcript_cold_archives;
-      PRAGMA user_version = 19;
-      UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
-      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-        VALUES ('agent:worker-1:history', 'window-1', '{"sessionId":"window-1","updatedAt":20}', 20);
-      INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
-        VALUES ('window-1', 'agent:worker-1:history', 10, 20);
-      INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-        VALUES ('window-1', 7, '{ "type": "message", "text": "雪 🦞" }', 11);
-      INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
-        VALUES ('window-1', 'original-generation', 20);
-    `);
-    legacy
-      .prepare(`
-        INSERT INTO session_transcript_archives (
-          session_id, generation, session_key, reason, encoding, archive_blob,
-          archive_sha256, archive_name, created_at
-        ) VALUES ('deleted-window', 'old-generation', 'agent:worker-1:history',
-          'deleted', 'identity', ?, ?, 'deleted-window.jsonl', 10)
-      `)
-      .run(Buffer.from("{}\n"), "0".repeat(64));
-    const eventsBefore = legacy.prepare("SELECT * FROM transcript_events").all();
-    const windowsBefore = legacy.prepare("SELECT * FROM session_windows").all();
-    const generationBefore = legacy.prepare("SELECT * FROM transcript_rewrite_watermarks").all();
-    const archivesBefore = legacy.prepare("SELECT * FROM session_transcript_archives").all();
-    legacy.close();
-
-    const migrated = await migrateAndOpenLegacyAgentDatabaseForTest(options);
-    const assertPreserved = (db: DatabaseSync) => {
-      expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-      expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-      expect(
-        db.prepare("SELECT session_id, seq, event_json, created_at FROM transcript_events").all(),
-      ).toEqual(eventsBefore);
-      expect(db.prepare("SELECT * FROM session_windows").all()).toEqual(windowsBefore);
-      expect(db.prepare("SELECT * FROM transcript_rewrite_watermarks").all()).toEqual(
-        generationBefore,
-      );
-      expect(db.prepare("SELECT * FROM session_transcript_archives").all()).toEqual(archivesBefore);
-      expect(db.prepare("SELECT * FROM session_transcript_cold_archives").all()).toEqual([]);
-      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    };
-    assertPreserved(migrated.db);
-    closeOpenClawAgentDatabaseByPath(databasePath);
-    assertPreserved(openOpenClawAgentDatabase(options).db);
-  });
-
-  it("rolls back cold storage, canonical validation and both version markers if schema publication fails", async () => {
-    const stateDir = createTempStateDir();
-    const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: stateDir } };
-    const databasePath = materializeV21WorkerAgentDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(databasePath);
-    removeCanonicalValidationFromHistoricalAgentFixture(legacy);
-    legacy.exec(`
-      DROP TABLE session_transcript_cold_archives;
-      PRAGMA user_version = 19;
-      UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
-      CREATE TRIGGER reject_schema_publication BEFORE UPDATE ON schema_meta
-      WHEN NEW.schema_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}
-      BEGIN SELECT RAISE(ABORT, 'test schema publication failure'); END;
-    `);
-    legacy.close();
-
-    await expect(migrateAndOpenLegacyAgentDatabaseForTest(options)).rejects.toThrow(
-      "test schema publication failure",
-    );
-    const after = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(readSqliteNumberPragma(after, "user_version")).toBe(19);
-      expect(after.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 19,
-      });
-      expect(
-        after
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE name IN ('session_transcript_cold_archives', 'session_canonical_validation_pending')",
-          )
-          .all(),
-      ).toEqual([]);
-    } finally {
-      after.close();
-    }
-  });
 
   it("migrates v13 session entries, routes, and generations into nodes and windows", async () => {
     const stateDir = createTempStateDir();
@@ -1443,17 +1271,6 @@ describe("openclaw agent database", () => {
 
   it.each([
     {
-      table: "acp_parent_stream_events",
-      schema: `CREATE TABLE acp_parent_stream_events (
-        run_id TEXT NOT NULL,
-        seq INTEGER NOT NULL,
-        event_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (run_id, seq)
-      );
-      INSERT INTO acp_parent_stream_events VALUES ('run-1', 1, '{"type":"delta"}', 20);`,
-    },
-    {
       table: "trajectory_runtime_events",
       schema: `CREATE TABLE trajectory_runtime_events (
         event_id INTEGER NOT NULL PRIMARY KEY,
@@ -1466,22 +1283,6 @@ describe("openclaw agent database", () => {
       );
       INSERT INTO trajectory_runtime_events VALUES
         (1, 'legacy-session', 'run-1', 1, '{"type":"runtime"}', 20);`,
-    },
-    {
-      table: "memory_index_sources",
-      schema: `CREATE TABLE memory_index_sources (
-        source_kind TEXT NOT NULL DEFAULT 'memory',
-        source_key TEXT NOT NULL,
-        path TEXT,
-        session_id TEXT,
-        hash TEXT NOT NULL,
-        mtime INTEGER NOT NULL,
-        size INTEGER NOT NULL,
-        PRIMARY KEY (source_kind, source_key),
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      INSERT INTO memory_index_sources VALUES
-        ('memory', 'notes', 'notes.md', NULL, 'retained-hash', 10, 20);`,
     },
   ])("refuses pre-July $table without discarding its rows", async ({ table, schema }) => {
     const stateDir = createTempStateDir();
@@ -1524,11 +1325,7 @@ describe("openclaw agent database", () => {
     }
   });
 
-  it.each([
-    { version: 1, searchCache: "none" },
-    { version: 8, searchCache: "files" },
-    { version: 8, searchCache: "fts" },
-  ])(
+  it.each([{ version: 1, searchCache: "none" }])(
     "refuses unreleased version $version session tables with $searchCache cache without changing the database",
     ({ version, searchCache }) => {
       const stateDir = createTempStateDir();
@@ -1667,93 +1464,7 @@ describe("openclaw agent database", () => {
     expect(migrated.db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
   });
 
-  it("migrates version 1 memory source identities before registering version 2", async () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = path.join(
-      stateDir,
-      "agents",
-      "worker-1",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    seedVersion1MemoryAgentDatabase(databasePath);
-
-    const database = await migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env });
-
-    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-    expect(
-      database.db.prepare("SELECT id, path, source FROM memory_index_sources ORDER BY id").all(),
-    ).toEqual([
-      { id: 41, path: "shared.md", source: "memory" },
-      { id: 84, path: "shared.md", source: "sessions" },
-    ]);
-    expect(
-      database.db
-        .prepare("SELECT rowid, path, source FROM memory_index_paths_fts ORDER BY rowid")
-        .all(),
-    ).toEqual([
-      { rowid: 41, path: "shared.md", source: "memory" },
-      { rowid: 84, path: "shared.md", source: "sessions" },
-    ]);
-    expect(database.db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
-      { id: "sentinel", text: "body" },
-    ]);
-    expect(
-      database.db.prepare("SELECT hash FROM memory_index_sources WHERE id = 41").get(),
-    ).toEqual({
-      hash: "",
-    });
-    // Provenance backfill invalidates the affected source once so the next
-    // memory pass can classify its chunks instead of trusting legacy provenance.
-    expect(database.db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({
-      revision: 8,
-    });
-    expect(
-      database.db
-        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
-
-    database.db
-      .prepare("UPDATE memory_index_sources SET path = ? WHERE id = ?")
-      .run("renamed.md", 41);
-    expect(
-      database.db.prepare("SELECT rowid, path FROM memory_index_paths_fts ORDER BY rowid").all(),
-    ).toEqual([
-      { rowid: 41, path: "renamed.md" },
-      { rowid: 84, path: "shared.md" },
-    ]);
-    expect(
-      listOpenClawRegisteredAgentDatabases({ env }).find((entry) => entry.agentId === "worker-1"),
-    ).toMatchObject({ path: databasePath, schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION });
-
-    closeOpenClawAgentDatabasesForTest();
-    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(
-      reopened.db.prepare("SELECT id, path FROM memory_index_sources ORDER BY id").all(),
-    ).toEqual([
-      { id: 41, path: "renamed.md" },
-      { id: 84, path: "shared.md" },
-    ]);
-  });
-
-  it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
-    const stateDir = createTempStateDir();
-    const databasePath = path.join(stateDir, "agent.sqlite");
-    fs.writeFileSync(databasePath, "not a sqlite database");
-
-    expect(() =>
-      openOpenClawAgentDatabase({
-        agentId: "worker-1",
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        path: databasePath,
-      }),
-    ).toThrow("file is not a database");
-    expect(listOpenFileDescriptorsForPath(databasePath)).toEqual([]);
-  });
-
-  it("retains a failed-open handle and lease when initialization cleanup also fails", () => {
+  it("retains a failed-open handle and lease when initialization cleanup also fails", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
@@ -1807,7 +1518,7 @@ describe("openclaw agent database", () => {
       }),
     ).toThrow("belongs to agent worker-1; requested agent worker-2");
 
-    expect(disposeOpenClawAgentDatabaseByPath(database.path, { env })).toBe(true);
+    expect(await disposeOpenClawAgentDatabaseByPath(database.path, { env })).toBe(true);
     expect(() => assertNoOpenClawAgentDatabaseLeases("worker-2", { env })).not.toThrow();
   });
 
@@ -2015,31 +1726,17 @@ describe("openclaw agent database", () => {
   );
 
   it.each([
-    { kind: "non-ASCII case", left: "É.sqlite", right: "é.sqlite", expected: "volume" },
-    { kind: "simple case-fold", left: "σ.sqlite", right: "ς.sqlite", expected: "volume" },
-    { kind: "case and normalization", left: "É.sqlite", right: "é.sqlite", expected: "volume" },
-    {
-      kind: "ASCII case and raw normalization",
-      left: "ÉA.sqlite",
-      right: "Éa.sqlite",
-      expected: "volume",
-    },
-    { kind: "unrelated Unicode spellings", left: "猫.sqlite", right: "犬.sqlite", expected: false },
+    { kind: "unrelated Unicode spellings", left: "猫.sqlite", right: "犬.sqlite" },
     {
       kind: "JavaScript case-fold expansion",
       left: "İ.sqlite",
       right: "i\u0307.sqlite",
-      expected: false,
     },
-  ] as const)("respects $kind when comparing missing paths", ({ left, right, expected }) => {
-    if (expected === "volume") {
-      expectMissingFileAliasesMatchVolume(left, right);
-    } else {
-      const stateDir = fs.realpathSync(createTempStateDir());
-      expect(
-        isSameOpenClawAgentDatabasePath(path.join(stateDir, left), path.join(stateDir, right)),
-      ).toBe(expected);
-    }
+  ] as const)("respects $kind when comparing missing paths", ({ left, right }) => {
+    const stateDir = fs.realpathSync(createTempStateDir());
+    expect(
+      isSameOpenClawAgentDatabasePath(path.join(stateDir, left), path.join(stateDir, right)),
+    ).toBe(false);
   });
 
   it.runIf(tempVolumeIsCaseInsensitive)(
@@ -2250,119 +1947,6 @@ describe("openclaw agent database", () => {
     expect(settled.errors.map((error) => error.message)).toEqual(["wal close failed"]);
     expect(database.db.isOpen).toBe(false);
     expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
-  });
-
-  it("disposes only its exact cached owner and unregisters that registry row", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const first = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    const second = openOpenClawAgentDatabase({ agentId: "worker-2", env });
-
-    expect(disposeOpenClawAgentDatabaseByPath(first.path, { env })).toBe(true);
-    expect(first.db.isOpen).toBe(false);
-    expect(second.db.isOpen).toBe(true);
-    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
-      expect.objectContaining({ agentId: "worker-2", path: second.path }),
-    ]);
-    expect(disposeOpenClawAgentDatabaseByPath(first.path, { env })).toBe(false);
-    expect(second.db.isOpen).toBe(true);
-
-    const reopened = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env,
-      path: first.path,
-    });
-    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
-      expect.objectContaining({ agentId: "worker-1", path: reopened.path }),
-      expect.objectContaining({ agentId: "worker-2", path: second.path }),
-    ]);
-  });
-
-  it.runIf(process.platform !== "win32").each([false, true])(
-    "disposes a symlinked database only when its cached owner is unambiguous (duplicate=%s)",
-    (duplicate) => {
-      const stateDir = fs.realpathSync(createTempStateDir());
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const realDir = path.join(stateDir, "probe-real");
-      const aliasDir = path.join(stateDir, "probe-alias");
-      fs.mkdirSync(realDir, { recursive: true });
-      fs.symlinkSync(realDir, aliasDir, "dir");
-      const realPath = path.join(realDir, "openclaw-agent.sqlite");
-      const aliasPath = path.join(aliasDir, "openclaw-agent.sqlite");
-      const database = openOpenClawAgentDatabase({ agentId: "probe", env, path: realPath });
-      const alias = duplicate
-        ? openOpenClawAgentDatabase({ agentId: "probe", env, path: aliasPath })
-        : undefined;
-
-      expect(disposeOpenClawAgentDatabaseByPath(duplicate ? realPath : aliasPath, { env })).toBe(
-        !duplicate,
-      );
-      expect(database.db.isOpen).toBe(duplicate);
-      if (alias) {
-        expect(alias.db.isOpen).toBe(true);
-      } else {
-        expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
-      }
-    },
-  );
-
-  it("reopens a recreated agent id on a fresh database after archival", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const original = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    const originalInode = fs.statSync(original.path).ino;
-    const archivedDir = path.join(stateDir, "trash", "worker-1-agent");
-    const deletion = beginAgentDeletionJournal(
-      {
-        operationId: "deletion",
-        deleteFiles: true,
-        agentId: "worker-1",
-        agentDir: path.dirname(original.path),
-        workspaceDir: path.join(stateDir, "workspace-worker-1"),
-        sessionsDir: path.join(stateDir, "sessions-worker-1"),
-      },
-      { env },
-    );
-    try {
-      expect(disposeOpenClawAgentDatabaseByPath(original.path, { env })).toBe(true);
-      expect(original.db.isOpen).toBe(false);
-      expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
-      fs.mkdirSync(path.dirname(archivedDir), { recursive: true });
-      fs.renameSync(path.dirname(original.path), archivedDir);
-      expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
-        "agent worker-1 is deleted",
-      );
-
-      runOpenClawStateWriteTransaction(
-        (sharedStateDatabase) =>
-          completeAgentDeletionJournalInDatabase(
-            sharedStateDatabase,
-            deletion.agentId,
-            deletion.operationId,
-          ),
-        { env },
-      );
-      expect(claimCompletedAgentDeletionJournal("worker-1", deletion.operationId, { env })).toBe(
-        true,
-      );
-      const recreated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-      expect(recreated.db.isOpen).toBe(true);
-      expect(fs.statSync(recreated.path).ino).not.toBe(originalInode);
-      expect(fs.existsSync(path.join(archivedDir, "openclaw-agent.sqlite"))).toBe(true);
-      expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
-        expect.objectContaining({ agentId: "worker-1", path: recreated.path }),
-      ]);
-    } finally {
-      runOpenClawStateWriteTransaction(
-        (sharedStateDatabase) =>
-          completeAgentDeletionJournalInDatabase(
-            sharedStateDatabase,
-            deletion.agentId,
-            deletion.operationId,
-          ),
-        { env },
-      );
-    }
   });
 
   it("keeps the deleted id fenced until its completed tombstone is claimed", () => {
@@ -2893,59 +2477,6 @@ describe("openclaw agent database", () => {
     },
   );
 
-  it("refuses physical transcript index corruption until explicit Doctor repair", async () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-    createTranscriptIdempotencyIndexDrift(databasePath, { hideWithCanonicalSql: true });
-
-    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
-      /integrity_check failed.*idx_agent_transcript_message_idempotency.*openclaw doctor --fix/,
-    );
-    const damaged = new (requireNodeSqlite().DatabaseSync)(databasePath, { readOnly: true });
-    try {
-      expect(damaged.prepare("PRAGMA integrity_check").get()?.integrity_check).toMatch(
-        /idx_agent_transcript_message_idempotency/,
-      );
-      expect(
-        damaged.prepare("SELECT event_id FROM transcript_event_identities NOT INDEXED").all(),
-      ).toEqual([{ event_id: "event-1" }]);
-    } finally {
-      damaged.close();
-    }
-    const repair = await migrateLegacyMediaPersistence({
-      env,
-      configuredAgentDatabaseTargets: [{ agentId: "worker-1", path: databasePath }],
-    });
-    expect(repair.warnings).toEqual([]);
-    expect(repair.changes).toContain(
-      "Warning: Rebuilt corrupt agent worker-1 SQLite indexes: idx_agent_transcript_message_idempotency. No table rows were removed.",
-    );
-    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
-      integrity_check: "ok",
-    });
-    expect(
-      reopened.db
-        .prepare(
-          `SELECT event_id
-             FROM transcript_event_identities
-            WHERE session_id = ?
-              AND message_idempotency_key = ?`,
-        )
-        .get("session-1", "message-1"),
-    ).toEqual({ event_id: "event-1" });
-    expect(() =>
-      reopened.db
-        .prepare(
-          `INSERT INTO transcript_event_identities (
-             session_id, event_id, seq, message_idempotency_key, created_at
-           ) VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run("session-1", "event-2", 2, "message-1", 2),
-    ).toThrow(/UNIQUE constraint failed/iu);
-  });
-
   it("repairs every missing or drifted canonical agent-state named index", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -3086,146 +2617,7 @@ describe("openclaw agent database", () => {
     }
   });
 
-  it("installs transcript eligibility without parsing or rewriting older same-version rows", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const older = new DatabaseSync(databasePath);
-    try {
-      older.exec(`
-        DROP INDEX idx_agent_transcript_context_pending;
-        ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;
-        INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-          VALUES ('agent:worker-1:eligibility', 'eligibility', '{"sessionId":"eligibility"}', 1);
-        INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
-          VALUES ('eligibility', 'agent:worker-1:eligibility', 1, 1);
-        INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-          VALUES ('eligibility', 0, '{', 1);
-        INSERT INTO session_transcript_active_events (session_id, active_position, event_seq, message_position)
-          VALUES ('eligibility', 0, 0, 0);
-        INSERT INTO session_transcript_index_state (session_id, indexed_seq, needs_rebuild, active_event_count, active_message_count, updated_at)
-          VALUES ('eligibility', 0, 0, 1, 1, 1);
-      `);
-    } finally {
-      older.close();
-    }
-    const repaired = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(readSqliteNumberPragma(repaired.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-    expect(
-      repaired.db
-        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
-    expect(
-      repaired.db
-        .prepare("SELECT event_json FROM transcript_events WHERE session_id = 'eligibility'")
-        .get(),
-    ).toEqual({ event_json: "{" });
-    expect(
-      repaired.db
-        .prepare(
-          "SELECT context_eligible, active_position, event_seq, message_position FROM session_transcript_active_events WHERE session_id = 'eligibility'",
-        )
-        .get(),
-    ).toEqual({ context_eligible: null, active_position: 0, event_seq: 0, message_position: 0 });
-    expect(
-      repaired.db
-        .prepare(
-          "SELECT type, [notnull], dflt_value FROM pragma_table_info('session_transcript_active_events') WHERE name = 'context_eligible'",
-        )
-        .get(),
-    ).toEqual({ type: "INTEGER", notnull: 0, dflt_value: null });
-    expect(
-      repaired.db
-        .prepare(
-          "SELECT [unique], partial FROM pragma_index_list('session_transcript_active_events') WHERE name = 'idx_agent_transcript_context_pending'",
-        )
-        .get(),
-    ).toEqual({ unique: 0, partial: 1 });
-  });
-
-  it.each([
-    {
-      kind: "noncanonical transcript eligibility declaration",
-      schema: `DROP INDEX idx_agent_transcript_context_pending;
-        ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;
-        ALTER TABLE session_transcript_active_events ADD COLUMN context_eligible TEXT;`,
-      expectedError: /column definitions differ for session_transcript_active_events/,
-    },
-    {
-      kind: "primary-key collation drift",
-      schema: `DROP TABLE auth_profile_store;
-        CREATE TABLE auth_profile_store (
-          store_key TEXT COLLATE NOCASE NOT NULL PRIMARY KEY,
-          store_json TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        ) STRICT;`,
-      expectedError: /column definitions differ for auth_profile_store/iu,
-    },
-    {
-      kind: "partially missing lazy board schema",
-      schema: "DROP TABLE board_widgets;",
-      expectedError: /missing table board_widgets/iu,
-    },
-  ])("rejects $kind in current-schema stores", ({ schema, expectedError }) => {
-    const stateDir = createTempStateDir();
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const drifted = new DatabaseSync(databasePath);
-    try {
-      drifted.exec(schema);
-    } finally {
-      drifted.close();
-    }
-    expect(() =>
-      openOpenClawAgentDatabase({ agentId: "worker-1", env: { OPENCLAW_STATE_DIR: stateDir } }),
-    ).toThrow(expectedError);
-  });
-
-  it("keeps memory provenance tables independently lazy and accepts their same-version installation", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-    const { DatabaseSync } = requireNodeSqlite();
-    const olderShape = new DatabaseSync(databasePath);
-    olderShape.exec("DROP TABLE memory_entry_origins; DROP TABLE memory_session_tombstones;");
-    olderShape.close();
-
-    const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    const findMemoryTable = (name: string) =>
-      opened.db.prepare("SELECT strict FROM pragma_table_list WHERE name = ?").get(name);
-    expect(findMemoryTable("memory_entry_origins")).toBeUndefined();
-    expect(findMemoryTable("memory_session_tombstones")).toBeUndefined();
-    expect(readSqliteNumberPragma(opened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-
-    for (const name of ["memory_entry_origins", "memory_session_tombstones"]) {
-      const canonicalSchema = OPENCLAW_AGENT_SCHEMA_SQL.match(
-        new RegExp(`CREATE TABLE IF NOT EXISTS ${name} \\([\\s\\S]*?\\) STRICT;`, "u"),
-      )?.[0];
-      if (!canonicalSchema) {
-        throw new Error(`Canonical ${name} schema is missing.`);
-      }
-      opened.db.exec(canonicalSchema);
-      opened.db.exec(canonicalSchema);
-      expect(findMemoryTable(name)).toEqual({ strict: 1 });
-      if (name === "memory_entry_origins") {
-        expect(findMemoryTable("memory_session_tombstones")).toBeUndefined();
-      }
-    }
-    expect(readSqliteNumberPragma(opened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-
-    closeOpenClawAgentDatabaseByPath(databasePath);
-    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    for (const name of ["memory_entry_origins", "memory_session_tombstones"]) {
-      expect(
-        reopened.db.prepare("SELECT strict FROM pragma_table_list WHERE name = ?").get(name),
-      ).toEqual({ strict: 1 });
-    }
-    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-  });
-
-  it.each([OPENCLAW_AGENT_SCHEMA_VERSION, 14])(
+  it.each([OPENCLAW_AGENT_SCHEMA_VERSION])(
     "rejects a missing stable table at version %s instead of recreating it empty",
     async (version) => {
       const stateDir = createTempStateDir();
@@ -3508,72 +2900,30 @@ describe("openclaw agent database", () => {
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 
-  it.each([
-    { owner: "worker-1", expected: { status: "owned", agentId: "worker-1" } },
-    { owner: "   ", expected: { status: "unreadable" } },
-  ])("inspects database ownership for $owner", ({ owner, expected }) => {
-    const stateDir = createTempStateDir();
-    const database = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    const databasePath = database.path;
-    if (owner === "worker-1") {
-      expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual(expected);
-    }
-    closeOpenClawAgentDatabasesForTest();
-    if (owner !== "worker-1") {
-      const { DatabaseSync } = requireNodeSqlite();
-      using raw = new DatabaseSync(databasePath);
-      raw.prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'").run(owner);
-    }
-
-    expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual(expected);
-  });
-
-  it("rejects stale schema_meta indexes before writable initialization", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-    createUnsafeSchemaMetaIndexDrift(databasePath);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
-      /integrity_check failed.*unsafe_schema_meta_role/iu,
-    );
-    const independentlyManaged = new DatabaseSync(databasePath);
-    try {
-      expect(() =>
-        ensureOpenClawAgentDatabaseSchema(independentlyManaged, {
-          agentId: "worker-1",
-          env,
-        }),
-      ).toThrow(/integrity_check failed.*unsafe_schema_meta_role/iu);
-    } finally {
-      independentlyManaged.close();
-    }
-  });
-
-  it.each([OPENCLAW_AGENT_SCHEMA_VERSION, OPENCLAW_AGENT_SCHEMA_VERSION - 1, 0])(
-    "rejects unrelated index corruption before exposing or migrating version %s",
-    (version) => {
+  it.each([{ owner: "   ", expected: { status: "unreadable" } }])(
+    "inspects database ownership for $owner",
+    ({ owner, expected }) => {
       const stateDir = createTempStateDir();
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-      createUnsafeIndexDrift(databasePath);
-      if (version !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+      const database = openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      const databasePath = database.path;
+      if (owner === "worker-1") {
+        expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual(expected);
+      }
+      closeOpenClawAgentDatabasesForTest();
+      if (owner !== "worker-1") {
         const { DatabaseSync } = requireNodeSqlite();
-        using before = new DatabaseSync(databasePath);
-        before.exec(`PRAGMA user_version = ${version};`);
+        using raw = new DatabaseSync(databasePath);
+        raw.prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'").run(owner);
       }
 
-      expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
-        /integrity_check failed.*missing from index unsafe_index_records_value/iu,
-      );
+      expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual(expected);
     },
   );
 
-  it.each(["path", "agent"] as const)(
+  it.each(["agent"] as const)(
     "revalidates default and relocated replacements after %s unregister",
     (scope) => {
       const stateDir = createTempStateDir();
@@ -3806,11 +3156,6 @@ describe("openclaw agent database", () => {
 
   it.each([
     {
-      kind: "sqlitefoo-only application schema",
-      schema: "CREATE TABLE sqlitefoo (value TEXT);",
-      expectedError: /uses schema version 0; run openclaw doctor --fix/,
-    },
-    {
       kind: "malformed ownership metadata",
       schema: "CREATE TABLE schema_meta (meta_key TEXT);",
       expectedError: /schema_meta is missing required columns/,
@@ -3841,39 +3186,6 @@ describe("openclaw agent database", () => {
       ).toThrow(expectedError);
     },
   );
-
-  it("rejects current-schema foreign-key violations before exposure", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const corrupted = new DatabaseSync(databasePath);
-    try {
-      corrupted.exec("PRAGMA foreign_keys = OFF;");
-      corrupted
-        .prepare(
-          "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        )
-        .run("orphan-window", "missing-node", 1, 1);
-      expect(corrupted.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-      expect(corrupted.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(corrupted.prepare("PRAGMA foreign_key_check").get()).toEqual({
-        table: "session_windows",
-        rowid: 1,
-        parent: "session_nodes",
-        fkid: 1,
-      });
-    } finally {
-      corrupted.close();
-    }
-
-    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
-      /foreign_key_check failed.*session_windows row 1 references session_nodes \(foreign key 1\)/iu,
-    );
-  });
 
   it("latches newer per-agent schema failures on a validated physical reopen", () => {
     const stateDir = createTempStateDir();

@@ -52,9 +52,6 @@ function idFrom(value: string | { id: string }): string {
   }
   return id;
 }
-function tokenFrom(value: string | { id: string; claim?: { token: string } }): string | null {
-  return typeof value === "string" ? null : (value.claim?.token ?? null);
-}
 function requiredRecord<TPayload, TMetadata>(
   row: ChannelIngressRow,
 ): ChannelIngressQueueRecord<TPayload, TMetadata> {
@@ -191,7 +188,7 @@ export function createChannelIngressQueue<
   const mutation = (value: string | { id: string; claim?: { token: string } }, at: number) => ({
     queueName,
     id: idFrom(value),
-    token: tokenFrom(value),
+    token: typeof value === "string" ? null : (value.claim?.token ?? null),
     now: at,
   });
 

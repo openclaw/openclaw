@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// CLI tagline selection helpers, including deterministic random/default/holiday modes.
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";

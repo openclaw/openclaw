@@ -351,7 +351,7 @@ export function readConnectPairingRequiredMessage(
   if (!normalizedMessage) {
     return null;
   }
-  const normalized = normalizedMessage.trim().toLowerCase();
+  const normalized = normalizedMessage.toLowerCase();
   let reason: ConnectPairingRequiredReason | undefined;
   for (const [candidate, metadata] of Object.entries(PAIRING_CONNECT_REASON_METADATA) as Array<
     [ConnectPairingRequiredReason, { message: string }]
@@ -510,10 +510,11 @@ export function formatConnectPairingRequiredMessage(details: unknown): string {
 
 /** Formats connect errors using structured details before falling back to raw messages. */
 export function formatConnectErrorMessage(params: { message?: string; details?: unknown }): string {
-  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
+  const code = readConnectErrorDetailCode(params.details);
+  if (code === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return formatConnectPairingRequiredMessage(params.details);
   }
-  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+  if (code === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
     return formatProtocolMismatchMessage(params.message, params.details);
   }
   return normalizeOptionalProtocolString(params.message) ?? "gateway request failed";
@@ -542,7 +543,7 @@ function formatProtocolMismatchMessage(message: string | undefined, details: unk
     parts.push(`Gateway v${expected}`);
   }
   if (probeMin !== undefined) {
-    parts.push(`probe min v${probeMin}`);
+    parts.push(`connection check min v${probeMin}`);
   }
   const normalized = normalizeOptionalProtocolString(message) ?? "protocol mismatch";
   return parts.length > 0 ? `${normalized}: ${parts.join(", ")}` : normalized;

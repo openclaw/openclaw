@@ -12,6 +12,7 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.t
 import { pathDisplayName } from "../../lib/path-display.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import type { NewSessionDraftController } from "./draft-controller.ts";
+import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { renderAgentSelect } from "./target-controls.ts";
@@ -259,17 +260,11 @@ export class PaletteSessionSettings {
         placement="bottom-end"
         without-arrow
         .open=${this.open}
-        @wa-show=${(event: Event) => {
-          if (event.target === event.currentTarget) {
-            this.open = true;
-            this.host.requestUpdate();
-          }
-        }}
-        @wa-hide=${(event: Event) => {
-          if (event.target === event.currentTarget) {
-            this.close();
-          }
-        }}
+        @wa-show=${onOwnPopoverEvent(() => {
+          this.open = true;
+          this.host.requestUpdate();
+        })}
+        @wa-hide=${onOwnPopoverEvent(() => this.close())}
       >
         <div
           class="palette-session-settings__content"

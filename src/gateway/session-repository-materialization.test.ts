@@ -9,6 +9,7 @@ import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
 } from "../agents/github-tool-identity.js";
+import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionEntries from "../config/sessions/session-accessor.js";
@@ -204,7 +205,9 @@ describe("explicit repository move to Gateway", () => {
             );
           }
           expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
-          expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
+          expect(
+            await managedWorktrees.findLiveByOwner("session", scope.sessionKey),
+          ).toBeUndefined();
         },
       );
     },
@@ -302,7 +305,7 @@ describe("explicit repository move to Gateway", () => {
         repositoryWorkspaceId: repository.workspaceId,
       });
       const assertCurrent = () => {
-        const worktree = managedWorktrees.findLiveByOwner("session", scope.sessionKey);
+        const worktree = findLiveRegistryWorktreeByOwner(process.env, "session", scope.sessionKey);
         if (
           outcome === "revoked" &&
           worktree &&
@@ -333,7 +336,7 @@ describe("explicit repository move to Gateway", () => {
       if (outcome === "revoked") {
         await expect(operation).rejects.toThrow("move authority revoked");
         expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
-        expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
+        expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
       } else {
         if (outcome === "postcommit failure") {
           await expect(operation).rejects.toThrow("postcommit observer failed");
@@ -341,7 +344,7 @@ describe("explicit repository move to Gateway", () => {
           await operation;
         }
         const entry = loadSessionEntry(scope)!;
-        const worktree = managedWorktrees.findLiveByOwner("session", scope.sessionKey)!;
+        const worktree = (await managedWorktrees.findLiveByOwner("session", scope.sessionKey))!;
         expect(entry.repositoryWorkspaceId).toBeUndefined();
         expect(entry.worktree?.id).toBe(worktree.id);
         expect(worktree.baseRef).toBe(outcome === "requested topic" ? "topic" : "HEAD");
@@ -381,7 +384,9 @@ describe("explicit repository move to Gateway", () => {
           sessionId,
           assertCurrent,
         });
-        expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)?.id).toBe(worktree.id);
+        expect((await managedWorktrees.findLiveByOwner("session", scope.sessionKey))?.id).toBe(
+          worktree.id,
+        );
       }
       // Retained publication may still need the original immutable source after the move.
       expect(await repositories.get(repository.workspaceId)).toEqual(repository);

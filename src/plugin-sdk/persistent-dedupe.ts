@@ -1,5 +1,4 @@
 // Persistent dedupe helpers give plugins bounded replay protection across process restarts.
-import fs from "node:fs/promises";
 import { resolveNonNegativeIntegerOption } from "../../packages/normalization-core/src/number-coercion.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
@@ -12,7 +11,6 @@ import {
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
 import {
   createPersistentStoreResolver,
-  createPersistentDedupeImportEntry,
   hasPluginStateOptions,
   resolveEntryKey,
   resolveNamespace,
@@ -26,8 +24,6 @@ import type {
   PersistentDedupeCheckOptions,
   PersistentDedupeLegacyPathOptions,
   PersistentDedupeOptions,
-  PersistentDedupeLegacyJsonImportEntry,
-  PersistentDedupePluginStateOptions,
 } from "./persistent-dedupe.types.js";
 
 export {
@@ -48,27 +44,6 @@ export type {
   PersistentDedupePluginStateOptions,
 } from "./persistent-dedupe.types.js";
 
-export type PersistentDedupeLegacyJsonMigrationResult = {
-  imported: number;
-  skippedExpired: number;
-  skippedInvalid: number;
-  skippedExisting: number;
-  removed: boolean;
-};
-
-export type PersistentDedupeLegacyJsonMigrationOptions = PersistentDedupePluginStateOptions & {
-  filePath: string;
-  namespace: string;
-  now?: number;
-  removeFile?: boolean;
-};
-
-type PersistentDedupeLegacyJsonEntriesResult = {
-  entries: PersistentDedupeLegacyJsonImportEntry[];
-  skippedExpired: number;
-  skippedInvalid: number;
-};
-
 function isRecentTimestamp(seenAt: number | undefined, ttlMs: number, now: number): boolean {
   return seenAt != null && (ttlMs <= 0 || now - seenAt < ttlMs);
 }
@@ -82,79 +57,10 @@ function resolveUnknownEntrySeenAt(value: unknown): number | undefined {
     : undefined;
 }
 
-function resolveRemainingTtlMs(
-  seenAt: number,
-  ttlMs: number,
-  now: number,
-): { ttlMs: number } | undefined | null {
-  if (ttlMs <= 0) {
-    return undefined;
-  }
-  const remaining = ttlMs - (now - seenAt);
-  return remaining > 0 ? { ttlMs: Math.max(1, Math.floor(remaining)) } : null;
-}
-
 function hasLegacyPathOptions(
   options: ClaimableDedupeOptions | PersistentDedupeOptions,
 ): options is PersistentDedupeLegacyPathOptions {
   return typeof options.resolveFilePath === "function";
-}
-
-function parseLegacyDedupeData(raw: string): {
-  data: Record<string, number>;
-  invalidCount: number;
-} {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    return { data: {}, invalidCount: 0 };
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { data: {}, invalidCount: 0 };
-  }
-  const data: Record<string, number> = {};
-  let invalidCount = 0;
-  for (const [key, seenAt] of Object.entries(parsed)) {
-    if (typeof seenAt === "number" && Number.isFinite(seenAt) && seenAt > 0) {
-      data[key] = seenAt;
-    } else {
-      invalidCount++;
-    }
-  }
-  return { data, invalidCount };
-}
-
-async function readPersistentDedupeLegacyJsonFileEntries(options: {
-  filePath: string;
-  ttlMs: number;
-  now?: number;
-}): Promise<PersistentDedupeLegacyJsonEntriesResult> {
-  const raw = await fs.readFile(options.filePath, "utf8");
-  const { data, invalidCount } = parseLegacyDedupeData(raw);
-  const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
-  const now = options.now ?? Date.now();
-  const entries: PersistentDedupeLegacyJsonImportEntry[] = [];
-  let skippedExpired = 0;
-
-  for (const [key, seenAt] of Object.entries(data)) {
-    const ttlOption = resolveRemainingTtlMs(seenAt, ttlMs, now);
-    if (ttlOption === null) {
-      skippedExpired++;
-      continue;
-    }
-    entries.push(createPersistentDedupeImportEntry({ key, seenAt, ...ttlOption }));
-  }
-
-  return { entries, skippedExpired, skippedInvalid: invalidCount };
-}
-
-export async function listPersistentDedupeLegacyJsonFileEntries(options: {
-  filePath: string;
-  ttlMs: number;
-  now?: number;
-}): Promise<PersistentDedupeLegacyJsonImportEntry[]> {
-  return (await readPersistentDedupeLegacyJsonFileEntries(options)).entries;
 }
 
 export function shouldReplacePersistentDedupeEntry(params: {
@@ -166,57 +72,6 @@ export function shouldReplacePersistentDedupeEntry(params: {
     incomingSeenAt != null &&
     incomingSeenAt > (resolveUnknownEntrySeenAt(params.existingValue) ?? 0)
   );
-}
-
-/** Import one retired JSON dedupe cache file into plugin-state SQLite during doctor repair. */
-export async function migratePersistentDedupeLegacyJsonFile(
-  options: PersistentDedupeLegacyJsonMigrationOptions,
-): Promise<PersistentDedupeLegacyJsonMigrationResult> {
-  const store = createPersistentStoreResolver(options)(resolveNamespace(options.namespace));
-  const legacy = await readPersistentDedupeLegacyJsonFileEntries(options);
-  const result: PersistentDedupeLegacyJsonMigrationResult = {
-    imported: 0,
-    skippedExpired: legacy.skippedExpired,
-    skippedInvalid: legacy.skippedInvalid,
-    skippedExisting: 0,
-    removed: false,
-  };
-
-  for (const entry of legacy.entries) {
-    let observed = await store.get().observe(entry.key);
-    for (;;) {
-      const currentSeenAt = resolveUnknownEntrySeenAt(observed.value);
-      const outcome = await store
-        .get()
-        .compareAndApply(
-          entry.key,
-          observed.comparison,
-          currentSeenAt != null && currentSeenAt >= entry.value.seenAt
-            ? { operation: "update", action: "keep" }
-            : { operation: "update", action: "set", value: entry.value, ttlMs: entry.ttlMs },
-        );
-      if (outcome.status === "conflict") {
-        observed = outcome.current;
-        continue;
-      }
-      if (outcome.status === "applied") {
-        result.imported++;
-      } else {
-        result.skippedExisting++;
-      }
-      break;
-    }
-  }
-
-  if (options.removeFile !== false) {
-    if (legacy.entries.length > 0) {
-      // Durable completion must still belong to this database before retiring its source.
-      store.get();
-    }
-    await fs.rm(options.filePath, { force: true });
-    result.removed = true;
-  }
-  return result;
 }
 
 /** Create a dedupe helper that combines in-memory fast checks with SQLite-backed state. */

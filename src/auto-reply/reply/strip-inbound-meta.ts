@@ -64,7 +64,6 @@ function isMessageToolDeliveryHintLine(line: string): boolean {
   return MESSAGE_TOOL_DELIVERY_HINTS.some((hint) => hint === line);
 }
 
-/** Fast check for whether text contains any inbound metadata sentinel. */
 export function hasInboundMetadataSentinel(text: string): boolean {
   return (
     text.includes(INBOUND_CONTEXT_MARKER) ||
@@ -217,7 +216,6 @@ function firstNonEmptyString(...values: unknown[]): string | null {
   return null;
 }
 
-/** Extracts the sender label from injected inbound metadata when present. */
 export function extractInboundSenderLabel(text: string): string | null {
   if (!text.includes(INBOUND_CONTEXT_MARKER)) {
     return null;

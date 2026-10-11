@@ -1,12 +1,14 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThread } from "./app-server/protocol.js";
 import type {
   CodexCatalogIndexRow,
   CodexCatalogRolloutFingerprint,
 } from "./session-catalog-index-row.js";
+import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import {
   mergeCodexCatalogRolloutRow,
-  projectCodexCatalogThread,
+  projectCodexCatalogPage,
 } from "./session-catalog-projection.js";
 import {
   type CodexCatalogRolloutScanner,
@@ -96,7 +98,10 @@ export async function reconcileCodexCatalogFiles(
       continue;
     }
     thread.preview ||= existing?.preview;
-    const projected = await projectCodexCatalogThread(thread, root);
+    const projected = await projectCodexCatalogPage(
+      { data: [projectCodexCatalogNativeThread(thread, sanitizeTerminalText)] },
+      { localSessionsRoot: root, sanitize: sanitizeTerminalText },
+    );
     owner.assertCurrent();
     if (!isCurrent(thread.id)) {
       continue;

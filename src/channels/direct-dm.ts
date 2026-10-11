@@ -6,9 +6,10 @@ import {
   type OutboundReplyPayload,
 } from "../plugin-sdk/reply-payload.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import {
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-event/envelope.js";
 import type {
@@ -128,7 +129,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
   route: DirectDmRoute;
   ctxPayload: FinalizedMsgContext;
 }> {
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: params.cfg,
     channel: params.channel,
     accountId: params.accountId,
@@ -144,6 +145,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
     : params.channelIngress;
   const boundParams =
     channelIngress === params.channelIngress ? params : { ...params, channelIngress };
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: params.cfg, route });
   const ctxPayload = await buildDirectDmContext(
     boundParams,
     route,
@@ -194,6 +196,7 @@ function buildDirectDmTurnPlan(
   };
 }
 
+/** @deprecated Use dispatchInboundDirectDm. Retained for released SDK runtime callbacks until the next major. */
 export async function dispatchInboundDirectDmWithRuntime(
   params: Omit<DispatchInboundDirectDmParams, "resolveChannelIngress"> & {
     runtime: PluginRuntime;

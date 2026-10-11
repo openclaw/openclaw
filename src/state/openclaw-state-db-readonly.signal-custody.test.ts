@@ -206,7 +206,7 @@ beforeEach(() => {
     );
   mocks.close.mockReset().mockResolvedValue();
   mocks.read.mockReset().mockResolvedValue({
-    value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] },
+    value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });
 });
 
@@ -222,7 +222,7 @@ afterEach(async () => {
 
 function runDirectRead() {
   return withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead({ path: mocks.source }, { type: "fleet.list" }),
+    executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
   );
 }
 
@@ -280,7 +280,7 @@ it("joins the direct reader and its transport close before deleting prepared byt
     reading.resolve();
     await finishRead.promise;
     mocks.events.push("read-settled");
-    return { value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } };
+    return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
   });
   mocks.close.mockImplementation(async () => {
     closing.resolve();
@@ -326,7 +326,7 @@ it("retains an enclosing snapshot callback while cleanup closes new read admissi
     const rejected = await escaped(() =>
       captureOutcome(
         Promise.resolve().then(() =>
-          executeExistingOpenClawStateRead({ path: mocks.source }, { type: "fleet.list" }),
+          executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
         ),
       ),
     );
@@ -435,7 +435,7 @@ it("forwards caller cancellation while retaining descendants and transport close
   mocks.read.mockImplementation(async () => {
     reading.resolve();
     await finishRead.promise;
-    return { value: { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] } };
+    return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
   });
   mocks.close.mockImplementation(async () => {
     closing.resolve();
@@ -459,7 +459,7 @@ it("forwards caller cancellation while retaining descendants and transport close
             mocks.events.push("descendant-settled");
           });
           reader = captureOutcome(
-            executeExistingOpenClawStateRead({ path: mocks.source }, { type: "fleet.list" }),
+            executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" }),
           );
           entered.resolve();
           await finishCallback.promise;

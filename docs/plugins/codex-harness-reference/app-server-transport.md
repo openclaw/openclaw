@@ -256,7 +256,7 @@ persists the native thread binding. If the snapshot request fails, OpenClaw dele
 provisional thread with `thread/delete` or unsubscribes an ephemeral thread
 with `thread/unsubscribe`. If safe cleanup cannot be confirmed, it retires the
 owning app-server connection. Supervised branches also clean up their temporary
-probe and retain recovery state when cleanup fails.
+check and retain recovery state when cleanup fails.
 
 With `allow_all_plugins`, an explicitly disabled configured workspace plugin
 still denies its owned apps. When `app/read` does not expose that ownership,

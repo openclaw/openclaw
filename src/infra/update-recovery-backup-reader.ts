@@ -25,7 +25,11 @@ import { resolveRequiredHomeDir } from "./home-dir.js";
 import { resolveLegacyStateDirMigrationCandidates } from "./state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "./update-capture-privacy-marker.js";
-import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
+import {
+  assertUpdateRecoverySealComplete,
+  hasPendingUpdateRecoverySeal,
+} from "./update-recovery-capture-seal.js";
+import { canonicalEntryPath } from "./update-recovery-path.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { inspectUpdateRunDriver, sameUpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
@@ -45,8 +49,6 @@ const recordedOutcomeSchema = z.strictObject({
   manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
 });
 
-const updateRecoveryForwardResolutionSchema =
-  updateRecoveryCaptureStateSchema.shape.forwardResolution.unwrap();
 type Outcome = {
   status: "pending" | "restored" | "committed" | "restore-failed";
   error?: string;
@@ -77,14 +79,6 @@ async function fileDigest(pathname: string): Promise<{ size: number; sha256: str
   } finally {
     await source.handle.close();
   }
-}
-
-function canonicalEntryPath(pathname: string): string {
-  const absolute = path.resolve(pathname);
-  return path.join(
-    resolvePathViaExistingAncestorSync(path.dirname(absolute)),
-    path.basename(absolute),
-  );
 }
 
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
@@ -182,6 +176,7 @@ async function withRecoveryMetadata<T>(
     if (pin.receipt.realPath !== location.directory) {
       throw new Error("Update recovery capture changed location.");
     }
+    await assertUpdateRecoverySealComplete(location.directory);
     const source = await safeRoot(location.directory, { symlinks: "reject", hardlinks: "reject" });
     assertOwned?.();
     const bytes = await source.readBytes("manifest.json", {
@@ -209,6 +204,7 @@ async function withRecoveryMetadata<T>(
       }
     }
     await pin.assertCurrent();
+    await assertUpdateRecoverySealComplete(location.directory);
     assertOwned?.();
     return await run({ ref, manifest, outcome, pin });
   } finally {
@@ -298,6 +294,7 @@ async function readBinding(ref: UpdateRecoveryBackupRef) {
       if (!(await statOrMissing(directory))) {
         continue;
       }
+      await assertUpdateRecoverySealComplete(directory);
       if (!(await statOrMissing(path.join(directory, "manifest.json")))) {
         // Preparation can stop before the final seal. Retain and bind all of
         // those bytes, but never label them a verified rollback generation.
@@ -356,11 +353,10 @@ export async function hasUpdateRecoveryForwardResolution(
 ): Promise<boolean> {
   return withRecoveryMetadata(ref, async ({ manifest, outcome }) => {
     const run = await getUpdateRunAsync(manifest.runId);
-    const value = run?.origin.updateRecoveryCapture?.forwardResolution;
-    if (!value) {
+    const receipt = run?.origin.updateRecoveryCapture?.forwardResolution;
+    if (!receipt) {
       return false;
     }
-    const receipt = updateRecoveryForwardResolutionSchema.parse(value);
     if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref))) {
       throw new Error("Forward recovery receipt is stale or contradicts its failed capture.");
     }
@@ -520,7 +516,11 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
       ) {
         continue;
       }
-      if (entry?.isDirectory() && !manifestEntry && /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId)) {
+      if (
+        entry?.isDirectory() &&
+        /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId) &&
+        (!manifestEntry || (await hasPendingUpdateRecoverySeal(directory)))
+      ) {
         result.push({ kind: "incomplete", directory });
         continue;
       }

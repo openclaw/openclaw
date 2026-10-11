@@ -59,6 +59,17 @@ export function createTelegramEventBindings({
     params;
   const { authorizeTelegramEventSender, resolveTelegramEventAuthorizationContext } = authorization;
   const { processMessageWithReplyChain, resolveCachedMessageThreadSpec } = message;
+  const resolveAuthorizedEventContext = async (
+    eventParams: Parameters<typeof resolveTelegramEventAuthorizationContext>[0] & {
+      senderId: string;
+      chatTitle?: string;
+    },
+  ) => {
+    const context = await resolveTelegramEventAuthorizationContext(eventParams);
+    return (await authorizeTelegramEventSender({ ...eventParams, mode: "reaction", context }))
+      ? context
+      : undefined;
+  };
 
   const registerChatMembership = () => {
     bot.on("my_chat_member", async (ctx) => {
@@ -215,9 +226,10 @@ export function createTelegramEventBindings({
           }
         }
 
-        const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        const eventAuthContext = await resolveAuthorizedEventContext({
           cfg: authorizationCfg,
           chatId,
+          chatTitle: reaction.chat.title,
           isGroup,
           senderId,
           threadSpec:
@@ -227,15 +239,7 @@ export function createTelegramEventBindings({
               isForum,
             }),
         });
-        const senderAuthorization = await authorizeTelegramEventSender({
-          chatId,
-          chatTitle: reaction.chat.title,
-          isGroup,
-          senderId,
-          mode: "reaction",
-          context: eventAuthContext,
-        });
-        if (!senderAuthorization) {
+        if (!eventAuthContext) {
           return;
         }
 
@@ -267,16 +271,10 @@ export function createTelegramEventBindings({
           ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
           : undefined;
         const senderUsernameLabel = user?.username ? `@${user.username}` : undefined;
-        let senderLabel = senderName;
-        if (senderName && senderUsernameLabel) {
-          senderLabel = `${senderName} (${senderUsernameLabel})`;
-        } else if (!senderName && senderUsernameLabel) {
-          senderLabel = senderUsernameLabel;
-        }
-        if (!senderLabel && user?.id) {
-          senderLabel = `id:${user.id}`;
-        }
-        senderLabel = senderLabel || "unknown";
+        const senderLabel =
+          (senderName && senderUsernameLabel
+            ? `${senderName} (${senderUsernameLabel})`
+            : senderName || senderUsernameLabel) || (user?.id ? `id:${user.id}` : "unknown");
 
         for (const addedReaction of addedReactions) {
           const emoji = addedReaction.emoji;
@@ -293,6 +291,19 @@ export function createTelegramEventBindings({
     });
   };
 
+  const handlePollError = (
+    err: unknown,
+    ctx: { update: unknown },
+    kind: "poll" | "poll_answer",
+  ) => {
+    runtime.error?.(danger(`telegram ${kind} handler failed: ${String(err)}`));
+    if (isTelegramSpooledReplayUpdate(ctx.update)) {
+      recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
+    } else {
+      throw err;
+    }
+  };
+
   const registerPolls = () => {
     bot.on("poll", async (ctx) => {
       try {
@@ -302,12 +313,7 @@ export function createTelegramEventBindings({
         }
         await retireTelegramPollRegistryEntry({ accountId, pollId: poll.id });
       } catch (err) {
-        runtime.error?.(danger(`telegram poll handler failed: ${String(err)}`));
-        if (isTelegramSpooledReplayUpdate(ctx.update)) {
-          recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
-          return;
-        }
-        throw err;
+        handlePollError(err, ctx, "poll");
       }
     });
 
@@ -350,22 +356,15 @@ export function createTelegramEventBindings({
           return;
         }
         const authorizationCfg = telegramDeps.getRuntimeConfig();
-        const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        const eventAuthContext = await resolveAuthorizedEventContext({
           cfg: authorizationCfg,
-          chatId,
-          isGroup,
-          senderId,
-          threadSpec: entry.threadSpec,
-        });
-        const senderAuthorization = await authorizeTelegramEventSender({
           chatId,
           chatTitle: "title" in entry.chat ? entry.chat.title : undefined,
           isGroup,
           senderId,
-          mode: "reaction",
-          context: eventAuthContext,
+          threadSpec: entry.threadSpec,
         });
-        if (!senderAuthorization) {
+        if (!eventAuthContext) {
           return;
         }
 
@@ -374,13 +373,11 @@ export function createTelegramEventBindings({
           eventAuthContext.groupConfig && "requireTopic" in eventAuthContext.groupConfig
             ? eventAuthContext.groupConfig.requireTopic
             : undefined;
-        if (!isGroup && requireTopic === true) {
-          if (eventAuthContext.dmThreadId == null) {
-            logVerbose(
-              `Blocked telegram poll_answer in DM ${chatId}: requireTopic=true but topic unknown`,
-            );
-            return;
-          }
+        if (!isGroup && requireTopic === true && eventAuthContext.dmThreadId == null) {
+          logVerbose(
+            `Blocked telegram poll_answer in DM ${chatId}: requireTopic=true but topic unknown`,
+          );
+          return;
         }
 
         const optionLabels = optionIds.map((index) => entry.options[index] ?? `option ${index}`);
@@ -417,12 +414,7 @@ export function createTelegramEventBindings({
         recordTelegramMessageProcessingResult(result);
         logVerbose(`telegram: poll_answer dispatched for poll ${pollId} by ${senderId}`);
       } catch (err) {
-        runtime.error?.(danger(`telegram poll_answer handler failed: ${String(err)}`));
-        if (isTelegramSpooledReplayUpdate(ctx.update)) {
-          recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
-          return;
-        }
-        throw err;
+        handlePollError(err, ctx, "poll_answer");
       }
     });
   };

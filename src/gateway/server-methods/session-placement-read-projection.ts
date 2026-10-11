@@ -1,10 +1,12 @@
 import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
-import type { SessionRowDatabaseFacts } from "../../config/sessions/session-transcript-worker.types.js";
+import type { SessionRowDatabaseFacts } from "../../config/sessions/session-row-facts.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { projectSessionActivitySummary } from "../session-activity-summary-state.js";
+import { sessionModelRevision } from "../session-model-revision.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
 import type { SessionRowPlacementFactsReader } from "../session-row-placement-projection.types.js";
 import {
@@ -78,6 +80,7 @@ export function readSessionRowFacts(params: {
       workspaceResultReconciling,
       environment,
       identity,
+      sessionModelRevision: sessionModelRevision(entry, identity?.inference),
       failedRecoveryAction,
       retryOnSend,
     };
@@ -106,10 +109,12 @@ export function readSessionRowFacts(params: {
         workspaceResultReconciling,
         environment,
         identity,
+        sessionModelRevision: revision,
         failedRecoveryAction,
         retryOnSend,
       } = placementFacts;
       return {
+        sessionModelRevision: revision,
         ...(placement
           ? {
               placement: projectWorkerSessionPlacement(
@@ -145,6 +150,9 @@ function readSessionRowHasBoard(target: {
   storeTarget: GatewayStoredSessionTarget["storeTarget"];
 }) {
   const { key, storeTarget } = target;
+  if (!isIncognitoOpenClawAgentSqlitePath(storeTarget.storePath, storeTarget)) {
+    throw new Error("Session Board membership requires prepared database facts");
+  }
   const board = withOpenClawAgentDatabaseReadOnly(
     (database) => readBoardSessionKeys(database, [key]).has(key),
     { agentId: storeTarget.agentId, path: storeTarget.storePath },

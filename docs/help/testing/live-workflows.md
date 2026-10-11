@@ -10,7 +10,7 @@ read_when:
 
 When debugging real providers/models (requires real creds):
 
-- Live suite (models + gateway tool/image probes): `pnpm test:live`
+- Live suite (models + gateway tool/image checks): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 - Progress-card refresh: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- src/gateway/gateway-progress-refresh.live.test.ts`
   - Requires `OPENAI_API_KEY` and uses `openai/gpt-5.6-luna` with isolated Gateway state.
@@ -52,9 +52,9 @@ When debugging real providers/models (requires real creds):
   includes source-level gateway boot, memory, plugin-pressure, repeated
   fake-model hello-loop, and CLI startup numbers.
 - Docker live model sweep: `pnpm test:docker:live-models`
-  - Each selected model runs a text turn plus a small file-read-style probe.
+  - Each selected model runs a text turn plus a small file-read-style check.
     Models whose metadata advertises `image` input also run a tiny image turn.
-    Disable the extra probes with `OPENCLAW_LIVE_MODEL_FILE_PROBE=0` or
+    Disable the extra checks with `OPENCLAW_LIVE_MODEL_FILE_PROBE=0` or
     `OPENCLAW_LIVE_MODEL_IMAGE_PROBE=0` when isolating provider failures.
   - CI coverage: daily `OpenClaw Scheduled Live And E2E Checks` and manual
     `OpenClaw Release Checks` both call the reusable live/E2E workflow with
@@ -73,12 +73,12 @@ When debugging real providers/models (requires real creds):
 - Codex app-server harness smoke: `pnpm test:docker:live-codex-harness`
   - Runs gateway agent turns through the plugin-owned Codex app-server
     harness, verifies `/codex status` and `/codex models`, and by default
-    exercises image, cron MCP, sub-agent, and Guardian probes. Disable the
-    sub-agent probe with `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0` when
+    exercises image, cron MCP, sub-agent, and Guardian checks. Disable the
+    sub-agent check with `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0` when
     isolating other failures. For a focused sub-agent check, disable the
-    other probes:
+    other checks:
     `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=1 pnpm test:docker:live-codex-harness`.
-    This exits after the sub-agent probe unless
+    This exits after the sub-agent check unless
     `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY=0` is set.
 - Codex on-demand install smoke: `pnpm test:docker:codex-on-demand`
   - Installs the packaged OpenClaw tarball in Docker, runs OpenAI API-key

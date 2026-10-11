@@ -36,23 +36,7 @@ export type IMessageCatchupRow = {
   isFromMe?: boolean;
 };
 
-export type IMessageCatchupSummary = {
-  querySucceeded: boolean;
-  fullyCaughtUp: boolean;
-  fetchedCount: number;
-  replayed: number;
-  skippedFromMe: number;
-  skippedPreCursor: number;
-  /** GUIDs already at the retry ceiling before this pass. */
-  skippedGivenUp: number;
-  failed: number;
-  /** GUIDs that reached the retry ceiling during this pass. */
-  givenUp: number;
-  cursorBefore: { lastSeenMs: number; lastSeenRowid: number } | null;
-  cursorAfter: { lastSeenMs: number; lastSeenRowid: number };
-  windowStartMs: number;
-  windowEndMs: number;
-};
+export type IMessageCatchupSummary = Awaited<ReturnType<typeof performIMessageCatchup>>;
 
 function openCatchupCursorStore(): PluginStateKeyedStore<IMessageCatchupCursor> {
   return getIMessageRuntime().state.openKeyedStore<IMessageCatchupCursor>({
@@ -280,9 +264,7 @@ export async function advanceIMessageCatchupCursor(
   });
 }
 
-export async function performIMessageCatchup(
-  params: PerformCatchupParams,
-): Promise<IMessageCatchupSummary> {
+export async function performIMessageCatchup(params: PerformCatchupParams) {
   const now = params.now ?? Date.now();
   const cfg = params.config;
   const cursor = await loadIMessageCatchupCursor(params.accountId);
@@ -293,15 +275,17 @@ export async function performIMessageCatchup(
   const windowEndMs = now;
   const sinceRowid = cursor?.lastSeenRowid ?? 0;
 
-  const summary: IMessageCatchupSummary = {
+  const summary = {
     querySucceeded: false,
     fullyCaughtUp: false,
     fetchedCount: 0,
     replayed: 0,
     skippedFromMe: 0,
     skippedPreCursor: 0,
+    // GUIDs already at the retry ceiling before this pass.
     skippedGivenUp: 0,
     failed: 0,
+    // GUIDs that reached the retry ceiling during this pass.
     givenUp: 0,
     cursorBefore: cursor
       ? { lastSeenMs: cursor.lastSeenMs, lastSeenRowid: cursor.lastSeenRowid }

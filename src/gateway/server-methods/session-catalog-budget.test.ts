@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { publishSessionCatalogHost } from "../../plugin-sdk/session-catalog-paging.js";
 import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
@@ -84,7 +85,7 @@ it("returns three fast catalogs within one second while an eight-second provider
   }
 });
 
-it("reuses a pending provider, serves its stale page, and retains its late refresh after errors", async () => {
+it("reuses pending discovery and preserves authoritative host withdrawals in fallback pages", async () => {
   const oldHost = {
     hostId: "node:slow",
     label: "Old page",
@@ -94,6 +95,8 @@ it("reuses a pending provider, serves its stale page, and retains its late refre
   };
   const freshHost = { ...oldHost, label: "Late page" };
   const late = createDeferredCore<(typeof freshHost)[]>();
+  const retry = createDeferredCore<(typeof freshHost)[]>();
+  const publication = createDeferredCore<typeof freshHost>();
   const list = vi
     .fn<SessionCatalogProvider["list"]>()
     .mockResolvedValueOnce([oldHost])
@@ -102,10 +105,12 @@ it("reuses a pending provider, serves its stale page, and retains its late refre
   hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
   const config = {};
   const client = { connId: "owner" };
-  await call("sessions.catalog.list", {}, config, client);
+  const query = { allowPartialResults: true, progressId: "withdrawal" };
+  const context = { broadcastToConnIds: vi.fn() };
+  await call("sessions.catalog.list", query, config, client, context);
   try {
     for (let index = 0; index < 3; index++) {
-      const waiting = startCall("sessions.catalog.list", {}, config, client);
+      const waiting = startCall("sessions.catalog.list", query, config, client, context);
       await vi.advanceTimersByTimeAsync(1_000);
       await waiting.completion;
       expect(waiting.respond).toHaveBeenCalledWith(true, {
@@ -123,7 +128,7 @@ it("reuses a pending provider, serves its stale page, and retains its late refre
     expect(list).toHaveBeenCalledTimes(2);
     late.resolve([freshHost]);
     await vi.advanceTimersByTimeAsync(0);
-    const failed = await call("sessions.catalog.list", {}, config, client);
+    const failed = await call("sessions.catalog.list", query, config, client, context);
     expect(failed).toHaveBeenCalledWith(true, {
       catalogs: [
         expect.objectContaining({
@@ -135,23 +140,57 @@ it("reuses a pending provider, serves its stale page, and retains its late refre
         }),
       ],
     });
-    list.mockResolvedValueOnce([
-      { ...freshHost, sessions: [], error: { code: "UNAVAILABLE", message: "node offline" } },
-    ]);
-    const offline = await call("sessions.catalog.list", {}, config, client);
+    const offlineHost = {
+      ...freshHost,
+      sessions: [],
+      error: { code: "UNAVAILABLE", message: "node offline" },
+    };
+    const loadingHost = { ...oldHost, hostId: "node:loading", pending: true };
+    const completedHost = { ...freshHost, hostId: loadingHost.hostId, label: "Completed page" };
+    list.mockImplementationOnce(async (params) => {
+      publishSessionCatalogHost(params, publication.promise);
+      return [offlineHost, loadingHost];
+    });
+    const offline = await call("sessions.catalog.list", query, config, client, context);
     expect(offline).toHaveBeenCalledWith(true, {
       catalogs: [
         expect.objectContaining({
-          hosts: [freshHost],
+          hosts: [offlineHost, loadingHost],
+        }),
+      ],
+    });
+    list.mockImplementationOnce(() => retry.promise);
+    const pending = startCall("sessions.catalog.list", query, config, client, context);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pending.completion;
+    expect(pending.respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          hosts: [offlineHost, loadingHost],
+          error: expect.objectContaining({ code: "catalog_pending" }),
+        }),
+      ],
+    });
+    publication.resolve(completedHost);
+    await vi.advanceTimersByTimeAsync(0);
+    retry.reject(new Error("Provider enumeration failed"));
+    await vi.advanceTimersByTimeAsync(0);
+    const rejected = await call("sessions.catalog.list", query, config, client, context);
+    expect(rejected).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          hosts: [offlineHost, completedHost],
           error: expect.objectContaining({
             code: "catalog_stale",
-            message: expect.stringContaining("UNAVAILABLE"),
+            message: expect.stringContaining("TIMEOUT"),
           }),
         }),
       ],
     });
   } finally {
     late.resolve([freshHost]);
+    retry.resolve([]);
+    publication.resolve({ ...freshHost, hostId: "node:loading" });
     await vi.advanceTimersByTimeAsync(0);
   }
 });

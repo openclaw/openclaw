@@ -172,12 +172,8 @@ export async function respondToDiscordVoiceTranscript(
   } else {
     const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
     const text = await runDiscordVoiceAgentTurn({
-      entry,
-      accountId: params.accountId,
-      userId,
+      ...params,
       message: prompt,
-      discordConfig: params.discordConfig,
-      runtime: params.runtime,
       context: ingress,
     });
     if (text === null) {
@@ -215,7 +211,7 @@ export async function respondToDiscordVoiceTranscript(
     return;
   }
   if (voiceReplyAudio.status === "failed") {
-    logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error ?? "unknown error"}`);
+    logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error}`);
     return;
   }
   const streamFailure = voiceReplyAudio.mode === "file" ? voiceReplyAudio.streamFailure : undefined;

@@ -24,6 +24,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -901,16 +902,12 @@ describe("standing grant operator surfaces", () => {
     const { databaseOptions } = await seedMintedGrant();
     const [before] = await listCronStandingGrants({ databaseOptions });
     let current = true;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            current = false;
-          }
-          return admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        current = false;
+      }
+      return admit(request, grant);
+    });
     const pending = revokeCronStandingGrant({
       grantId: before!.grantId,
       revokedBy: "reviewer",

@@ -242,7 +242,7 @@ it.for(cases)(
       }
       const { sessionId, sessionKey, agentId } = REQUEST;
       const worktreeId = "abandonment-worktree";
-      insertRegistryWorktree(process.env, {
+      await insertRegistryWorktree(process.env, {
         id: worktreeId,
         name: "abandonment",
         repoFingerprint: "fixture",
@@ -291,7 +291,7 @@ it.for(cases)(
       await placements.markWorkspaceResultPending(claim);
       expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       if (persisted) {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId,
           source,
           target: { kind: "gateway" },

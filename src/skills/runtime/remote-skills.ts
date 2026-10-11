@@ -148,7 +148,7 @@ function sanitizeSkillNameFragment(value: string): string {
 function prefixedSkillName(params: {
   nodeId: string;
   baseName: string;
-  usedNames: Set<string>;
+  isAvailable: (name: string) => boolean;
 }): string | null {
   const prefix = `${sanitizeSkillNameFragment(params.nodeId)}-`;
   for (let index = 0; index < 100; index += 1) {
@@ -156,7 +156,7 @@ function prefixedSkillName(params: {
     const availableBaseLength = Math.max(1, 64 - prefix.length - suffix.length);
     const base = params.baseName.slice(0, availableBaseLength).replace(/-+$/g, "") || "skill";
     const candidate = `${prefix}${base}${suffix}`;
-    if (!params.usedNames.has(candidate)) {
+    if (params.isAvailable(candidate)) {
       return candidate;
     }
   }
@@ -176,6 +176,7 @@ function locatorNote(node: RemoteSkillNode, skillName: string): string {
 export function mergeRemoteNodeSkillEntries(
   localEntries: readonly SkillEntry[],
   options?: { canExec?: boolean; node?: string },
+  matchesSnapshotSkill?: (skill: SkillEntry["skill"]) => boolean,
 ): SkillEntry[] {
   if (options?.canExec !== true) {
     return [...localEntries];
@@ -215,20 +216,11 @@ export function mergeRemoteNodeSkillEntries(
   const usedNames = new Set(localEntries.map((entry) => entry.skill.name));
   const remoteEntries: SkillEntry[] = [];
   for (const { node, skill } of remote) {
-    const hasCollision = usedNames.has(skill.name) || (remoteNameCounts.get(skill.name) ?? 0) > 1;
-    const exposedName = hasCollision
-      ? prefixedSkillName({ nodeId: node.nodeId, baseName: skill.name, usedNames })
-      : skill.name;
-    if (!exposedName || usedNames.has(exposedName)) {
-      log.warn(`dropped node skill with unresolved name collision: ${node.nodeId}/${skill.name}`);
-      continue;
-    }
-    usedNames.add(exposedName);
     const filePath = remoteSkillLocation(node.nodeId, skill.name);
     const invocation = resolveSkillInvocationPolicy(skill.frontmatter);
-    remoteEntries.push({
+    const entry: SkillEntry = {
       skill: {
-        name: exposedName,
+        name: skill.name,
         description: skill.description,
         locationNote: locatorNote(node, skill.name),
         readContent: skill.content,
@@ -254,7 +246,25 @@ export function mergeRemoteNodeSkillEntries(
         includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
         userInvocable: invocation.userInvocable,
       },
-    });
+    };
+    const isAvailable = (name: string) =>
+      !usedNames.has(name) &&
+      (!matchesSnapshotSkill || matchesSnapshotSkill({ ...entry.skill, name }));
+    const hasCollision =
+      !isAvailable(skill.name) ||
+      (!matchesSnapshotSkill && (remoteNameCounts.get(skill.name) ?? 0) > 1);
+    const exposedName = hasCollision
+      ? prefixedSkillName({ nodeId: node.nodeId, baseName: skill.name, isAvailable })
+      : skill.name;
+    if (!exposedName) {
+      if (!matchesSnapshotSkill) {
+        log.warn(`dropped node skill with unresolved name collision: ${node.nodeId}/${skill.name}`);
+      }
+      continue;
+    }
+    usedNames.add(exposedName);
+    entry.skill.name = exposedName;
+    remoteEntries.push(entry);
   }
   return [...localEntries, ...remoteEntries].toSorted((left, right) =>
     left.skill.name.localeCompare(right.skill.name, "en"),

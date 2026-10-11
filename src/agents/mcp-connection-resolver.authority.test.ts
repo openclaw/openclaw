@@ -5,6 +5,7 @@ import { McpConnectionAuthorityError } from "./mcp-connection-authority-error.js
 import { resolveRequesterScopedMcpConnections } from "./mcp-connection-resolver.js";
 
 const mocks = vi.hoisted(() => ({ resolve: vi.fn(), pluginId: "fixture" }));
+// mock-isolation: Resolver authority tests do not initialize the process-wide plugin registry.
 vi.mock("../plugins/runtime.js", () => ({
   getActivePluginRegistry: () => ({
     mcpServerConnectionResolvers: [
@@ -15,9 +16,11 @@ vi.mock("../plugins/runtime.js", () => ({
     ],
   }),
 }));
+// mock-isolation: Resolve against the fixture registry, not an ambient Gateway request.
 vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
   getPluginRuntimeGatewayRequestScope: () => undefined,
 }));
+// mock-isolation: Capture resolver diagnostics without initializing global logging.
 vi.mock("../logger.js", () => ({ logWarn: vi.fn() }));
 const requester = { serverNames: ["calendar"], requesterSenderId: "alice" };
 function observation() {

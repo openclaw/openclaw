@@ -69,7 +69,8 @@ vi.mock("./commands-handlers.runtime.js", () => ({
   loadCommandHandlers: () => [],
 }));
 
-vi.mock("./route-reply.runtime.js", () => ({
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
   routeReply: (params: unknown) => routeReplyMock(params),
 }));
 
@@ -259,6 +260,7 @@ describe("handleCommands reset hooks", () => {
       ok: true,
       sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       sessionId: "session-after-acp-reset",
+      lifecycleRevision: "after-acp-reset",
       storePath: "/tmp/claude-sessions.json",
     });
     resetMocks.resolveBoundAcpThreadSessionKey.mockResolvedValue(
@@ -302,6 +304,7 @@ describe("handleCommands reset hooks", () => {
     expect(onSessionPrepared).toHaveBeenCalledWith({
       sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       sessionId: "session-after-acp-reset",
+      lifecycleRevision: "after-acp-reset",
       storePath: "/tmp/claude-sessions.json",
     });
   });

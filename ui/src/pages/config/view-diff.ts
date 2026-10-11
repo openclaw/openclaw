@@ -2,11 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSensitiveConfigPath } from "../../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../../api/types.ts";
-import {
-  countSensitiveConfigValues,
-  hintForPath,
-  redactedPlaceholder,
-} from "../../components/config-form.shared.ts";
+import { hasSensitiveConfigData, hintForPath } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import { isJson5Warm, parseJson5Text } from "../../lib/json5-runtime.ts";
 import type { ConfigDiffEntry, ConfigDiffPath, ConfigViewState } from "./view-types.ts";
@@ -39,87 +35,57 @@ function computeDiff(
       return true;
     }
     for (let index = 0; index < orig.length; index += 1) {
-      if (valuesDiffer(orig[index], curr[index], depth + 1)) {
+      if (compare(orig[index], curr[index], null, depth + 1)) {
         return true;
       }
     }
     return false;
   }
 
-  function objectValuesDiffer(
-    orig: Record<string, unknown>,
-    curr: Record<string, unknown>,
+  // A null path compares array contents without emitting their individual fields.
+  function compare(
+    orig: unknown,
+    curr: unknown,
+    path: ConfigDiffPath | null,
     depth: number,
   ): boolean {
-    const origKeys = Object.keys(orig);
-    const currKeys = Object.keys(curr);
-    if (origKeys.length !== currKeys.length) {
-      return true;
-    }
-    for (const key of origKeys) {
-      if (!Object.hasOwn(curr, key) || valuesDiffer(orig[key], curr[key], depth + 1)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  function valuesDiffer(orig: unknown, curr: unknown, depth: number): boolean {
     visited += 1;
     if (visited > MAX_CONFIG_DIFF_NODES || depth > MAX_CONFIG_DIFF_DEPTH) {
-      return true;
+      return path === null;
     }
-    if (orig === curr) {
+    if ((path !== null && changes.length >= MAX_CONFIG_DIFF_CHANGES) || orig === curr) {
       return false;
     }
-    if (typeof orig !== typeof curr) {
-      return true;
-    }
-    if (typeof orig !== "object" || orig === null || curr === null) {
-      return orig !== curr;
-    }
-    if (Array.isArray(orig) || Array.isArray(curr)) {
-      return Array.isArray(orig) && Array.isArray(curr)
-        ? arrayValuesDiffer(orig, curr, depth + 1)
-        : true;
-    }
-    return objectValuesDiffer(
-      orig as Record<string, unknown>,
-      curr as Record<string, unknown>,
-      depth + 1,
-    );
-  }
-
-  function compare(orig: unknown, curr: unknown, path: ConfigDiffPath, depth: number) {
-    visited += 1;
-    if (
-      visited > MAX_CONFIG_DIFF_NODES ||
-      depth > MAX_CONFIG_DIFF_DEPTH ||
-      changes.length >= MAX_CONFIG_DIFF_CHANGES
-    ) {
-      return;
-    }
-    if (orig === curr) {
-      return;
-    }
-    if (typeof orig !== typeof curr || typeof orig !== "object" || orig === null || curr === null) {
-      pushChange(path, orig, curr);
-      return;
-    }
-    if (Array.isArray(orig) || Array.isArray(curr)) {
-      if (Array.isArray(orig) && Array.isArray(curr) && arrayValuesDiffer(orig, curr, depth + 1)) {
-        pushChange(path, orig, curr);
-      } else if (!Array.isArray(orig) || !Array.isArray(curr)) {
-        pushChange(path, orig, curr);
+    let differs = true;
+    if (typeof orig === typeof curr && typeof orig === "object" && orig !== null && curr !== null) {
+      if (Array.isArray(orig) || Array.isArray(curr)) {
+        differs =
+          !Array.isArray(orig) || !Array.isArray(curr) || arrayValuesDiffer(orig, curr, depth + 1);
+      } else {
+        const origObj = orig as Record<string, unknown>;
+        const currObj = curr as Record<string, unknown>;
+        const origKeys = Object.keys(origObj);
+        const currKeys = Object.keys(currObj);
+        if (path === null) {
+          return (
+            origKeys.length !== currKeys.length ||
+            origKeys.some(
+              (key) =>
+                !Object.hasOwn(currObj, key) ||
+                compare(origObj[key], currObj[key], null, depth + 2),
+            )
+          );
+        }
+        for (const key of new Set([...origKeys, ...currKeys])) {
+          compare(origObj[key], currObj[key], [...path, key], depth + 1);
+        }
+        return false;
       }
-      return;
     }
-    const origObj = orig as Record<string, unknown>;
-    const currObj = curr as Record<string, unknown>;
-    const allKeys = new Set([...Object.keys(origObj), ...Object.keys(currObj)]);
-    for (const key of allKeys) {
-      compare(origObj[key], currObj[key], [...path, key], depth + 1);
+    if (differs && path !== null) {
+      pushChange(path, orig, curr);
     }
+    return differs;
   }
 
   compare(original, current, [], 0);
@@ -211,9 +177,9 @@ export function renderRawDiffValue(
   uiHints: ConfigUiHints,
   rawRevealed: boolean,
 ): string {
-  const hasSensitiveValue = countSensitiveConfigValues(value, path, uiHints) > 0;
+  const hasSensitiveValue = hasSensitiveConfigData(value, path, uiHints);
   if (!rawRevealed && value != null && (isSensitiveDiffPath(path, uiHints) || hasSensitiveValue)) {
-    return redactedPlaceholder();
+    return t("configForm.redactedPlaceholder");
   }
   return truncateValue(value);
 }

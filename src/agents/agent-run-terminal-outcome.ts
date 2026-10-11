@@ -1,4 +1,3 @@
-/** Normalizes agent run wait/liveness/timeout metadata into sticky terminal outcomes. */
 import {
   resolveAgentRunLifecycleTerminalFacts,
   resolveAgentRunTerminalFacts,
@@ -92,13 +91,6 @@ type LegacyAgentRunAttemptTerminalInput = {
 
 // Timeout owns mechanical abort/failure observations; within a timeout, the
 // latest concrete phase/source can only refine toward stronger attribution.
-const ATTEMPT_TERMINAL_KIND_RANK = {
-  ok: 0,
-  failed: 1,
-  aborted: 2,
-  timeout: 3,
-} as const;
-
 const ATTEMPT_TIMEOUT_PHASE_RANK = {
   prompt: 0,
   tool_execution: 1,
@@ -138,17 +130,17 @@ function getAgentRunAttemptFailure(
       : terminal.failure;
 }
 
-function withAgentRunAttemptFailure<T extends AgentRunAttemptTerminal>(
-  terminal: T,
+function withAgentRunAttemptFailure(
+  terminal: AgentRunAttemptTerminal,
   failure: AgentRunAttemptFailure | undefined,
-): T {
+): AgentRunAttemptTerminal {
   if (!failure || terminal.kind === "ok") {
     return terminal;
   }
   if (terminal.kind === "failed") {
-    return { ...terminal, ...failure } as T;
+    return { ...terminal, ...failure };
   }
-  return { ...terminal, failure } as T;
+  return { ...terminal, failure };
 }
 
 function withAgentRunAttemptTimeoutObservation(
@@ -286,10 +278,7 @@ export function mergeAgentRunAttemptTerminal(
           : current.source;
       selected = { kind: "aborted", source };
     } else {
-      selected =
-        ATTEMPT_TERMINAL_KIND_RANK[incoming.kind] >= ATTEMPT_TERMINAL_KIND_RANK[current.kind]
-          ? incoming
-          : current;
+      selected = current.kind === "aborted" ? current : incoming;
     }
     for (const observation of [current.timeoutObservation, incoming.timeoutObservation]) {
       if (observation) {
@@ -354,6 +343,12 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
   const externalAbort =
     (terminal.kind === "aborted" || terminal.kind === "timeout") && terminal.source === "external";
   const timedOut = terminal.kind === "timeout" && terminal.source !== "observation";
+  const timeoutPhase =
+    terminal.kind === "timeout"
+      ? terminal.phase
+      : terminal.kind === "ok"
+        ? undefined
+        : terminal.timeoutObservation;
   return {
     ...(terminal.kind === "ok" &&
       terminal.settlementWarning && { settlementWarning: terminal.settlementWarning }),
@@ -369,14 +364,8 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
     promptErrorSource: failure?.source ?? null,
     timedOut,
     timedOutByRunBudget: terminal.kind === "timeout" && terminal.source === "run_budget",
-    timedOutDuringCompaction:
-      (terminal.kind === "timeout" && terminal.phase === "compaction") ||
-      ((terminal.kind === "aborted" || terminal.kind === "failed") &&
-        terminal.timeoutObservation === "compaction"),
-    timedOutDuringToolExecution:
-      (terminal.kind === "timeout" && terminal.phase === "tool_execution") ||
-      ((terminal.kind === "aborted" || terminal.kind === "failed") &&
-        terminal.timeoutObservation === "tool_execution"),
+    timedOutDuringCompaction: timeoutPhase === "compaction",
+    timedOutDuringToolExecution: timeoutPhase === "tool_execution",
   };
 }
 
@@ -387,7 +376,6 @@ export {
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 export { mergeAgentRunTerminalOutcome } from "./agent-run-terminal-outcome-merge.js";
 
-/** Raw terminal input collected from run wait/liveness/timeout paths. */
 type AgentRunTerminalInput = AgentRunTerminalFactInput & {
   error?: unknown;
   startedAt?: unknown;
@@ -423,6 +411,8 @@ function formatAgentRunTerminalOutcome(
   input: Pick<AgentRunTerminalInput, "error" | "startedAt" | "endedAt">,
 ): AgentRunTerminalOutcome {
   const { reason, status, ...metadata } = facts;
+  const startedAt = asFiniteTimestamp(input.startedAt);
+  const endedAt = asFiniteTimestamp(input.endedAt);
   const rawError =
     input.error == null ? undefined : asNonEmptyString(formatErrorMessage(input.error));
   const error =
@@ -442,23 +432,17 @@ function formatAgentRunTerminalOutcome(
     status,
     ...(error ? { error } : {}),
     ...metadata,
-    ...(asFiniteTimestamp(input.startedAt) !== undefined
-      ? { startedAt: asFiniteTimestamp(input.startedAt) }
-      : {}),
-    ...(asFiniteTimestamp(input.endedAt) !== undefined
-      ? { endedAt: asFiniteTimestamp(input.endedAt) }
-      : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(endedAt !== undefined ? { endedAt } : {}),
   };
 }
 
-/** Builds the normalized terminal outcome from raw run status metadata. */
 export function buildAgentRunTerminalOutcome(
   input: AgentRunTerminalInput,
 ): AgentRunTerminalOutcome {
   return formatAgentRunTerminalOutcome(resolveAgentRunTerminalFacts(input), input);
 }
 
-/** Builds the canonical outcome directly from a terminal lifecycle event. */
 export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
   phase: "end" | "error";
   data?: AgentRunLifecycleTerminalData;
@@ -500,7 +484,6 @@ function hasNestedAbortReason(value: unknown, matches: (candidate: unknown) => b
   return false;
 }
 
-/** Maps the closed embedded-attempt terminal into the canonical run outcome. */
 export function buildAgentRunTerminalOutcomeFromAttempt(input: {
   terminal: AgentRunAttemptTerminal;
   promptTimeoutOutcome?: {

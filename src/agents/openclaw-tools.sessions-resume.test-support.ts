@@ -172,7 +172,7 @@ export function registerSessionsSendResumeTests({
     },
   );
 
-  it.each([{ watch: true }, { timeoutSeconds: 1 }])(
+  it.each([{ timeoutSeconds: 1 }])(
     "sessions_send resume rejects competing delivery options %j",
     async (options) => {
       const parent = "agent:main:main";

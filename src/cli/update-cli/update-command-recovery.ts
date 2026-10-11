@@ -34,11 +34,9 @@ export function assertUpdateCommandRecoveryState(opts: UpdateCommandOptions): vo
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
-  if (opts.run) {
-    const current = loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
-    if (current) {
-      throw new UpdateRecoveryRequiredError(current);
-    }
+  const current = opts.run && loadUpdateRecovery(opts.run.runId, { env: opts.run.env });
+  if (current) {
+    throw new UpdateRecoveryRequiredError(current);
   }
 }
 

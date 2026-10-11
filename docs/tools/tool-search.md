@@ -466,14 +466,14 @@ The regression proves:
 pnpm test:live -- src/agents/tool-search.live.test.ts
 ```
 
-This opt-in probe uses configured OpenAI credentials; without them it is skipped.
+This opt-in check uses configured OpenAI credentials; without them it is skipped.
 It compares direct exposure, the unset default, and both explicit Tool Search modes with small and large
 synthetic catalogs through the OpenClaw runner. A verification code created inside
-the target tool proves actual execution. The probe checks policy-denied and
+the target tool proves actual execution. The check covers policy-denied and
 direct-only tools, deferred schemas, and transcript delivery without forcing a
 model tool choice. It reports request bytes, discovery and call counts, schema
 recovery, and elapsed time. Small catalogs are measured rather than assumed to
-benefit from compaction. A successful probe is not a cross-provider reliability
+benefit from compaction. A successful check is not a cross-provider reliability
 benchmark.
 
 ## Failure behavior

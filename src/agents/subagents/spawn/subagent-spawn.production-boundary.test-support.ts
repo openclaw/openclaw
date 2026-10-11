@@ -299,6 +299,21 @@ export function createBoundSpawnInvocation(
 type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
 
+export type RequestCustodySpawnCaseOptions = {
+  createBoundParent: () => Promise<BoundParent>;
+  createBoundGateway: (bound: BoundParent) => Promise<{ runtime: GatewayRuntime }>;
+  closeBoundGateway: (
+    bound: BoundParent,
+    runtime: GatewayRuntime,
+    childRunId?: string,
+  ) => Promise<unknown[]>;
+  throwBoundFailures: (failures: unknown[]) => void;
+  parentSessionKey: string;
+  parentRunId: string;
+  assertNoModelExecution: () => void;
+  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
+};
+
 export function registerYieldedRequesterBatchCase(options: {
   createBoundParent: () => Promise<BoundParent>;
   createGuestParent: (audit?: boolean) => Promise<{
@@ -328,7 +343,7 @@ export function registerYieldedRequesterBatchCase(options: {
     async (actor, { signal }) => {
       const registry = await import("../registry/subagent-registry.js");
       const { loadSubagentRegistryFromSqlite } =
-        await import("../registry/subagent-registry.store.sqlite.js");
+        await import("../registry/subagent-registry-state.fixture.test-support.js");
       const { settleSubagentRegistryPersistenceWork } =
         await import("../registry/subagent-registry.persistence.test-support.js");
       const announce = await import("../announce/subagent-announce.js");

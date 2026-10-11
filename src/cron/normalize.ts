@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
@@ -53,7 +54,7 @@ function coerceSchedule(schedule: UnknownRecord) {
       : undefined;
   const exprRaw = normalizeOptionalString(next.expr) ?? "";
   const timezone = normalizeOptionalString(next.tz);
-  const commandRaw = normalizeOptionalString(next.command) ?? "";
+  const commandRaw = readNonBlankString(next.command) ?? "";
   const streamCommand = normalizeCronCommandArgv(next.command);
   const cwdRaw = normalizeOptionalString(next.cwd) ?? "";
   const streamMode = normalizeOptionalLowercaseString(next.mode);

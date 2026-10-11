@@ -9,16 +9,19 @@ const mocks = vi.hoisted(() => ({
   authorizationRequired: vi.fn(),
 }));
 vi.mock("node:dns/promises", () => ({ lookup: mocks.lookup }));
+// mock-isolation: Exercise the real guarded transport with deterministic external HTTP responses.
 vi.mock("../infra/net/undici-runtime.js", () => ({
   createHttp1Agent: () => ({ close: async () => {}, destroy: async () => {} }),
   createHttp1EnvHttpProxyAgent: () => ({ close: async () => {}, destroy: async () => {} }),
   createHttp1ProxyAgent: () => ({ close: async () => {}, destroy: async () => {} }),
   loadUndiciRuntimeDeps: () => ({ fetch: mocks.fetch }),
 }));
+// mock-isolation: This transport suite controls OAuth results; credential storage has separate proof.
 vi.mock("./mcp-oauth.js", () => ({
   resolveMcpOAuthAccessToken: mocks.token,
   recordMcpOAuthAuthorizationRequired: mocks.authorizationRequired,
 }));
+// mock-isolation: Transport diagnostics must not initialize global logging.
 vi.mock("../logger.js", () => ({ logDebug: vi.fn(), logWarn: vi.fn() }));
 
 const server = { url: "https://mcp.example.com/events", transport: "streamable-http" };

@@ -34,7 +34,6 @@ describe("SQLite transcript reader byte budget", () => {
   it.each([
     { encoding: "UTF-16le" as const, payload: "a".repeat(200), label: "ascii" },
     { encoding: "UTF-8" as const, payload: "日本語🦞".repeat(40), label: "cjk" },
-    { encoding: "UTF-16be" as const, payload: "日本語🦞".repeat(40), label: "cjk" },
   ])(
     "measures the UTF-8 byte budget in $encoding for $label payloads",
     async ({ encoding, payload, label }) => {

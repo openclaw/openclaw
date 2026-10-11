@@ -207,12 +207,30 @@ export function prepareTranscriptCommit(input: TranscriptCommitInput): PreparedT
   const plan = (
     result: ApplyTranscriptCommitResult,
     nextMessageSeq = 0,
-  ): PreparedTranscriptCommit => ({
-    result,
-    version: snapshot.version,
-    nextMessageSeq,
-    parentId: manager.getAppendParentId(),
-  });
+  ): PreparedTranscriptCommit => {
+    let applied = result;
+    if (result.ok && result.messages.length > 0) {
+      const activeSequences = new Map(
+        manager
+          .getBranch()
+          .filter((event) => event.type === "message" || event.type === "compaction")
+          .map((event, index) => [event.id, index + 1]),
+      );
+      applied = {
+        ...result,
+        messages: result.messages.map((message) => {
+          const messageSeq = activeSequences.get(message.messageId);
+          return messageSeq === undefined ? message : { ...message, messageSeq };
+        }),
+      };
+    }
+    return {
+      result: applied,
+      version: snapshot.version,
+      nextMessageSeq,
+      parentId: manager.getAppendParentId(),
+    };
+  };
   if (input.recoverPersistedBatch) {
     const recovered = resolvePersistedCommitAcrossDag({
       baseLeafId: input.requestedBaseLeafId,

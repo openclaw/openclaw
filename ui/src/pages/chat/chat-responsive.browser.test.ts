@@ -27,7 +27,6 @@ import {
   expectFiniteRect,
   getBoundingBox,
   getRect,
-  messageCircleOffSvg,
   readUiCss,
   rectsOverlap,
   waitForLayoutSettled,
@@ -575,15 +574,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   : ""
               }
               <div class="agent-chat__composer-shell">
-                ${
-                  opts.crowdedComposerFooter
-                    ? `<div class="agent-chat__composer-run-status">
-                    <span class="agent-chat__run-status agent-chat__run-status--interrupted">
-                      ${messageCircleOffSvg()}<span class="agent-chat__run-status-label">Interrupted</span>
-                    </span>
-                  </div>`
-                    : ""
-                }
                 <div class="agent-chat__input" data-composer-layout="multiline">
                   ${
                     opts.slashMenu
@@ -2841,33 +2831,21 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           input: rectFor(".agent-chat__input"),
           meta: rectFor(".agent-chat__composer-meta"),
           settings: rectFor(".chat-controls__model-trigger"),
-          status: rectFor(".agent-chat__composer-run-status"),
           typing: rectFor(".agent-chat__typing-indicator--outside"),
         };
       });
 
       expect(layout.viewport).toEqual({ width: 320, height: 568 });
       expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
-      for (const control of [layout.status, layout.settings]) {
-        expect(control.x).toBeGreaterThanOrEqual(layout.footer.x - 1);
-        expect(control.x + control.width).toBeLessThanOrEqual(
-          layout.footer.x + layout.footer.width + 1,
-        );
-      }
-      expect(layout.status.x).toBeGreaterThanOrEqual(layout.input.x - 1);
-      expect(layout.status.x + layout.status.width).toBeLessThanOrEqual(
-        layout.input.x + layout.input.width + 1,
+      expect(layout.settings.x).toBeGreaterThanOrEqual(layout.footer.x - 1);
+      expect(layout.settings.x + layout.settings.width).toBeLessThanOrEqual(
+        layout.footer.x + layout.footer.width + 1,
       );
       expect(layout.typing.x).toBeGreaterThanOrEqual(0);
       expect(layout.typing.x + layout.typing.width).toBeLessThanOrEqual(layout.viewport.width);
       expect(layout.settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       expect(layout.settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-      for (const [left, right] of [
-        [layout.status, layout.settings],
-        [layout.settings, layout.meta],
-      ] as const) {
-        expect(rectsOverlap(left, right)).toBe(false);
-      }
+      expect(rectsOverlap(layout.settings, layout.meta)).toBe(false);
       expect(rectsOverlap(layout.typing, layout.footer)).toBe(false);
     });
   });

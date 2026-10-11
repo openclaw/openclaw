@@ -77,6 +77,7 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 import { MemoryIndexDatabase } from "./manager-database-context.js";
+import { loadMemorySourceFileState } from "./manager-source-state.js";
 import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
@@ -141,6 +142,9 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
   ) {
     super();
     this.publishedDatabase = new MemoryIndexDatabase(db);
+    // Keep this scheduler fixture microtask-only; worker I/O could hide a missing yield.
+    this.publishedDatabase.readSourceState = async (query) =>
+      loadMemorySourceFileState({ db, ...query });
   }
 
   async reindexArchiveFiles(files: string[]): Promise<void> {
@@ -189,10 +193,7 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
 
   protected assertRequiredProviderAvailable(): void {}
 
-  protected async indexFile(
-    entry: MemoryIndexEntry,
-    _options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.onIndexFile(this.indexedPaths.length);
   }

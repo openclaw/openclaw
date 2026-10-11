@@ -5,24 +5,6 @@ import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 // The icon owns its CSS so composer and transcript call sites cannot render it unstyled.
 import "../../../styles/chat/attachments.css";
 
-type AttachmentFileIconFamily =
-  | "unknown"
-  | "pdf"
-  | "document"
-  | "spreadsheet"
-  | "image"
-  | "video"
-  | "audio"
-  | "archive"
-  | "text"
-  | "markdown"
-  | "code"
-  | "javascript"
-  | "json"
-  | "python"
-  | "svg"
-  | "yaml";
-
 export type AttachmentFileVisualMode = "preview-with-favicon" | "large-placeholder";
 
 type CompactFileIcon =
@@ -60,7 +42,7 @@ type FileIconFamilyDefinition = {
   compactByExtension?: Readonly<Record<string, CompactFileIcon>>;
 };
 
-const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
+const FILE_ICON_FAMILIES = [
   {
     family: "unknown",
     accent: "#929292",
@@ -218,7 +200,9 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
   },
 ] as const;
 
-const UNKNOWN_FILE_ICON = FILE_ICON_FAMILIES[0]!;
+type AttachmentFileIconFamily = (typeof FILE_ICON_FAMILIES)[number]["family"];
+
+const UNKNOWN_FILE_ICON = FILE_ICON_FAMILIES[0];
 
 export type ResolvedAttachmentFileIcon = {
   family: AttachmentFileIconFamily;
@@ -233,12 +217,16 @@ export function resolveAttachmentFileIcon(
 ): ResolvedAttachmentFileIcon {
   const extension = getMediaFileExtension(filename);
   const normalizedMimeType = mimeType?.split(";", 1)[0]?.trim().toLowerCase();
-  const definition =
+  const definition: FileIconFamilyDefinition =
     (extension
-      ? FILE_ICON_FAMILIES.find((candidate) => candidate.extensions.includes(extension))
+      ? FILE_ICON_FAMILIES.find((candidate: FileIconFamilyDefinition) =>
+          candidate.extensions.includes(extension),
+        )
       : undefined) ??
     (normalizedMimeType
-      ? FILE_ICON_FAMILIES.find((candidate) => candidate.mimeTypes.includes(normalizedMimeType))
+      ? FILE_ICON_FAMILIES.find((candidate: FileIconFamilyDefinition) =>
+          candidate.mimeTypes.includes(normalizedMimeType),
+        )
       : undefined) ??
     UNKNOWN_FILE_ICON;
   const compact = extension

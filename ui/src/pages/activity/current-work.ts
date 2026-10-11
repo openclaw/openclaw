@@ -210,7 +210,10 @@ export function reconcileCurrentWork(
         // An unchanged reference for an entirely unheld target changes no query membership.
         continue;
       }
-      if (isCronRunSessionKey(change.key)) {
+      if (
+        isCronRunSessionKey(change.key) ||
+        (change.snapshot && parseSessionChangedEvent(change.snapshot)?.[2].isDock === true)
+      ) {
         continue;
       }
       if (

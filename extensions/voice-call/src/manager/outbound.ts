@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { CallBriefSchema } from "../call-brief.js";
 import {
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
@@ -35,8 +36,10 @@ type EndCallContext = Pick<
   | "stateRuntime"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "notifyHangupTimers"
   | "endCallOperations"
   | "mutationQueue"
+  | "beforeCallEnd"
 >;
 
 type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
@@ -81,6 +84,15 @@ export async function initiateCall(
   const dtmfSequence = opts.dtmfSequence;
   const requesterSessionKey = opts.requesterSessionKey?.trim();
   const agentId = normalizeAgentId(opts.agentId ?? ctx.config.agentId);
+  const parsedBrief = CallBriefSchema.optional().safeParse(opts.brief);
+  if (!parsedBrief.success) {
+    return {
+      callId: "",
+      success: false,
+      error: `Invalid call brief: ${parsedBrief.error.message}`,
+    };
+  }
+  const brief = parsedBrief.data;
   if (dtmfSequence) {
     const validationError = validateDtmfDigits(dtmfSequence);
     if (validationError) {
@@ -116,6 +128,11 @@ export async function initiateCall(
     return { callId: "", success: false, error: "fromNumber not configured" };
   }
 
+  const pendingNotifyAmd =
+    mode === "notify" &&
+    Boolean(initialMessage) &&
+    ctx.provider.name === "twilio" &&
+    ctx.config.voicemail?.detection === "twilio";
   const callRecord: CallRecord = {
     callId,
     provider: ctx.provider.name,
@@ -137,7 +154,16 @@ export async function initiateCall(
     metadata: {
       ...(initialMessage && { initialMessage }),
       mode,
+      ...(pendingNotifyAmd ? { pendingNotifyAmd: true } : {}),
+      ...(ctx.config.voicemail?.detection === "twilio" &&
+      (ctx.provider.name === "twilio" || ctx.provider.name === "mock")
+        ? { voicemailManagedByHost: true }
+        : {}),
       ...(requesterSessionKey ? { requesterSessionKey } : {}),
+      ...(brief ? { brief } : {}),
+      ...(brief?.maxDurationSeconds
+        ? { maxDurationSeconds: Math.min(brief.maxDurationSeconds, ctx.config.maxDurationSeconds) }
+        : {}),
     },
   };
 
@@ -158,7 +184,9 @@ export async function initiateCall(
     }
     let inlineTwiml: string | undefined;
     let preConnectTwiml: string | undefined;
-    if (mode === "notify" && initialMessage) {
+    if (pendingNotifyAmd) {
+      inlineTwiml = '<Response><Pause length="60"/></Response>';
+    } else if (mode === "notify" && initialMessage) {
       const pollyVoice = mapVoiceToPolly(resolvePreferredTtsVoice(ctx.config));
       inlineTwiml = generateNotifyTwiml(initialMessage, pollyVoice);
       console.log(`[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`);
@@ -187,6 +215,7 @@ export async function initiateCall(
       webhookUrl: ctx.webhookUrl,
       inlineTwiml,
       preConnectTwiml,
+      ...(ctx.config.voicemail?.detection === "twilio" ? { voicemail: ctx.config.voicemail } : {}),
       ...(streamSession
         ? { streamUrl: streamSession.streamUrl, streamAuthToken: streamSession.token }
         : {}),
@@ -361,6 +390,13 @@ export async function speakInitialMessage(
     return;
   }
 
+  if (
+    call.metadata?.pendingNotifyAmd ||
+    call.metadata?.notifyStatus ||
+    call.metadata?.voicemailStatus
+  ) {
+    return;
+  }
   const initialMessage = call.metadata?.initialMessage as string | undefined;
   const mode = (call.metadata?.mode as CallMode) ?? "conversation";
 
@@ -568,13 +604,19 @@ export function endCall(
         reason,
       });
 
-      await ctx.mutationQueue.enqueue("state", () =>
-        finalizeCall({
-          ctx,
-          call,
-          endReason: reason,
-        }),
-      );
+      try {
+        await ctx.beforeCallEnd?.(call);
+      } catch (error) {
+        console.warn(`[voice-call] Failed to drain call ${callId}: ${formatErrorMessage(error)}`);
+      }
+
+      await ctx.mutationQueue.enqueue("state", () => {
+        const preparedCall = copyCallRecord(call);
+        if (reason === "voicemail" && preparedCall.metadata?.voicemailStatus === "playing") {
+          preparedCall.metadata = { ...preparedCall.metadata, voicemailStatus: "left" };
+        }
+        return finalizeCall({ ctx, call, preparedCall, endReason: reason });
+      });
 
       return { success: true };
     } catch (err) {

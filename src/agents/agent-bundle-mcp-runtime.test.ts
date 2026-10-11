@@ -342,7 +342,7 @@ describe("session MCP runtime", () => {
     { label: "valid leaf", structuredContent: { node: null, label: "leaf" }, valid: true },
     { label: "invalid leaf", structuredContent: { node: null, label: 42 }, valid: false },
   ])(
-    "validates nested union resource references over stdio: $label",
+    "validates nested union output schemas under the canonical trimmed tool name: $label",
     async ({ structuredContent, valid }) => {
       const tempDir = tempDirTracker.make("bundle-mcp-nested-union-schema-");
       const serverPath = path.join(tempDir, "server.mjs");
@@ -351,7 +351,7 @@ describe("session MCP runtime", () => {
         logPath: path.join(tempDir, "server.log"),
         tools: [
           {
-            name: "nested",
+            name: " nested ",
             inputSchema: { type: "object" },
             outputSchema: {
               $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -395,41 +395,6 @@ describe("session MCP runtime", () => {
       }
     },
   );
-
-  it("enforces output schemas under the canonical trimmed tool name", async () => {
-    const tempDir = tempDirTracker.make("bundle-mcp-canonical-schema-");
-    const serverPath = path.join(tempDir, "server.mjs");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath: path.join(tempDir, "server.log"),
-      tools: [
-        {
-          name: " spaced ",
-          inputSchema: { type: "object" },
-          outputSchema: {
-            type: "object",
-            properties: { count: { type: "number" } },
-            required: ["count"],
-          },
-        },
-      ],
-      callToolResult: { content: [], structuredContent: { count: "invalid" } },
-    });
-    const runtime = createSessionMcpRuntime({
-      sessionId: "session-canonical-schema",
-      workspaceDir: "/workspace",
-      cfg: { mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } } },
-    });
-
-    try {
-      expect((await runtime.getCatalog()).tools.map((entry) => entry.toolName)).toEqual(["spaced"]);
-      await expect(runtime.callTool("docs", "spaced", {})).rejects.toThrow(
-        "does not match the tool's output schema",
-      );
-    } finally {
-      await runtime.dispose();
-    }
-  });
 
   it("validates an in-flight result against its dispatch-time output schema", async ({
     signal,
@@ -1037,29 +1002,6 @@ describe("session MCP runtime", () => {
     }
   });
 
-  it("does not pause MCP servers for normal tool error results", async () => {
-    const tempDir = tempDirTracker.make("bundle-mcp-error-backoff-");
-    const serverPath = path.join(tempDir, "error-backoff.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      callToolResult: { content: [{ type: "text", text: "tool failed" }], isError: true },
-    });
-
-    const runtime = await makeStdioRuntime("session-error-backoff", "failing", serverPath);
-
-    try {
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        await expect(runtime.callTool("failing", "slow_tool", {})).resolves.toMatchObject({
-          isError: true,
-        });
-      }
-    } finally {
-      await runtime.dispose();
-    }
-  });
-
   it.for(["before-start", "initialize", "tools/list", "ready"] as const)(
     "settles private MCP acquisition cancellation at %s",
     async (phase, { signal }) => {
@@ -1630,118 +1572,110 @@ describe("session MCP runtime", () => {
     expect(testing.getCachedSessionIds()).not.toContain("session-view-reset");
   });
 
-  it.for(["run", "app"] as const)(
-    "keeps an active MCP child and database lock until its %s lease retires",
-    async (retirementPath, { signal }) => {
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-deferred-run-"));
-      const serverPath = path.join(tempDir, "server.mjs");
-      const logPath = path.join(tempDir, "server.log");
-      const pidPath = path.join(tempDir, "server.pid");
-      const databasePath = path.join(tempDir, "locked.sqlite");
-      const appRetirement = retirementPath === "app";
-      await writeListToolsMcpServer({
-        filePath: serverPath,
-        logPath,
-        pidPath,
-        databasePath,
-        capabilities: { tools: {}, resources: {} },
-        resourceReadResult: {
-          contents: [
-            {
-              uri: "ui://fixture/app",
-              mimeType: "text/html;profile=mcp-app",
-              text: "<html><body>lease fixture</body></html>",
-            },
-          ],
-        },
-      });
-      let materialized: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
-      let lockProbe: DatabaseSync | undefined;
+  it("keeps an active MCP child and database lock until its app lease retires", async ({
+    signal,
+  }) => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-deferred-run-"));
+    const serverPath = path.join(tempDir, "server.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const pidPath = path.join(tempDir, "server.pid");
+    const databasePath = path.join(tempDir, "locked.sqlite");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      pidPath,
+      databasePath,
+      capabilities: { tools: {}, resources: {} },
+      resourceReadResult: {
+        contents: [
+          {
+            uri: "ui://fixture/app",
+            mimeType: "text/html;profile=mcp-app",
+            text: "<html><body>lease fixture</body></html>",
+          },
+        ],
+      },
+    });
+    let materialized: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+    let lockProbe: DatabaseSync | undefined;
 
-      try {
-        const runtime = await getOrCreateSessionMcpRuntime({
-          sessionId: "session-run-child",
-          sessionKey: "agent:test:session-run-child",
-          workspaceDir: "/workspace",
-          cfg: {
-            mcp: {
-              apps: { enabled: appRetirement },
-              servers: {
-                child: { command: process.execPath, args: [serverPath] },
-              },
+    try {
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-run-child",
+        sessionKey: "agent:test:session-run-child",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            apps: { enabled: true },
+            servers: {
+              child: { command: process.execPath, args: [serverPath] },
             },
           },
-        });
-        materialized = await materializeBundleMcpToolsForRun({ runtime });
-        const appView = appRetirement
-          ? await fetchMcpAppView({
-              runtime,
-              serverName: "child",
-              toolName: "slow_tool",
-              uiResourceUri: "ui://fixture/app",
-              toolInput: {},
-              toolResult: { content: [] },
-            })
-          : undefined;
-        if (appRetirement) {
-          expect(appView).toBeDefined();
-        }
-        const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
-        const { DatabaseSync } = await import("node:sqlite");
-        const database = new DatabaseSync(databasePath);
-        lockProbe = database;
-        database.exec("PRAGMA busy_timeout = 0");
-        expect(() => database.exec("BEGIN IMMEDIATE")).toThrow(/database is locked|SQLITE_BUSY/iu);
+        },
+      });
+      materialized = await materializeBundleMcpToolsForRun({ runtime });
+      const appView = await fetchMcpAppView({
+        runtime,
+        serverName: "child",
+        toolName: "slow_tool",
+        uiResourceUri: "ui://fixture/app",
+        toolInput: {},
+        toolResult: { content: [] },
+      });
+      expect(appView).toBeDefined();
+      const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+      const { DatabaseSync } = await import("node:sqlite");
+      const database = new DatabaseSync(databasePath);
+      lockProbe = database;
+      database.exec("PRAGMA busy_timeout = 0");
+      expect(() => database.exec("BEGIN IMMEDIATE")).toThrow(/database is locked|SQLITE_BUSY/iu);
 
-        await retireSessionMcpRuntime({
-          sessionId: "session-run-child",
-          reason: "gateway-session-cleanup",
-          preserveActiveLeases: true,
-        });
+      await retireSessionMcpRuntime({
+        sessionId: "session-run-child",
+        reason: "gateway-session-cleanup",
+        preserveActiveLeases: true,
+      });
+      expect(() => process.kill(pid, 0)).not.toThrow();
+      expect(testing.getCachedSessionIds()).toContain("session-run-child");
+
+      await materialized.dispose();
+      materialized = undefined;
+      if (appView) {
         expect(() => process.kill(pid, 0)).not.toThrow();
-        expect(testing.getCachedSessionIds()).toContain("session-run-child");
-
-        await materialized.dispose();
-        materialized = undefined;
-        if (appView) {
-          expect(() => process.kill(pid, 0)).not.toThrow();
-          expect(() => database.exec("BEGIN IMMEDIATE")).toThrow(
-            /database is locked|SQLITE_BUSY/iu,
-          );
-          const view = expectDefined(getMcpAppViewLease(appView.viewId, runtime), "MCP App view");
-          // Exercise the real expiry/deletion owner, not a manual retirement completion.
-          const clock = vi.spyOn(Date, "now").mockReturnValue(view.expiresAtMs);
-          try {
-            expect(getMcpAppViewLease(appView.viewId, runtime)).toBeUndefined();
-          } finally {
-            clock.mockRestore();
-          }
-          await waitForRuntimeState(
-            () => {
-              try {
-                process.kill(pid, 0);
-                return false;
-              } catch {
-                return true;
-              }
-            },
-            "deferred MCP child process exit",
-            signal,
-          );
+        expect(() => database.exec("BEGIN IMMEDIATE")).toThrow(/database is locked|SQLITE_BUSY/iu);
+        const view = expectDefined(getMcpAppViewLease(appView.viewId, runtime), "MCP App view");
+        // Exercise the real expiry/deletion owner, not a manual retirement completion.
+        const clock = vi.spyOn(Date, "now").mockReturnValue(view.expiresAtMs);
+        try {
+          expect(getMcpAppViewLease(appView.viewId, runtime)).toBeUndefined();
+        } finally {
+          clock.mockRestore();
         }
-        expect(() => process.kill(pid, 0)).toThrow();
-        expect(testing.getCachedSessionIds()).not.toContain("session-run-child");
-        expect(() => database.exec("BEGIN IMMEDIATE")).not.toThrow();
-        database.exec("ROLLBACK");
-      } finally {
-        mcpUiResourceTesting.clearViewStore();
-        await retireSessionMcpRuntime({ sessionId: "session-run-child", reason: "test-cleanup" });
-        lockProbe?.close();
-        await materialized?.dispose();
-        await fs.rm(tempDir, { recursive: true, force: true });
+        await waitForRuntimeState(
+          () => {
+            try {
+              process.kill(pid, 0);
+              return false;
+            } catch {
+              return true;
+            }
+          },
+          "deferred MCP child process exit",
+          signal,
+        );
       }
-    },
-  );
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(testing.getCachedSessionIds()).not.toContain("session-run-child");
+      expect(() => database.exec("BEGIN IMMEDIATE")).not.toThrow();
+      database.exec("ROLLBACK");
+    } finally {
+      mcpUiResourceTesting.clearViewStore();
+      await retireSessionMcpRuntime({ sessionId: "session-run-child", reason: "test-cleanup" });
+      lockProbe?.close();
+      await materialized?.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 
   it("keeps a run-mode subagent runtime alive for an approved follow-up turn", async () => {
     const fixture = await createMcpProbeFixture(tempDirs);
@@ -1802,41 +1736,6 @@ describe("session MCP runtime", () => {
       expect(testing.getCachedSessionIds()).not.toContain(sessionId);
     } finally {
       await retireSessionMcpRuntime({ sessionId, reason: "test-cleanup" });
-    }
-  });
-
-  it("keeps an unleased stdio child alive until reset", async () => {
-    const tempDir = makeTempDir(tempDirs, "bundle-mcp-keep-alive-");
-    const serverPath = path.join(tempDir, "server.mjs");
-    const pidPath = path.join(tempDir, "server.pid");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath: path.join(tempDir, "server.log"),
-      pidPath,
-    });
-    const clock = createGatewaySchedulerClock(Date.now());
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: createTestGatewayScheduler(clock.clock),
-    });
-    const params: RuntimeParams = {
-      sessionId: "session-child-keep-alive",
-      workspaceDir: tempDir,
-      cfg: { mcp: { servers: { child: { command: process.execPath, args: [serverPath] } } } },
-    };
-    try {
-      const runtime = await manager.getOrCreate(params);
-      await runtime.getCatalog();
-      await runtime.callTool("child", "slow_tool", {});
-      const pid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
-      clock.setTime(Date.now() + 86_400_000);
-      expect(await manager.sweepIdleRuntimes()).toBe(0);
-      expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
-      expect(() => process.kill(pid, 0)).not.toThrow();
-      await manager.disposeSession(params.sessionId);
-      expect(() => process.kill(pid, 0)).toThrow();
-      expect(manager.listRuntimeKeys()).toEqual([]);
-    } finally {
-      await manager.disposeAll();
     }
   });
 

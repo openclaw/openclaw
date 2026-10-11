@@ -88,7 +88,7 @@ const manifestSource = readFileSync(
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
-const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb";
+const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6";
 const CREATE_GITHUB_APP_TOKEN_V3 =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
@@ -1697,6 +1697,35 @@ AFTER_CD
         ).toBe(releaseGate && !qualification);
       }
     }
+    const releaseChild = {
+      eventName: "workflow_dispatch",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      dispatchId: "full-release-validation-1-1-ci",
+    } as const;
+    expect(evaluateWorkflowExpression("${{ " + prepare.if + " }}", releaseChild)).toBe(true);
+    expect(evaluateWorkflowExpression(job["runs-on"], releaseChild)).toBe(
+      "blacksmith-16vcpu-ubuntu-2404",
+    );
+    expect(evaluateWorkflowExpression(parallelism!, releaseChild)).toBe(1);
+    for (const recovery of [
+      { ...releaseChild, runnerBackend: "github" as const },
+      { ...releaseChild, runAttempt: 2 },
+      { ...releaseChild, runnerBackend: "hybrid" as const, runAttempt: 2 },
+      { ...releaseChild, runnerBackend: "runson" as const, runAttempt: 2 },
+    ]) {
+      expect(evaluateWorkflowExpression(job["runs-on"], recovery)).toBe("ubuntu-24.04");
+      expect(evaluateWorkflowExpression(parallelism!, recovery)).toBe(1);
+    }
+    expect(
+      evaluateWorkflowExpression(job["runs-on"], {
+        ...releaseChild,
+        releaseRunnerGroup: "release-runners",
+      }),
+    ).toEqual({ group: "release-runners", labels: "ubuntu-24.04" });
+    const manualDispatch = { ...releaseChild, dispatchId: "" };
+    expect(evaluateWorkflowExpression(job["runs-on"], manualDispatch)).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowExpression(parallelism!, manualDispatch)).toBe(1);
     expect(prepare.run).toContain("pnpm build:ci-artifacts");
     expect(prepare.run).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
     expect(prepare.run).not.toContain("--skip-check");
@@ -3317,19 +3346,26 @@ server.listen(0, "127.0.0.1", () => {
     },
   );
 
-  it("refreshes full-build cache generations without changing their restore prefix", () => {
+  it("shares full-build caches by installed Node version across requests and generations", () => {
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
     const cacheStep = expectDefined(
       action.runs.steps.find((step: WorkflowStep) => step.name === "Restore build-all cache"),
       "full-build cache restore",
     );
-    const renderCacheKey = (template: string, runId: number, runAttempt: number) =>
+    const renderCacheKey = (
+      template: string,
+      runId: number,
+      runAttempt: number,
+      requestedNode = "24.x",
+      resolvedNode = "24.21.0",
+    ) =>
       template.replace(/\$\{\{([\s\S]*?)\}\}/gu, (_, expression: string) =>
         String(
-          runInNewContext(expression.replace(/inputs\.([a-z-]+)/gu, 'inputs["$1"]'), {
+          runInNewContext(expression.replace(/\.([A-Za-z_][\w-]*)/gu, '["$1"]'), {
             github: { repository: "openclaw/openclaw", run_id: runId, run_attempt: runAttempt },
-            inputs: { "build-all-cache-scope": "full", "node-version": "24.x" },
+            inputs: { "build-all-cache-scope": "full", "node-version": requestedNode },
             runner: { os: "Linux", arch: "X64" },
+            steps: { "setup-node": { outputs: { "resolved-version": resolvedNode } } },
             hashFiles: () => "unchanged-source",
           }),
         ),
@@ -3349,6 +3385,19 @@ server.listen(0, "127.0.0.1", () => {
       );
     }
     expect(cacheStep.with["restore-keys"]).not.toContain("hashFiles");
+    const warmerKey = renderCacheKey(cacheStep.with.key, 10, 1);
+    const releasePrefix = renderCacheKey(cacheStep.with["restore-keys"], 11, 1, "24.21.0").trim();
+    expect(warmerKey.startsWith(releasePrefix)).toBe(true);
+    for (const resolvedNode of ["24.22.0", "26.7.0"]) {
+      const otherRuntimePrefix = renderCacheKey(
+        cacheStep.with["restore-keys"],
+        11,
+        1,
+        "24.x",
+        resolvedNode,
+      ).trim();
+      expect(warmerKey.startsWith(otherRuntimePrefix)).toBe(false);
+    }
   });
 
   it("persists Node 26 minimum declarations through trusted bounded artifacts", () => {
@@ -5136,6 +5185,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         env: {
           TASK: task,
           RUN_BUNDLED_TESTS: String(eventName !== "pull_request"),
+          RUN_PR_MADGE_IMPORT_CYCLES: String(eventName === "pull_request"),
+          RUN_PR_KYSELY_GUARDRAILS: String(eventName === "pull_request"),
+          SPLIT_PR_GUARDS: "false",
           GITHUB_EVENT_NAME: eventName,
           CHECKOUT_KIND: "linux-node",
           CHECKOUT_BASE_SHA: String(checkoutBase),
@@ -5936,7 +5988,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(installRipgrepStep).toMatchObject({
       if: "matrix.requires_ripgrep == true && runner.os == 'Linux'",
-      run: expect.stringContaining("apt-get install -y --no-install-recommends ripgrep"),
+      uses: "./.ci-harness/.github/actions/setup-ripgrep",
     });
     expect(nodeTestJob.steps.indexOf(buildRuntimeStep)).toBeLessThan(
       nodeTestJob.steps.indexOf(runStep),

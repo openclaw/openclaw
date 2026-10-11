@@ -7,6 +7,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -287,9 +288,11 @@ describe("cloud worker run ownership", () => {
           sessionKey: SESSION_KEY,
           embeddedRunToolAuthorityBinding: () => {
             assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+            const project = (_overlay: ReplyToolAuthorityOverlay) => "worker-turn-authority";
             return {
               source: "reply",
-              project: () => "worker-turn-authority",
+              project,
+              projectAsync: async (overlay) => project(overlay),
               assertActive: () => {},
             };
           },

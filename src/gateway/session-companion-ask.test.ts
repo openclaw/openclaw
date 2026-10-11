@@ -103,7 +103,7 @@ function createCompanion(cfg: OpenClawConfig = {}) {
         context: { empty: true, messages: [], sessionId: "session-1" },
       }),
     },
-    sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+    sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
     resolveUtilityModelRef: () => "test/model-a",
   });
 }

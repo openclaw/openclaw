@@ -27,6 +27,29 @@ describe("summarizeToolGroup", () => {
     ).toBe("1 edit · 2 other operations");
   });
 
+  it("counts launched subagents apart from the launcher's other operations", () => {
+    const launches = ["story", "puzzle", "cafe"].map((id) =>
+      prepared(`tool:${id}`, "Sub-agent", { name: "sessions_spawn", toolCallId: id }),
+    );
+    expect(
+      summarizeToolGroup([prepared("search", "Find notes", { name: "custom_tool" }), ...launches]),
+    ).toBe("1 other operation · 3 subagents");
+    expect(summarizeToolGroup(launches.slice(0, 1))).toBe("1 subagent");
+    // A launch that opened a session in its own right is not a subagent.
+    expect(summarizeToolGroup(launches, { ownSessionLaunches: new Set(["story"]) })).toBe(
+      "1 other operation · 2 subagents",
+    );
+    // A refused launch started no subagent.
+    const refused = prepared("tool:refused", "Sub-agent", {
+      name: "sessions_spawn",
+      toolCallId: "refused",
+      status: "failed",
+    });
+    expect(summarizeToolGroup([...launches, refused])).toBe(
+      "1 other operation · 3 subagents · 1 failed",
+    );
+  });
+
   it("replaces running state with the same operation's outcome without counting suppressed siblings", () => {
     expect(
       summarizeToolGroup([

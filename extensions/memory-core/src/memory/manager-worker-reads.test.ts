@@ -48,6 +48,11 @@ describe("memory manager retained worker reads", () => {
           (sql) => /transcript_events/i.test(sql) && /\b(?:count|sum)\s*\(/i.test(sql),
         ),
       ).toEqual([]);
+      expect(
+        observed.queries.filter(
+          (sql) => /^select\b/i.test(sql) && /memory_index_sources/i.test(sql),
+        ),
+      ).toEqual([]);
       expect(manager.status().dirty).toBe(false);
     } finally {
       observed.restore();

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/cloudflare",
-  "version": "2026.9.8",
+  "version": "2026.9.9",
   "description": "Cloudflare R2 storage provider for OpenClaw.",
   "repository": {
     "type": "git",
@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1136.0"
+    "@aws-sdk/client-s3": "3.1144.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -24,10 +24,10 @@
       "minHostVersion": ">=2026.9.7"
     },
     "compat": {
-      "pluginApi": ">=2026.9.8"
+      "pluginApi": ">=2026.9.9"
     },
     "build": {
-      "openclawVersion": "2026.9.8"
+      "openclawVersion": "2026.9.9"
     },
     "release": {
       "publishToClawHub": true,

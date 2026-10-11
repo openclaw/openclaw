@@ -51,10 +51,8 @@ export function resolveBedrockCachePoint(
   };
 }
 
-/** How Bedrock thinking output should be displayed to users. */
 type BedrockThinkingDisplay = "summarized" | "omitted";
 
-/** Extra Bedrock-specific stream options accepted by the provider runtime. */
 export interface BedrockOptions extends StreamOptions {
   region?: string;
   profile?: string;
@@ -75,7 +73,6 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
   });
 }
 
-/** Return whether a Bedrock model is known to support Anthropic prompt caching. */
 export function supportsBedrockClaudePromptCaching(modelId: string, modelName?: string): boolean {
   const candidates = getModelMatchCandidates(modelId, modelName);
   const hasClaudeRef = candidates.some((s) => s.includes("claude"));

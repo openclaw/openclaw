@@ -84,6 +84,14 @@ export async function settleDuplicateSessionSqliteArchives(params: {
     target: SessionSqliteMigrationTargetInput;
     issues: DoctorSessionSqliteIssue[];
   }> = [];
+  const recordFailure = (target: SessionSqliteMigrationTargetInput, message: string) => {
+    failures.push({
+      target,
+      issues: [
+        { code: "historical_transcript_deferred", message: `${message}; original retained.` },
+      ],
+    });
+  };
   const survivors = new Map<string, RecoveryArtifactReference[]>();
   const selected: RecoveryCleanupReport["artifacts"] = [];
   const replacements = new Map<string, RecoveryArtifactReference["move"]>();
@@ -133,15 +141,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
         }
         replacements.set(item.path, survivor[0]!.move);
       } catch (error) {
-        failures.push({
-          target,
-          issues: [
-            {
-              code: "historical_transcript_deferred",
-              message: `${item.path}: ${String(error)}; original retained.`,
-            },
-          ],
-        });
+        recordFailure(target, `${item.path}: ${String(error)}`);
       }
     }
   }
@@ -153,15 +153,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
     } else {
       replacements.delete(archivePath);
       const item = selected.find((candidate) => candidate.path === archivePath)!;
-      failures.push({
-        target: refs[0]!.target,
-        issues: [
-          {
-            code: "historical_transcript_deferred",
-            message: `${archivePath}: ${item.detail ?? item.reason}; original retained.`,
-          },
-        ],
-      });
+      recordFailure(refs[0]!.target, `${archivePath}: ${item.detail ?? item.reason}`);
     }
   }
   return [
@@ -179,11 +171,13 @@ export async function retireSessionSqliteRecovery(params: {
   readConfig(): Promise<OpenClawConfig>;
   confirm(report: RecoveryCleanupReport): Promise<boolean>;
 }): Promise<RecoveryCleanupReport> {
-  await assertOpenClawStateWriteAllowedAtPath({
-    databasePath: path.join(params.preview.stateDir, "state", "openclaw.sqlite"),
-    env: params.env,
-    recoverOrphanedSidecars: false,
-  });
+  const assertStateWriteAllowed = (stateDir: string) =>
+    assertOpenClawStateWriteAllowedAtPath({
+      databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
+      env: params.env,
+      recoverOrphanedSidecars: false,
+    });
+  await assertStateWriteAllowed(params.preview.stateDir);
   return withDoctorSqliteMaintenanceLock({
     env: params.env,
     operation: "update recovery cleanup",
@@ -199,11 +193,7 @@ export async function retireSessionSqliteRecovery(params: {
       ) {
         throw new Error("Recovery selection changed; preview cleanup again.");
       }
-      await assertOpenClawStateWriteAllowedAtPath({
-        databasePath: path.join(report.stateDir, "state", "openclaw.sqlite"),
-        env: params.env,
-        recoverOrphanedSidecars: false,
-      });
+      await assertStateWriteAllowed(report.stateDir);
       const adoptions = new Map<RecoveryArtifactReference, MigrationArtifact>();
       const assertDestinations = createRecoveryDestinationVerifier(report.stateDir);
       for (const item of report.artifacts) {
@@ -297,11 +287,7 @@ export async function retireSessionSqliteRecovery(params: {
           }
         }
       }
-      await assertOpenClawStateWriteAllowedAtPath({
-        databasePath: path.join(report.stateDir, "state", "openclaw.sqlite"),
-        env: params.env,
-        recoverOrphanedSidecars: false,
-      });
+      await assertStateWriteAllowed(report.stateDir);
       authority.assertCurrent();
       for (const item of selected) {
         const refs = references.get(item.path)!;

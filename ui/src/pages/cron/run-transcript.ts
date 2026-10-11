@@ -10,7 +10,7 @@ import { mergeChatTranscriptPages } from "../chat/chat-transcript-pages.ts";
 import { renderChatHistoryBoundary } from "../chat/components/chat-history-boundary.ts";
 import { renderChatTranscriptFeed } from "../chat/components/chat-transcript-feed.ts";
 
-type Scope = { client: GatewayBrowserClient; epoch: number; isCurrent: () => boolean };
+type Scope = { client: GatewayBrowserClient; isCurrent: () => boolean };
 
 /** The run log owns transcript identity; never resolve a client-selected session alias. */
 export class CronRunTranscript implements ReactiveController {

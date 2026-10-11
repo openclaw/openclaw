@@ -42,7 +42,6 @@ import {
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import {
-  cancelProcessExitAfterTuiReturn,
   resolveTuiShutdownHardExitMs,
   runTui,
   scheduleProcessExitAfterTuiReturn,
@@ -999,7 +998,7 @@ export async function finalizeSetupWizard(
             });
             sessionGateway = undefined;
           } finally {
-            cancelProcessExitAfterTuiReturn(cleanupExitTimer);
+            clearTimeout(cleanupExitTimer);
           }
         }
       }

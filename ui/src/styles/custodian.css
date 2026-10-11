@@ -313,7 +313,8 @@ openclaw-custodian-page {
   background: var(--bg-elevated);
 }
 
-.custodian__wizard-title {
+.custodian__wizard-title,
+.custodian__history-heading strong {
   color: var(--text-strong);
   font-size: 14px;
 }
@@ -436,11 +437,6 @@ openclaw-custodian-page {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-}
-
-.custodian__history-heading strong {
-  color: var(--text-strong);
-  font-size: 14px;
 }
 
 .custodian__history-heading span,

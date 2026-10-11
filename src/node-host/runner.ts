@@ -1,4 +1,3 @@
-/** CLI runner for node-host stdin/stdout command dispatch. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
@@ -25,6 +24,7 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
 import {
@@ -515,22 +515,14 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       await autoUpdateStart?.catch(() => undefined);
       await autoUpdater?.stop();
       const failures: unknown[] = [];
-      try {
-        await client.stop();
-      } catch (error) {
-        failures.push(error);
+      for (const close of [() => client.stop(), () => activeRuntime.close()]) {
+        try {
+          await close();
+        } catch (error) {
+          failures.push(error);
+        }
       }
-      try {
-        await activeRuntime.close();
-      } catch (error) {
-        failures.push(error);
-      }
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "node host shutdown cleanup failed");
-      }
+      throwNodeHostCleanupErrors(failures, "node host shutdown cleanup failed");
     } finally {
       clearInterval(lifetimeInterval);
     }

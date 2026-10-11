@@ -11,13 +11,15 @@ import {
   commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
   upsertDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
 } from "../delivery-queue-sqlite-namespace.kernel.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import {
   deleteDeliveryQueueEntryInDatabase,
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
 } from "../delivery-queue-sqlite.kernel.js";
-import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
+import {
+  getDeliveryQueueEntryStatus,
+  seedDeliveryQueueEntry,
+} from "../delivery-queue-sqlite.test-support.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.types.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import {

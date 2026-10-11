@@ -79,6 +79,7 @@ it.each([
   );
   expect(readDarwinProcessCommand(12, uid)).toEqual({
     argv,
+    executable: "/runtime path/node",
     ...(serviceMarker ? { serviceMarker } : {}),
   });
 });

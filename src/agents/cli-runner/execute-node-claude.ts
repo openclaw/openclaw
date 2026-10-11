@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import type { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
 import { prepareNodeClaudeSkillRuntime } from "../../gateway/node-claude-skill-runtime.js";
 import { createAbortError } from "../../infra/abort-signal.js";
@@ -128,29 +129,6 @@ export function createCliAbortError(): Error {
   return createAbortError("CLI run aborted");
 }
 
-async function waitForNodeOperation<T>(params: {
-  operation: () => Promise<T>;
-  signal?: AbortSignal;
-}): Promise<T> {
-  if (params.signal?.aborted) {
-    throw createCliAbortError();
-  }
-  const operation = params.operation();
-  if (!params.signal) {
-    return await operation;
-  }
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(createCliAbortError());
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-    if (params.signal?.aborted) {
-      onAbort();
-    }
-    void operation.then(resolve, reject).finally(() => {
-      params.signal?.removeEventListener("abort", onAbort);
-    });
-  });
-}
-
 type ExecuteNodeClaudeRunDeps = {
   invokeNodeClaudeCliRun: typeof invokeNodeClaudeCliRun;
   registerExecApprovalRequestForHostOrThrow: typeof registerExecApprovalRequestForHostOrThrow;
@@ -247,8 +225,8 @@ export async function executeNodeClaudeRun(params: {
     if (approval) {
       skillRuntime?.assertCurrent();
       const approvalId = crypto.randomUUID();
-      const registration = await waitForNodeOperation({
-        operation: () =>
+      const registration = await racePromiseWithAbortSignal(
+        () =>
           params.deps.registerExecApprovalRequestForHostOrThrow({
             approvalId,
             command: approval.systemRunPlan.commandText,
@@ -266,16 +244,18 @@ export async function executeNodeClaudeRun(params: {
               ? { approvalReviewerDeviceIds: [contextParams.approvalReviewerDeviceId] }
               : {}),
           }),
-        signal: skillRuntime?.signal ?? nodeAbortController.signal,
-      });
-      const decision = await waitForNodeOperation({
-        operation: () =>
+        skillRuntime?.signal ?? nodeAbortController.signal,
+        createCliAbortError,
+      );
+      const decision = await racePromiseWithAbortSignal(
+        () =>
           params.deps.resolveRegisteredExecApprovalDecision({
             approvalId: registration.id,
             preResolvedDecision: registration.finalDecision,
           }),
-        signal: skillRuntime?.signal ?? nodeAbortController.signal,
-      });
+        skillRuntime?.signal ?? nodeAbortController.signal,
+        createCliAbortError,
+      );
       if (decision === "allow-once" || decision === "allow-always") {
         nodeResult = await invokeNode({ decision, plan: approval.systemRunPlan });
       } else {

@@ -6,7 +6,6 @@ import {
 } from "../../../config/legacy.default-agent-roles.js";
 import { projectLegacyAgentRosterEntries } from "../../../config/legacy.roster.js";
 import {
-  defineLegacyConfigMigration,
   getRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigMigrationContext,
@@ -109,15 +108,13 @@ export const LEGACY_AGENT_ROSTER_RULES: LegacyConfigRule[] = [
 ];
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_ENTRIES: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "runtime.agents-entries",
-    describe: "Move agent arrays to keyed entries",
     legacyRules: LEGACY_AGENT_ROSTER_RULES,
     apply: migrateAgentEntries,
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "runtime.agents-explicit-ownership",
-    describe: "Persist canonical roster and per-surface ownership",
     apply: (raw, changes, context) => {
       const retired = retireLegacyAgentDefaultMarkers(raw);
       if (!retired) {
@@ -145,5 +142,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_ENTRIES: LegacyConfigMigrationSpec
       nextAgents.ownership = "explicit";
       changes.push("Stamped the multi-agent roster for explicit per-surface ownership.");
     },
-  }),
+  },
 ];

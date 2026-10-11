@@ -136,9 +136,6 @@ export async function deliverLineAutoReply(params: {
     allowFailedBatchTextRecovery: boolean,
     externalTail: messagingApi.Message[] = [],
   ): Promise<void> => {
-    if (messages.length === 0) {
-      return;
-    }
     for (let i = 0; i < messages.length; i += 5) {
       const batch = messages.slice(i, i + 5);
       try {

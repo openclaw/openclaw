@@ -461,7 +461,7 @@ export function registerCanaryReadinessBudgetTests(
           expect(requests).toEqual(["/startupz", "/readyz", "/readyz"]);
           expect(proxyRequests).toEqual(["http://external.example/"]);
         } else if (loopbackMode === "proxy") {
-          const message = `Readiness probe http://127.0.0.1:${rehearsal.port}/startupz failed: HTTP 502 (via proxy http://127.0.0.1:${address.port}). Check Gateway logs and proxy.loopbackMode; rerun openclaw update.`;
+          const message = `Readiness check http://127.0.0.1:${rehearsal.port}/startupz failed: HTTP 502 (via proxy http://127.0.0.1:${address.port}). Check Gateway logs and proxy.loopbackMode; rerun openclaw update.`;
           expectCanaryReadinessWarning(result.steps.at(-1), "startupz", 502);
           expect(result.steps.at(-1)).toMatchObject({
             advisory: { kind: "candidate-runtime-unavailable", message },

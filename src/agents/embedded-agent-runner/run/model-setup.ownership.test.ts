@@ -14,7 +14,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
-import { historyLane } from "../../../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -244,10 +244,10 @@ describe("model chat and native model ownership", () => {
     async (race) => {
       const nativeOwner = vi.fn(() => ({ model: "native" as const, auth: "native" as const }));
       const fixture = await createFixture({}, nativeOwner);
-      const run = historyLane.pool.run.bind(historyLane.pool);
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
       const revoked = new Error("Native model setup authority revoked");
       let changed = false;
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           !changed &&

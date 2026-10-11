@@ -23,7 +23,7 @@ class AgentAvatarView extends LitElement {
       agents: [{ id: "beta", name: "Beta" }],
     },
     agentIdentityById: identityWithAvatar,
-    identityAvatarLoader: this.avatarLoader,
+    overview: { ...createProps().overview, identityAvatarLoader: this.avatarLoader },
   });
 
   override createRenderRoot() {
@@ -147,7 +147,10 @@ it("fetches a persisted settings avatar with the bearer credential", async () =>
 it("renders the upload preview without fetching the persisted settings avatar", async () => {
   const preview = `data:image/png;base64,${avatarPng}`;
   const view = await createView({
-    identityDraft: { name: null, emoji: null, avatar: preview },
+    overview: {
+      ...createProps().overview,
+      identityDraft: { name: null, emoji: null, avatar: preview },
+    },
   });
 
   expect(avatarImage(view)?.getAttribute("src")).toBe(preview);
@@ -167,7 +170,7 @@ it("keeps a missing settings avatar on its fallback and recovers on a new revisi
   await changeAvatarRevision(view, 2);
   await waitForFast(() => expect(fetchAvatar).toHaveBeenCalledTimes(2));
   await waitForFast(() => expect(avatarImage(view)).toBeNull());
-  view.props.identityDraft = { name: "Renamed Beta", emoji: null, avatar: null };
+  view.props.overview.identityDraft = { name: "Renamed Beta", emoji: null, avatar: null };
   view.requestUpdate();
   await view.updateComplete;
   expect(avatarImage(view)).toBeNull();
@@ -194,7 +197,7 @@ it("keeps a decode failure on its fallback across rerenders until the revision c
   expect(avatarImage(view)).toBeNull();
   await expectAvatarFallback(view);
 
-  view.props.identityDraft = { name: "Renamed Beta", emoji: null, avatar: null };
+  view.props.overview.identityDraft = { name: "Renamed Beta", emoji: null, avatar: null };
   view.requestUpdate();
   await view.updateComplete;
   expect(avatarImage(view)).toBeNull();

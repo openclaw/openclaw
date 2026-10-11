@@ -70,7 +70,7 @@ describe("process error handlers", () => {
   });
 
   it.each([
-    Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }),
+    Object.assign(new TypeError("request failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }),
     Object.assign(new Error("unable to open database file"), { code: "SQLITE_CANTOPEN" }),
   ])("warns without exiting for transient rejection %#", (error) => {
     emitUnhandled(error);

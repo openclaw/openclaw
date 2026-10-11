@@ -4,6 +4,7 @@ import {
   type WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { WhatsAppQaMessageScenarioContext } from "./whatsapp-live.contracts.js";
 import {
   isWhatsAppScenarioSutMessage,
@@ -166,9 +167,7 @@ export async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: s
       ) {
         throw error;
       }
-      await new Promise((resolve) => {
-        setTimeout(resolve, WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS);
-      });
+      await sleep(WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS);
     }
   }
   throw new Error("unreachable WhatsApp QA driver retry loop exit");

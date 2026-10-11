@@ -16,29 +16,24 @@ import "../components/app-sidebar.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
+import type { ShellViewHost } from "./app-shell-view.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
 
-type PairingShell = HTMLElement & {
-  runtime?: ApplicationRuntime;
-  render: () => TemplateResult;
-  routeState: {
-    routeId?: string;
-    location?: { pathname: string; search: string; hash: string };
+type PairingShell = HTMLElement &
+  Pick<ShellViewHost, "devicePairSetup" | "settingsSidebar"> & {
+    runtime?: ApplicationRuntime;
+    render: () => TemplateResult;
+    routeState: {
+      routeId?: string;
+      location?: { pathname: string; search: string; hash: string };
+    };
+    outboxStoreRuntime: OutboxStoreRuntime | null;
+    openNewSession: (agentId: string) => void;
   };
-  devicePairSetupRenderer: unknown;
-  devicePairSetupLoadFailed: boolean;
-  loadDevicePairSetupRenderer: () => void;
-  settingsSidebarRenderer: unknown;
-  settingsSidebarLoadFailed: boolean;
-  loadSettingsSidebarRenderer: () => void;
-  retrySettingsSidebarRenderer: () => void;
-  outboxStoreRuntime: OutboxStoreRuntime | null;
-  openNewSession: (agentId: string) => void;
-};
 
 type PairingSidebar = LitElement & {
   render: () => TemplateResult;
@@ -454,10 +449,10 @@ describe("application shell pairing access", () => {
     if (failed) {
       renderSidebar();
     } else {
-      shell.loadDevicePairSetupRenderer = loadRenderer;
+      shell.devicePairSetup.load = loadRenderer;
     }
-    shell.devicePairSetupRenderer = null;
-    shell.devicePairSetupLoadFailed = failed;
+    shell.devicePairSetup.renderer = null;
+    shell.devicePairSetup.failed = failed;
     renderSidebar();
     const dialog = container.querySelector<HTMLElement>(".device-pair-setup");
     if (failed) {
@@ -467,7 +462,7 @@ describe("application shell pairing access", () => {
       ];
       expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
       actions[0]?.click();
-      expect(shell.devicePairSetupLoadFailed).toBe(false);
+      expect(shell.devicePairSetup.failed).toBe(false);
     } else {
       expect(dialog?.getAttribute("aria-busy")).toBe("true");
       expect(dialog?.textContent).toContain("Loading…");
@@ -482,12 +477,12 @@ describe("application shell pairing access", () => {
       routeId: "profile",
       location: { pathname: "/settings/profile", search: "", hash: "" },
     };
-    shell.settingsSidebarRenderer = null;
-    shell.settingsSidebarLoadFailed = failed;
+    shell.settingsSidebar.renderer = null;
+    shell.settingsSidebar.failed = failed;
     if (failed) {
-      shell.retrySettingsSidebarRenderer = loadRenderer;
+      shell.settingsSidebar.retry = loadRenderer;
     } else {
-      shell.loadSettingsSidebarRenderer = loadRenderer;
+      shell.settingsSidebar.load = loadRenderer;
     }
     render(shell.render(), container);
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");

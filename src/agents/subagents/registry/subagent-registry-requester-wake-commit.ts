@@ -14,7 +14,6 @@ import {
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
 import type { RequesterInitialTransfer } from "./subagent-registry-requester-yield.js";
-import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   captureRequesterSettleRunIdentity,
@@ -22,7 +21,7 @@ import {
   isRequesterCompletionCohortCurrent,
 } from "./subagent-requester-settle-identity.js";
 import {
-  bindSubagentRunRuntimeKey,
+  copySubagentRunRuntimeOwner,
   currentSubagentRunOrObserved,
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
@@ -182,16 +181,12 @@ export function commitRequesterInitialTransfer(
   const identities = new Map(
     entries.map((entry) => [entry.runId, captureRequesterSettleRunIdentity(entry)]),
   );
-  const cancelled = new Map(
-    entries.map((entry) => [
-      entry.runId,
-      {
-        killIntent: entry.killIntent,
-        killReconciliation: entry.killReconciliation,
-        suppressed: entry.suppressCompletionDelivery,
-      },
-    ]),
-  );
+  const cancellation = (entry: SubagentRunRecord) => ({
+    killIntent: entry.killIntent,
+    killReconciliation: entry.killReconciliation,
+    suppressed: entry.suppressCompletionDelivery,
+  });
+  const cancelled = new Map(entries.map((entry) => [entry.runId, cancellation(entry)]));
   const retiredRunIds = new Set<string>();
   let writeFailure: SubagentRegistryWriteError | undefined;
   let retired = false;
@@ -270,14 +265,7 @@ export function commitRequesterInitialTransfer(
               captureRequesterSettleRunIdentity(current),
               identities.get(expected.runId),
             ) ||
-            !isDeepStrictEqual(
-              {
-                killIntent: current.killIntent,
-                killReconciliation: current.killReconciliation,
-                suppressed: current.suppressCompletionDelivery,
-              },
-              cancelled.get(expected.runId),
-            )
+            !isDeepStrictEqual(cancellation(current), cancelled.get(expected.runId))
       ) {
         throw new SubagentRegistryMutationRejectedError(
           "Initial requester handoff lost its recorded cohort",
@@ -318,9 +306,7 @@ export function commitRequesterInitialTransfer(
           }
           const drafts = entries.map((entry) => {
             const current = rows.get(entry.runId) ?? entry;
-            const draft = structuredClone(current);
-            bindSubagentRunRuntimeKey(draft, getSubagentRunRuntimeKey(current));
-            return draft;
+            return copySubagentRunRuntimeOwner(current, structuredClone(current));
           });
           const retiring = mutate(drafts);
           const postimages = new Map<string, SubagentRunRecord | null>();
@@ -598,14 +584,8 @@ export function commitRequesterWake(
         if (acknowledgedReceipt !== pending.committedWake) {
           acknowledgedReceipt = pending.committedWake;
           acknowledgedProgress.clear();
-          for (const { row } of acknowledgedReceipt.result.records) {
-            const intended = rowToSubagentRunRecord(row);
-            if (intended) {
-              acknowledgedProgress.set(
-                intended.runId,
-                captureRequesterSettleWakeProgress(intended),
-              );
-            }
+          for (const { subagent } of acknowledgedReceipt.result.records) {
+            acknowledgedProgress.set(subagent.runId, captureRequesterSettleWakeProgress(subagent));
           }
         }
         if (

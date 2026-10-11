@@ -1,4 +1,3 @@
-/** Persistent SQLite-backed ACP event ledger for session rehydration. */
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import {
@@ -355,8 +354,7 @@ function estimateSqliteLedgerBytes(db: DatabaseSync): number {
 
 const LEDGER_TRIM_EVENT_BATCH = 64;
 
-// Deletes up to `limit` oldest events for one session and returns the bytes
-// released, keeping the session aggregate in sync in the same statement pair.
+// Keep the session's byte aggregate in sync with the deletion in the same transaction.
 function deleteOldestSqliteEvents(db: DatabaseSync, sessionId: string, limit: number): number {
   const queries = getSqliteLedgerQueries(db);
   const rows = queries.deleteOldestEvents({ sessionId, limit }).rows;
@@ -480,15 +478,11 @@ function buildSqliteReplay(
   };
 }
 
-/** Creates the SQLite-backed ACP event ledger used by the state database. */
 export function createSqliteAcpEventLedger(
   params: OpenClawStateDatabaseOptions & AcpLedgerOptions = {},
 ): AcpEventLedger {
-  const normalized = normalizeAcpLedgerOptions(params);
+  const state = normalizeAcpLedgerOptions(params);
   const dbOptions = { env: params.env, path: params.path };
-  const state = {
-    ...normalized,
-  };
   const mutate = (fn: (db: DatabaseSync) => void) =>
     runOpenClawStateWriteTransaction((database) => fn(database.db), dbOptions);
   const read = <T>(fn: (db: DatabaseSync) => T): T => fn(openOpenClawStateDatabase(dbOptions).db);

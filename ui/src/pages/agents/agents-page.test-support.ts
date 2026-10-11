@@ -14,6 +14,7 @@ import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.
 import type { CronState } from "../../lib/cron/types.ts";
 import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import type { AgentFilesState } from "./files.ts";
 import type { AgentsRouteData } from "./route.ts";
 
 const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
@@ -32,7 +33,7 @@ export type TestAgentsPage = HTMLElement & {
   agentFilesLoading: boolean;
   agentFilesList: AgentsFilesListResult | null;
   agentFileActive: string | null;
-  agentFileContents: Record<string, string>;
+  agentFileEditors: AgentFilesState["agentFileEditors"];
   agentIdentityLoading: boolean;
   agentSkillsError: string | null;
   readonly agentsPanel: AgentsPanel;
@@ -68,7 +69,7 @@ export type TestAgentsPage = HTMLElement & {
   loadEffectiveToolsForAgent: (agentId: string) => void;
   loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
   clearAgentSkills: (agentId: string) => void;
-  saveAgentConfig: () => void;
+  refreshAgents: (mode?: "ensure" | "refresh" | "save") => Promise<void>;
   identityDraft: { name: string | null; emoji: string | null; avatar: string | null };
   identitySaving: boolean;
   identityError: string | null;

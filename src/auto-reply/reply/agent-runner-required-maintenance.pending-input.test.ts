@@ -32,7 +32,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { runReplyAgent } from "./agent-runner.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import {
   createTestFollowupRun,
   installAgentRunnerMemoryFixture,
@@ -202,8 +202,8 @@ describe("required maintenance with restart-safe admitted input", () => {
                     name: "Synthetic model",
                     reasoning: false,
                     input: ["text"],
-                    contextWindow: 32_768,
-                    contextTokens: 32_768,
+                    contextWindow: 49_152,
+                    contextTokens: 49_152,
                     maxTokens: 8_192,
                     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   },
@@ -287,6 +287,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             context: { chatAbortControllers: new Map(), chatQueuedTurns: new Map() },
             entry,
             initialSessionEntry: entry,
+            lifecycleTimestamps: undefined,
             now: Date.now(),
             placement: undefined,
             request,
@@ -304,6 +305,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             },
             input: { text: approved, timestamp: Date.now(), idempotencyKey: `${runId}:user` },
             ...buildRestartSafeChatTranscriptState({
+              sourceIngress: "control-ui",
               admission: restartSafeAdmission!,
               clientRunId: runId,
               startedAt: Date.now(),
@@ -337,7 +339,8 @@ describe("required maintenance with restart-safe admitted input", () => {
           const sessionStore = { [sessionKey]: entry };
           installAgentRunnerMemoryFixture(() => ({
             softThresholdTokens: 4_000,
-            reserveTokensFloor: 8_192,
+            // Keep the 24,576-token maintenance threshold with transport-estimation headroom.
+            reserveTokensFloor: 24_576,
             forceFlushTranscriptBytes: 2 * 1024 * 1024,
             prompt: "Checkpoint durable notes. Reply NO_REPLY.",
             systemPrompt: "Write durable notes only.",

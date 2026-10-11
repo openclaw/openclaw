@@ -26,6 +26,47 @@ const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, succe
 describe("mutable update execution", () => {
   registerServiceCollectionTests();
   it.each(
+    (["package", "git"] as const).flatMap((kind) =>
+      (["deferred", "advisory", "failure"] as const).map((outcome) => ({ kind, outcome })),
+    ),
+  )(
+    "scopes $kind verification deferral to state contention ($outcome)",
+    async ({ kind, outcome }) => {
+      const options = executionParams(kind);
+      options.opts.restart = options.shouldRestart = false;
+      const deferred = {
+        name: "post-install-verify",
+        command: "verify installed package",
+        cwd: options.root,
+        exitCode: outcome === "advisory" ? 0 : null,
+        durationMs: 0,
+        advisory: {
+          kind: "recoverable-maintenance" as const,
+          message: "State verification deferred to the operator restart.",
+        },
+      };
+      const install = kind === "package" ? mocks.runPackageUpdate : mocks.runGitUpdate;
+      const result = {
+        ...successfulUpdate,
+        ...(outcome === "failure" ? { status: "error", reason: "post-update-failed" } : {}),
+        steps: [deferred],
+      };
+      install.mockResolvedValueOnce(result);
+      const execution = await executeMutableUpdate(await bindExecutionGuards(options));
+      expect(execution?.result).toMatchObject({
+        status: outcome === "deferred" ? "skipped" : outcome === "failure" ? "error" : "ok",
+        steps: [deferred],
+      });
+      expect(execution?.result.reason).toBe(
+        outcome === "deferred"
+          ? "gateway-readiness-unverified"
+          : outcome === "failure"
+            ? "post-update-failed"
+            : undefined,
+      );
+    },
+  );
+  it.each(
     (["root", "include"] as const).flatMap((source) =>
       (["after-validation", "after-stop", "after-git-transfer"] as const).flatMap((phase) =>
         [true, false].map((accepted) => ({ source, phase, accepted })),

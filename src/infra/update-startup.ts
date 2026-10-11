@@ -146,11 +146,10 @@ function resolvePersistedUpdateAvailable(
   if (cmp == null || cmp >= 0) {
     return null;
   }
-  const persistedTag = state.lastAvailableTag?.trim() || channelToNpmTag(channel);
   return {
     currentVersion: VERSION,
     latestVersion,
-    channel: persistedTag,
+    channel: state.lastAvailableTag?.trim() || channelToNpmTag(channel),
   };
 }
 
@@ -401,6 +400,9 @@ async function runGatewayUpdateCheckOwned(
   const rawNow = Date.now();
   const now = resolveUpdateCheckNowMs(rawNow);
   const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
+  const lastAttemptAt = state.autoLastAttemptAt ? Date.parse(state.autoLastAttemptAt) : null;
+  const recentAttempt =
+    lastAttemptAt != null && Number.isFinite(lastAttemptAt) && now - lastAttemptAt < ONE_HOUR_MS;
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
   const persistedAvailable = isDevGit
     ? null
@@ -421,11 +423,10 @@ async function runGatewayUpdateCheckOwned(
     !shouldBypassSharedThrottle &&
     rawNowIsValid &&
     lastCheckedAt &&
-    Number.isFinite(lastCheckedAt)
+    Number.isFinite(lastCheckedAt) &&
+    now - lastCheckedAt < checkIntervalMs
   ) {
-    if (now - lastCheckedAt < checkIntervalMs) {
-      return;
-    }
+    return;
   }
 
   const { root, status, installReceipt } = installStatus;
@@ -542,11 +543,6 @@ async function runGatewayUpdateCheckOwned(
     const canRunTrackedDevCampaign =
       (hasTrackedDevUpstream || hasReceiptBackedDetachedHead) && git.ahead === 0;
     if (shouldRunAutoUpdate && canRunTrackedDevCampaign) {
-      const lastAttemptAt = state.autoLastAttemptAt ? Date.parse(state.autoLastAttemptAt) : null;
-      const recentAttempt =
-        lastAttemptAt != null &&
-        Number.isFinite(lastAttemptAt) &&
-        now - lastAttemptAt < ONE_HOUR_MS;
       if (!recentAttempt) {
         announceUpdate(target, "dev", "dev");
       }
@@ -626,32 +622,17 @@ async function runGatewayUpdateCheckOwned(
     }
 
     if (shouldRunAutoUpdate && (channel === "stable" || channel === "beta")) {
-      const lastAttemptAt = state.autoLastAttemptAt ? Date.parse(state.autoLastAttemptAt) : null;
-      const recentAttemptForSameVersion =
-        state.autoLastAttemptVersion === resolved.version &&
-        lastAttemptAt != null &&
-        Number.isFinite(lastAttemptAt) &&
-        now - lastAttemptAt < ONE_HOUR_MS;
-
-      let dueNow = channel === "beta";
-      let applyAfterMs: number | null = null;
-      if (channel === "stable") {
-        applyAfterMs = resolveStableAutoApplyAtMs({
-          nextState,
-          nowMs: now,
-          version: resolved.version,
-          tag,
-        });
-        dueNow = now >= applyAfterMs;
-      }
-
-      if (!dueNow) {
+      const applyAfterMs =
+        channel === "stable"
+          ? resolveStableAutoApplyAtMs({ nextState, nowMs: now, version: resolved.version, tag })
+          : null;
+      if (applyAfterMs !== null && now < applyAfterMs) {
         params.log.info("auto-update deferred (stable rollout window active)", {
           version: resolved.version,
           tag,
           applyAfter: applyAfterMs ? resolveUpdateCheckTimestamp(applyAfterMs) : undefined,
         });
-      } else if (recentAttemptForSameVersion) {
+      } else if (recentAttempt && state.autoLastAttemptVersion === resolved.version) {
         params.log.info("auto-update deferred (recent attempt exists)", {
           version: resolved.version,
           tag,

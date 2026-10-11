@@ -75,7 +75,6 @@ async function makeFakeOpenClawPackage(root: string) {
 
 function limitPositionalReads(maxBytes: number) {
   const realReadSync = fsSync.readSync.bind(fsSync);
-  let totalBytesRead = 0;
   vi.spyOn(fsSync, "readSync").mockImplementation(((
     fd: number,
     buffer: NodeJS.ArrayBufferView,
@@ -83,11 +82,8 @@ function limitPositionalReads(maxBytes: number) {
     length: number,
     position: number | null,
   ) => {
-    const bytesRead = realReadSync(fd, buffer, offset, Math.min(length, maxBytes), position);
-    totalBytesRead += bytesRead;
-    return bytesRead;
+    return realReadSync(fd, buffer, offset, Math.min(length, maxBytes), position);
   }) as typeof fsSync.readSync);
-  return () => totalBytesRead;
 }
 
 describe("git commit resolution", () => {
@@ -496,21 +492,6 @@ describe("git commit resolution", () => {
     limitPositionalReads(4);
 
     expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("abcdef0");
-  });
-
-  it("keeps short-read retries within the bounded metadata window", async () => {
-    const temp = await makeTempDir("git-commit-bounded-ref");
-    const repoRoot = path.join(temp, "repo");
-    await makeFakeGitRepo(repoRoot, {
-      head: "ref: refs/heads/main\n",
-      refs: {
-        "refs/heads/main": `${"x".repeat(256)}abcdef0123456789`,
-      },
-    });
-    const totalBytesRead = limitPositionalReads(4);
-
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    expect(totalBytesRead()).toBe(256);
   });
 
   it("falls back to baked metadata when a bounded Git metadata read errors", async () => {

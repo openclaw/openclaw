@@ -62,13 +62,13 @@ openclaw memory status [--agent <id>] [--deep] [--index] [--fix] [--json] [--ver
 Without `--agent`, runs for every agent in `agents.entries`; if no agent list is
 configured, falls back to the default agent.
 
-| Flag        | Effect                                                                                                                                                                                                                                                                           |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--deep`    | Probe vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; a complete persisted index is shown as `indexed (unprobed)`, while unknown vector/semantic state means it was not probed. |
-| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                 |
-| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                      |
-| `--json`    | Print JSON.                                                                                                                                                                                                                                                                      |
-| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                    |
+| Flag        | Effect                                                                                                                                                                                                                                                                            |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--deep`    | Check vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; a complete persisted index is shown as `indexed (unprobed)`, while unknown vector/semantic state means it was not checked. |
+| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                  |
+| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                       |
+| `--json`    | Print JSON.                                                                                                                                                                                                                                                                       |
+| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                     |
 
 With local llama.cpp embeddings, `--deep` and `--index` also show available
 server, model, capability, and endpoint diagnostics.
@@ -124,6 +124,13 @@ up to five attempts. Retries honor valid provider cooldown hints, capped at
 60 seconds per wait. Other transient errors keep the shorter three-attempt
 budget. Permanent quota errors without a cooldown hint stop that operation.
 The verbose output shows each retry wait.
+
+For OpenAI and OpenAI-compatible embeddings, set
+`OPENCLAW_DEBUG_MEMORY_EMBEDDINGS=1` to log remote request counts, HTTP status,
+response sizes when provided, and vector shape. These diagnostics omit headers,
+URLs, input text, and vector contents. Validation errors identify the provider,
+model, batch size, and rejected condition. A rejected batch still aborts indexing;
+full rebuilds publish only a complete index.
 
 Interactive `memory_search` keeps three attempts and at most eight seconds of
 total retry sleep within the agent tool's 30-second deadline. A cancelled caller

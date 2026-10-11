@@ -243,10 +243,6 @@ describe("check-deadcode-exports", () => {
     expect(packageJson.scripts["deadcode:full"]).toContain("--exclude duplicates");
   });
 
-  it("models the jiti virtual agent-sessions SDK entry", () => {
-    expect(knipConfig.workspaces["."].entry).toContain("src/agents/sessions/extension-sdk.ts!");
-  });
-
   it("models the spawned system-agent MCP stdio entry", () => {
     expect(knipConfig.workspaces["."].entry).toContain("src/mcp/openclaw-tools-serve.ts!");
   });

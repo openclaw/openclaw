@@ -35,45 +35,33 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
   adapter?: ChannelApprovalNativeAdapter | null;
 }): Promise<ChannelApprovalNativeDeliveryPlan> {
   const adapter = params.adapter;
+  const emptyPlan: ChannelApprovalNativeDeliveryPlan = {
+    targets: [],
+    originTarget: null,
+    notifyOriginWhenDmOnly: false,
+  };
   if (!adapter) {
-    return {
-      targets: [],
-      originTarget: null,
-      notifyOriginWhenDmOnly: false,
-    };
+    return emptyPlan;
   }
 
-  const capabilities = adapter.describeDeliveryCapabilities({
+  const deliveryContext = () => ({
     cfg: params.cfg,
     accountId: params.accountId,
     approvalKind: params.approvalKind,
     request: params.request,
   });
+  const capabilities = adapter.describeDeliveryCapabilities(deliveryContext());
   if (!capabilities.enabled) {
-    return {
-      targets: [],
-      originTarget: null,
-      notifyOriginWhenDmOnly: false,
-    };
+    return emptyPlan;
   }
 
   const originTarget =
     capabilities.supportsOriginSurface && adapter.resolveOriginTarget
-      ? ((await adapter.resolveOriginTarget({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          approvalKind: params.approvalKind,
-          request: params.request,
-        })) ?? null)
+      ? ((await adapter.resolveOriginTarget(deliveryContext())) ?? null)
       : null;
   const approverDmTargets =
     capabilities.supportsApproverDmSurface && adapter.resolveApproverDmTargets
-      ? await adapter.resolveApproverDmTargets({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          approvalKind: params.approvalKind,
-          request: params.request,
-        })
+      ? await adapter.resolveApproverDmTargets(deliveryContext())
       : [];
 
   const plannedTargets: ChannelApprovalNativePlannedTarget[] = [];

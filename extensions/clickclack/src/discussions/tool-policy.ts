@@ -10,7 +10,7 @@ import {
   getClickClackDiscussionBindingStore,
 } from "./binding-store.js";
 import { resolveDiscussionBindingAccount } from "./eligibility.js";
-import { isDiscussionSessionKey } from "./naming.js";
+import { discussionSessionKey, isDiscussionSessionKey } from "./naming.js";
 import { isClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 
 const TARGETED_SESSION_TOOLS = new Set(["sessions_history", "sessions_send", "session_status"]);
@@ -27,22 +27,31 @@ export function isClickClackDiscussionSessionTarget(params: {
   requesterSessionKey: string;
   targetSessionKey: string;
 }) {
-  const matched = getClickClackDiscussionBindingStore(params.runtime).getByDiscussionSession(
-    params.requesterSessionKey,
-  );
+  if (!isDiscussionSessionKey(params.requesterSessionKey)) {
+    return undefined;
+  }
+  const { runtime, targetSessionKey } = params;
+  let binding;
+  try {
+    binding = getClickClackDiscussionBindingStore(runtime).get(targetSessionKey);
+  } catch {
+    // The explicit tool target may not be a valid store key; unreadable authority denies access.
+    return undefined;
+  }
   if (
-    matched &&
-    matched.sessionKey === params.targetSessionKey &&
+    binding &&
+    discussionSessionKey({ runtime, mainSessionKey: targetSessionKey, ...binding }) ===
+      params.requesterSessionKey &&
     !isClickClackDiscussionChannelRevoked({
-      runtime: params.runtime,
-      serverBaseUrl: matched.binding.serverBaseUrl,
-      channelId: matched.binding.channelId,
+      runtime,
+      serverBaseUrl: binding.serverBaseUrl,
+      channelId: binding.channelId,
     }) &&
-    bindingMatchesActiveSessionIncarnation(params.runtime, matched.sessionKey, matched.binding) &&
-    resolveDiscussionBindingAccount(params.runtime.config.current() as CoreConfig, matched.binding)
-      .state === "active"
+    bindingMatchesActiveSessionIncarnation(runtime, targetSessionKey, binding) &&
+    resolveDiscussionBindingAccount(runtime.config.current() as CoreConfig, binding).state ===
+      "active"
   ) {
-    return matched;
+    return { sessionKey: targetSessionKey, binding };
   }
   return undefined;
 }
@@ -54,37 +63,32 @@ export function enforceClickClackDiscussionToolTarget(params: {
   context: PluginHookToolContext;
 }): PluginHookBeforeToolCallResult | undefined {
   const callerSessionKey = params.context.sessionKey;
-  if (!callerSessionKey) {
+  if (!callerSessionKey || !isDiscussionSessionKey(callerSessionKey)) {
     return undefined;
   }
   const { toolName } = params.event;
   if (toolName !== "session_status" && !toolName.startsWith("sessions_")) {
     return undefined;
   }
-  const matched = getClickClackDiscussionBindingStore(params.runtime).getByDiscussionSession(
-    callerSessionKey,
-  );
-  if (!matched) {
-    return isDiscussionSessionKey(callerSessionKey) ? blockedResult() : undefined;
-  }
-  const accountCanObserve = Boolean(
-    isClickClackDiscussionSessionTarget({
-      runtime: params.runtime,
-      requesterSessionKey: callerSessionKey,
-      targetSessionKey: matched.sessionKey,
-    }),
-  );
-  const targetsMain =
-    accountCanObserve &&
-    TARGETED_SESSION_TOOLS.has(toolName) &&
-    params.event.params.sessionKey === matched.sessionKey;
   const usesAlternateSendTarget =
     toolName === "sessions_send" &&
     (params.event.params.label !== undefined || params.event.params.agentId !== undefined);
   const mutatesStatus = toolName === "session_status" && params.event.params.model !== undefined;
   const selectsHistoryIncarnation =
     toolName === "sessions_history" && params.event.params.sessionId !== undefined;
-  if (targetsMain && !usesAlternateSendTarget && !mutatesStatus && !selectsHistoryIncarnation) {
+  const targetSessionKey = params.event.params.sessionKey;
+  if (
+    TARGETED_SESSION_TOOLS.has(toolName) &&
+    typeof targetSessionKey === "string" &&
+    !usesAlternateSendTarget &&
+    !mutatesStatus &&
+    !selectsHistoryIncarnation &&
+    isClickClackDiscussionSessionTarget({
+      runtime: params.runtime,
+      requesterSessionKey: callerSessionKey,
+      targetSessionKey,
+    })
+  ) {
     return undefined;
   }
   return blockedResult();

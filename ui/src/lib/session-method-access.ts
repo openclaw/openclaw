@@ -43,13 +43,12 @@ function deniedAccess(
     requiredScope,
     cause,
     reason: t(
-      cause === "disconnected"
-        ? "sessionsView.actionRequiresConnection"
-        : cause === "method-unavailable"
-          ? "sessionsView.actionUnavailable"
-          : cause === "session-not-owned"
-            ? "sessionsView.actionRequiresOwnership"
-            : "sessionsView.actionRequiresScope",
+      {
+        disconnected: "sessionsView.actionRequiresConnection",
+        "method-unavailable": "sessionsView.actionUnavailable",
+        "session-not-owned": "sessionsView.actionRequiresOwnership",
+        "missing-scope": "sessionsView.actionRequiresScope",
+      }[cause],
       { scope: requiredScope },
     ),
   };

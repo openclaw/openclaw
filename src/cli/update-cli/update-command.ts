@@ -165,9 +165,9 @@ async function updateCommandInternal(
   retainRuntime: RetainUpdateRuntime,
   initialization?: InitializedUpdate,
 ): Promise<void> {
-  const run = opts.run!;
-  const updateStepTimeoutMs =
-    prepared.timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
+  const admittedRun = opts.run!;
+  const admissionStepTimeoutMs =
+    prepared.timeoutMs ?? admittedRun.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   let target = initialization?.target;
   let reselected = false;
@@ -181,14 +181,14 @@ async function updateCommandInternal(
       defaultRuntime.error(
         "Warning: Stored update channel changed during admission; selecting the current channel's target.",
       );
-      run.executorFence?.assertCurrent();
+      admittedRun.executorFence?.assertCurrent();
       await initialization.stagedPackage?.close();
-      run.executorFence?.assertCurrent();
+      admittedRun.executorFence?.assertCurrent();
       // Candidate verdicts and downgrade confirmation belong to the old target.
       initialization.stagedPackage = undefined;
       initialization.candidateAdmission = undefined;
       initialization.downgradeConfirmed = undefined;
-      run.candidateAdmissionChecks = undefined;
+      admittedRun.candidateAdmissionChecks = undefined;
       target = undefined;
       reselected = true;
     }
@@ -200,7 +200,7 @@ async function updateCommandInternal(
       invocationCwd,
       prepared,
       executor,
-      updateStepTimeoutMs,
+      admissionStepTimeoutMs,
     );
   if (!target) {
     target = initialization
@@ -211,449 +211,428 @@ async function updateCommandInternal(
     return;
   }
   if (reselected && initialization) {
-    run.executorFence = await executor.enter(target.root, {
+    admittedRun.executorFence = await executor.enter(target.root, {
       preflight: true,
       serviceRoot: target.managedServiceRoot,
     });
-    run.executorFence.assertCurrent();
+    admittedRun.executorFence.assertCurrent();
     assertUpdatePackageActivationAdmission(target.root, {
       serviceRoot: target.managedServiceRoot,
     });
     initialization.target = target;
   }
+  const runResolvedUpdate = async (stagedPackage?: StagedPackageInstallUpdate): Promise<void> => {
+    const {
+      startedAt,
+      timeoutMs,
+      shouldRestart,
+      requestedChannel,
+      controlPlaneUpdateSentinelMeta,
+      discoveredRoot,
+      installKind,
+    } = prepared;
+    const run = opts.run!;
+    const updateStepTimeoutMs =
+      timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
+    const {
+      root,
+      mode,
+      updateInstallKind,
+      configSnapshot,
+      legacyConfigPlan,
+      storedChannel,
+      channel,
+      switchToGit,
+      switchToPackage,
+      tag,
+      currentVersion,
+      targetVersion,
+      downgradeRisk,
+      packageInstallTarget,
+      packageAlreadyCurrent,
+      packageRuntimeTarget,
+      managedServiceRootRedirect,
+      managedServiceRoot,
+      managedServiceNodeRunner,
+    } = target;
+    let { packageUpdateNodeRunner } = target;
+    let packageActivationRuntime: PackageActivationRuntime | undefined;
+    const refuseUpdate: typeof target.refuseUpdate = async (
+      reason,
+      message,
+      failureFacts,
+      recoverySteps,
+    ) => {
+      await stagedPackage?.close();
+      return await reportPreMutationUpdateResult({
+        root,
+        mode,
+        installKind: updateInstallKind,
+        opts,
+        controlPlaneUpdateSentinelMeta,
+        reason,
+        message,
+        failureFacts,
+        recoverySteps,
+      });
+    };
+
+    recordUpdateRunPhase(
+      run.runId,
+      "staging",
+      {
+        target: {
+          channel,
+          tag,
+          kind: updateInstallKind,
+          ...(targetVersion ? { version: targetVersion } : {}),
+        },
+        before: { version: currentVersion ?? VERSION },
+      },
+      { env: run.env },
+    );
+    if (
+      opts.channel &&
+      !configSnapshot.valid &&
+      !legacyConfigPlan &&
+      !run.candidateAdmissionChecks?.includes("config")
+    ) {
+      const failure = createUpdateConfigFailure(configSnapshot);
+      return await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
+    }
+    const schemaPreflight = await preflightUpdateCommandSchemas({
+      ...target,
+      callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
+      shouldRestart,
+      updateStepTimeoutMs,
+      invocationCwd,
+      packageTargetVersion: targetVersion ?? undefined,
+      opts,
+      refuseUpdate,
+    });
+    if (!schemaPreflight) {
+      return;
+    }
+
+    if (opts.dryRun) {
+      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
+      return await previewUpdateCommand({
+        target,
+        prepared,
+        opts,
+        runId: run.runId,
+        updateStepTimeoutMs,
+        invocationCwd,
+        preflight: schemaPreflight,
+      });
+    }
+
+    const finalizationContext = {
+      opts,
+      root,
+      previousInstallRoot: discoveredRoot,
+      requestedChannel,
+      storedChannel,
+      channel,
+      shouldRestart,
+      updateStepTimeoutMs,
+      invocationCwd,
+      startedAt,
+      controlPlaneUpdateSentinelMeta,
+    };
+    const currentCoreFinalization = {
+      ...finalizationContext,
+      legacyConfigPlan,
+      callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
+      packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
+      runtimeTarget: packageRuntimeTarget,
+      managedServiceRootRedirect,
+      managedServiceRoot,
+      stop: presentation.stop,
+      refuseUpdate,
+    };
+    const pluginCount = Object.keys(configSnapshot.config.plugins?.entries ?? {}).length;
+    const activateCurrentCore = async () => {
+      run.executorFence = await executor.enter(root, {
+        preflight: true,
+        serviceRoot: managedServiceRoot,
+        activationTimeoutMs: (run.activationTimeoutMs ??=
+          timeoutMs === undefined
+            ? undefined
+            : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
+                env: run.env,
+                pluginCount,
+              })),
+      });
+      run.executorFence.assertCurrent();
+      assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
+    };
+    if (packageAlreadyCurrent) {
+      await activateCurrentCore();
+      const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
+      return await finishAlreadyCurrentUpdate({
+        ...currentCoreFinalization,
+        result: {
+          status: "skipped",
+          mode: packageInstallTarget?.manager ?? "unknown",
+          root,
+          reason: "already-current",
+          before: { version: currentVersion },
+          after: { version: currentVersion },
+          steps: [],
+          durationMs: Date.now() - startedAt,
+        },
+      });
+    }
+
+    if (
+      downgradeRisk &&
+      !opts.yes &&
+      !initialization?.downgradeConfirmed &&
+      !(await confirmUpdateDowngrade({ opts, currentVersion, targetVersion, tag }))
+    ) {
+      return;
+    }
+
+    if (updateInstallKind === "git" && opts.tag && !opts.json) {
+      defaultRuntime.log(
+        theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
+      );
+    }
+
+    if (updateInstallKind === "package") {
+      const runtimePreflight = await preparePackageUpdateRuntime({
+        ...target,
+        managedService: schemaPreflight.service,
+        shouldRestart,
+        opts,
+        executor,
+        timeoutMs: updateStepTimeoutMs,
+      });
+      if (!runtimePreflight.ok) {
+        return await refuseUpdate(
+          "node-runtime-preflight",
+          runtimePreflight.error,
+          runtimePreflight.failureFacts,
+          runtimePreflight.recoverySteps,
+        );
+      }
+      packageUpdateNodeRunner = runtimePreflight.value.nodeRunner;
+      packageActivationRuntime = runtimePreflight.value.activationRuntime;
+      recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
+    }
+
+    // Preload execution and recovery before the package swap can remove these chunks.
+    const {
+      executeMutableUpdate,
+      finishUpdate,
+      finishAlreadyCurrentUpdate,
+      continueMigratedUpdateInFreshProcess,
+      inspectActivatedUpdateState,
+      restoreFailedUpdateDatabases,
+      createUpdateCommandFinalizationFence,
+      createUpdateCommandExecutionGuards,
+    } = await import("./update-execution.runtime.js");
+
+    const executionGuards = createUpdateCommandExecutionGuards(opts, root);
+    const progress = createUpdateRunProgress(
+      run,
+      presentation.progress,
+      executionGuards.recordStep,
+    );
+    let preUpdatePluginInstallRecords: Awaited<ReturnType<typeof prepareMutableUpdateRuntime>> = {};
+    let mutableUpdatePrepared = false;
+    const prepareMutableUpdate: Parameters<
+      typeof executeMutableUpdate
+    >[0]["prepareMutableUpdate"] = async (
+      env,
+      activationTimeoutMs,
+      admitExecutor,
+      installTarget,
+    ) => {
+      if (!mutableUpdatePrepared) {
+        assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
+      }
+      const fence = await executor.enter(root, {
+        serviceRoot: managedServiceRoot,
+        activationTimeoutMs,
+      });
+      admitExecutor(fence);
+      run.activationTimeoutMs ??= activationTimeoutMs;
+      fence.assertCurrent();
+      if (mutableUpdatePrepared) {
+        if (managedServiceRoot) {
+          assertUpdatePackageActivationAdmission(managedServiceRoot);
+        }
+        return;
+      }
+      const installKey = captureUpdateCommandExecutorAuthority(fence).installKey;
+      assertUpdatePackageActivationAdmission(installKey, { serviceRoot: managedServiceRoot });
+      preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
+      // Retention can walk the full dependency tree before the first staging step.
+      // Record that work so the completed capacity check does not look stalled.
+      const retentionStep = {
+        name: "updater-runtime-retention",
+        command: "retain running updater runtime",
+        index: 0,
+        total: 0,
+      };
+      const retentionStartedAt = Date.now();
+      await progress.onStepStart?.(retentionStep);
+      const retention = await retainRuntime({
+        mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
+        installTarget,
+        env,
+        timeoutMs: updateStepTimeoutMs,
+        assertCurrent: () => fence.assertCurrent(),
+      });
+      await reportUpdateStepCompletion(progress, {
+        ...retentionStep,
+        durationMs: Date.now() - retentionStartedAt,
+        exitCode: 0,
+        diagnostics: retention ? [JSON.stringify(retention)] : undefined,
+      });
+      mutableUpdatePrepared = true;
+    };
+
+    const execution = await executeMutableUpdate({
+      ...target,
+      callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
+      installKind,
+      timeoutMs,
+      updateStepTimeoutMs,
+      startedAt,
+      progress,
+      executionGuards,
+      stop: presentation.stop,
+      opts,
+      shouldRestart,
+      stagedPackage,
+      packageTargetVersion: targetVersion ?? undefined,
+      packageUpdateNodeRunner,
+      packageActivationRuntime,
+      managedServiceNodeRunner,
+      managedServiceRootRedirect,
+      managedServiceRoot,
+      invocationCwd,
+      recoveryState,
+      prepareMutableUpdate,
+      onActivation: () => {
+        presentation.suspend();
+        progress.deferLedgerWrites();
+      },
+    });
+    run.executorFence?.assertCurrent();
+    if (!execution) {
+      return;
+    }
+    const { ownedManagedUpdateContext, recoveryEnv, ...executionState } = execution;
+    const { result } = executionState;
+    result.runId = run.runId;
+    if (result.status === "skipped" && result.reason === "already-current") {
+      await activateCurrentCore();
+      presentation.stop();
+      return await finishAlreadyCurrentUpdate({
+        ...currentCoreFinalization,
+        root: result.root ?? root,
+        result,
+        ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
+        packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
+      });
+    }
+    recoveryState.triageTarget.root = result.root ?? root;
+    recoveryState.triageTarget.failureResult = result;
+    recoveryState.triageTarget.env =
+      recoveryEnv ?? ownedManagedUpdateContext?.env ?? recoveryState.triageTarget.env;
+    presentation.stop();
+    const finalization = {
+      ...executionState,
+      ...finalizationContext,
+      expectedVersion: targetVersion ?? undefined,
+      installKindChanged: switchToGit || switchToPackage,
+      configSnapshot: ownedManagedUpdateContext?.configSnapshot ?? configSnapshot,
+      downgradeRisk,
+      ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
+      preUpdatePluginInstallRecords:
+        ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords,
+      packageUpdateNodeRunner,
+    };
+    const rollbackBlockedReason = opts.recovery
+      ? undefined
+      : await inspectActivatedUpdateState({
+          result,
+          root,
+          packageUpdateNodeRunner,
+          schemaVersions: execution.schemaVersions,
+          candidateSchemaVersions: execution.candidateSchemaVersions,
+          config: finalization.configSnapshot.config,
+          env: ownedManagedUpdateContext?.env ?? run.env,
+          timeoutMs: updateStepTimeoutMs,
+        });
+    run.executorFence?.assertCurrent();
+    if (opts.recovery || rollbackBlockedReason) {
+      // Only candidate code may reopen migrated state, including during reporting and cleanup.
+      recoveryState.ledgerHandoffOwned = true;
+      const assertRollbackCurrent = createUpdateCommandFinalizationFence(finalization);
+      const continued = await continueMigratedUpdateInFreshProcess(
+        { ...finalization, rollbackBlockedReason },
+        progress.pendingSteps,
+      );
+      if (continued.databaseRollbackAvailable && finalization.databaseBackup) {
+        const restored = await restoreFailedUpdateDatabases({
+          backup: finalization.databaseBackup,
+          result: continued.result,
+          runId: run.runId,
+          env: ownedManagedUpdateContext?.env ?? run.env,
+          assertCurrent: assertRollbackCurrent,
+          progress,
+        });
+        if (!restored) {
+          throw new UpdateCommandPendingRecoveryFailure(
+            continued.result,
+            continued.result.steps.at(-1)?.stderrTail ?? undefined,
+          );
+        }
+        await finishUpdate(
+          { ...finalization, result: continued.result },
+          {
+            beforeFinalization: async () => {
+              await progress.flushLedgerWrites();
+              recoveryState.ledgerHandoffOwned = false;
+              presentation.resume();
+            },
+          },
+        );
+        return;
+      }
+      recoveryState.ledgerHandoffCompleted = true;
+      opts.onResult?.(continued.result);
+      if (continued.exitCode !== 0) {
+        throw new UpdateCommandFailure(continued.result, continued.exitCode, undefined, {
+          automaticTriage: continued.automaticTriage,
+        });
+      }
+      return;
+    }
+    await finishUpdate(finalization, {
+      beforeFinalization: async () => {
+        await progress.flushLedgerWrites();
+        presentation.resume();
+      },
+    });
+  };
+
   return await withUpdateCandidateAdmission(
     {
       target,
       prepared,
       opts,
-      timeoutMs: updateStepTimeoutMs,
+      timeoutMs: admissionStepTimeoutMs,
       invocationCwd,
       presentation,
       stagedPackage: initialization?.stagedPackage,
       candidateAdmission: initialization?.candidateAdmission,
     },
-    (stagedPackage) =>
-      runResolvedUpdate(
-        opts,
-        recoveryState,
-        invocationCwd,
-        prepared,
-        presentation,
-        executor,
-        retainRuntime,
-        target,
-        stagedPackage,
-        initialization,
-      ),
+    runResolvedUpdate,
   );
-}
-
-async function runResolvedUpdate(
-  opts: UpdateCommandOptions,
-  recoveryState: UpdateCommandRecoveryState,
-  invocationCwd: string | undefined,
-  prepared: PreparedUpdate,
-  presentation: ReturnType<typeof createUpdateProgress>,
-  executor: UpdateCommandExecutor,
-  retainRuntime: RetainUpdateRuntime,
-  target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>,
-  stagedPackage?: StagedPackageInstallUpdate,
-  initialization?: InitializedUpdate,
-): Promise<void> {
-  const {
-    startedAt,
-    timeoutMs,
-    shouldRestart,
-    requestedChannel,
-    controlPlaneUpdateSentinelMeta,
-    discoveredRoot,
-    installKind,
-  } = prepared;
-  const run = opts.run!;
-  const updateStepTimeoutMs =
-    timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
-  const {
-    root,
-    mode,
-    updateInstallKind,
-    configSnapshot,
-    legacyConfigPlan,
-    storedChannel,
-    channel,
-    switchToGit,
-    switchToPackage,
-    tag,
-    currentVersion,
-    targetVersion,
-    downgradeRisk,
-    packageInstallTarget,
-    packageAlreadyCurrent,
-    packageRuntimeTarget,
-    managedServiceRootRedirect,
-    managedServiceRoot,
-    managedServiceNodeRunner,
-  } = target;
-  let { packageUpdateNodeRunner } = target;
-  let packageActivationRuntime: PackageActivationRuntime | undefined;
-  const refuseUpdate: typeof target.refuseUpdate = async (
-    reason,
-    message,
-    failureFacts,
-    recoverySteps,
-  ) => {
-    await stagedPackage?.close();
-    return await reportPreMutationUpdateResult({
-      root,
-      mode,
-      installKind: updateInstallKind,
-      opts,
-      controlPlaneUpdateSentinelMeta,
-      reason,
-      message,
-      failureFacts,
-      recoverySteps,
-    });
-  };
-
-  recordUpdateRunPhase(
-    run.runId,
-    "staging",
-    {
-      target: {
-        channel,
-        tag,
-        kind: updateInstallKind,
-        ...(targetVersion ? { version: targetVersion } : {}),
-      },
-      before: { version: currentVersion ?? VERSION },
-    },
-    { env: run.env },
-  );
-  if (
-    opts.channel &&
-    !configSnapshot.valid &&
-    !legacyConfigPlan &&
-    !run.candidateAdmissionChecks?.includes("config")
-  ) {
-    const failure = createUpdateConfigFailure(configSnapshot);
-    return await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
-  }
-  const schemaPreflight = await preflightUpdateCommandSchemas({
-    ...target,
-    callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
-    shouldRestart,
-    updateStepTimeoutMs,
-    invocationCwd,
-    packageTargetVersion: targetVersion ?? undefined,
-    opts,
-    refuseUpdate,
-  });
-  if (!schemaPreflight) {
-    return;
-  }
-
-  if (opts.dryRun) {
-    finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
-    return await previewUpdateCommand({
-      target,
-      prepared,
-      opts,
-      runId: run.runId,
-      updateStepTimeoutMs,
-      invocationCwd,
-      preflight: schemaPreflight,
-    });
-  }
-
-  const currentCoreFinalization = {
-    opts,
-    legacyConfigPlan,
-    callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
-    root,
-    previousInstallRoot: discoveredRoot,
-    requestedChannel,
-    storedChannel,
-    channel,
-    shouldRestart,
-    updateStepTimeoutMs,
-    invocationCwd,
-    startedAt,
-    controlPlaneUpdateSentinelMeta,
-    packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
-    runtimeTarget: packageRuntimeTarget,
-    managedServiceRootRedirect,
-    managedServiceRoot,
-    stop: presentation.stop,
-    refuseUpdate,
-  };
-  const pluginCount = Object.keys(configSnapshot.config.plugins?.entries ?? {}).length;
-  const activateCurrentCore = async () => {
-    run.executorFence = await executor.enter(root, {
-      preflight: true,
-      serviceRoot: managedServiceRoot,
-      activationTimeoutMs: (run.activationTimeoutMs ??=
-        timeoutMs === undefined
-          ? undefined
-          : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
-              env: run.env,
-              pluginCount,
-            })),
-    });
-    run.executorFence.assertCurrent();
-    assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
-  };
-  if (packageAlreadyCurrent) {
-    await activateCurrentCore();
-    const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
-    return await finishAlreadyCurrentUpdate({
-      ...currentCoreFinalization,
-      result: {
-        status: "skipped",
-        mode: packageInstallTarget?.manager ?? "unknown",
-        root,
-        reason: "already-current",
-        before: { version: currentVersion },
-        after: { version: currentVersion },
-        steps: [],
-        durationMs: Date.now() - startedAt,
-      },
-    });
-  }
-
-  if (
-    downgradeRisk &&
-    !opts.yes &&
-    !initialization?.downgradeConfirmed &&
-    !(await confirmUpdateDowngrade({ opts, currentVersion, targetVersion, tag }))
-  ) {
-    return;
-  }
-
-  if (updateInstallKind === "git" && opts.tag && !opts.json) {
-    defaultRuntime.log(
-      theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
-    );
-  }
-
-  if (updateInstallKind === "package") {
-    const runtimePreflight = await preparePackageUpdateRuntime({
-      ...target,
-      managedService: schemaPreflight.service,
-      shouldRestart,
-      opts,
-      executor,
-      timeoutMs: updateStepTimeoutMs,
-    });
-    if (!runtimePreflight.ok) {
-      return await refuseUpdate(
-        "node-runtime-preflight",
-        runtimePreflight.error,
-        runtimePreflight.failureFacts,
-        runtimePreflight.recoverySteps,
-      );
-    }
-    packageUpdateNodeRunner = runtimePreflight.value.nodeRunner;
-    packageActivationRuntime = runtimePreflight.value.activationRuntime;
-    recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
-  }
-
-  // Preload execution and recovery before the package swap can remove these chunks.
-  const {
-    executeMutableUpdate,
-    finishUpdate,
-    finishAlreadyCurrentUpdate,
-    continueMigratedUpdateInFreshProcess,
-    inspectActivatedUpdateState,
-    restoreFailedUpdateDatabases,
-    createUpdateCommandFinalizationFence,
-    createUpdateCommandExecutionGuards,
-  } = await import("./update-execution.runtime.js");
-
-  const executionGuards = createUpdateCommandExecutionGuards(opts, root);
-  const progress = createUpdateRunProgress(run, presentation.progress, executionGuards.recordStep);
-  let preUpdatePluginInstallRecords: Awaited<ReturnType<typeof prepareMutableUpdateRuntime>> = {};
-  let mutableUpdatePrepared = false;
-  const prepareMutableUpdate: Parameters<
-    typeof executeMutableUpdate
-  >[0]["prepareMutableUpdate"] = async (env, activationTimeoutMs, admitExecutor, installTarget) => {
-    if (!mutableUpdatePrepared) {
-      assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
-    }
-    const fence = await executor.enter(root, {
-      serviceRoot: managedServiceRoot,
-      activationTimeoutMs,
-    });
-    admitExecutor(fence);
-    run.activationTimeoutMs ??= activationTimeoutMs;
-    fence.assertCurrent();
-    if (mutableUpdatePrepared) {
-      if (managedServiceRoot) {
-        assertUpdatePackageActivationAdmission(managedServiceRoot);
-      }
-      return;
-    }
-    const installKey = captureUpdateCommandExecutorAuthority(fence).installKey;
-    assertUpdatePackageActivationAdmission(installKey, { serviceRoot: managedServiceRoot });
-    preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
-    // Retention can walk the full dependency tree before the first staging step.
-    // Record that work so the completed capacity check does not look stalled.
-    const retentionStep = {
-      name: "updater-runtime-retention",
-      command: "retain running updater runtime",
-      index: 0,
-      total: 0,
-    };
-    const retentionStartedAt = Date.now();
-    await progress.onStepStart?.(retentionStep);
-    const retention = await retainRuntime({
-      mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
-      installTarget,
-      env,
-      timeoutMs: updateStepTimeoutMs,
-      assertCurrent: () => fence.assertCurrent(),
-    });
-    await reportUpdateStepCompletion(progress, {
-      ...retentionStep,
-      durationMs: Date.now() - retentionStartedAt,
-      exitCode: 0,
-      diagnostics: retention ? [JSON.stringify(retention)] : undefined,
-    });
-    mutableUpdatePrepared = true;
-  };
-
-  const execution = await executeMutableUpdate({
-    ...target,
-    callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
-    installKind,
-    timeoutMs,
-    updateStepTimeoutMs,
-    startedAt,
-    progress,
-    executionGuards,
-    stop: presentation.stop,
-    opts,
-    shouldRestart,
-    stagedPackage,
-    packageTargetVersion: targetVersion ?? undefined,
-    packageUpdateNodeRunner,
-    packageActivationRuntime,
-    managedServiceNodeRunner,
-    managedServiceRootRedirect,
-    managedServiceRoot,
-    invocationCwd,
-    recoveryState,
-    prepareMutableUpdate,
-    onActivation: () => {
-      presentation.suspend();
-      progress.deferLedgerWrites();
-    },
-  });
-  run.executorFence?.assertCurrent();
-  if (!execution) {
-    return;
-  }
-  const { ownedManagedUpdateContext, recoveryEnv, ...executionState } = execution;
-  const { result } = executionState;
-  result.runId = run.runId;
-  if (result.status === "skipped" && result.reason === "already-current") {
-    await activateCurrentCore();
-    presentation.stop();
-    return await finishAlreadyCurrentUpdate({
-      ...currentCoreFinalization,
-      root: result.root ?? root,
-      result,
-      ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
-      packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
-    });
-  }
-  recoveryState.triageTarget.root = result.root ?? root;
-  recoveryState.triageTarget.failureResult = result;
-  recoveryState.triageTarget.env =
-    recoveryEnv ?? ownedManagedUpdateContext?.env ?? recoveryState.triageTarget.env;
-  presentation.stop();
-  const finalization = {
-    ...executionState,
-    expectedVersion: targetVersion ?? undefined,
-    root,
-    previousInstallRoot: discoveredRoot,
-    installKindChanged: switchToGit || switchToPackage,
-    configSnapshot: ownedManagedUpdateContext?.configSnapshot ?? configSnapshot,
-    requestedChannel,
-    storedChannel,
-    channel,
-    downgradeRisk,
-    shouldRestart,
-    opts,
-    ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
-    controlPlaneUpdateSentinelMeta,
-    preUpdatePluginInstallRecords:
-      ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords,
-    startedAt,
-    packageUpdateNodeRunner,
-    updateStepTimeoutMs,
-    invocationCwd,
-  };
-  const rollbackBlockedReason = opts.recovery
-    ? undefined
-    : await inspectActivatedUpdateState({
-        result,
-        root,
-        packageUpdateNodeRunner,
-        schemaVersions: execution.schemaVersions,
-        candidateSchemaVersions: execution.candidateSchemaVersions,
-        config: finalization.configSnapshot.config,
-        env: ownedManagedUpdateContext?.env ?? run.env,
-        timeoutMs: updateStepTimeoutMs,
-      });
-  run.executorFence?.assertCurrent();
-  if (opts.recovery || rollbackBlockedReason) {
-    // Only candidate code may reopen migrated state, including during reporting and cleanup.
-    recoveryState.ledgerHandoffOwned = true;
-    const assertRollbackCurrent = createUpdateCommandFinalizationFence(finalization);
-    const continued = await continueMigratedUpdateInFreshProcess(
-      { ...finalization, rollbackBlockedReason },
-      progress.pendingSteps,
-    );
-    if (continued.databaseRollbackAvailable && finalization.databaseBackup) {
-      const restored = await restoreFailedUpdateDatabases({
-        backup: finalization.databaseBackup,
-        result: continued.result,
-        runId: run.runId,
-        env: ownedManagedUpdateContext?.env ?? run.env,
-        assertCurrent: assertRollbackCurrent,
-        progress,
-      });
-      if (!restored) {
-        throw new UpdateCommandPendingRecoveryFailure(
-          continued.result,
-          continued.result.steps.at(-1)?.stderrTail ?? undefined,
-        );
-      }
-      await finishUpdate(
-        { ...finalization, result: continued.result },
-        {
-          beforeFinalization: async () => {
-            await progress.flushLedgerWrites();
-            recoveryState.ledgerHandoffOwned = false;
-            presentation.resume();
-          },
-        },
-      );
-      return;
-    }
-    recoveryState.ledgerHandoffCompleted = true;
-    opts.onResult?.(continued.result);
-    if (continued.exitCode !== 0) {
-      throw new UpdateCommandFailure(continued.result, continued.exitCode, undefined, {
-        automaticTriage: continued.automaticTriage,
-      });
-    }
-    return;
-  }
-  await finishUpdate(finalization, {
-    beforeFinalization: async () => {
-      await progress.flushLedgerWrites();
-      presentation.resume();
-    },
-  });
 }

@@ -271,7 +271,12 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
         .toContainEqual(
           expect.objectContaining({
-            params: { sessionKey, limit: 1000, inputRunIds: [messageId] },
+            params: {
+              sessionKey,
+              toolResultMaxChars: 2_000,
+              limit: 1000,
+              inputRunIds: [messageId],
+            },
           }),
         );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");

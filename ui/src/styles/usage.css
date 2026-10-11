@@ -405,10 +405,7 @@
 .usage-query-hint,
 .sessions-card-count,
 .session-bar-meta,
-.session-summary-meta,
-.usage-summary-sub,
 .usage-mosaic-sub,
-.usage-error-sub,
 .context-weight-desc,
 .timeseries-summary,
 .session-log-meta,
@@ -1199,7 +1196,6 @@
   align-items: start;
 }
 
-/* Expand to two columns when the detail panel column is present */
 .usage-grid:has(.usage-grid-column:nth-child(2)) {
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
 }
@@ -2036,7 +2032,6 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .session-bar-row,
   .session-log-entry {
     align-items: flex-start;
   }
@@ -2048,10 +2043,7 @@
   }
 
   .session-summary-grid,
-  .context-breakdown-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
+  .context-breakdown-grid,
   .usage-loading-grid {
     grid-template-columns: minmax(0, 1fr);
   }

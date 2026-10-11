@@ -1,13 +1,22 @@
+import "./session-entry-patch-delivery.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { deserialize, serialize } from "node:v8";
 import { MessageChannel } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import { patchSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  getSessionEntry,
+  patchSessionEntry,
+  updateLastRoute,
+} from "../../plugin-sdk/session-store-runtime.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -18,6 +27,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveSessionLifecycleTimestampsAsync } from "./lifecycle-read.js";
 import { retainPreparedSessionGenerationFacts } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRow,
@@ -32,8 +42,10 @@ import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
+import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   composeSessionSourceAssertion,
@@ -43,64 +55,9 @@ import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcri
 import * as reconcile from "./session-transcript-reconcile.js";
 import type { SessionEntry } from "./types.js";
 
-vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
-  kickSessionEntryMaintenanceAfterWrite() {},
-}));
-vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
-
-const delivery = vi.hoisted(() => ({ afterCommit: undefined as (() => void) | undefined }));
-vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
-  return {
-    ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              operation({
-                execute: async (command, commandOptions) => {
-                  const result = await worker.execute(command, commandOptions);
-                  if (command.type === "session.entry.patch.commit") {
-                    delivery.afterCommit?.();
-                  }
-                  return result;
-                },
-              }),
-            options,
-          ),
-      };
-    },
-  };
-});
-
-afterEach(() => {
-  delivery.afterCommit = undefined;
-  vi.restoreAllMocks();
-});
-
-function fixture() {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const scope = {
-    agentId: "main",
-    storePath: database.path,
-    sessionKey: "agent:main:patch-worker",
-  };
-  replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 1, label: "initial" });
-  return {
-    database,
-    scope,
-    read: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
-  };
-}
+const { getSessionEntryPatchDelivery } =
+  await import("./session-entry-patch-delivery.test-support.js");
+const delivery = getSessionEntryPatchDelivery();
 
 function patchSessionEntryCore(
   ...[scope, update, options]: Parameters<typeof patchInternalSessionEntry>
@@ -108,7 +65,46 @@ function patchSessionEntryCore(
   return patchInternalSessionEntry(scope, update, { workerGuard: {}, ...options });
 }
 
-it("skips unchanged cold serialization and preserves snapshot bytes and revisions on metadata patches", async () => {
+it("ends an absent live-switch selection without committing and keeps newer flags and callback CAS", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const initial = f.read()!;
+    const newer = { ...initial, liveModelSwitchPending: true, modelOverride: "new-selection" };
+    const update = vi.fn(() => ({ liveModelSwitchPending: undefined }));
+    const onCommitted = vi.fn();
+    const options = {
+      skipMaintenance: true,
+      prepareIf: { kind: "live-model-switch-pending" as const },
+      onCommitted,
+    };
+    delivery.afterPrepare = () => {
+      delivery.afterPrepare = undefined;
+      replaceSessionEntrySync(f.scope, newer);
+    };
+
+    await expect(patchSessionEntryCore(f.scope, update, options)).resolves.toBeNull();
+    expect(delivery.commands).toEqual(["session.entry.patch.prepare"]);
+    expect(update).not.toHaveBeenCalled();
+    expect(onCommitted).not.toHaveBeenCalled();
+    expect(f.read()).toMatchObject(newer);
+
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      replaceSessionEntrySync(f.scope, { ...newer, modelOverride: "latest-selection" });
+    };
+    await expect(patchSessionEntryCore(f.scope, update, options)).rejects.toBeInstanceOf(
+      SqliteSessionMutationConflictError,
+    );
+    expect(update).toHaveBeenCalledOnce();
+    expect(onCommitted).not.toHaveBeenCalled();
+    expect(f.read()).toMatchObject({
+      liveModelSwitchPending: true,
+      modelOverride: "latest-selection",
+    });
+  });
+});
+
+it("preserves cold serialization and snapshot revisions for synchronous SDK commit guards", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const cold = {
@@ -152,9 +148,12 @@ it("skips unchanged cold serialization and preserves snapshot bytes and revision
           typeof value === "object" &&
           ("prompt" in value || "files" in value || "systemPrompt" in value),
       ).length;
-    // The native patch path executes this writer in-process, so this spy observes its JSON work.
+    // Released synchronous commit guards retain the native writer, so the spy observes its JSON work.
     const patch = (update: Partial<SessionEntry>) =>
-      patchInternalSessionEntry(f.scope, () => update, { skipMaintenance: true });
+      patchInternalSessionEntry(f.scope, () => update, {
+        skipMaintenance: true,
+        assertCommitAllowed: () => expect(f.database.db.isTransaction).toBe(true),
+      });
     await patch({ label: "metadata only" });
     expect(serializedColdFields()).toBe(0);
     expect(snapshots()).toEqual(saved);
@@ -185,76 +184,84 @@ it("skips unchanged cold serialization and preserves snapshot bytes and revision
   });
 });
 
-it("evaluates the active-leaf predicate on the patch transaction's uncommitted transcript", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    const options = { agentId: f.database.agentId, path: f.database.path };
-    const scope = { ...f.scope, sessionId: "original" };
-    const event = (id: string, parentId: string | null) => ({
-      type: "message",
-      id,
-      parentId,
-      message: { role: "user", content: id },
-    });
-    runOpenClawAgentWriteTransaction(
-      (database) => appendTranscriptEventsInTransaction(database, scope, [event("root", null)]),
-      options,
-    );
-    const prepared = readSessionEntrySelectionSnapshot(f.database, f.scope.sessionKey, false);
-    const writeBase = prepared[0]!.entry;
-    const { generation } = readSessionTranscriptWatermarkInDatabase(f.database, scope.sessionId);
-    expect(generation).not.toBeNull();
-    const observer = new (requireNodeSqlite().DatabaseSync)(f.database.path, { readOnly: true });
-    const { port1, port2 } = new MessageChannel();
-    try {
-      admission.withSqliteWorkerOperationAdmission({ port: port1 }, () =>
-        commitSessionEntryPatch(
-          {
-            selection: { kind: "entry", sessionKey: f.scope.sessionKey, exact: false },
-            prepared,
-            sessionKey: f.scope.sessionKey,
-            writeBase,
-            next: { ...writeBase, label: "transaction leaf accepted" },
-            operationLabel: "session-entry.patch",
-            validateCanonicalKeys: false,
-            shouldCommitIf: {
-              kind: "transcript",
-              sessionId: scope.sessionId,
-              generation,
-              leafEntryId: "pending",
-            },
-          },
-          {
-            options,
-            open: () => f.database,
-            admit() {},
-            writeTransaction: (operationLabel, _owner, write) =>
-              runOpenClawAgentWriteTransaction(
-                (database) => {
-                  appendTranscriptEventsInTransaction(database, scope, [event("pending", "root")]);
-                  expect(
-                    observer
-                      .prepare(
-                        "SELECT leaf_event_id FROM session_transcript_index_state WHERE session_id = ?",
-                      )
-                      .get(scope.sessionId),
-                  ).toMatchObject({ leaf_event_id: "root" });
-                  return write(database);
-                },
-                options,
-                { operationLabel },
-              ),
-          },
-        ),
+it.each([false, true])(
+  "evaluates the active-leaf predicate on the patch transaction's uncommitted transcript (dirty=%s)",
+  async (dirty) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const options = { agentId: f.database.agentId, path: f.database.path };
+      const scope = { ...f.scope, sessionId: "original" };
+      const event = (id: string, parentId: string | null) => ({
+        type: "message",
+        id,
+        parentId,
+        message: { role: "user", content: id },
+      });
+      runOpenClawAgentWriteTransaction(
+        (database) => appendTranscriptEventsInTransaction(database, scope, [event("root", null)]),
+        options,
       );
-      expect(f.read()?.label).toBe("transaction leaf accepted");
-    } finally {
-      observer.close();
-      port1.close();
-      port2.close();
-    }
-  });
-});
+      const prepared = readSessionEntrySelectionSnapshot(f.database, f.scope.sessionKey, false);
+      const writeBase = prepared[0]!.entry;
+      const { generation } = readSessionTranscriptWatermarkInDatabase(f.database, scope.sessionId);
+      expect(generation).not.toBeNull();
+      const observer = new (requireNodeSqlite().DatabaseSync)(f.database.path, { readOnly: true });
+      const { port1, port2 } = new MessageChannel();
+      try {
+        admission.withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+          commitSessionEntryPatch(
+            {
+              selection: { kind: "entry", sessionKey: f.scope.sessionKey, exact: false },
+              prepared,
+              sessionKey: f.scope.sessionKey,
+              writeBase,
+              next: { ...writeBase, label: "transaction leaf accepted" },
+              operationLabel: "session-entry.patch",
+              validateCanonicalKeys: false,
+              shouldCommitIf: {
+                kind: "transcript",
+                sessionId: scope.sessionId,
+                generation,
+                leafEntryId: "pending",
+              },
+            },
+            {
+              options,
+              open: () => f.database,
+              admit() {},
+              writeTransaction: (operationLabel, _owner, write) =>
+                runOpenClawAgentWriteTransaction(
+                  (database) => {
+                    appendTranscriptEventsInTransaction(database, scope, [
+                      event("pending", "root"),
+                    ]);
+                    if (dirty) {
+                      markSessionTranscriptIndexDirtyInTransaction(database.db, scope.sessionId);
+                    }
+                    expect(
+                      observer
+                        .prepare(
+                          "SELECT leaf_event_id FROM session_transcript_index_state WHERE session_id = ?",
+                        )
+                        .get(scope.sessionId),
+                    ).toMatchObject({ leaf_event_id: "root" });
+                    return write(database);
+                  },
+                  options,
+                  { operationLabel },
+                ),
+            },
+          ),
+        );
+        expect(f.read()?.label).toBe(dirty ? "initial" : "transaction leaf accepted");
+      } finally {
+        observer.close();
+        port1.close();
+        port2.close();
+      }
+    });
+  },
+);
 
 it("compares transported snapshot columns without rehydrating unchanged entries", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -349,16 +356,12 @@ it.each(["after updater", "final grant"] as const)(
       const f = fixture();
       let current = true;
       const refusal = new Error("patch authority revoked");
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (phase === "final grant" && request.stage === "commit") {
-              current = false;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        if (phase === "final grant" && request.stage === "commit") {
+          current = false;
+        }
+        callback(request, grant);
+      });
       const committed = vi.fn();
       await expect(
         patchSessionEntryCore(
@@ -386,6 +389,125 @@ it.each(["after updater", "final grant"] as const)(
     });
   },
 );
+
+it.each(["shared SQLite", "custom suffixed"] as const)(
+  "patches the selected physical entry through a %s source",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const unsuffixed = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: state.statePath("source.sqlite"),
+      });
+      const database =
+        kind === "shared SQLite"
+          ? unsuffixed
+          : openOpenClawAgentDatabase({
+              agentId: "primary",
+              path: state.statePath("source.primary.sqlite"),
+            });
+      const scope = {
+        agentId: "primary",
+        sessionKey: "agent:primary:source-owner",
+        storePath: kind === "shared SQLite" ? database.path : state.statePath("source.json"),
+      };
+      const expected = { sessionId: "source", updatedAt: 1, label: "selected source" };
+      if (database !== unsuffixed) {
+        replaceSessionEntrySync(
+          { ...scope, storePath: unsuffixed.path },
+          { ...expected, label: "other store" },
+        );
+      }
+      replaceSessionEntrySync({ ...scope, storePath: database.path }, expected);
+      const source = captureSessionEntrySourceAssertion({
+        scope,
+        expected,
+        fields: ["sessionId", "label"],
+        assertCurrent() {},
+        refuse() {
+          throw new Error("Selected physical entry changed");
+        },
+      });
+      const sql = observeHostDataSql();
+      try {
+        await expect(
+          patchSessionEntryCore(scope, () => ({ label: "patched source" }), {
+            workerGuard: { source },
+          }),
+        ).resolves.toMatchObject({ sessionId: "source", label: "patched source" });
+        expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.label).toBe(
+        "patched source",
+      );
+      if (database !== unsuffixed) {
+        expect(readExactSessionEntryRow(unsuffixed, scope.sessionKey)?.entry.label).toBe(
+          "other store",
+        );
+      }
+    });
+  },
+);
+
+it("refuses a captured entry source changed during planning without reading it on the caller thread", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const scope = { ...f.scope, sessionKey: "agent:main:source-authority" };
+    const expected = { sessionId: "source", updatedAt: 1, label: "original source" };
+    replaceSessionEntrySync(scope, expected);
+    const refusal = new Error("selected source changed");
+    const legacyAssertion = vi.fn(() => {
+      throw new Error("native source read must not run");
+    });
+    const source = captureSessionEntrySourceAssertion({
+      scope,
+      expected,
+      fields: ["sessionId", "label"],
+      assertCurrent: legacyAssertion,
+      refuse: () => {
+        throw refusal;
+      },
+    });
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    const entrySql: string[] = [];
+    let fixtureWrite = false;
+    const sql = observeHostDataSql((query) => {
+      if (!fixtureWrite && isSessionEntryDataSql(query)) {
+        entrySql.push(query);
+      }
+    });
+    const pending = patchSessionEntryCore(
+      f.scope,
+      async () => {
+        entered.resolve();
+        await resume.promise;
+        return { label: "must not persist" };
+      },
+      { workerGuard: { source } },
+    );
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Source preparation did not admit the updater",
+      );
+      fixtureWrite = true;
+      replaceSessionEntrySync(scope, { ...expected, label: "revoked source" });
+      fixtureWrite = false;
+      resume.resolve();
+      await expect(pending).rejects.toBe(refusal);
+      expect(legacyAssertion).not.toHaveBeenCalled();
+      expect(entrySql).toEqual([]);
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([pending]);
+      sql.restore();
+    }
+    expect(f.read()?.label).toBe("initial");
+  });
+});
 
 it("settles false before CAS and later throwing authority, while null updates still validate CAS", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -509,6 +631,30 @@ it("settles false before CAS and later throwing authority, while null updates st
   });
 });
 
+it("recovers missing lifecycle timestamps during worker patch planning", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const startedAt = 1_700_000_000_000;
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        appendTranscriptEventsInTransaction(database, { ...f.scope, sessionId: "original" }, [
+          { type: "session", id: "original", version: 3, timestamp: startedAt },
+        ]),
+      { agentId: f.database.agentId, path: f.database.path },
+    );
+    const entry = await patchSessionEntryCore(f.scope, async (current) => {
+      const timestamps = await resolveSessionLifecycleTimestampsAsync({
+        ...f.scope,
+        entry: current,
+        signal,
+      });
+      return { sessionStartedAt: timestamps.sessionStartedAt };
+    });
+    expect(entry?.sessionStartedAt).toBe(startedAt);
+    expect(f.read()?.sessionStartedAt).toBe(startedAt);
+  });
+});
+
 it("retains nested worker admission for an opaque plugin updater", async ({ signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
@@ -524,6 +670,25 @@ it("retains nested worker admission for an opaque plugin updater", async ({ sign
     });
     expect(entry?.label).toBe("initial:nested");
     expect(f.read()?.label).toBe("initial:nested");
+  });
+});
+
+it("retains synchronous SDK entry reads inside an opaque last-route commit guard", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const assertCommitAllowed = vi.fn(() => {
+      expect(f.database.db.isTransaction).toBe(true);
+      expect(getSessionEntry(f.scope)?.sessionId).toBe("original");
+    });
+    const entry = await updateLastRoute({
+      storePath: f.scope.storePath,
+      sessionKey: f.scope.sessionKey,
+      channel: "slack",
+      to: "channel:synthetic",
+      assertCommitAllowed,
+    });
+    expect(assertCommitAllowed).toHaveBeenCalledOnce();
+    expect(entry?.sessionId).toBe("original");
   });
 });
 

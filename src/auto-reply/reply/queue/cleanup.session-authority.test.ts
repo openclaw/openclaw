@@ -167,7 +167,7 @@ describe("session-owned pending followup cleanup", () => {
       settle: vi.fn(),
     };
     queue.draining = true;
-    const drainOwner = (queue.drainOwner = {});
+    const drainOwner = (queue.drainOwner = { rescheduleRequested: false });
     expect(prepare()()).toBe(2);
     expect(queue.items).toEqual([inFlight, injecting]);
     expect(queue.summarySources).toEqual([activeSummary]);

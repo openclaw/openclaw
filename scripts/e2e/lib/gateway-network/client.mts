@@ -1,4 +1,3 @@
-// WebSocket client helpers for gateway network E2E scenarios.
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -175,7 +174,7 @@ async function adminRpc(
     body: JSON.stringify({ id: `e2e-${method}`, method, params }),
     signal,
   });
-  return await readJson<GatewayFrame>(response, `Admin RPC ${method}`, signal);
+  return readJson<GatewayFrame>(response, `Admin RPC ${method}`, signal);
 }
 
 async function readProbe(
@@ -184,7 +183,7 @@ async function readProbe(
 ): Promise<GatewayProbeResponse> {
   const signal = deadlineSignal(deadline);
   const response = await fetchImpl(httpUrl(url, pathname), { signal });
-  return await readJson<GatewayProbeResponse["body"]>(response, pathname, signal);
+  return readJson<GatewayProbeResponse["body"]>(response, pathname, signal);
 }
 
 function emitPhase(phase: string, startedAt: number) {
@@ -245,13 +244,14 @@ export async function prepareReadySuspension(
       throw new DOMException("gateway suspension preparation timeout", "TimeoutError");
     }
     const response = await rpc("gateway.suspend.prepare", { requestId });
-    if (response?.status !== 200 || response.body?.ok !== true) {
+    if (
+      response?.status !== 200 ||
+      response.body?.ok !== true ||
+      response.body.payload?.status !== "busy"
+    ) {
       return assertReadySuspensionResponse(response, now());
     }
     const payload = response.body.payload;
-    if (payload?.status !== "busy") {
-      return assertReadySuspensionResponse(response, now());
-    }
     const retryAfterMs =
       typeof payload.retryAfterMs === "number" && Number.isFinite(payload.retryAfterMs)
         ? Math.max(1, Math.floor(payload.retryAfterMs))
@@ -579,42 +579,37 @@ export async function runGatewayNetworkClient(
         remainingDeadlineMs(deadline),
       );
       if (!connectRes.ok) {
-        lastError = responseError("connect", connectRes);
-        if (!isRetryableStartupError(lastError.message)) {
-          throw lastError;
-        }
-      } else {
-        let suspension: "supported" | "unsupported" | undefined;
-        let capabilityError: Error | undefined;
-        try {
-          suspension = classifySuspensionCapability(connectRes);
-        } catch (error) {
-          capabilityError = error instanceof Error ? error : new Error(String(error));
-        }
-        ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
-        const healthRes = await onceFrameImpl(
-          ws,
-          (frame) => frame?.type === "res" && frame?.id === "h1",
-          remainingDeadlineMs(deadline),
-        );
-        if (healthRes.ok) {
-          if (!hasGatewayHealthSummaryPayload(healthRes)) {
-            throw new Error("health failed: missing health summary payload");
-          }
-          if (capabilityError) {
-            throw capabilityError;
-          }
-          assert(suspension, "connect hello suspension capability must be classified");
-          const capabilities = { suspension };
-          if (capabilitiesPath) {
-            await writeFile(capabilitiesPath, JSON.stringify(capabilities));
-          }
-          stdout("ok");
-          return capabilities;
-        }
-
+        throw responseError("connect", connectRes);
+      }
+      let suspension: "supported" | "unsupported" | undefined;
+      let capabilityError: Error | undefined;
+      try {
+        suspension = classifySuspensionCapability(connectRes);
+      } catch (error) {
+        capabilityError = error instanceof Error ? error : new Error(String(error));
+      }
+      ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
+      const healthRes = await onceFrameImpl(
+        ws,
+        (frame) => frame?.type === "res" && frame?.id === "h1",
+        remainingDeadlineMs(deadline),
+      );
+      if (!healthRes.ok) {
         throw responseError("health", healthRes);
       }
+      if (!hasGatewayHealthSummaryPayload(healthRes)) {
+        throw new Error("health failed: missing health summary payload");
+      }
+      if (capabilityError) {
+        throw capabilityError;
+      }
+      assert(suspension, "connect hello suspension capability must be classified");
+      const capabilities = { suspension };
+      if (capabilitiesPath) {
+        await writeFile(capabilitiesPath, JSON.stringify(capabilities));
+      }
+      stdout("ok");
+      return capabilities;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (!isRetryableStartupError(lastError.message)) {

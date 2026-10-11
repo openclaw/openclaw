@@ -153,9 +153,32 @@ export type RealtimeEvent = {
 
 type RealtimeGaSessionPolicy = ReturnType<typeof buildOpenAIRealtimeGaSessionPolicy>;
 
+function normalizeRealtimeBaseUrl(value: unknown): string | undefined {
+  if (value === undefined || (typeof value === "string" && !value.trim())) {
+    return undefined;
+  }
+  const url = typeof value === "string" ? URL.parse(value.trim()) : null;
+  if (!url || !["http:", "https:", "ws:", "wss:"].includes(url.protocol)) {
+    throw new Error("Invalid OpenAI realtime baseUrl: expected an HTTP(S) or WS(S) endpoint URL");
+  }
+  // Never echo a configured URL: query values may contain provider credentials.
+  if (url.username || url.password || url.hash) {
+    throw new Error("Invalid OpenAI realtime baseUrl: credentials and fragments are not supported");
+  }
+  url.protocol = url.protocol.replace("http", "ws");
+  return url.toString();
+}
+
 export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
+  const baseUrl = normalizeRealtimeBaseUrl(raw?.baseUrl);
+  const azureEndpoint = normalizeOptionalString(raw?.azureEndpoint);
+  const azureDeployment = normalizeOptionalString(raw?.azureDeployment);
+  if (baseUrl && (azureEndpoint || azureDeployment)) {
+    throw new Error("OpenAI realtime baseUrl cannot be combined with Azure endpoint or deployment");
+  }
   return {
+    baseUrl,
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
@@ -173,8 +196,8 @@ export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
         : undefined,
     minBargeInAudioEndMs: asSafeIntegerInRange(raw?.minBargeInAudioEndMs, { min: 0 }),
     reasoningEffort: normalizeOptionalString(raw?.reasoningEffort),
-    azureEndpoint: normalizeOptionalString(raw?.azureEndpoint),
-    azureDeployment: normalizeOptionalString(raw?.azureDeployment),
+    azureEndpoint,
+    azureDeployment,
     azureApiVersion: normalizeOptionalString(raw?.azureApiVersion),
   };
 }

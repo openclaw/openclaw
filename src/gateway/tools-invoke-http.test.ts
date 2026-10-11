@@ -22,7 +22,9 @@ import {
 } from "./terminal/session-manager.test-helpers.js";
 import {
   createToolsInvokeHttpTestServer,
+  createToolsInvokeSessionSpawnFixture,
   expectOkInvokeResponse,
+  registerToolsInvokeSpawnWorkspaceTests,
 } from "./tools-invoke-http.test-support.js";
 import {
   registerToolsInvokeUploadTests,
@@ -146,18 +148,6 @@ vi.mock("../agents/openclaw-tools.js", async () => {
       execute: async () => ({ ok: true, result: [] }),
     },
     {
-      name: "sessions_spawn",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({
-        ok: true,
-        route: {
-          agentTo: lastCreateOpenClawToolsContext?.agentTo,
-          agentThreadId: lastCreateOpenClawToolsContext?.agentThreadId,
-        },
-        inheritedToolDenylist: lastCreateOpenClawToolsContext?.inheritedToolDenylist,
-      }),
-    },
-    {
       name: "sessions_send",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true }),
@@ -228,6 +218,7 @@ vi.mock("../agents/openclaw-tools.js", async () => {
         ? tools.filter((tool) => tool.name !== "browser")
         : tools;
       return [
+        await createToolsInvokeSessionSpawnFixture(ctx),
         ...selected,
         ...(ctx.disablePluginTools
           ? []
@@ -463,6 +454,13 @@ const setMainAllowedTools = (params: {
 };
 
 describe("POST /tools/invoke", () => {
+  registerToolsInvokeSpawnWorkspaceTests({
+    sessionEntries,
+    setConfig: (config) => {
+      cfg = config;
+    },
+    invoke: invokeToolAuthed,
+  });
   registerToolsInvokeUploadTests({
     getConfig: () => cfg,
     setConfig: (config) => {

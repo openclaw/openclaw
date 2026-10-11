@@ -14,6 +14,7 @@ import {
   type SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -377,26 +378,19 @@ describe("skill library worker reads and prepared selection authority", () => {
     ).resolves.toMatchObject({ state: "unchanged" });
     expect(() => assertPreparedSkillLibrarySelection(pins)).not.toThrow();
     const rollback = new Error("rollback library change");
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     let checkedCommit = false;
-    const refusal = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          admit(
-            request,
-            request.stage === "commit" && request.facts !== undefined
-              ? () => {
-                  checkedCommit = true;
-                  expect(() => assertPreparedSkillLibrarySelection(pins)).toThrow(
-                    SkillLibraryError,
-                  );
-                  throw rollback;
-                }
-              : grant,
-          );
-        }, attachment),
+    const refusal = probe.admission(workerAdmission, (request, grant, admit) => {
+      admit(
+        request,
+        request.stage === "commit" && request.facts !== undefined
+          ? () => {
+              checkedCommit = true;
+              expect(() => assertPreparedSkillLibrarySelection(pins)).toThrow(SkillLibraryError);
+              throw rollback;
+            }
+          : grant,
       );
+    });
     try {
       await expect(
         mutateSkillLibrary(

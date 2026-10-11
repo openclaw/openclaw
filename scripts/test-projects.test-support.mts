@@ -3007,7 +3007,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/lib/release-version.mjs",
     [
-      "test/release-version.test.ts",
       "test/npm-publish-plan.test.ts",
       "test/openclaw-npm-release-check.test.ts",
       npmPostpublish,

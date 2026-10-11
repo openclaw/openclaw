@@ -10,7 +10,7 @@ import {
 } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
@@ -21,9 +21,9 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
+  describeGatewayLockHolder,
   type LockPayload,
   parseGatewayLockPayload,
-  readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
 import {
   ensureOwnerDirectory,
@@ -33,6 +33,7 @@ import {
 import { startGatewayStateOwnerHeartbeat } from "./gateway-state-owner-heartbeat.js";
 import {
   assertPersistedStateDatabaseAccessAllowed,
+  defaultPayload,
   isGatewayStateOwnerDefinitelyStale,
   StateDatabaseAdmissionPendingError,
 } from "./gateway-state-owner-record.js";
@@ -210,9 +211,10 @@ export const GatewayStateOwnerContentionError = resolveGlobalSingleton(
       constructor(
         public readonly databasePath: string,
         public override readonly cause?: unknown,
+        holderDetail?: string,
       ) {
         super(
-          `OpenClaw state database is busy at ${databasePath}. Wait for the other OpenClaw process to finish, then retry. If it persists, run \`openclaw gateway status\` and check for other OpenClaw processes using the same state directory. A running Gateway can hold this ownership until it stops; stop it through its service manager or original terminal before retrying.`,
+          `OpenClaw state database is busy at ${databasePath}. ${holderDetail ? `${holderDetail} ` : ""}Wait for the other OpenClaw process to finish, then retry. If it persists, run \`openclaw gateway status\` and check for other OpenClaw processes using the same state directory. A running Gateway can hold this ownership until it stops; stop it through its service manager or original terminal before retrying.`,
         );
         this.name = "GatewayStateOwnerContentionError";
       }
@@ -277,21 +279,6 @@ export function resolveGatewayStateOwnerPath(databasePath: string): string {
   );
 }
 
-function defaultPayload(databasePath: string): LockPayload {
-  const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
-  const startTime = getFileLockProcessStartTime(process.pid);
-  return {
-    pid: process.pid,
-    ownerId: randomUUID(),
-    createdAt: new Date().toISOString(),
-    stateDir,
-    configPath: path.join(stateDir, "openclaw.json"),
-    role: "sqlite-maintenance",
-    processNamespace: readGatewayLockProcessNamespace(),
-    ...(startTime === null ? {} : { startTime }),
-  };
-}
-
 function acquireOwnerFile(
   databasePath: string,
   pathname: string,
@@ -301,6 +288,7 @@ function acquireOwnerFile(
 ) {
   const deadline = performance.now() + busyTimeoutMs;
   ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
+  const observed: { holder: LockPayload | null } = { holder: null };
   const stale = ({ payload: value }: { payload: unknown }) =>
     isGatewayStateOwnerDefinitelyStale(value, pathname);
   if (busyTimeoutMs > 0) {
@@ -335,7 +323,7 @@ function acquireOwnerFile(
         staleRecovery: "remove-if-unchanged",
         reentrantOwner: payload.ownerId,
         payload: () => payload,
-        parsePayload: parseGatewayLockPayload,
+        parsePayload: (raw) => (observed.holder = parseGatewayLockPayload(raw)),
         shouldReclaim: stale,
         shouldRemoveStaleLock: stale,
       });
@@ -349,7 +337,13 @@ function acquireOwnerFile(
         continue;
       }
       if (code === "file_lock_timeout" || code === "file_lock_stale") {
-        throw new GatewayStateOwnerContentionError(databasePath, error);
+        const { holder } = observed;
+        const holderDetail = describeGatewayLockHolder(
+          holder ?? {},
+          pathname,
+          holder && isPidAlive(holder.pid) ? "live" : "unknown",
+        );
+        throw new GatewayStateOwnerContentionError(databasePath, error, holderDetail);
       }
       throw error;
     }
@@ -429,8 +423,13 @@ export function acquireGatewayStateOwner(params: {
   getProjection?: () => GatewayStateProjection | undefined;
 }): StateDatabaseSchemaLease {
   const pathname = resolveGatewayStateOwnerPath(params.databasePath);
-  if (owners.has(pathname)) {
-    throw new GatewayStateOwnerContentionError(params.databasePath);
+  const held = owners.get(pathname);
+  if (held) {
+    throw new GatewayStateOwnerContentionError(
+      params.databasePath,
+      undefined,
+      describeGatewayLockHolder(held.payload, pathname, "live"),
+    );
   }
   const payload = params.payload
     ? { ...params.payload, ownerId: params.payload.ownerId ?? randomUUID() }

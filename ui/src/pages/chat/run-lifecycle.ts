@@ -41,7 +41,7 @@ import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./i
 import type { ToolStreamHost } from "./tool-stream-contract.ts";
 import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
-export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 export type ChatHistoryRunObservation = {
   runId: string;
@@ -644,16 +644,13 @@ export function reconcileChatRunFromSessionRow(
     historyRun?: ChatHistoryRunObservation | null;
   } = {},
 ): boolean {
-  if (!uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId)) {
-    return false;
-  }
-  if (!host.chatRunId && host.chatStream == null) {
-    return false;
-  }
-  if (row.hasActiveRun === true || isSessionRunActive(row)) {
-    return false;
-  }
-  if (row.hasActiveRun !== false && row.status === undefined) {
+  if (
+    !uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId) ||
+    (!host.chatRunId && host.chatStream == null) ||
+    row.hasActiveRun === true ||
+    isSessionRunActive(row) ||
+    (row.hasActiveRun !== false && row.status === undefined)
+  ) {
     return false;
   }
   const runId = host.chatRunId;

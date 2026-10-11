@@ -172,6 +172,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
       query: "nebula launch",
       scope: {
         agentId: "main",
+        excludeDock: true,
         includeGlobal: true,
         includeUnknown: false,
         configuredAgentsOnly: true,
@@ -355,6 +356,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
       query: "launch code",
       scope: {
         agentId: "main",
+        excludeDock: true,
         includeGlobal: true,
         includeUnknown: false,
         configuredAgentsOnly: true,

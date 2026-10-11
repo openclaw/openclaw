@@ -61,24 +61,21 @@ export type MemorySessionTombstone = {
   createdAt: number;
 };
 
-export type MemoryOriginReadTarget = {
-  agentId: string;
-  databasePath: string;
-  stateDir: string;
-};
-
 export type MemoryOriginReadFilters = {
   entryKeys?: readonly string[];
   sessionIds?: readonly string[];
 };
 
-export type MemoryOriginReadInput = MemoryOriginReadTarget &
-  (
-    | ({ kind: "origin-rows" } & MemoryOriginReadFilters)
-    | ({ kind: "origin-exists"; entryKeys: readonly string[] } & MemoryOriginReadFilters)
-    | { kind: "session-tombstones"; sessionIds?: readonly string[] }
-    | { kind: "origin-index-keys" }
-  );
+export type MemoryOriginReadInput = {
+  agentId: string;
+  databasePath: string;
+  stateDir: string;
+} & (
+  | ({ kind: "origin-rows" } & MemoryOriginReadFilters)
+  | ({ kind: "origin-exists"; entryKeys: readonly string[] } & MemoryOriginReadFilters)
+  | { kind: "session-tombstones"; sessionIds?: readonly string[] }
+  | { kind: "origin-index-keys" }
+);
 
 export type MemoryOriginReadOutput =
   | { kind: "origin-rows"; rows: MemoryEntryOrigin[] }

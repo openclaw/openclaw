@@ -29,7 +29,7 @@ it("reads live, dead, reused, and unverifiable owners without reaping or writer 
     { id: "foreign", pid: 12345, startTime: 1, live: true },
   ];
   for (const entry of cases) {
-    insertRegistryWorktree(env, {
+    await insertRegistryWorktree(env, {
       id: entry.id,
       name: entry.id,
       repoFingerprint: "0123456789abcdef",

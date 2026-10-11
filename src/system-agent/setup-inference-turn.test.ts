@@ -395,7 +395,7 @@ describe("setup probe projection", () => {
 
         // Gateway delivery can consume retained events after the producer has cleaned up.
         for (const event of events) {
-          handler(event);
+          await handler(event);
         }
         expect(broadcast).not.toHaveBeenCalled();
         expect(broadcastToConnIds).not.toHaveBeenCalled();
@@ -403,7 +403,7 @@ describe("setup probe projection", () => {
         expect(persistLifecycle).not.toHaveBeenCalled();
       } finally {
         unsubscribe();
-        handler.dispose();
+        await handler.dispose();
         chatRunState.clear();
         if (runId) {
           clearAgentRunContext(runId);

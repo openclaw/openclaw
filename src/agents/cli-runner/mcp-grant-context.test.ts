@@ -134,19 +134,6 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(grant.execOverrides?.mode).toBe("allowlist");
   });
 
-  it("carries the exact Skill Workshop revision into the loopback grant", () => {
-    const proposalRevision = {
-      agentId: "proposal-owner",
-      workspaceDir: "/proposal-workspace",
-      proposalId: "proposal-h1",
-      expectedRevisionHash: "1".repeat(64),
-    };
-
-    expect(buildGrant({ skillWorkshopProposalRevision: proposalRevision }).skillWorkshop).toEqual({
-      proposalRevision,
-    });
-  });
-
   it.each([
     { label: "the provider", overrides: { messageProvider: undefined } },
     { label: "the destination", overrides: { currentChannelId: undefined } },

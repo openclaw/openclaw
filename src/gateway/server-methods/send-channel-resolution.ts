@@ -68,10 +68,7 @@ export function resolveGatewayOutboundTarget(params: {
       error: ReturnType<typeof errorShape>;
     } {
   const resolved = resolveOutboundTarget({
-    channel: params.channel,
-    to: params.to,
-    cfg: params.cfg,
-    accountId: params.accountId,
+    ...params,
     mode: "explicit",
   });
   if (!resolved.ok) {

@@ -433,6 +433,12 @@ describe("native pending assignment inventory through registered monitor admissi
         readQualification: () => undefined,
         assertCurrent: () => {},
       });
+      if (scenario === "session" || scenario === "lifecycle" || scenario === "connection") {
+        await expect(input).rejects.toThrow("outside the sender's admitted tree");
+        await replacement.unregister();
+        client.close();
+        return;
+      }
       await entered.promise;
       if (scenario === "revoked") {
         replacement.closeGateway();

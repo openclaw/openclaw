@@ -4070,8 +4070,8 @@ describe("mac elevation host command contract", () => {
     }));
 
   it.concurrent.for([
-    ["fail", "TCC: unknown (permission probe failed)"],
-    ["invalid", "TCC: unknown (permission probe returned invalid status)"],
+    ["fail", "TCC: unknown (permission check failed)"],
+    ["invalid", "TCC: unknown (permission check returned invalid status)"],
   ] as const)(
     "fails closed when the TCC permission probe returns %s output",
     async ([mode, diagnostic], { mac }) =>

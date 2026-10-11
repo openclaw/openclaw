@@ -134,7 +134,6 @@ async function applyPluginEnabledThroughGateway(
   return true;
 }
 
-/** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsEnableCommand(
   id: string,
   opts: { acceptCapabilities?: boolean } = {},
@@ -142,7 +141,6 @@ export async function runPluginsEnableCommand(
   await runPluginPolicyCommand(id, true, opts.acceptCapabilities);
 }
 
-/** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsDisableCommand(id: string): Promise<void> {
   await runPluginPolicyCommand(id, false);
 }
@@ -211,7 +209,6 @@ export async function runPluginsInstallAction(
   );
 }
 
-/** Inspect or refresh the persisted plugin registry index. */
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
   const { inspectPluginRegistry } = await import("../plugins/plugin-registry.js");
 
@@ -301,7 +298,6 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
   defaultRuntime.log(lines.join("\n"));
 }
 
-/** Print plugin install-tree, compatibility, and plugin-owned config diagnostics. */
 export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): Promise<void> {
   const {
     buildPluginCompatibilityNotices,
@@ -727,7 +723,6 @@ function normalizeMarketplaceExpectedSha256(value: string | undefined): string |
   return hash ? `sha256:${hash.toLowerCase()}` : trimmed;
 }
 
-/** List entries from the configured OpenClaw marketplace feed. */
 export async function runPluginMarketplaceEntriesCommand(
   opts: PluginMarketplaceEntriesOptions,
 ): Promise<void> {
@@ -782,7 +777,6 @@ export async function runPluginMarketplaceEntriesCommand(
   defaultRuntime.log(lines.join("\n"));
 }
 
-/** Refresh the configured OpenClaw marketplace feed snapshot. */
 export async function runPluginMarketplaceRefreshCommand(
   opts: PluginMarketplaceRefreshOptions,
 ): Promise<void> {
@@ -826,7 +820,7 @@ export async function runPluginMarketplaceRefreshCommand(
   }
   const payload = buildMarketplaceRefreshPayload(result, opts.feedUrl);
 
-  const failedPinnedRefresh = Boolean(expectedSha256?.trim()) && payload.source !== "hosted";
+  const failedPinnedRefresh = Boolean(expectedSha256) && payload.source !== "hosted";
   emitMarketplaceFeedTelemetry({
     command: "refresh",
     failedPinnedRefresh,

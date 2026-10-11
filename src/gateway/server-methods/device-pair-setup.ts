@@ -36,12 +36,11 @@ type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 function resolveDevicePairingJoinBaseUrl(payload: PairingSetupPayload): URL {
   for (const candidate of payload.urls ?? [payload.url]) {
     const parsed = new URL(candidate);
-    if (parsed.protocol === "wss:") {
-      parsed.protocol = "https:";
-      return parsed;
-    }
-    if (parsed.protocol === "ws:" && isLoopbackHost(parsed.hostname)) {
-      parsed.protocol = "http:";
+    if (
+      parsed.protocol === "wss:" ||
+      (parsed.protocol === "ws:" && isLoopbackHost(parsed.hostname))
+    ) {
+      parsed.protocol = parsed.protocol === "wss:" ? "https:" : "http:";
       return parsed;
     }
   }
@@ -131,7 +130,6 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         parsedJoinUrl.hash = "";
         joinUrl = parsedJoinUrl.toString();
       }
-      // QR is on by default; callers that only need the code can opt out.
       const includeQr = params.includeQr !== false;
       // QR rendering is optional output; keep the usable setup code if encoding fails.
       const renderedQr = includeQr

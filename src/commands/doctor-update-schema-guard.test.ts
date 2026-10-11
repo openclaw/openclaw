@@ -26,6 +26,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -39,7 +40,7 @@ import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
 import * as backupVerify from "./backup-verify.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
-import type { DoctorMaintenance, DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
+import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { guardUpdateDoctorSchemaUpgrade } from "./doctor-update-schema-guard.js";
 
@@ -119,7 +120,9 @@ const runtime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
 async function withDoctorMaintenance(
   options: Partial<Pick<DoctorMaintenanceParams, "runtime" | "assertCurrent">>,
-  run: (maintenance: DoctorMaintenance) => Promise<void>,
+  run: (
+    maintenance: NonNullable<Awaited<ReturnType<typeof beginDoctorMaintenance>>>,
+  ) => Promise<void>,
 ) {
   const maintenance = await beginDoctorMaintenance({
     root: null,
@@ -637,12 +640,13 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
     }).path;
     await closeOpenClawAgentDatabasesAsync();
     await closeStateDatabaseForTest();
+    fs.unlinkSync(external);
     const database = new DatabaseSync(external);
     try {
-      database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1};`);
-      database
-        .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
-        .run(OPENCLAW_AGENT_SCHEMA_VERSION - 1);
+      database.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+      database.exec(`PRAGMA user_version = 24;
+        INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+        VALUES ('primary', 'agent', 24, 'external', '2026.9.9', 1, 1)`);
     } finally {
       database.close();
     }

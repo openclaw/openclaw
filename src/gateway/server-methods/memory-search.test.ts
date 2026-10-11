@@ -414,12 +414,15 @@ describe("memory.search gateway method", () => {
   });
 
   it("shares one format repair across concurrent transient Gateway searches", async () => {
-    const { memoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
-      memoryRuntime: MemoryPluginRuntime;
+    const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
+      createMemoryRuntime: (host: {
+        runInBackgroundContext: <T>(run: () => T) => T;
+      }) => MemoryPluginRuntime;
       configureMemoryCoreDreamingState: (
         openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
       ) => void;
     }>("../../../extensions/memory-core/runtime-api.js");
+    const memoryRuntime = createMemoryRuntime({ runInBackgroundContext: (run) => run() });
     const stateEnv = testState.env;
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
       createPluginStateKeyedStore<T>("memory-core", { ...options, env: stateEnv }),

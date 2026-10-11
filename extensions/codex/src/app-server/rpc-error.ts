@@ -25,7 +25,9 @@ export class CodexAppServerRpcError extends Error {
   readonly method: string;
 
   constructor(error: { code?: number; message: string; data?: JsonValue }, method: string) {
-    super(formatCodexAppServerRpcErrorMessage(error, method));
+    const message = error.message || `${method} failed`;
+    const detail = readCodexAppServerRpcReloginDetail(error.data);
+    super(detail && !message.includes(detail) ? `${message}: ${detail}` : message);
     this.name = "CodexAppServerRpcError";
     this.code = error.code;
     this.data = error.data;
@@ -42,15 +44,6 @@ export function isCodexThreadReadMissingError(error: unknown, threadId: string):
     error.code === -32_600 &&
     error.message === `thread not loaded: ${threadId}`
   );
-}
-
-function formatCodexAppServerRpcErrorMessage(
-  error: { message: string; data?: JsonValue },
-  method: string,
-): string {
-  const message = error.message || `${method} failed`;
-  const detail = readCodexAppServerRpcReloginDetail(error.data);
-  return detail && !message.includes(detail) ? `${message}: ${detail}` : message;
 }
 
 function readCodexAppServerRpcReloginDetail(data: JsonValue | undefined): string | undefined {

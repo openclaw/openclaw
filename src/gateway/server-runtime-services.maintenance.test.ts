@@ -16,6 +16,7 @@ import {
   createMaintenanceHandles,
   createPostReadyMaintenanceScheduleParams,
   resetRuntimeServiceMocks,
+  runtimeServiceMocks,
 } from "./server-runtime-services.test-harness.js";
 
 // mock-isolation: Scheduler tests must not start channel or transcript repair lifetimes.
@@ -32,6 +33,36 @@ beforeEach(() => {
 afterEach(resetGatewayWorkAdmission);
 
 describe("post-ready maintenance scheduling", () => {
+  it.skipIf(process.platform !== "linux")(
+    "warms after readiness, repeats, and cancels with its Gateway",
+    async () => {
+      const clock = createGatewaySchedulerClock();
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const ready = createDeferredCore();
+      const connectionWork = new GatewayConnectionWork();
+      scheduleGatewayPostReadyMaintenance(
+        createPostReadyMaintenanceScheduleParams({
+          scheduler,
+          signal: connectionWork.signal,
+          isClosing: () => connectionWork.signal.aborted,
+          waitForPostReadyWork: () => ready.promise,
+        }),
+      );
+      const pending = clock.advanceBy(1);
+      await Promise.resolve();
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
+      ready.resolve();
+      await pending;
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).toHaveBeenCalledTimes(1);
+      await clock.advanceBy(15 * 60 * 1000);
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).toHaveBeenCalledTimes(2);
+      connectionWork.beginClose();
+      await scheduler.stop();
+      await clock.advanceBy(15 * 60 * 1000);
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("starts cron and records memory when post-ready maintenance fails", async () => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);

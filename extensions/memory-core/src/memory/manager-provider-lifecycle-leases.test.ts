@@ -40,10 +40,7 @@ describe("memory index", () => {
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       beginSyncProviderGeneration: () => void;
       endSyncProviderGeneration: () => void;
-      indexFile: (
-        entry: IndexEntry,
-        options: { source: "memory"; content: string },
-      ) => Promise<void>;
+      indexFile: (entry: IndexEntry, source: "memory") => Promise<void>;
       db: {
         prepare: (sql: string) => {
           get: (...params: unknown[]) => { model?: string } | undefined;
@@ -80,9 +77,9 @@ describe("memory index", () => {
 
     fields.beginSyncProviderGeneration();
     try {
-      await fields.indexFile(first, { source: "memory", content: first.content });
+      await fields.indexFile(first, "memory");
       await expect(fields.activateFallbackProvider("local worker exited")).resolves.toBe(true);
-      await fields.indexFile(second, { source: "memory", content: second.content });
+      await fields.indexFile(second, "memory");
     } finally {
       fields.endSyncProviderGeneration();
     }

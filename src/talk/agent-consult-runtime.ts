@@ -33,14 +33,8 @@ import {
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
 
-/**
- * Agent runtime surface used by realtime voice consults.
- */
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
-/**
- * Speakable text returned to the realtime voice bridge after an agent consult.
- */
 export type RealtimeVoiceAgentConsultResult = { text: string; yielded?: true };
 
 const REALTIME_VOICE_YIELD_ACK_MAX_CHARS = 500;
@@ -55,14 +49,12 @@ const REALTIME_VOICE_YIELD_ACK_FALLBACK =
  */
 export const REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION = 1;
 
-/**
- * Controls whether voice consults run in a fresh session or fork context from the requester.
- */
 type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
 
 type RealtimeVoiceAgentConsultRunRegistration = {
   abortSignal?: AbortSignal;
   cleanup?: () => void;
+  cleanupBeforeRun?: () => void;
 };
 
 /**
@@ -362,9 +354,6 @@ function assertRealtimeVoiceConsultNotInterrupted(
   }
 }
 
-/**
- * Runs an embedded agent consult and returns concise speakable text for realtime voice playback.
- */
 export async function consultRealtimeVoiceAgent(params: {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
@@ -394,6 +383,7 @@ export async function consultRealtimeVoiceAgent(params: {
   fastMode?: RunEmbeddedAgentParams["fastMode"];
   timeoutMs?: number;
   toolsAllow?: string[];
+  toolBindings?: RunEmbeddedAgentParams["toolBindings"];
   extraSystemPrompt?: string;
   fallbackText?: string;
   abortSignal?: AbortSignal;
@@ -401,7 +391,10 @@ export async function consultRealtimeVoiceAgent(params: {
     runId: string;
     sessionId: string;
     timeoutMs: number;
-  }) => RealtimeVoiceAgentConsultRunRegistration | void;
+  }) =>
+    | RealtimeVoiceAgentConsultRunRegistration
+    | void
+    | Promise<RealtimeVoiceAgentConsultRunRegistration | void>;
 }): Promise<RealtimeVoiceAgentConsultResult> {
   params.abortSignal?.throwIfAborted();
   const [{ beginSessionWorkAdmission }, { resolveSessionWorkStartError }] = await Promise.all([
@@ -504,10 +497,18 @@ export async function consultRealtimeVoiceAgent(params: {
       const runId = `${params.runIdPrefix}-${randomUUID()}`;
       const timeoutMs =
         params.timeoutMs ?? params.agentRuntime.resolveAgentTimeoutMs({ cfg: params.cfg });
-      const runRegistration = params.onRunStarted?.({ runId, sessionId, timeoutMs });
+      const runRegistration = await params.onRunStarted?.({ runId, sessionId, timeoutMs });
       const abortSignal = runRegistration?.abortSignal
         ? AbortSignal.any([lifecycleAbortController.signal, runRegistration.abortSignal])
         : lifecycleAbortController.signal;
+      try {
+        abortSignal.throwIfAborted();
+        assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+      } catch (error) {
+        runRegistration?.cleanupBeforeRun?.();
+        runRegistration?.cleanup?.();
+        throw error;
+      }
 
       // Voice consults suppress verbose/reasoning output because the bridge needs a short,
       // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
@@ -551,6 +552,7 @@ export async function consultRealtimeVoiceAgent(params: {
         toolResultFormat: "plain",
         execSession: sessionEntry,
         toolsAllow: params.toolsAllow,
+        toolBindings: params.toolBindings,
         timeoutMs,
         runId,
         lane: params.lane,

@@ -61,11 +61,7 @@ function addBundledChannelOwnerPluginIds(params: {
 }): void {
   // Channel state callbacks run before this pass and may update config.
   const plugins = normalizePluginsConfig(params.config.plugins);
-  const channelIds = new Set(
-    params.channelIds
-      .map((channelId) => normalizeOptionalLowercaseString(channelId))
-      .filter((channelId): channelId is string => Boolean(channelId)),
-  );
+  const channelIds = new Set(params.channelIds);
   if (channelIds.size === 0) {
     return;
   }

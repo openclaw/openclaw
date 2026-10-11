@@ -1,9 +1,8 @@
-import fs, { type BigIntStats } from "node:fs";
+import fs from "node:fs";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { FileMutationFingerprint } from "./file-descriptor.js";
-import { hashPublishedFileSync } from "./sqlite-snapshot-file.js";
-import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
+import { hashPublishedFileSync, sameFileStatFingerprint } from "./sqlite-snapshot-file.js";
 
 export function readSqliteIntegrityFileIdentity(
   pathname: string,
@@ -26,29 +25,17 @@ export type SqliteFileGeneration = {
   wal?: SqliteFileFingerprint;
 };
 
-function assertRegularFile(stat: BigIntStats): void {
-  if (!stat.isFile()) {
-    throw new Error("SQLite generation target must be a regular file");
-  }
-}
-
-function sameFileState(left: FileMutationFingerprint, right: FileMutationFingerprint): boolean {
-  return (
-    sameFileIdentity(left, right) &&
-    readDatabaseIdentityBirthtime(left) === readDatabaseIdentityBirthtime(right) &&
-    left.size === right.size
-  );
-}
-
 function fingerprintFile(pathname: string): SqliteFileFingerprint {
   const fd = fs.openSync(pathname, "r");
   try {
     const before = fs.fstatSync(fd, { bigint: true });
-    assertRegularFile(before);
+    if (!before.isFile()) {
+      throw new Error("SQLite generation target must be a regular file");
+    }
     const { sha256 } = hashPublishedFileSync(fs.realpathSync.native(pathname), before);
     const after = fs.fstatSync(fd, { bigint: true });
     const current = fs.statSync(pathname, { bigint: true });
-    if (!sameFileState(before, after) || !sameFileState(after, current)) {
+    if (!sameFileStatFingerprint(before, after) || !sameFileStatFingerprint(after, current)) {
       throw new Error(`SQLite generation target changed while hashing: ${pathname}`);
     }
     // Retain native descriptor IDs when Windows pathname stats report unknown IDs.
@@ -101,7 +88,7 @@ function sameFileFingerprint(left: SqliteFileFingerprint, right: SqliteFileFinge
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&
-    sameFileState(left, right) &&
+    sameFileStatFingerprint(left, right) &&
     left.sha256 === right.sha256
   );
 }

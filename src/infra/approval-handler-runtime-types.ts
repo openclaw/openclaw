@@ -1,4 +1,3 @@
-// Defines channel-native approval handler runtime types.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 import type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
@@ -17,7 +16,6 @@ export type { ApprovalResolved, ChannelApprovalKind } from "./approval-types.js"
 /** Backward-compatible approval request accepted by public plugin callbacks. */
 export type ApprovalRequest = ApprovalRequestInput;
 
-/** Shared context passed to channel-native approval hooks. */
 export type ChannelApprovalCapabilityHandlerContext = {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -41,14 +39,12 @@ type FinalApprovalEntryContext<TEntry> = ChannelApprovalCapabilityHandlerContext
   phase: "resolved" | "expired";
 };
 
-/** Result instruction for updating, deleting, clearing, or leaving a delivered approval entry. */
 export type ChannelApprovalNativeFinalAction<TPayload> =
   | { kind: "update"; payload: TPayload }
   | { kind: "delete" }
   | { kind: "clear-actions" }
   | { kind: "leave" };
 
-/** Availability gate for deciding whether a channel-native approval runtime can handle work. */
 export type ChannelApprovalNativeAvailabilityAdapter = {
   isConfigured: (params: ChannelApprovalCapabilityHandlerContext) => boolean;
   shouldHandle: (params: ApprovalRequestContext) => boolean;
@@ -89,7 +85,6 @@ type ChannelApprovalNativePresentationAdapterForView<
     | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
 };
 
-/** Builds channel-native payloads for pending, resolved, and expired approval views. */
 export type ChannelApprovalNativePresentationAdapter<
   TPendingPayload = unknown,
   TFinalPayload = unknown,
@@ -125,7 +120,6 @@ type ChannelApprovalNativeTransportAdapterForView<
   deleteEntry?: (params: FinalApprovalEntryContext<TPendingEntry>) => Promise<void>;
 };
 
-/** Transport hooks for preparing, delivering, updating, and deleting native approval entries. */
 export type ChannelApprovalNativeTransportAdapter<
   TPreparedTarget = unknown,
   TPendingEntry = unknown,
@@ -163,7 +157,6 @@ type ChannelApprovalNativeInteractionAdapterForView<
   ) => Promise<void> | void;
 };
 
-/** Optional hooks for binding and clearing interactive approval controls. */
 export type ChannelApprovalNativeInteractionAdapter<
   TPendingEntry = unknown,
   TBinding = unknown,
@@ -202,7 +195,6 @@ type ChannelApprovalNativeObserveAdapterForView<
   ) => void;
 };
 
-/** Optional observer hooks for delivery errors, duplicates, and successful deliveries. */
 export type ChannelApprovalNativeObserveAdapter<
   TPreparedTarget = unknown,
   TPendingPayload = unknown,

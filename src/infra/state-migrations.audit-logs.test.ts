@@ -18,6 +18,7 @@ import {
   buildAuditScrubbedContent,
   configAuditRecord,
   failArchiveHardening,
+  failAuditMove,
   failSecondScrubWrite,
   FIRST_AUDIT_SCRUB_BYTE,
   systemAuditEvent,
@@ -25,117 +26,82 @@ import {
   writeAuditRestoreJournal,
 } from "./state-migrations.audit.test-support.js";
 
-async function auditMoveFault(audit: AuditMigrationFixture, code = "EINVAL") {
-  const nativeModule = (await import(
-    new URL("native.js", import.meta.resolve("@openclaw/fs-safe/root")).href
-  )) as {
-    requireNativeBinding(): {
-      renameNoReplace(...args: unknown[]): void;
-      linkBeneath(...args: unknown[]): void;
-    };
-  };
-  const native = nativeModule.requireNativeBinding();
-  const rename = native.renameNoReplace.bind(native);
-  const sources = new Set(
-    [audit.config, audit.system].flatMap(({ source, claim, raw }) =>
-      [source, claim, raw, `${raw}.doctor-scrub-staging`].map((entry) => path.basename(entry)),
-    ),
-  );
-  const renameSpy = vi.spyOn(native, "renameNoReplace").mockImplementation((...args) => {
-    if (typeof args[1] === "string" && sources.has(args[1])) {
-      throw Object.assign(new Error(`rename no-replace unavailable: ${code}`), { code });
-    }
-    return rename(...args);
-  });
-  return { native, renameSpy };
-}
-
 describe("legacy core audit log migration", () => {
-  it.each(["EINVAL", "ENOSYS", "EOPNOTSUPP"])(
-    "preserves open-descriptor appends when native no-replace rename returns %s",
-    async (code) => {
-      await withAuditMigrationFixture(async (audit) => {
-        const { source, claim, raw, sanitized } = audit.config;
-        await audit.writeJsonLines(source, [configAuditRecord("original")]);
-        const predecessor = await fs.open(source, "a");
-        const identity = await predecessor.stat();
-        const { renameSpy } = await auditMoveFault(audit, code);
-        try {
-          const migrated = await audit.migrate();
-          expect(migrated.warnings).toEqual([]);
-          expect(await fs.stat(raw)).toMatchObject({
-            dev: identity.dev,
-            ino: identity.ino,
-            nlink: 1,
-          });
-          await expect(fs.access(source)).rejects.toMatchObject({ code: "ENOENT" });
-          await expect(fs.access(claim)).rejects.toMatchObject({ code: "ENOENT" });
-          const later = configAuditRecord("late-descriptor-row", {
-            ts: "2026-07-04T00:00:00.000Z",
-          });
-          await predecessor.appendFile(`${JSON.stringify(later)}\n`);
-          await predecessor.sync();
-          await expect(fs.readFile(raw, "utf8")).resolves.toContain("late-descriptor-row");
-
-          const recovered = await audit.migrate();
-          expect(recovered.warnings).toEqual([]);
-          expect(audit.configRecords()).toHaveLength(2);
-          const rows = await audit.readJsonLines<{ ts: string }>(sanitized);
-          expect(rows.map((row) => row.ts)).toEqual([
-            "2026-07-01T00:00:00.000Z",
-            "2026-07-04T00:00:00.000Z",
-          ]);
-          expect(audit.detect().hasLegacy).toBe(false);
-          expect((await audit.migrate()).changes).toEqual([]);
-          expect(audit.configRecords()).toHaveLength(2);
-        } finally {
-          renameSpy.mockRestore();
-          await predecessor.close();
-        }
-      });
-    },
-  );
-
-  it.each(["EPERM", "EXDEV", "EMLINK"])(
-    "warns and continues independent audit migration when hard links return %s",
-    async (code) => {
-      await withAuditMigrationFixture(async (audit) => {
-        const { source, claim, raw, sanitized } = audit.config;
-        const original = `${JSON.stringify(configAuditRecord("retained-original"))}\n`;
-        await audit.write(source, original);
-        const identity = await fs.stat(source);
-        await audit.writeJsonLines(audit.system.source, [systemAuditEvent("Independent source")]);
-        const { native, renameSpy } = await auditMoveFault(audit);
-        const link = native.linkBeneath.bind(native);
-        const linkSpy = vi.spyOn(native, "linkBeneath").mockImplementation((...args) => {
-          if (args[1] === path.basename(source)) {
-            throw Object.assign(new Error(`hard links unavailable: ${code}`), { code });
-          }
-          return link(...args);
+  it("preserves open-descriptor appends when the native helper is unavailable", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { source, claim, raw, sanitized } = audit.config;
+      await audit.writeJsonLines(source, [configAuditRecord("original")]);
+      const predecessor = await fs.open(source, "a");
+      const identity = await predecessor.stat();
+      const moveSpy = failAuditMove(
+        audit,
+        source,
+        new fsSafe.FsSafeError("helper-unavailable", "native fs-safe helper is unavailable"),
+      );
+      try {
+        const migrated = await audit.migrate();
+        expect(migrated.warnings).toEqual([]);
+        expect(await fs.stat(raw)).toMatchObject({
+          dev: identity.dev,
+          ino: identity.ino,
+          nlink: 1,
         });
-        try {
-          const result = await audit.migrate();
-          expect(result.warningDisposition).toBe("recoverable");
-          expect(result.warnings.join("\n")).toContain(source);
-          expect(result.warnings.join("\n")).toMatch(/filesystem|hard.link/iu);
-          expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
-          expect(result.warnings.join("\n")).toContain("OPENCLAW_STATE_DIR=");
-          expect(result.warnings.join("\n")).toContain(audit.stateDir);
-          await expect(fs.readFile(source, "utf8")).resolves.toBe(original);
-          expect(await fs.stat(source)).toMatchObject({ dev: identity.dev, ino: identity.ino });
-          for (const absent of [claim, raw, sanitized]) {
-            await expect(fs.access(absent)).rejects.toMatchObject({ code: "ENOENT" });
-          }
-          expect(audit.configRecords()).toEqual([]);
-          expect(audit.systemSummaries()).toEqual(["Independent source"]);
-          await expect(fs.access(audit.system.source)).rejects.toMatchObject({ code: "ENOENT" });
-        } finally {
-          linkSpy.mockRestore();
-          renameSpy.mockRestore();
+        await expect(fs.access(source)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(claim)).rejects.toMatchObject({ code: "ENOENT" });
+        const later = configAuditRecord("late-descriptor-row", {
+          ts: "2026-07-04T00:00:00.000Z",
+        });
+        await predecessor.appendFile(`${JSON.stringify(later)}\n`);
+        await predecessor.sync();
+        await expect(fs.readFile(raw, "utf8")).resolves.toContain("late-descriptor-row");
+
+        const recovered = await audit.migrate();
+        expect(recovered.warnings).toEqual([]);
+        expect(audit.configRecords()).toHaveLength(2);
+        const rows = await audit.readJsonLines<{ ts: string }>(sanitized);
+        expect(rows.map((row) => row.ts)).toEqual([
+          "2026-07-01T00:00:00.000Z",
+          "2026-07-04T00:00:00.000Z",
+        ]);
+        expect(audit.detect().hasLegacy).toBe(false);
+        expect((await audit.migrate()).changes).toEqual([]);
+        expect(audit.configRecords()).toHaveLength(2);
+      } finally {
+        moveSpy.mockRestore();
+        await predecessor.close();
+      }
+    });
+  });
+
+  it("warns and continues independent audit migration when fs-safe refuses its move fallback", async () => {
+    await withAuditMigrationFixture(async (audit) => {
+      const { source, claim, raw, sanitized } = audit.config;
+      const original = `${JSON.stringify(configAuditRecord("retained-original"))}\n`;
+      await audit.write(source, original);
+      const identity = await fs.stat(source);
+      await audit.writeJsonLines(audit.system.source, [systemAuditEvent("Independent source")]);
+      const moveSpy = failAuditMove(audit, source);
+      try {
+        const result = await audit.migrate();
+        expect(result.warningDisposition).toBe("recoverable");
+        expect(result.warnings.join("\n")).toContain(source);
+        expect(result.warnings.join("\n")).toMatch(/filesystem|hard.link/iu);
+        expect(result.warnings.join("\n")).toContain("openclaw doctor --fix");
+        expect(result.warnings.join("\n")).toContain("OPENCLAW_STATE_DIR=");
+        expect(result.warnings.join("\n")).toContain(audit.stateDir);
+        await expect(fs.readFile(source, "utf8")).resolves.toBe(original);
+        expect(await fs.stat(source)).toMatchObject({ dev: identity.dev, ino: identity.ino });
+        for (const absent of [claim, raw, sanitized]) {
+          await expect(fs.access(absent)).rejects.toMatchObject({ code: "ENOENT" });
         }
-      });
-    },
-  );
+        expect(audit.configRecords()).toEqual([]);
+        expect(audit.systemSummaries()).toEqual(["Independent source"]);
+        await expect(fs.access(audit.system.source)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        moveSpy.mockRestore();
+      }
+    });
+  });
 
   it.each(["archive", "journal"] as const)(
     "retains audit bytes and continues after the %s hard-link move becomes unavailable",
@@ -145,15 +111,8 @@ describe("legacy core audit log migration", () => {
         const original = `${JSON.stringify(configAuditRecord("retained-during-move"))}\n`;
         await audit.write(source, original);
         await audit.writeJsonLines(audit.system.source, [systemAuditEvent("Independent source")]);
-        const { native, renameSpy } = await auditMoveFault(audit);
         const rejectedSource = phase === "archive" ? claim : `${raw}.doctor-scrub-staging`;
-        const link = native.linkBeneath.bind(native);
-        const linkSpy = vi.spyOn(native, "linkBeneath").mockImplementation((...args) => {
-          if (args[1] === path.basename(rejectedSource)) {
-            throw Object.assign(new Error("hard links unavailable: EPERM"), { code: "EPERM" });
-          }
-          return link(...args);
-        });
+        const moveSpy = failAuditMove(audit, rejectedSource);
         try {
           const result = await audit.migrate();
           expect(result.warningDisposition).toBe("recoverable");
@@ -168,8 +127,7 @@ describe("legacy core audit log migration", () => {
           expect(audit.systemSummaries()).toEqual(["Independent source"]);
           expect(audit.configRecords()).toHaveLength(1);
         } finally {
-          linkSpy.mockRestore();
-          renameSpy.mockRestore();
+          moveSpy.mockRestore();
         }
 
         const retry = await audit.migrate();
@@ -253,14 +211,12 @@ describe("legacy core audit log migration", () => {
       const original = `${JSON.stringify(configAuditRecord("source-owner"))}\n`;
       const competing = `${JSON.stringify(configAuditRecord("destination-owner"))}\n`;
       await audit.write(source, original);
-      const { native, renameSpy } = await auditMoveFault(audit);
-      const link = native.linkBeneath.bind(native);
-      const linkSpy = vi.spyOn(native, "linkBeneath").mockImplementation((...args) => {
-        if (args[1] === path.basename(source)) {
-          writeFileSync(claim, competing, { flag: "wx" });
-        }
-        return link(...args);
-      });
+      const moveSpy = failAuditMove(
+        audit,
+        source,
+        new fsSafe.FsSafeError("helper-unavailable", "native fs-safe helper is unavailable"),
+        () => writeFileSync(claim, competing, { flag: "wx" }),
+      );
       try {
         const result = await audit.migrate();
         expect(result.warnings.length).toBeGreaterThan(0);
@@ -269,8 +225,7 @@ describe("legacy core audit log migration", () => {
         await expect(fs.readFile(claim, "utf8")).resolves.toBe(competing);
         expect(audit.configRecords()).toEqual([]);
       } finally {
-        linkSpy.mockRestore();
-        renameSpy.mockRestore();
+        moveSpy.mockRestore();
       }
     });
   });

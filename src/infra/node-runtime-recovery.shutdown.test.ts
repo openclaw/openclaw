@@ -34,7 +34,7 @@ afterEach(() => {
 
 it.each([
   { platform: "linux", args: ["gateway", "run"], nativeBudgetMs: 330_000 },
-  { platform: "darwin", args: ["gateway"], nativeBudgetMs: 20_000 },
+  { platform: "darwin", args: ["gateway"], nativeBudgetMs: 330_000 },
   { platform: "linux", args: ["gateway", "status"], nativeBudgetMs: 3_000 },
   { platform: "win32", args: ["gateway", "run"], nativeBudgetMs: 3_000 },
 ] as const)(
@@ -53,11 +53,8 @@ it.each([
       XPC_SERVICE_NAME: "ai.openclaw.fixture",
     });
     detach = () => child.emit("exit", 0, null);
-    // The launcher tells the child nothing about the timer it armed: the serving
-    // Gateway derives the same deadline from the same shared expression, which is what
-    // lets a Gateway started by an already-running older launcher bound itself
-    // correctly. So the env must reach the child unchanged, and the escalation
-    // asserted below is what that derivation has to land on.
+    // No new environment contract is needed to give newly started launchers the
+    // full service budget; legacy parent compatibility stays with the Gateway.
     expect(spawn).toHaveBeenCalledExactlyOnceWith(
       "node",
       ["child.mjs"],

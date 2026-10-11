@@ -22,7 +22,6 @@ export type TelegramActionConfig = {
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
-  /** Enable forum topic creation. */
   createForumTopic?: boolean;
   /** Enable forum topic editing (rename / change icon). */
   editForumTopic?: boolean;
@@ -97,7 +96,6 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
      * Default: false.
      */
     richMessages?: boolean;
-    /** Network transport overrides for Telegram. */
     network?: TelegramNetworkConfig;
     proxy?: string;
     webhookUrl?: string;
@@ -113,7 +111,6 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     webhookCertPath?: string;
     /** Per-action tool gating (default: true for all). */
     actions?: TelegramActionConfig;
-    /** Telegram thread/conversation binding overrides. */
     threadBindings?: TelegramThreadBindingsConfig;
     /** Controls whether link previews are shown in outbound messages. Default: true. */
     linkPreview?: boolean;
@@ -173,7 +170,6 @@ export type TelegramDirectConfig = Omit<CommonChannelGroupConfig, "requireMentio
 };
 
 export type TelegramConfig = {
-  /** Optional per-account Telegram configuration (multi-account). */
   accounts?: Record<string, TelegramAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;

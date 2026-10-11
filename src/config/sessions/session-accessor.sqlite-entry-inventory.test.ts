@@ -42,7 +42,7 @@ it("counts mixed validated and raw entries with the same archive filter", async 
   expect(readSessionEntryCount(database)).toBe(4);
   expect(readSessionEntryCount(database, { includeArchived: false })).toBe(2);
   database.db
-    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+    .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
     .run("{}", "agent:main:validated-false");
   expect(readSessionEntryCount(database)).toBe(3);
   expect(readSessionEntryCount(database, { includeArchived: false })).toBe(1);

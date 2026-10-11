@@ -234,11 +234,6 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["refreshHooksPolicy"],
   },
   {
-    prefixes: ["skills.workshop.autonomous.mode"],
-    kind: "hot",
-    actions: ["reconcileSystemJobs"],
-  },
-  {
     prefixes: ["agents.defaults.decisionModel"],
     kind: "hot",
     actions: ["reloadPlugins"],

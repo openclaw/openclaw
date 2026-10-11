@@ -22,7 +22,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig,
   projectInferenceRoute,
-  sameDefaultInferenceRoute,
 } from "../system-agent/inference-route.js";
 import { activateSavedSetupCredential } from "../system-agent/setup-inference-credential-access.js";
 import { isSetupCredentialReplacement } from "../system-agent/setup-inference-credentials.js";
@@ -336,7 +335,7 @@ export async function offerLiveModelVerification(params: {
         activate: async () => {
           if (savedProfile?.credential.setup?.replacement && verifiedRoute) {
             const latest = (await params.configTarget.read()).config;
-            if (!sameDefaultInferenceRoute(await projectRoute(latest), verifiedRoute)) {
+            if (!isDeepStrictEqual(await projectRoute(latest), verifiedRoute)) {
               throw new Error(
                 "The connection changed before activation. Test the saved sign-in again.",
               );

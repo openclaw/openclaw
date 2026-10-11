@@ -375,6 +375,47 @@ describe("comfy image-generation provider", () => {
     });
   });
 
+  it("reports completed local history without image outputs after one lookup", async () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-prompt-1" }))
+      .mockResolvedValueOnce(
+        fetchGuardJson({
+          "local-prompt-1": { status: { completed: true, status_str: "success" }, outputs: {} },
+        }),
+      );
+
+    await expect(generateImage({ timeoutMs: 1_000 })).rejects.toThrow(
+      "Comfy workflow local-prompt-1 completed without image outputs",
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a local execution error instead of treating it as missing output", async () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-prompt-1" }))
+      .mockResolvedValueOnce(
+        fetchGuardJson({
+          "local-prompt-1": {
+            status: {
+              completed: false,
+              status_str: "error",
+              messages: [["execution_error", { exception_message: "Missing checkpoint" }]],
+            },
+            outputs: {},
+          },
+        }),
+      );
+
+    await expect(generateImage({ timeoutMs: 1_000 })).rejects.toThrow(
+      "Comfy workflow failed: Missing checkpoint",
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["literal", "Basic fixture", true],
     ["available env", { source: "env", provider: "default", id: "COMFY_HEADER_AVAILABLE" }, true],

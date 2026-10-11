@@ -10,6 +10,7 @@ import {
   readProviderJsonResponse,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -414,9 +415,7 @@ async function waitForFalQueueResult(params: {
       throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
     }
     const pollDelayMs = resolveFalQueueRemainingMs(params.deadline, lastStatus, POLL_INTERVAL_MS);
-    await new Promise((resolve) => {
-      setTimeout(resolve, pollDelayMs);
-    });
+    await sleep(pollDelayMs);
   }
 }
 

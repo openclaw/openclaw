@@ -18,13 +18,18 @@ import {
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
 
 const mocks = vi.hoisted(() => ({ beforeAppend: vi.fn(async () => {}) }));
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+vi.mock("../config/sessions/session-accessor.sqlite-transcript-turn.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../config/sessions/session-accessor.sqlite-transcript-turn.js")
+    >();
   return {
     ...actual,
-    appendTranscriptMessage: async (...args: Parameters<typeof actual.appendTranscriptMessage>) => {
+    appendExpectedSessionTranscriptTurn: async (
+      ...args: Parameters<typeof actual.appendExpectedSessionTranscriptTurn>
+    ) => {
       await mocks.beforeAppend();
-      return actual.appendTranscriptMessage(...args);
+      return actual.appendExpectedSessionTranscriptTurn(...args);
     },
   };
 });
@@ -76,7 +81,7 @@ describe("voice confirmation transcript admission", () => {
     );
     scope = {
       agentId: "main",
-      voiceSessionId: createOrResumeClientVoiceSession({
+      voiceSessionId: await createOrResumeClientVoiceSession({
         agentId: "main",
         sessionKey,
         origin: "client",

@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveStateDir } from "../config/paths.js";
 import { hydrateSessionStoreSkillPromptRefs } from "../config/sessions/skill-prompt-blobs.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -38,11 +37,7 @@ type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
   storePath: string;
 };
 
-function resolveSessionSnapshotBundledSkillsDir(bundledSkillsDir?: string): string | undefined {
-  const explicit = bundledSkillsDir?.trim();
-  if (explicit) {
-    return explicit;
-  }
+function resolveSessionSnapshotBundledSkillsDir(): string | undefined {
   const resolved = resolveBundledSkillsDir();
   if (resolved) {
     return resolved;
@@ -101,19 +96,15 @@ function collectInjectedWorkspaceFilePaths(value: unknown): string[] {
 function collectCachedSnapshotPaths(entry: SessionEntry): CachedSnapshotPath[] {
   const snapshot = entry.skillsSnapshot as Record<string, unknown> | undefined;
   const report = entry.systemPromptReport as Record<string, unknown> | undefined;
-  const paths: CachedSnapshotPath[] = [];
-  for (const location of extractSkillLocations(snapshot?.prompt)) {
-    paths.push({ field: "skillsSnapshot.prompt", path: location });
-  }
-  for (const location of collectResolvedSkillPaths(snapshot?.resolvedSkills)) {
-    paths.push({ field: "skillsSnapshot.resolvedSkills", path: location });
-  }
-  if (isRecord(report)) {
-    for (const location of collectInjectedWorkspaceFilePaths(report.injectedWorkspaceFiles)) {
-      paths.push({ field: "systemPromptReport.injectedWorkspaceFiles", path: location });
-    }
-  }
-  return paths;
+  const sources: Array<[SnapshotPathSource, string[]]> = [
+    ["skillsSnapshot.prompt", extractSkillLocations(snapshot?.prompt)],
+    ["skillsSnapshot.resolvedSkills", collectResolvedSkillPaths(snapshot?.resolvedSkills)],
+    [
+      "systemPromptReport.injectedWorkspaceFiles",
+      isRecord(report) ? collectInjectedWorkspaceFilePaths(report.injectedWorkspaceFiles) : [],
+    ],
+  ];
+  return sources.flatMap(([field, paths]) => paths.map((location) => ({ field, path: location })));
 }
 
 function isAbsolutePathLike(value: string): boolean {
@@ -242,21 +233,6 @@ function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
   return findings;
 }
 
-async function listSessionStorePaths(stateDir: string): Promise<string[]> {
-  const agentsDir = path.join(stateDir, "agents");
-  let agentEntries: fs.Dirent[];
-  try {
-    agentEntries = await fs.promises.readdir(agentsDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return agentEntries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(agentsDir, entry.name, "sessions", "sessions.json"))
-    .filter((storePath) => fs.existsSync(storePath))
-    .toSorted((a, b) => a.localeCompare(b));
-}
-
 function loadSessionStoreForSnapshotScan(storePath: string): Record<string, SessionEntry> {
   const parsed = JSON.parse(fs.readFileSync(storePath, "utf-8")) as unknown;
   if (!isRecord(parsed)) {
@@ -268,27 +244,21 @@ function loadSessionStoreForSnapshotScan(storePath: string): Record<string, Sess
 }
 
 type SessionSnapshotScanOptions = {
-  storePaths?: string[];
-  bundledSkillsDir?: string;
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 };
 
 async function scanSessionSnapshotHealth(
-  params: SessionSnapshotScanOptions = {},
+  params: SessionSnapshotScanOptions,
   onError?: (storePath: string, error: unknown) => void,
 ) {
-  const bundledSkillsDir = resolveSessionSnapshotBundledSkillsDir(params.bundledSkillsDir);
+  const bundledSkillsDir = resolveSessionSnapshotBundledSkillsDir();
   const stores: Array<{ storePath: string; findings: StaleSessionSnapshotPathFinding[] }> = [];
   if (bundledSkillsDir) {
-    const storePaths =
-      params.storePaths ??
-      (params.cfg
-        ? resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env })
-            .map((target) => target.storePath)
-            .filter((storePath) => fs.existsSync(storePath))
-            .toSorted((a, b) => a.localeCompare(b))
-        : await listSessionStorePaths(resolveStateDir(params.env)));
+    const storePaths = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env })
+      .map((target) => target.storePath)
+      .filter((storePath) => fs.existsSync(storePath))
+      .toSorted((a, b) => a.localeCompare(b));
     for (const storePath of storePaths) {
       let store: Record<string, SessionEntry>;
       try {
@@ -311,7 +281,7 @@ async function scanSessionSnapshotHealth(
 }
 
 export async function detectSessionSnapshotHealthIssues(
-  params?: SessionSnapshotScanOptions,
+  params: SessionSnapshotScanOptions,
 ): Promise<SessionSnapshotHealthIssue[]> {
   const { stores } = await scanSessionSnapshotHealth(params);
   return stores.flatMap(({ storePath, findings }) =>
@@ -335,7 +305,7 @@ export function sessionSnapshotIssueToHealthFinding(
 }
 
 /** Reports historical snapshot paths without rewriting migration source bytes. */
-export async function noteSessionSnapshotHealth(params?: SessionSnapshotScanOptions) {
+export async function noteSessionSnapshotHealth(params: SessionSnapshotScanOptions) {
   const { bundledSkillsDir, stores } = await scanSessionSnapshotHealth(
     params,
     (storePath, error) => {
@@ -377,9 +347,6 @@ export async function noteSessionSnapshotHealth(params?: SessionSnapshotScanOpti
         )} -> ${shortenHomePath(finding.expectedPath)}`,
       );
       shown += 1;
-      if (shown >= 10) {
-        break;
-      }
     }
     if (shown >= 10) {
       break;

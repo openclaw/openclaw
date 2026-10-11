@@ -15,6 +15,7 @@ import {
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -293,23 +294,18 @@ it.each(["manual", "timer"] as const)(
           }
           return post.call(this, request, transferList);
         });
-        const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-        const admission = vi
-          .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (
-                request.stage === "commit" &&
-                nonce !== undefined &&
-                isRecord(request.facts) &&
-                request.facts.nonce === nonce
-              ) {
-                revoked = true;
-                available = false;
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+          if (
+            request.stage === "commit" &&
+            nonce !== undefined &&
+            isRecord(request.facts) &&
+            request.facts.nonce === nonce
+          ) {
+            revoked = true;
+            available = false;
+          }
+          admit(request, grant);
+        });
         const execute = runtimeMutation.runCronRuntimeMutation;
         const mutation = vi
           .spyOn(runtimeMutation, "runCronRuntimeMutation")

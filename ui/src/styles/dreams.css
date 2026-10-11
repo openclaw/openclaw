@@ -1,7 +1,3 @@
-/* ===========================================
-   Dreams Tab – Sleeping Lobster Animation
-   =========================================== */
-
 .dreams-page {
   display: flex;
   flex-direction: column;
@@ -197,7 +193,6 @@
   }
 }
 
-/* Bubble trail dots */
 .dreams__bubble-dot {
   position: absolute;
   border-radius: 50%;
@@ -703,7 +698,6 @@
   }
 }
 
-/* Left accent glow line */
 .dreams-diary__accent {
   position: absolute;
   top: 4px;
@@ -784,7 +778,6 @@
 }
 
 .dreams-diary__prose {
-  /* no styling container needed, just prose spacing */
   max-width: 100%;
   min-width: 0;
   overflow-x: clip;

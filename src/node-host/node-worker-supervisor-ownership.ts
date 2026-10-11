@@ -14,6 +14,7 @@ import type {
   NodeWorkerTerminalState,
 } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
+import type { NodeWorkerNativeInferenceSnapshot } from "./node-worker-native-inference.js";
 import type { NodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -47,6 +48,7 @@ export function nodeWorkerEnvironmentBinding(input: NodeWorkerLaunchInput) {
     workspaceDir: assignment.workspaceDir,
     containmentRoot: assignment.workerContainmentRoot,
     permissionMode: assignment.permissionMode,
+    inference: assignment.inference,
   };
 }
 
@@ -154,6 +156,8 @@ export type NodeWorkerSupervisorOptions = {
   workspace?: NodeWorkerWorkspaceRuntime;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
+  /** Node-local canonical models captured before the runtime yields. */
+  nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
 };
 
 /** Match both process bookkeeping and exact authoritative container identity. */

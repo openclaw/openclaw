@@ -34,7 +34,8 @@ import type { QueuedEvent, SubscriptionBinding } from "./state.js";
 import type { EventCron, EventSourceSnapshot, McpEventsDependencies } from "./types.js";
 
 // Network resolution is the external prerequisite; production still always enforces public HTTPS.
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   resolvePinnedHostnameWithPolicy: vi.fn(async () => ({
     hostname: "receiver.example.com",
     addresses: ["93.184.216.34"],
@@ -98,6 +99,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
   let subscribed: Array<Record<string, unknown>>;
   let unsubscribed: Array<Record<string, unknown>>;
   let rejectedWrites: number;
+  let rejectedDeletes: number;
   let beforeReply: (() => Promise<void>) | undefined;
   let callback: OpenClawPluginHttpRouteHandler;
 
@@ -131,6 +133,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     bindingId = "";
     beforeReply = undefined;
     rejectedWrites = 0;
+    rejectedDeletes = 0;
     sources = [
       {
         jobId: "authored-job",
@@ -173,6 +176,13 @@ describe("MCP Events callback and subscription lifecycle", () => {
                       throw new Error("Injected state write failure");
                     }
                     return admitted.register(...args);
+                  },
+                  delete: async (...args) => {
+                    if (rejectedDeletes > 0) {
+                      rejectedDeletes--;
+                      throw new Error("Injected state delete failure");
+                    }
+                    return admitted.delete(...args);
                   },
                 };
               },
@@ -534,30 +544,41 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect(pending.every((row) => row.attempts === 0)).toBe(true);
   });
 
-  it("rejects old callbacks and queued claims after credential disconnect/reconnect without a job change", async () => {
-    await current!.start();
-    const oldBinding = bindingId;
-    const oldSecret = secret;
-    expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
-    // The credential owner records a new lifetime even if no callback observed the disconnected interval.
-    authorizationId++;
-    await runSchedule("drain");
-    expect(deps.cron.runEvent).not.toHaveBeenCalled();
-    expect(await queue().listPending()).toHaveLength(0);
-    expect((await post(JSON.stringify(event("evt-2")), "evt-2")).status).toBe(410);
-    expect(subscribed).toHaveLength(1);
-    await current!.reconcile();
-    expect(bindingId).not.toBe(oldBinding);
-    expect(secret).not.toBe(oldSecret);
-    const body = JSON.stringify(event("evt-3"));
-    const retired = await fetch(origin + "/plugins/mcp-events/callback/" + oldBinding, {
-      method: "POST",
-      headers: signed(oldSecret, body, "evt-3"),
-      body,
-    });
-    expect(retired.status).toBe(410);
-    expect((await post(body, "evt-3")).status).toBe(200);
-  });
+  it.each(["callback", "renewal", "queued claim"] as const)(
+    "recovers automatically after %s detects credential replacement",
+    async (trigger) => {
+      await current!.start();
+      const oldBinding = bindingId;
+      const oldSecret = secret;
+      expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
+      // The credential owner records a new lifetime even if no callback observed the disconnected interval.
+      authorizationId++;
+      if (trigger === "callback") {
+        expect((await post(JSON.stringify(event("evt-2")), "evt-2")).status).toBe(410);
+      } else if (trigger === "renewal") {
+        const key = "refresh:" + oldBinding;
+        now = schedules.get(key)!.atMs;
+        await runSchedule(key);
+      }
+      await runSchedule("drain");
+      expect(deps.cron.runEvent).not.toHaveBeenCalled();
+      expect(await queue().listPending()).toHaveLength(0);
+      expect(subscribed).toHaveLength(1);
+      // Run only the owner-scheduled recovery, not an external edit or explicit reconciliation.
+      await runSchedule("reconcile");
+      expect(bindingId).not.toBe(oldBinding);
+      expect(secret).not.toBe(oldSecret);
+      const body = JSON.stringify(event("evt-3"));
+      const retired = await fetch(origin + "/plugins/mcp-events/callback/" + oldBinding, {
+        method: "POST",
+        headers: signed(oldSecret, body, "evt-3", now),
+        body,
+      });
+      expect(retired.status).toBe(410);
+      expect((await post(body, "evt-3")).status).toBe(200);
+      expect(await queue().listPending()).toHaveLength(1);
+    },
+  );
 
   it("retains a bounded refresh deadline while subscription failure bookkeeping is unavailable", async () => {
     await current!.start();
@@ -578,6 +599,57 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect(subscribed).toHaveLength(2);
     expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
   });
+
+  it.each(["retirement", "cleanup", "deletion"] as const)(
+    "retains cleanup after a %s bookkeeping write fails",
+    async (phase) => {
+      const prepare = deps.prepareSource;
+      let attempts = 0;
+      deps.prepareSource = async (input) => {
+        const source = await prepare(input);
+        return {
+          ...source,
+          unsubscribe: async (signal) => {
+            attempts++;
+            if (phase === "cleanup" && attempts <= 2) {
+              rejectedWrites = attempts === 2 ? 1 : 0;
+              throw new Error("Injected remote cleanup failure");
+            }
+            return await source.unsubscribe(signal);
+          },
+        };
+      };
+      await current!.start();
+      const key = "cleanup:" + bindingId;
+      sources = [];
+      if (phase === "retirement") {
+        rejectedWrites = 1;
+        await expect(current!.reconcile()).rejects.toThrow("Injected state write failure");
+      } else if (phase === "cleanup") {
+        await current!.reconcile();
+        const retry = schedules.get(key);
+        if (!retry) {
+          throw new Error("Missing first cleanup retry");
+        }
+        now = retry.atMs;
+        await expect(runSchedule(key)).rejects.toThrow("Injected state write failure");
+      } else {
+        rejectedDeletes = 1;
+        await current!.reconcile();
+      }
+      expect((await post(JSON.stringify(event("evt-retired")), "evt-retired")).status).toBe(410);
+      const retry = schedules.get(key);
+      expect(retry, "Retired bindings must recover without another edit or restart").toBeDefined();
+      if (!retry) {
+        throw new Error("Missing cleanup recovery deadline");
+      }
+      now = retry.atMs;
+      await runSchedule(key);
+      expect(current!.diagnostics()).toEqual([]);
+      expect(unsubscribed).toHaveLength(1);
+      expect(schedules.has(key)).toBe(false);
+    },
+  );
 
   it("wakes committed ingress even when checkpoint persistence fails after enqueue", async () => {
     await current!.start();

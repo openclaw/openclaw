@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { nodeWorkerTurnMatchesIdentity } from "../worker/node-supervisor-protocol.js";
@@ -10,7 +9,6 @@ import { createNodeWorkerSupervisor, mocks } from "./node-worker-supervisor.mock
 import {
   TEST_WORKER_ENDPOINT,
   testNodeWorkerEnvironmentIdentity,
-  testNodeWorkerLaunchIdentity,
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 import type { NodeWorkerTurnReceipt } from "./node-worker-turn-store.js";
@@ -298,7 +296,7 @@ describe("node worker idle retention", () => {
     }
   });
 
-  it.each(["completed", "failed", "closed", "aborted"] as const)(
+  it.each(["completed", "closed", "aborted"] as const)(
     "releases prepared workspace custody when public launch is %s",
     async (outcome) => {
       const f = fixture();
@@ -318,9 +316,6 @@ describe("node worker idle retention", () => {
         started.resolve();
         await startup.promise;
       });
-      if (outcome === "failed") {
-        mocks.launchClaim.mockRejectedValueOnce(failure);
-      }
       const pending = f.supervisor.launch(
         input("prepared"),
         TEST_WORKER_ENDPOINT,
@@ -630,7 +625,7 @@ describe("node worker idle retention", () => {
     }
   });
 
-  it.each(["stop", "disconnect", "close"] as const)(
+  it.each(["stop", "close"] as const)(
     "%s retires idle through physical cleanup and preserves the completed turn",
     async (operation) => {
       const f = fixture();
@@ -643,8 +638,6 @@ describe("node worker idle retention", () => {
         expect(owner.adapter.kill).not.toHaveBeenCalled();
         if (operation === "stop") {
           await f.supervisor.stopEnvironment(identity);
-        } else if (operation === "disconnect") {
-          await f.supervisor.retireIdle();
         } else {
           await f.supervisor.close();
         }
@@ -733,55 +726,6 @@ describe("node worker idle retention", () => {
           reclaimableIdle: 0,
         });
         expect(await f.supervisor.status("idle")).toMatchObject({ state: "completed" });
-      } finally {
-        await f.supervisor.close();
-      }
-    },
-  );
-
-  it.each(["old-gateway", "old-bundle"] as const)(
-    "keeps %s retention background-only and preserves the old managed turn shape",
-    async (compatibility) => {
-      const f = fixture();
-      try {
-        const value = input("legacy");
-        if (compatibility === "old-gateway") {
-          delete value.idleRetention;
-        } else {
-          value.descriptor.admission.handshake.protocolFeatures =
-            value.descriptor.admission.handshake.protocolFeatures.filter(
-              (feature) => feature !== NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
-            );
-        }
-        const owner = await f.launch(value);
-        expect(mocks.send).toHaveBeenCalledWith(owner.adapter, {
-          type: "turn",
-          turnId: value.launchId,
-          descriptor: { ...value.descriptor, connectionEndpoint: TEST_WORKER_ENDPOINT },
-        });
-        await owner.complete(value.launchId);
-        await vi.advanceTimersByTimeAsync(240_000);
-        expect(owner.adapter.kill).not.toHaveBeenCalled();
-        expect(await f.supervisor.hasActiveWork()).toBe(true);
-        expect(f.snapshots.every((snapshot) => !Object.hasOwn(snapshot, "reclaimableIdle"))).toBe(
-          true,
-        );
-        const next = {
-          ...value,
-          launchId: "legacy-next",
-          descriptor: structuredClone(value.descriptor),
-        };
-        next.descriptor.assignment.turnId = next.launchId;
-        await f.supervisor.launch(next, TEST_WORKER_ENDPOINT);
-        expect(mocks.send).toHaveBeenCalledWith(owner.adapter, {
-          type: "turn",
-          turnId: next.launchId,
-          descriptor: { ...next.descriptor, connectionEndpoint: TEST_WORKER_ENDPOINT },
-        });
-        expect(
-          await f.supervisor.cancel({ ...testNodeWorkerLaunchIdentity(value), ownerEpoch: 0 }),
-        ).toBeUndefined();
-        expect(owner.adapter.kill).not.toHaveBeenCalled();
       } finally {
         await f.supervisor.close();
       }

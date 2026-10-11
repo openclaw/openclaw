@@ -159,7 +159,7 @@ function legacyTranscriptRelativeDir(session: TranscriptSessionDescriptor): stri
   }
   const legacySegment =
     session.sessionId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
-  return path.normalize(path.join(date, legacySegment));
+  return path.join(date, legacySegment);
 }
 
 async function optionalRegularFile(filePath: string): Promise<boolean> {

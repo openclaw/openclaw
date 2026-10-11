@@ -8,7 +8,7 @@ How OpenClaw captures a prepared project and node runtime before enrollment, reu
 
 ## Warm images
 
-The Crabbox plugin prepares its [supported CLI](/gateway/config-cloud-workers#crabbox-profile) automatically before warm-image operations. Its configured CLI version probe allows 30 seconds, including during a busy Gateway startup, before trying the managed fallback. Concurrent discovery and provisioning share one binary acquisition per executable; cancelling a caller stops its wait without cancelling other callers. Keep the fixed lease ID: it prevents duplicate allocations when dispatch is retried.
+The Crabbox plugin prepares its [supported CLI](/gateway/config-cloud-workers#crabbox-profile) automatically before warm-image operations. Its configured CLI version check allows 30 seconds, including during a busy Gateway startup, before trying the managed fallback. Concurrent discovery and provisioning share one binary acquisition per executable; cancelling a caller stops its wait without cancelling other callers. Keep the fixed lease ID: it prevents duplicate allocations when dispatch is retried.
 
 Warm images and project preparation for image capture are Linux only.
 

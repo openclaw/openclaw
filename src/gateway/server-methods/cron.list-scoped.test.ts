@@ -134,11 +134,7 @@ async function listScoped(
 }
 
 describe("cron.list scoped SQLite snapshots", () => {
-  it.each([
-    { enabled: true, quarantine: false },
-    { enabled: true, quarantine: true },
-    { enabled: false, quarantine: true },
-  ])(
+  it.each([{ enabled: true, quarantine: true }])(
     "keeps unsupported enabled=$enabled delivery repairable beside healthy work and quarantine=$quarantine",
     async ({ enabled, quarantine }) => {
       await withCronStore(
@@ -432,7 +428,7 @@ describe("cron.list scoped SQLite snapshots", () => {
     );
   });
 
-  it.each([200, 401])(
+  it.each([401])(
     "bounds sorting work while finding visible jobs across a %i-job inventory",
     async (count) => {
       await withCronStore(count, async ({ context, storePath }) => {

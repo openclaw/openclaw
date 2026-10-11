@@ -1,16 +1,24 @@
-/** Shared parser for slash commands with action and argument tails. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
+/** Splits trimmed command text without normalizing the remaining arguments. */
+export function splitCommandAction(trimmed: string, defaultAction = "") {
+  const actionEnd = trimmed.search(/\s/);
+  return {
+    action:
+      (actionEnd === -1 ? trimmed : trimmed.slice(0, actionEnd)).toLowerCase() || defaultAction,
+    args: actionEnd === -1 ? "" : trimmed.slice(actionEnd).trim(),
+  };
+}
 
 /** Matches a whole, case-insensitive command token and preserves its argument text. */
 export function matchSlashCommandToken(raw: string, command: string): string | null {
-  const trimmed = raw.trim();
-  const commandEnd = trimmed.search(/\s/);
-  const token = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
-  return token.toLowerCase() === command
-    ? commandEnd === -1
-      ? ""
-      : trimmed.slice(commandEnd).trim()
-    : null;
+  const { action, args } = splitCommandAction(raw.trim());
+  return action === command ? args : null;
+}
+
+export function resolveSlashCommandName(commandBody: string): string | null {
+  const match = commandBody.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
+  return normalizeLowercaseStringOrEmpty(match?.[1]) || null;
 }
 
 /** Parses a normalized send-policy command without importing command runtime state. */
@@ -38,7 +46,6 @@ export function parseSendPolicyCommandBody(normalized: string): {
   return { hasCommand: true, mode };
 }
 
-/** Parses a slash command or returns null when the prefix does not match. */
 export function parseSlashCommandOrNull(
   raw: string,
   slash: string,
@@ -54,13 +61,5 @@ export function parseSlashCommandOrNull(
   if (charAfter && !/[\s:]/.test(charAfter)) {
     return null;
   }
-  const rest = trimmed.slice(slash.length).trim();
-  if (!rest) {
-    return { action: defaultAction, args: "" };
-  }
-  const actionEnd = rest.search(/\s/);
-  return {
-    action: (actionEnd === -1 ? rest : rest.slice(0, actionEnd)).toLowerCase(),
-    args: actionEnd === -1 ? "" : rest.slice(actionEnd).trim(),
-  };
+  return splitCommandAction(trimmed.slice(slash.length).trim(), defaultAction);
 }

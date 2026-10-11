@@ -118,7 +118,7 @@ export interface SessionListHost {
     | "sessionMenu"
     | "sessionSortMenuPosition"
     | "toggleCatalogViewMenu"
-    | "toggleSessionSortMenu"
+    | "togglePositionedMenu"
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
   readonly sessionOwnerFilterActive: boolean;

@@ -36,7 +36,7 @@ import {
 } from "./session-catalog-native-page.js";
 import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import {
-  projectCodexCatalogThread,
+  projectCodexCatalogPage,
   CodexCatalogProjections,
   CodexCatalogProjectionCapacityError,
 } from "./session-catalog-projection.js";
@@ -201,20 +201,22 @@ export class CodexCatalogIndex {
     }
     const oldest = retainCodexCatalogRow(this.rows, row);
     this.overflow ||= this.rows.size >= CODEX_CATALOG_MAX_ROWS;
-    this.ordering.invalidate();
     if (oldest?.threadId === row.threadId) {
       return;
     }
     if (oldest) {
-      this.evict(oldest.threadId);
+      this.evict(oldest.threadId, oldest);
     }
+    this.ordering.put(row, previous);
     this.persistence.put(row);
   }
 
-  private evict(threadId: string): void {
+  private evict(threadId: string, row = this.rows.get(threadId)): void {
     // Retention does not withdraw observations supported by an open native connection.
     this.rows.delete(threadId);
-    this.ordering.invalidate();
+    if (row) {
+      this.ordering.remove(row);
+    }
     this.persistence.remove(threadId);
   }
 
@@ -246,14 +248,12 @@ export class CodexCatalogIndex {
           do {
             observedRevision = await this.hydrate(this.availability.complete);
           } while (observedRevision !== this.sourceRevision);
-          // A complete replacement walk also satisfies a pending snapshot refresh.
-          this.needsNativeRefresh = false;
-        }
-        if (this.needsNativeRefresh) {
+        } else if (this.needsNativeRefresh) {
           await this.reconcile();
           await this.reconcileNative();
-          this.needsNativeRefresh = false;
         }
+        // A complete replacement walk also satisfies a pending snapshot refresh.
+        this.needsNativeRefresh = false;
         this.initialized = true;
         this.failure = undefined;
         this.currency.start();
@@ -304,9 +304,13 @@ export class CodexCatalogIndex {
             if (patched !== restored) {
               this.persistence.put(patched);
             }
+            const previous = this.rows.get(patched.threadId);
             const evicted = retainCodexCatalogRow(this.rows, patched);
             if (evicted) {
-              this.evict(evicted.threadId);
+              this.evict(evicted.threadId, evicted);
+            }
+            if (evicted !== patched) {
+              this.ordering.put(patched, previous);
             }
             this.ordering.restore(row);
           }
@@ -506,30 +510,25 @@ export class CodexCatalogIndex {
     }
     try {
       this.currency.requestNativeRefresh();
-      return this.upsertPreparedThread(
-        projectCodexCatalogNativeThread(thread, sanitizeTerminalText),
-      );
+      const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
+      return this.projections
+        .run(() => {
+          this.observations.mark(prepared.id);
+          const fields = this.captureFields();
+          return this.observations.observe((isCurrent) =>
+            this.projectThread(prepared, isCurrent, fields),
+          );
+        })
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          if (!(error instanceof CodexCatalogProjectionCapacityError)) {
+            throw error;
+          }
+          this.report(error);
+        });
     } catch (error) {
       return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
     }
-  }
-
-  private upsertPreparedThread(prepared: CodexThread): Promise<void> {
-    return this.projections
-      .run(() => {
-        this.observations.mark(prepared.id);
-        const fields = this.captureFields();
-        return this.observations.observe((isCurrent) =>
-          this.projectThread(prepared, isCurrent, fields),
-        );
-      })
-      .then(() => undefined)
-      .catch((error: unknown) => {
-        if (!(error instanceof CodexCatalogProjectionCapacityError)) {
-          throw error;
-        }
-        this.report(error);
-      });
   }
 
   private refreshThread(
@@ -554,12 +553,15 @@ export class CodexCatalogIndex {
   }
 
   private async projectThread(
-    thread: CodexThread,
+    thread: ReturnType<typeof projectCodexCatalogNativeThread>,
     isCurrent: (id: string) => boolean,
     fieldRevision: FieldRevision,
     sourceOrder?: number,
   ): Promise<boolean> {
-    const projected = await projectCodexCatalogThread(thread, this.options.localSessionsRoot);
+    const projected = await projectCodexCatalogPage(
+      { data: [thread] },
+      { localSessionsRoot: this.options.localSessionsRoot, sanitize: sanitizeTerminalText },
+    );
     if (this.closed) {
       return true;
     }
@@ -637,7 +639,7 @@ export class CodexCatalogIndex {
       this.scheduleHydration();
       for (;;) {
         this.assertCurrent();
-        const ordered = this.ordering.read(this.rows);
+        const ordered = this.ordering.read();
         const page = query?.(ordered, this.liveStatus, this.liveSettings, this.availability);
         if (
           cursor.kind === "native" ||
@@ -680,6 +682,6 @@ export class CodexCatalogIndex {
     ]);
     this.rows.clear();
     this.observedFiles.clear();
-    this.ordering.invalidate();
+    this.ordering.clear();
   }
 }

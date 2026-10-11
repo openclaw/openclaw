@@ -122,9 +122,6 @@ export async function monitorMSTeamsProvider(
     !looksLikeMSTeamsConversationId(normalizeMSTeamsConversationId(entry));
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
-    if (entries.length === 0) {
-      return { additions: [], unresolved: [] };
-    }
     const resolved = await resolveMSTeamsUserAllowlist({ cfg, entries });
     const additions: string[] = [];
     const unresolved: string[] = [];

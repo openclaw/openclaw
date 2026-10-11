@@ -22,6 +22,7 @@ export interface ControlUiGitHubError extends Error {
   readonly statusCode: number;
   readonly upstreamStatus: number;
   readonly retryable: boolean;
+  readonly retryAtMs: number | undefined;
   readonly retryAfterMs: number | undefined;
 }
 type GitHubGraphQLUnavailableError = ControlUiGitHubError;

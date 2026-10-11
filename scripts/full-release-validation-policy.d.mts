@@ -76,6 +76,11 @@ export interface ReleaseChildSpec {
 }
 export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export function releaseGhRateLimitRetryAt(
+  error: unknown,
+  now?: number,
+  failures?: number,
+): number | undefined;
 export function isReleaseGhArtifactMissingError(error: unknown): boolean;
 export function releaseChildSpec(key: string): ReleaseChildSpec;
 export function releaseChildSpecs(): ReleaseChildSpec[];
@@ -153,16 +158,7 @@ export function selectReleaseStateArtifacts(
   decisionCandidates: Array<{ name: string; payload: unknown }>,
   drainCandidates: Array<{ name: string; payload: unknown }>,
   expected?: Record<string, unknown>,
-): {
-  decision: ReleaseStateArtifact;
-  drain: ReleaseStateArtifact;
-  executionPlan: ReleaseExecutionPlan;
-  sourceAttempts: {
-    decision: number;
-    drain: number;
-    executionPlan: number;
-  };
-};
+): ReturnType<typeof verifyReleaseStateArtifacts>;
 export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],

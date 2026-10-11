@@ -567,7 +567,7 @@ describe("repeated request liveness", () => {
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       activeWorkKind: "model_call",
       lastProgressAgeMs: 0,
-      repeatedRequestNoProgressAgeMs: 5 * 60_000,
+      repeatedRequestNoProgressAgeMs: 4.5 * 60_000,
     });
 
     emitCoreSemanticRunProgressDiagnosticEvent({

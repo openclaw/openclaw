@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
@@ -15,6 +15,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
+import {
+  projectionLane,
+  rotateDatabaseWorkers,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -22,15 +26,19 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { rolePolicyConfig, sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import {
+  connectChatMetadataAccount,
   createChatMetadataHarness,
   createChatMetadataOwner,
   createOpenAIChatMetadataConfig,
 } from "./chat-metadata-runtime.test-support.js";
+import * as metadataProjection from "./chat-metadata-session-projection.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -58,11 +66,16 @@ const cases = [
   { write: "selected participant repeat then entry write", allowed: true, entryChanged: true },
   { write: "rolled-back selected owner", allowed: true },
   { write: "rolled-back selected participant", allowed: true },
+  { write: "rolled-back selected account", allowed: true },
   { write: "raw before sibling owner", allowed: true, entryChanged: true },
   { write: "raw after sibling owner", allowed: true, entryChanged: true },
   { write: "raw before sibling participant", allowed: true, entryChanged: true },
   { write: "raw after sibling participant", allowed: true, entryChanged: true },
   { write: "tracked selected update", allowed: true, entryChanged: true },
+  { write: "overlapping selected owner", allowed: true, entryChanged: true },
+  { write: "overlapping selected participant", allowed: true, entryChanged: true },
+  { write: "overlapping selected read acknowledgment", allowed: true, entryChanged: true },
+  { write: "overlapping selected account", allowed: false },
   { write: "selected lifecycle change", allowed: false },
   { write: "external sibling update", allowed: true },
   // Identical target facts remain publishable even if the row was recreated.
@@ -121,6 +134,9 @@ it.each(
       recordSelected("a", 10);
       recordSelected("b", 20);
     }
+    // Raw fixture writes bypass admission; drain setup maintenance before warming either cache.
+    await closeOpenClawAgentDatabasesAsync(state.root);
+    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     const database = openOpenClawAgentDatabase(selected);
     if (write.startsWith("legacy sibling")) {
       expect(loadSessionEntry(sibling)?.sessionId).toBe("sibling");
@@ -178,7 +194,24 @@ it.each(
         .run(selected.sessionKey);
     const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async (scope) => {
       expect(scope.isCurrent?.()).toBe(true);
-      if (write === "tracked sibling update") {
+      const refresh = write.startsWith("overlapping")
+        ? expectDefined(scope.withCurrent, "metadata refresh")(() => metadata)
+        : undefined;
+      void refresh?.catch(() => {});
+      if (write.startsWith("overlapping")) {
+        if (write.endsWith("owner") || write.endsWith("participant")) {
+          sideWrite(selected);
+        } else {
+          runOpenClawAgentWriteTransaction((current) => {
+            writeSessionEntry(current, selected.sessionKey, {
+              ...before,
+              ...(write.endsWith("account")
+                ? { authProfileOverride: "openai:changed-during-refresh" }
+                : { lastReadAt: 2 }),
+            });
+          }, selected);
+        }
+      } else if (write === "tracked sibling update") {
         await upsertSessionEntryCore(sibling, { label: "changed sibling" });
       } else if (write === "raw sibling update" || write === "sibling cache replacement") {
         database.db
@@ -266,9 +299,20 @@ it.each(
       } else if (write.startsWith("rolled-back")) {
         const rollback = new Error("roll back side metadata");
         expect(() =>
-          runOpenClawAgentWriteTransaction(() => {
-            sideWrite(selected);
-            expect(scope.isCurrent?.()).toBe(true);
+          runOpenClawAgentWriteTransaction((current) => {
+            if (write === "rolled-back selected account") {
+              writeSessionEntry(current, selected.sessionKey, {
+                ...before,
+                authProfileOverride: "openai:changed-during-transaction",
+              });
+              expect(scope.isCurrent?.()).toBe(false);
+              expect(() => scope.assertCurrent?.()).toThrow(
+                PreparedModelRuntimePublicationSupersededError,
+              );
+            } else {
+              sideWrite(selected);
+              expect(scope.isCurrent?.()).toBe(true);
+            }
             throw rollback;
           }, selected),
         ).toThrow(rollback);
@@ -339,7 +383,7 @@ it.each(
         expect(scope.assertCurrent).toBeDefined();
         scope.assertCurrent!();
       }
-      return metadata;
+      return refresh ? await refresh : metadata;
     });
     const respond = vi.fn<RespondFn>();
     const handler = chatHistoryHandlers["chat.metadata"]!;
@@ -464,13 +508,33 @@ it.each(
   });
 });
 
-it("keeps prepared chat metadata across only a committed read acknowledgment", async () => {
+it.each([
+  { write: "read acknowledgment", field: "lastReadAt", external: false, allowed: true },
+  { write: "local visibility change", field: "visibility", external: false, allowed: false },
+  { write: "external visibility change", field: "visibility", external: true, allowed: false },
+  {
+    write: "local saved-account change",
+    field: "authProfileOverride",
+    external: false,
+    allowed: false,
+  },
+  {
+    write: "external saved-account change",
+    field: "authProfileOverride",
+    external: true,
+    allowed: false,
+  },
+] as const)("revalidates $write before preparing private chat metadata", async (scenario) => {
   await withOpenClawTestState(
     { label: "metadata-read-acknowledgment", env: WITHOUT_OPENAI_ENV_AUTH },
     async (state) => {
-      const config = createOpenAIChatMetadataConfig();
+      const config = { ...createOpenAIChatMetadataConfig(), ...rolePolicyConfig() };
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
+      const owner = ensureProfileForEmail("metadata-session-owner@example.test");
+      const viewer = ensureProfileForEmail("metadata-session-viewer@example.test");
+      const authProfileId = connectChatMetadataAccount(owner.id);
+      const client = sharingPolicyClient({ user: viewer.id });
       const selected = { agentId: "main", sessionKey: "agent:main:metadata-read-marker" };
       await upsertSessionEntryCore(selected, {
         sessionId: "read-marker-session",
@@ -479,9 +543,11 @@ it("keeps prepared chat metadata across only a committed read acknowledgment", a
         updatedAt: 1,
         lastReadAt: 1,
         label: "read-marker-label",
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: owner.id },
         providerOverride: "openai",
         modelOverride: "gpt-5.6-luna",
-        authProfileOverride: "openai:read-marker",
+        authProfileOverride: authProfileId,
         authProfileOverrideSource: "user",
         toolOverrides: { webSearch: false },
       });
@@ -500,6 +566,7 @@ it("keeps prepared chat metadata across only a committed read acknowledgment", a
         safeParseJsonRecord(String(beforeRow.entry_json)),
         "selected payload",
       );
+      const prepareProjection = vi.spyOn(metadataProjection, "prepareChatMetadataModelProjection");
       const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
       harness.setOwner(
         createChatMetadataOwner(config, "gpt-5.6-luna", {}, "openai", "openai-chatgpt-responses"),
@@ -515,14 +582,14 @@ it("keeps prepared chat metadata across only a committed read acknowledgment", a
             params: { sessionKey: selected.sessionKey },
             context,
             respond,
-            client: null,
+            client,
             req: { type: "req", id: "metadata-read-marker", method: "chat.metadata" },
             isWebchatConnect: () => false,
           }),
         );
       let release: (() => void) | undefined;
       let pending: Promise<void> | undefined;
-      const heldRead = async (changeReadMarker: boolean) => {
+      const heldRead = async (changeEntry: boolean) => {
         const entered = createDeferred();
         const gate = createDeferred();
         release = () => gate.resolve();
@@ -535,31 +602,51 @@ it("keeps prepared chat metadata across only a committed read acknowledgment", a
         const request = invoke(respond);
         pending = request;
         void request.catch(() => {});
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          request.then(() => {
-            throw new Error("Metadata completed before the preparation hold");
-          }),
-        ]);
+          request,
+          "Metadata completed before the preparation hold",
+        );
         try {
-          if (changeReadMarker) {
+          if (changeEntry && scenario.allowed) {
             await patchSessionEntryCore(selected, () => ({ lastReadAt: 2 }), {
               preserveActivity: true,
               skipMaintenance: true,
+              // Native fixture writes isolate request-reader lifetimes; worker writes have owner coverage.
+              assertCommitAllowed: () => {},
             });
+          } else if (changeEntry) {
+            const writer = scenario.external ? new DatabaseSync(database.path) : database.db;
+            try {
+              writer
+                .prepare(
+                  "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+                )
+                .run(
+                  `$.${scenario.field}`,
+                  scenario.field === "visibility" ? "draft" : "openai:replacement",
+                  selected.sessionKey,
+                );
+            } finally {
+              if (scenario.external) {
+                writer.close();
+              }
+            }
           }
-          expect(loadSessionEntry(selected)).toEqual(
-            changeReadMarker ? { ...before, lastReadAt: 2 } : before,
-          );
-          expect(readRow()).toEqual(
-            changeReadMarker
-              ? {
-                  ...beforeRow,
-                  entry_json: JSON.stringify({ ...beforePayload, lastReadAt: 2 }),
-                  last_read_at: 2,
-                }
-              : beforeRow,
-          );
+          if (!changeEntry || scenario.allowed) {
+            expect(loadSessionEntry(selected)).toEqual(
+              changeEntry ? { ...before, lastReadAt: 2 } : before,
+            );
+            expect(readRow()).toEqual(
+              changeEntry
+                ? {
+                    ...beforeRow,
+                    entry_json: JSON.stringify({ ...beforePayload, lastReadAt: 2 }),
+                    last_read_at: 2,
+                  }
+                : beforeRow,
+            );
+          }
         } finally {
           gate.resolve();
         }
@@ -580,20 +667,38 @@ it("keeps prepared chat metadata across only a committed read acknowledgment", a
             models: [expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" })],
           }),
         );
+        expect(prepareProjection).toHaveBeenCalledWith(
+          expect.objectContaining({ preferredProfileId: authProfileId }),
+        );
         harness.runtime.invalidate();
         await harness.runtime.refresh();
+        prepareProjection.mockClear();
         const changed = await heldRead(true);
+        if (!scenario.allowed) {
+          expect(prepareProjection).not.toHaveBeenCalled();
+          expect(changed.error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+          expect(changed.error).toMatchObject({
+            message: "Session changed while preparing its metadata. Retry the request.",
+          });
+          expect(changed.respond).not.toHaveBeenCalled();
+          // Retire cached readers without releasing request-owned registrations.
+          await rotateDatabaseWorkers(projectionLane);
+          expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+          return;
+        }
         const fresh = vi.fn<RespondFn>();
         await invoke(fresh);
         // Fresh preparation agrees before asserting the held request, including on the old source.
         expect(fresh.mock.calls).toEqual(control.respond.mock.calls);
-        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
         expect(changed.error).toBeUndefined();
         expect(changed.respond.mock.calls).toEqual(control.respond.mock.calls);
+        await rotateDatabaseWorkers(projectionLane);
+        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       } finally {
         release?.();
         await pending?.catch(() => {});
         await harness.runtime.stop();
+        prepareProjection.mockRestore();
       }
     },
   );

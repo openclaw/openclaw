@@ -341,12 +341,18 @@ describe("detectZaiEndpoint", () => {
   });
 
   it("fails closed when a probe error body stalls without chunks", async () => {
+    vi.useFakeTimers();
+    const state = { cancelled: false, settled: false };
     const fetchFn = (async (url: string) => {
       if (url !== "https://api.z.ai/api/paas/v4/chat/completions") {
         throw new Error(`unexpected url: ${url}`);
       }
       // Headers arrived, but the body never produces a chunk or closes.
-      const body = new ReadableStream<Uint8Array>();
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          state.cancelled = true;
+        },
+      });
       return new Response(body, {
         status: 400,
         headers: { "content-type": "application/json" },
@@ -354,26 +360,39 @@ describe("detectZaiEndpoint", () => {
     }) as typeof fetch;
 
     const timeoutMs = 80;
-    const startedAt = Date.now();
-    const detected = await detectZaiEndpoint({
-      apiKey: "sk-test", // pragma: allowlist secret
-      endpoint: "global",
-      timeoutMs,
-      fetchFn,
-    });
-    const elapsedMs = Date.now() - startedAt;
+    try {
+      const detectedPromise = detectZaiEndpoint({
+        apiKey: "sk-test", // pragma: allowlist secret
+        endpoint: "global",
+        timeoutMs,
+        fetchFn,
+      }).then((result) => {
+        state.settled = true;
+        return result;
+      });
 
-    expect(detected).toBeNull();
-    expect(elapsedMs).toBeLessThan(2 * timeoutMs);
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(state).toEqual({ cancelled: false, settled: false });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state).toEqual({ cancelled: true, settled: true });
+      expect(await detectedPromise).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps one probe deadline through a slow-drip error body", async () => {
-    const state = { cancelled: false };
+    vi.useFakeTimers();
+    const state = { cancelled: false, settled: false, chunks: 0 };
     let interval: ReturnType<typeof setInterval> | undefined;
     const fetchFn = (async () => {
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
-          interval = setInterval(() => controller.enqueue(new Uint8Array([123])), 10);
+          interval = setInterval(() => {
+            state.chunks += 1;
+            controller.enqueue(new Uint8Array([123]));
+          }, 10);
         },
         cancel() {
           state.cancelled = true;
@@ -389,16 +408,27 @@ describe("detectZaiEndpoint", () => {
     }) as typeof fetch;
 
     const timeoutMs = 80;
-    const startedAt = Date.now();
-    const detected = await detectZaiEndpoint({
-      apiKey: "sk-test", // pragma: allowlist secret
-      endpoint: "global",
-      timeoutMs,
-      fetchFn,
-    });
+    try {
+      const detectedPromise = detectZaiEndpoint({
+        apiKey: "sk-test", // pragma: allowlist secret
+        endpoint: "global",
+        timeoutMs,
+        fetchFn,
+      }).then((result) => {
+        state.settled = true;
+        return result;
+      });
 
-    expect(detected).toBeNull();
-    expect(Date.now() - startedAt).toBeLessThan(3 * timeoutMs);
-    expect(state.cancelled).toBe(true);
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(state).toEqual({ cancelled: false, settled: false, chunks: 7 });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state.cancelled).toBe(true);
+      expect(state.settled).toBe(true);
+      expect(await detectedPromise).toBeNull();
+    } finally {
+      clearInterval(interval);
+      vi.useRealTimers();
+    }
   });
 });

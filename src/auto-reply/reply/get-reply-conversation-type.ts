@@ -15,8 +15,5 @@ export function resolveReplyPolicyConversationType(
     return undefined;
   }
   const chatType = normalizeChatType(ctx.ChatType);
-  if (chatType === "direct") {
-    return "direct";
-  }
-  return chatType === "group" || chatType === "channel" ? "group" : undefined;
+  return chatType === "channel" ? "group" : chatType;
 }

@@ -79,6 +79,7 @@ suite.define(() => {
         page.locator(".sidebar-zone-entry:has(.nav-item)").evaluateAll((rows) =>
           rows.map((row) => {
             const link = row.querySelector(".nav-item")!;
+            const icon = link.querySelector(".nav-item__icon")!;
             const menu = row.querySelector(".sidebar-reorder-trigger")!;
             const rowBox = row.getBoundingClientRect();
             const linkBox = link.getBoundingClientRect();
@@ -86,9 +87,11 @@ suite.define(() => {
             return {
               label: link.textContent?.trim(),
               width: linkBox.width,
-              available: rowBox.width - menuBox.width,
-              right: linkBox.right,
-              menuLeft: menuBox.left,
+              // The reorder grip sits in the row's leading gutter, so the link spans the full row.
+              available: rowBox.width,
+              gripStart: menuBox.left - rowBox.left,
+              gripEnd: menuBox.right,
+              iconStart: icon.getBoundingClientRect().left,
             };
           }),
         );
@@ -124,7 +127,8 @@ suite.define(() => {
       expect(finalWidths.map((row) => row.label)).toEqual(initialWidths.map((row) => row.label));
       for (const row of finalWidths) {
         expect.soft(row.width, row.label).toBeCloseTo(row.available, 1);
-        expect.soft(row.right, row.label).toBeLessThanOrEqual(row.menuLeft + 0.1);
+        expect.soft(row.gripStart, row.label).toBeGreaterThanOrEqual(-0.1);
+        expect.soft(row.gripEnd, row.label).toBeLessThanOrEqual(row.iconStart + 0.1);
       }
       await page.locator(".sidebar-brand__new-thread").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");

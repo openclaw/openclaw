@@ -123,6 +123,8 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     // Dynamic work arriving inside that window must retry after the new owners become visible.
     const replacement = context.getPendingReplacement();
     const currentOwner = context.owners.get(key);
+    const configuredCatalog = resolveConfiguredOwner(context.owners, input)?.pluginGeneration
+      ?.remoteCatalog;
     const attempt = [
       key,
       replacement,
@@ -131,10 +133,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       currentOwner?.snapshot,
       currentOwner?.pending,
       currentOwner?.needsRefresh,
+      configuredCatalog,
       lastExternalPublication,
     ];
     if (previousAttempt?.every((value, index) => value === attempt[index])) {
-      // Failed construction can retire its owner, hiding supersession from this checkpoint.
+      // Failed dynamic owners can disappear. A newly accepted catalog is still progress;
+      // rebuilding without either identity changing would spin.
       throw (
         supersededPublication ??
         new PreparedModelRuntimeOwnerNotPublishedError(
@@ -259,7 +263,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
             [Symbol.asyncDispose]: retainPreparedPluginGeneration(options.pluginGeneration),
           };
         }
-        throw new PreparedModelRuntimeOwnerNotPublishedError(
+        throw new PreparedModelRuntimePublicationSupersededError(
           `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
         );
       }

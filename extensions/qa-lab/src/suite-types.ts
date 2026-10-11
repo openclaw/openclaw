@@ -33,18 +33,14 @@ export type QaSuiteStep = {
   run: () => Promise<QaSuiteStepOutcome | void>;
 };
 
-export type QaSuiteScenarioResult = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  // The lifecycle owner carries this through retries and post-run checks.
-  evidenceOccurrenceId?: string;
-  steps: QaReportCheck[];
-  details?: string;
-  timing?: QaEvidenceTiming;
-  rttMeasurement?: QaEvidenceRttMeasurement;
-  modelSwitchEvidence?: Record<string, unknown>;
-  runtimeParity?: RuntimeParityResult;
-};
+export type QaSuiteScenarioResult = QaReportCheck &
+  QaSuiteStepOutcome & {
+    // The lifecycle owner carries this through retries and post-run checks.
+    evidenceOccurrenceId?: string;
+    steps: QaReportCheck[];
+    modelSwitchEvidence?: Record<string, unknown>;
+    runtimeParity?: RuntimeParityResult;
+  };
 
 export type QaSuiteEnvironment = {
   lab: QaLabServerHandle;

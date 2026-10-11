@@ -17,19 +17,35 @@ const inferenceFallbackMocks = vi.hoisted(() => ({
   verifySystemAgentInferenceWithFallback: vi.fn(),
 }));
 const transcriptStoreMocks = vi.hoisted(() => ({
-  appendTranscriptReset: vi.fn(),
-  appendTranscriptTurn: vi.fn(),
-  readTranscriptTail: vi.fn(() => []),
+  appendReset: vi.fn(),
+  appendTurn: vi.fn(),
+  readTranscriptTailAsync: vi
+    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
+    .mockResolvedValue([]),
 }));
 
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback:
     inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
 }));
-vi.mock("../../system-agent/transcript-store.js", () => transcriptStoreMocks);
+// mock-isolation: Keep machine-wide audit state outside caller-identity and session-routing tests.
+vi.mock("../../system-agent/transcript-store.js", () => ({
+  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
+  createSystemAgentTranscriptStore: () => ({
+    assertCurrent: () => undefined,
+    appendTurn: transcriptStoreMocks.appendTurn,
+    appendReset: transcriptStoreMocks.appendReset,
+    readTail: (limit: number, afterLastReset = false) =>
+      afterLastReset
+        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
+        : transcriptStoreMocks.readTranscriptTailAsync(limit),
+  }),
+}));
 // Ownership tests exercise fresh-session creation; keep the caretaker greeting
 // deterministic so identity behavior is the only variable under test.
+// mock-isolation: Keep greeting discovery and provider inference outside caller-identity tests.
 vi.mock("../../system-agent/greeting.js", () => ({
+  createSystemAgentGreetingCache: () => ({ assertCurrent: () => undefined }),
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
   buildSystemAgentGreetingQuestion: vi.fn(() => undefined),
   loadSystemAgentGreetingFacts: vi.fn(() => ({
@@ -265,7 +281,7 @@ describe("openclaw.chat session ownership", () => {
       ...makeContext(sessions),
       systemAgentApprovalManager: { expire },
     } as unknown as GatewayRequestContext;
-    transcriptStoreMocks.appendTranscriptReset.mockImplementationOnce(() => {
+    transcriptStoreMocks.appendReset.mockImplementationOnce(() => {
       throw new Error("transcript store unavailable");
     });
 
@@ -273,7 +289,7 @@ describe("openclaw.chat session ownership", () => {
       "transcript store unavailable",
     );
 
-    expect(transcriptStoreMocks.appendTranscriptReset).toHaveBeenCalledOnce();
+    expect(transcriptStoreMocks.appendReset).toHaveBeenCalledOnce();
     expect(sessions.get("owned-session")).toBe(session);
     expect(session.pendingApproval).toEqual({
       id: "approval-1",
@@ -539,7 +555,7 @@ describe("openclaw.chat session responses", () => {
     });
 
     expect(call).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    expect(transcriptStoreMocks.appendTranscriptTurn).not.toHaveBeenCalled();
+    expect(transcriptStoreMocks.appendTurn).not.toHaveBeenCalled();
   });
 
   it("forwards sensitive-input metadata", async () => {

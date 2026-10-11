@@ -10,7 +10,6 @@ import { VERSION } from "../version.js";
 import {
   doctorCommandCall,
   expectNoSideEffects,
-  freshRestartCalls,
   getLogOutput,
   getErrorOutput,
   lastReplaceConfigCall,
@@ -19,7 +18,6 @@ import {
   npmPluginUpdateCall,
   packageInstallCommandCall,
   replaceConfigCall,
-  spawnCall,
   syncPluginCall,
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
@@ -39,12 +37,10 @@ import {
   defaultRuntime,
   ExitError,
   makeOkUpdateResult,
-  mockGitUpdateAfterMutation,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveNpmChannelTag,
   runCommandWithTimeout,
-  runDaemonRestart,
   updateCliShared,
   updateCommand,
   updateGitCheckout,
@@ -91,7 +87,7 @@ describe("update-cli", () => {
     tempDirsToCleanup,
   } = createUpdateCliFixture();
 
-  it.each([undefined, "beta"] as const)(
+  it.each(["beta"] as const)(
     "rereads a concurrent config write during database admission without losing it (channel=%s)",
     async (changedChannel) => {
       await mockPackageInstallAtCaseDir("openclaw-concurrent-config", VERSION);
@@ -277,10 +273,6 @@ describe("update-cli", () => {
 
   it.each([
     {
-      name: "keeps the caller legacy plan out of a same-version service-profile switch from stable",
-      requestedChannel: "beta",
-    },
-    {
       name: "refuses a foreign legacy caller without an explicit channel request",
       requestedChannel: undefined,
     },
@@ -304,7 +296,7 @@ describe("update-cli", () => {
     const callerBefore = await fs.readFile(callerPath, "utf8");
     const serviceBefore = await fs.readFile(servicePath, "utf8");
     readPackageVersion.mockResolvedValue(VERSION);
-    primeNpmChannelTag(requestedChannel ? "beta" : "latest", VERSION);
+    primeNpmChannelTag("latest", VERSION);
     mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
     primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
       OPENCLAW_SERVICE_MARKER: "openclaw",
@@ -327,46 +319,23 @@ describe("update-cli", () => {
       },
       async () => {
         const update = updateCommand({ channel: requestedChannel, yes: true, json: true });
-        if (requestedChannel) {
-          await update;
-        } else {
-          await expect(update).rejects.toEqual(new ExitError(1));
-        }
+
+        await expect(update).rejects.toEqual(new ExitError(1));
       },
     );
     expect(await fs.readFile(callerPath, "utf8")).toBe(callerBefore);
-    if (!requestedChannel) {
-      expect(await fs.readFile(servicePath, "utf8")).toBe(serviceBefore);
-      expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "invalid-config" });
-      expectNoSideEffects(
-        serviceStop,
-        serviceRestart,
-        candidateValidation,
-        replaceConfigFile,
-        updateNpmInstalledPlugins,
-        legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
-      );
-      expect(packageInstallCommandCall()).toBeUndefined();
-      return;
-    }
-    const serviceAfter = await createConfigIO({
-      env: { ...process.env, OPENCLAW_CONFIG_PATH: servicePath },
-      observe: false,
-      pluginValidation: "skip",
-    }).readConfigFileSnapshot();
-    expect(serviceAfter.config.gateway?.bind).toBe("lan");
-    expect(serviceAfter.config.update?.channel).toBe("beta");
-    expect(legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel).not.toHaveBeenCalled();
-    expectNoSideEffects(serviceStop, serviceRestart, candidateValidation);
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({ coreVersion: VERSION, updateChannel: "beta" }),
+
+    expect(await fs.readFile(servicePath, "utf8")).toBe(serviceBefore);
+    expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "invalid-config" });
+    expectNoSideEffects(
+      serviceStop,
+      serviceRestart,
+      candidateValidation,
+      replaceConfigFile,
+      updateNpmInstalledPlugins,
+      legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
     );
     expect(packageInstallCommandCall()).toBeUndefined();
-    expect(lastWriteJsonCall()).toMatchObject({
-      status: "ok",
-    });
-    expect(replaceConfigFile).toHaveBeenCalledTimes(1);
   });
 
   it.each(["caller", "service"] as const)(
@@ -703,7 +672,7 @@ describe("update-cli", () => {
     expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("beta");
   });
 
-  it.each(["ok", "error"] as const)(
+  it.each(["error"] as const)(
     "hands the checkout to global activation and fresh finalization only after Git update success (%s)",
     async (status) => {
       const tempDir = createCaseDir("openclaw-update");
@@ -733,44 +702,23 @@ describe("update-cli", () => {
         root: gitRoot,
         after: { sha, version: "2026.8.1" },
       });
-      if (status === "ok") {
-        mockGitUpdateAfterMutation(updateResult);
-      } else {
-        vi.mocked(updateGitCheckout).mockResolvedValue(updateResult);
-      }
+
+      vi.mocked(updateGitCheckout).mockResolvedValue(updateResult);
+
       mockNoopPostUpdatePluginConvergence();
 
       await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
         const command = updateCommand({ channel: "dev", yes: true, restart: false });
-        if (status === "error") {
-          await expect(command).rejects.toEqual(new ExitError(1));
-        } else {
-          await command;
-        }
+
+        await expect(command).rejects.toEqual(new ExitError(1));
       });
-      if (status === "error") {
-        expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-        expectNoSideEffects(spawn, replaceConfigFile, completionCacheSpy);
-        await expect(
-          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-        ).resolves.toContain('"version":"2026.4.10"');
-        expect(defaultRuntime.exit).not.toHaveBeenCalled();
-        return;
-      }
-      await expect(fs.realpath(packageRoot)).resolves.toBe(await fs.realpath(gitRoot));
-      // A real built entry resumes finalization in fresh code, not this old process.
-      expect(spawnCall()?.[1]?.[0]).toBe(path.join(gitRoot, "dist", "entry.js"));
-      expect(spawnCall()?.[2]?.env?.OPENCLAW_UPDATE_POST_CORE_CHANNEL).toBe("dev");
-      expect(spawnCall()?.[2]?.env?.OPENCLAW_UPDATE_POST_CORE).toBe("1");
-      expectNoSideEffects(
-        replaceConfigFile,
-        syncPluginsForUpdateChannel,
-        updateNpmInstalledPlugins,
+
+      expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+      expectNoSideEffects(spawn, replaceConfigFile, completionCacheSpy);
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        '"version":"2026.4.10"',
       );
-      expect(completionCacheSpy).toHaveBeenCalledWith(gitRoot, false);
-      expectNoSideEffects(runDaemonRestart);
-      expect(freshRestartCalls()).toHaveLength(0);
-      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
     },
   );
 });

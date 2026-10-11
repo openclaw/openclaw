@@ -1,5 +1,4 @@
 import path from "node:path";
-import { note } from "../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
@@ -104,13 +103,5 @@ export async function assertDoctorPreflightMigrationsComplete(params: {
       }
     }
     throw error;
-  }
-}
-
-export function noteStateMigrationResult(result: MigrationMessages): void {
-  for (const key of ["changes", "notices", "warnings"] as const) {
-    if (result[key]?.length) {
-      note(result[key].map((entry) => `- ${entry}`).join("\n"), `Doctor ${key}`);
-    }
   }
 }

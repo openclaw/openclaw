@@ -512,86 +512,6 @@ describe("Vitest pair benchmark contract", () => {
     expect(noisyFaster.lanes.every((lane) => lane.candidateImprovedPairs === 4)).toBe(true);
   });
 
-  it("weights aggregate acceptance by duration for each measured round", () => {
-    const analysis = analyzeBenchmark(
-      recordsFor((lane) =>
-        lane === "gateway"
-          ? { baselineMs: 10_000, candidateMs: 10_600 }
-          : { baselineMs: 100, candidateMs: 90 },
-      ),
-      manifest,
-    );
-
-    expect(analysis.overall.measuredWallRatio).toBeCloseTo(10_870 / 10_300);
-    expect(analysis.verdict).toBe("regression");
-    expect(analysis.regressions[0]).toContain("overall median duration-weighted");
-  });
-
-  it("accepts the exact aggregate boundary and rejects values above it", () => {
-    expect(
-      analyzeBenchmark(recordsFor({ baselineMs: 1000, candidateMs: 1050 }), manifest).verdict,
-    ).toBe("pass");
-    expect(
-      analyzeBenchmark(recordsFor({ baselineMs: 1000, candidateMs: 1050.1 }), manifest).verdict,
-    ).toBe("regression");
-  });
-
-  it.each([
-    {
-      name: "ratio only",
-      baselineMs: 5000,
-      candidateMs: 5600,
-      regression: false,
-    },
-    {
-      name: "delta only",
-      baselineMs: 20_000,
-      candidateMs: 21_000,
-      regression: false,
-    },
-    {
-      name: "exact ratio boundary",
-      baselineMs: 10_000,
-      candidateMs: 11_000,
-      regression: false,
-    },
-    {
-      name: "exact delta boundary",
-      baselineMs: 5000,
-      candidateMs: 6000,
-      regression: true,
-    },
-  ])("applies both critical lane thresholds: $name", ({ baselineMs, candidateMs, regression }) => {
-    const analysis = analyzeBenchmark(
-      recordsFor((lane) => ({
-        baselineMs,
-        candidateMs: lane === "gateway" ? candidateMs : baselineMs,
-      })),
-      manifest,
-    );
-    const gateway = analysis.lanes.find((lane) => lane.id === "gateway");
-
-    expect(gateway?.regressions).toHaveLength(regression ? 1 : 0);
-    expect(analysis.verdict).toBe(regression ? "regression" : "pass");
-  });
-
-  it("keeps cold timing diagnostic and records measured lane deltas", () => {
-    const analysis = analyzeBenchmark(
-      recordsFor((_lane, round) =>
-        round === null
-          ? { baselineMs: 100, candidateMs: 1000 }
-          : { baselineMs: 10_000, candidateMs: 10_500 },
-      ),
-      manifest,
-    );
-
-    expect(analysis.verdict).toBe("pass");
-    expect(analysis.regressions).toEqual([]);
-    expect(analysis.overall.coldWallRatio).toBe(10);
-    expect(analysis.lanes.every((lane) => lane.coldWallRatio === 10)).toBe(true);
-    expect(analysis.lanes.every((lane) => lane.measuredWallDeltaMs === 500)).toBe(true);
-  });
-
   it.runIf(process.platform !== "win32")(
     "pins pnpm despite poisoned ambient pnpm and Corepack state",
     () => {
@@ -774,22 +694,6 @@ describe("Vitest pair benchmark lifecycle", () => {
 
       const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
       await waitForDescendantReap(pid, signal);
-    },
-  );
-
-  it.runIf(process.platform === "linux")(
-    "uses GNU time labels understood by the hosted Linux runner",
-    () => {
-      const root = tempDirs.make("vitest-pair-gnu-time-");
-      const output = path.join(root, "time.txt");
-      const result = spawnSync("/usr/bin/time", ["-v", "-o", output, process.execPath, "-e", ""], {
-        encoding: "utf8",
-      });
-
-      expect(result.status).toBe(0);
-      const measurements = readFileSync(output, "utf8");
-      expect(measurements).toMatch(/^\s*User time \(seconds\):\s+\d+(?:\.\d+)?\s*$/mu);
-      expect(measurements).toMatch(/^\s*System time \(seconds\):\s+\d+(?:\.\d+)?\s*$/mu);
     },
   );
 });

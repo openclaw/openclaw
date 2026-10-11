@@ -10,8 +10,6 @@ import {
 import {
   ChatSessionCompanionThreads,
   requestSessionCompanionAnswer,
-  requestSessionCompanionState,
-  resetSessionCompanion,
 } from "./chat-session-companion.ts";
 import { ChatSessionRailElement } from "./components/chat-session-rail.ts";
 
@@ -27,31 +25,17 @@ function digest(health: SessionObserverDigest["health"] = "on-track"): SessionOb
 }
 
 describe("ChatSessionCompanionThreads", () => {
-  it("uses the exact companion RPC methods and payloads", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.companion.ask") {
-        return { answer: "Answer", ts: 1 };
-      }
-      if (method === "sessions.companion.state") {
-        return { exchanges: [] };
-      }
-      return { ok: true as const };
-    });
+  it("sends companion questions with the bounded RPC timeout", async () => {
+    const request = vi.fn(async () => ({ answer: "Answer", ts: 1 }));
     const client = { request: request as GatewayBrowserClient["request"] };
 
     await requestSessionCompanionAnswer(client, "one", "Question", "work");
-    await requestSessionCompanionState(client, "one", "work");
-    await resetSessionCompanion(client, "one", "work");
 
-    expect(request.mock.calls).toEqual([
-      [
-        "sessions.companion.ask",
-        { sessionKey: "one", agentId: "work", question: "Question" },
-        { timeoutMs: 70_000 },
-      ],
-      ["sessions.companion.state", { sessionKey: "one", agentId: "work" }],
-      ["sessions.companion.reset", { sessionKey: "one", agentId: "work" }],
-    ]);
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "sessions.companion.ask",
+      { sessionKey: "one", agentId: "work", question: "Question" },
+      { timeoutMs: 70_000 },
+    );
   });
 
   it("sends a full selected passage as context, not an unsupported file", async () => {

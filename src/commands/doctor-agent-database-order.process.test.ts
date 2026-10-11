@@ -88,7 +88,8 @@ function readDatabase<T>(pathname: string, read: (database: DatabaseSync) => T):
   }
 }
 
-it.concurrent.for(["current", "historical-v1", "lost-journal"] as const)(
+// Let the file worker limit bound these full Doctor process runs.
+it.for(["current", "historical-v1", "lost-journal"] as const)(
   "settles historical agent migration before auth and session repair with %s shared state",
   { timeout: getCliProcessTestTimeout(CHILD_TIMEOUT_MS, CHILD_TIMEOUT_MS) },
   async (sharedState, { expect, onTestFinished }) => {

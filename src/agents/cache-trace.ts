@@ -1,6 +1,3 @@
-/**
- * Optional JSONL diagnostics for agent cache/session/prompt tracing.
- */
 import crypto from "node:crypto";
 import path from "node:path";
 import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
@@ -88,7 +85,6 @@ function summarizeMessages(messages: AgentMessage[]): {
   };
 }
 
-/** Create a cache trace recorder when diagnostics config/env enables it. */
 export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
   const env = params.env ?? process.env;
   const enabled =

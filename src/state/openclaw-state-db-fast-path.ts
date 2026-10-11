@@ -21,13 +21,13 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import {
   assertSupportedStateSchemaVersion,
-  readStateSchemaMigrationVersion,
+  readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import {
-  getOpenClawStateRuntimeSchema,
   isOpenClawStateStartupRepairableSchemaIssue,
-  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function needsOpenClawStateDatabaseSchemaRepair(
   pathname: string,
@@ -38,7 +38,7 @@ export function needsOpenClawStateDatabaseSchemaRepair(
     database = openNodeSqliteDatabase(pathname, { readOnly: true });
     assertSupportedStateSchemaVersion(database, pathname);
     const needsRepair =
-      readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
+      readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
       hasLegacyCronRunLogs(database) ||
       detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
     if (!needsRepair) {
@@ -66,8 +66,8 @@ export function assertCurrentStateRuntimeSchema(
   assertSqliteSchemaContains(
     database,
     pathname,
-    getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
-    STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+    OPENCLAW_STATE_SCHEMA_SQL,
+    STATE_RUNTIME_SCHEMA_COMPATIBILITY,
     readTable,
   );
 }
@@ -89,7 +89,7 @@ export function isOpenClawStateSchemaFastPathEligible(
     database,
     () => {
       const userVersion = assertSupportedStateSchemaVersion(database, pathname);
-      if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+      if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
         return false;
       }
       const schemaVersion = readSqliteSchemaCookie(database);
@@ -107,8 +107,8 @@ export function isOpenClawStateSchemaFastPathEligible(
       assertCurrentStateRuntimeSchema(database, pathname, readTable);
       const startupRepairRequired = collectSqliteSchemaIssues(
         database,
-        getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
-        STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+        OPENCLAW_STATE_SCHEMA_SQL,
+        STATE_RUNTIME_SCHEMA_COMPATIBILITY,
         readTable,
       ).some(isOpenClawStateStartupRepairableSchemaIssue);
       if (startupRepairRequired) {

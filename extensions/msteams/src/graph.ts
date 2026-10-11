@@ -171,11 +171,7 @@ export async function fetchGraphJson<T>(params: {
  * Fetch JSON from an absolute Graph API URL (for example @odata.nextLink
  * pagination URLs) without prepending GRAPH_ROOT.
  */
-export async function fetchGraphAbsoluteUrl<T>(params: {
-  token: string;
-  url: string;
-  headers?: Record<string, string>;
-}): Promise<T> {
+export async function fetchGraphAbsoluteUrl<T>(params: { token: string; url: string }): Promise<T> {
   const assertReadAuthority = captureChannelReadAuthority();
   const assertRequestCurrent = captureGraphRequestCurrentness(assertReadAuthority);
   assertRequestCurrent?.();
@@ -185,7 +181,6 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
       headers: {
         "User-Agent": buildUserAgent(),
         Authorization: `Bearer ${params.token}`,
-        ...params.headers,
       },
     },
     auditContext: "msteams.graph.absolute",
@@ -213,10 +208,6 @@ export type PaginatedResult<T> = {
   found?: T;
 };
 
-/**
- * Fetch all pages of a Graph API collection, following @odata.nextLink.
- * Optionally stop early when `findOne` matches an item.
- */
 export async function fetchAllGraphPages<T>(params: {
   token: string;
   path: string;
@@ -280,7 +271,6 @@ export async function resolveGraphToken(
     );
   }
 
-  // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
     const delegated = await resolveDelegatedAccessToken({
       tenantId: creds.tenantId,
@@ -291,7 +281,6 @@ export async function resolveGraphToken(
     if (delegated) {
       return delegated;
     }
-    // Fall through to app-only token
   }
 
   const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(msteamsCfg));

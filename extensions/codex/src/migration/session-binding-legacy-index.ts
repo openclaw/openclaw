@@ -42,32 +42,27 @@ export async function readLegacySessionIndex(
     if (value.sessionId === undefined) {
       continue;
     }
-    const sessionId = typeof value.sessionId === "string" ? value.sessionId.trim() : "";
-    const sessionFile = value.sessionFile;
-    const lifecycleRevision = value.lifecycleRevision;
-    const agentHarnessId = value.agentHarnessId;
-    if (
-      !isSafeLegacySessionId(value.sessionId) ||
-      (sessionFile !== undefined && typeof sessionFile !== "string") ||
-      (lifecycleRevision !== undefined && typeof lifecycleRevision !== "string") ||
-      (agentHarnessId !== undefined && typeof agentHarnessId !== "string")
-    ) {
+    if (!isSafeLegacySessionId(value.sessionId)) {
       return { failure: `session index ${storePath} has invalid entries` };
     }
-    entries.push({
-      sessionKey,
-      entry: {
-        sessionId,
-        ...(typeof sessionFile === "string" ? { sessionFile } : {}),
-        ...(typeof lifecycleRevision === "string" ? { lifecycleRevision } : {}),
-        ...(typeof agentHarnessId === "string" ? { agentHarnessId } : {}),
-        ...(typeof value.updatedAt === "number" &&
-        Number.isFinite(value.updatedAt) &&
-        value.updatedAt >= 0
-          ? { updatedAt: value.updatedAt }
-          : {}),
-      },
-    });
+    const entry: LegacySessionIndexEntry = { sessionId: value.sessionId.trim() };
+    for (const key of ["sessionFile", "lifecycleRevision", "agentHarnessId"] as const) {
+      const field = value[key];
+      if (field !== undefined) {
+        if (typeof field !== "string") {
+          return { failure: `session index ${storePath} has invalid entries` };
+        }
+        entry[key] = field;
+      }
+    }
+    if (
+      typeof value.updatedAt === "number" &&
+      Number.isFinite(value.updatedAt) &&
+      value.updatedAt >= 0
+    ) {
+      entry.updatedAt = value.updatedAt;
+    }
+    entries.push({ sessionKey, entry });
   }
   return { entries };
 }

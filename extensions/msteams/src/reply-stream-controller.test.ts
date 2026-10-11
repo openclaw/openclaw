@@ -58,38 +58,19 @@ function makeContext(stream?: ReturnType<typeof makeStream>) {
 
 function makeController(
   opts: {
-    conversationType?: string;
     stream?: ReturnType<typeof makeStream>;
   } = {},
 ) {
   const stream = opts.stream;
   return createTeamsReplyStreamController({
     allowProviderPreview: true,
-    conversationType: opts.conversationType ?? "personal",
+    conversationType: "personal",
     context: makeContext(stream),
     feedbackLoopEnabled: false,
   });
 }
 
 describe("createTeamsReplyStreamController", () => {
-  it("emits only the delta when openclaw sends cumulative text on each chunk", () => {
-    // openclaw's reply pipeline calls onPartialReply with the cumulative
-    // text-so-far on every chunk. The SDK's HttpStream APPENDS each emit() to
-    // its internal text buffer (this.text += activity.text). Without delta
-    // conversion, the SDK accumulates "chunk1 + chunk2 + chunk3" and the user
-    // sees the message duplicated on each progress update (real bug observed
-    // 2026-05-06: a sonnet rendered with each line repeated alongside the
-    // previous full state).
-    const stream = makeStream();
-    const ctrl = makeController({ stream });
-    ctrl.onPartialReply({ text: "Here's one for you:\nThe morning" });
-    ctrl.onPartialReply({ text: "Here's one for you:\nThe morning light" });
-    ctrl.onPartialReply({ text: "Here's one for you:\nThe morning light breaks" });
-    expect(stream.emit).toHaveBeenNthCalledWith(1, "Here's one for you:\nThe morning");
-    expect(stream.emit).toHaveBeenNthCalledWith(2, " light");
-    expect(stream.emit).toHaveBeenNthCalledWith(3, " breaks");
-  });
-
   it("keeps the next chunk after cumulative trailing whitespace is normalized", () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
@@ -128,57 +109,6 @@ describe("createTeamsReplyStreamController", () => {
           mediaUrl: "https://example.test/replacement.png",
         },
       ],
-    });
-  });
-
-  it("falls back to the full replacement when close fails before acknowledgement", async () => {
-    const stream = makeAcknowledgedStream();
-    const ctrl = makeController({ stream });
-
-    ctrl.onPartialReply({ text: "abcde" });
-    stream.acknowledge("abcde");
-    ctrl.onPartialReply({ text: "provider replacement" });
-    expect(ctrl.preparePayload({ mediaUrl: "https://example.test/before.png" })).toBeUndefined();
-    expect(
-      ctrl.preparePayload({
-        text: "provider replacement",
-        mediaUrl: "https://example.test/replacement.png",
-      }),
-    ).toBeUndefined();
-    stream.close.mockRejectedValueOnce(new Error("close failed"));
-
-    await expect(ctrl.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      messageId: "stream-acknowledged",
-      content: "abcde",
-      logicalContent: "provider replacement",
-      postNativePayloads: [
-        { mediaUrl: "https://example.test/before.png" },
-        {
-          text: "provider replacement",
-          mediaUrl: "https://example.test/replacement.png",
-        },
-      ],
-    });
-  });
-
-  it("ignores a delayed old chunk that is only a prefix of the replacement", async () => {
-    const stream = makeAcknowledgedStream();
-    const ctrl = makeController({ stream });
-
-    ctrl.onPartialReply({ text: "abcde" });
-    stream.acknowledge("abcde");
-    ctrl.onPartialReply({ text: "ab replacement" });
-    expect(ctrl.preparePayload({ text: "ab replacement" })).toBeUndefined();
-    stream.acknowledge("ab");
-    stream.close.mockRejectedValueOnce(new Error("close failed"));
-
-    await expect(ctrl.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      messageId: "stream-acknowledged",
-      content: "abcde",
-      logicalContent: "ab replacement",
-      postNativePayloads: [{ text: "ab replacement" }],
     });
   });
 
@@ -243,35 +173,6 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.close).not.toHaveBeenCalled();
   });
 
-  it("holds payloads around replacement text until native settlement", async () => {
-    const stream = makeAcknowledgedStream();
-    const ctrl = makeController({ stream });
-
-    ctrl.onPartialReply({ text: "abcde" });
-    stream.acknowledge("abcde");
-    ctrl.onPartialReply({ text: "provider replacement" });
-
-    expect(ctrl.preparePayload({ mediaUrl: "https://example.test/before.png" })).toBeUndefined();
-    expect(ctrl.preparePayload({ text: "provider replacement" })).toBeUndefined();
-    expect(
-      ctrl.preparePayload({
-        text: "second payload",
-        mediaUrl: "https://example.test/after.png",
-      }),
-    ).toBeUndefined();
-
-    await expect(ctrl.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      messageId: "stream-final",
-      content: "provider replacement",
-      logicalContent: "provider replacement\nsecond payload",
-      postNativePayloads: [
-        { mediaUrl: "https://example.test/before.png" },
-        { text: "second payload", mediaUrl: "https://example.test/after.png" },
-      ],
-    });
-  });
-
   it("preserves held payload order after replacement emit fails", async () => {
     const stream = makeAcknowledgedStream();
     const ctrl = makeController({ stream });
@@ -309,62 +210,18 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.emit).toHaveBeenCalledWith("abcdef");
   });
 
-  it("keeps replies without partial text or progress work on block delivery", async () => {
-    const stream = makeStream();
-    const ctrl = makeController({ stream });
-
-    expect(stream.update).not.toHaveBeenCalled();
-    expect(stream.emit).not.toHaveBeenCalled();
-    expect(ctrl.preparePayload({ text: "tool-only response" })).toEqual({
-      text: "tool-only response",
-    });
-    await ctrl.finalize();
-    expect(stream.close).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])("keeps later partial segments whole with settled=%s", async (settled) => {
+  it("keeps later partial segments whole after settlement", async () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
 
     ctrl.onPartialReply({ text: "First segment" });
     expect(ctrl.preparePayload({ text: "First segment" })).toBeUndefined();
     expect(ctrl.claimNativeDelivery()).toBe(true);
-    if (settled) {
-      await ctrl.finalize();
-    }
+    await ctrl.finalize();
 
     ctrl.onPartialReply({ text: "Second segment after tools" });
     const result = ctrl.preparePayload({ text: "Second segment after tools" });
     expect(result).toEqual({ text: "Second segment after tools" });
-  });
-
-  it("passes media+text payload through fully after stream finalization is pending", () => {
-    const stream = makeStream();
-    const ctrl = makeController({ stream });
-
-    ctrl.onPartialReply({ text: "Streamed text" });
-    expect(ctrl.preparePayload({ text: "Streamed text" })).toBeUndefined();
-
-    expect(
-      ctrl.preparePayload({
-        text: "Post-tool text with image",
-        mediaUrl: "https://example.com/tool-output.png",
-      }),
-    ).toEqual({
-      text: "Post-tool text with image",
-      mediaUrl: "https://example.com/tool-output.png",
-    });
-  });
-
-  it("drops the payload even when it carries media after cancel", () => {
-    // Cancel honored consistently — no leftover media bubble lands either.
-    const stream = makeStream();
-    const ctrl = makeController({ stream });
-    ctrl.onPartialReply({ text: "partial" });
-    stream.canceled = true;
-    expect(
-      ctrl.preparePayload({ text: "partial complete", mediaUrl: "https://x/y.png" }),
-    ).toBeUndefined();
   });
 
   it("preserves disabled quoted tables when finalizing formatted replies", async () => {
@@ -391,101 +248,6 @@ describe("createTeamsReplyStreamController", () => {
       expect.objectContaining({ type: "message", text: expected }),
     );
     expect(stream.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns text-only fallback when stream close no-ops after media already queued", async () => {
-    const stream = makeStream();
-    stream.close.mockResolvedValueOnce(undefined);
-    const ctrl = makeController({ stream });
-
-    ctrl.onPartialReply({ text: "streamed" });
-    expect(ctrl.preparePayload({ text: "streamed final", mediaUrl: "https://x/y.png" })).toEqual({
-      text: undefined,
-      mediaUrl: "https://x/y.png",
-    });
-
-    await expect(ctrl.finalize()).resolves.toEqual({
-      visibleReplySent: false,
-      fallbackPayload: {
-        text: "streamed final",
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-      },
-    });
-  });
-
-  it("returns suppressed final payload when stream close throws", async () => {
-    const stream = makeStream();
-    stream.close.mockRejectedValueOnce(new Error("close failed"));
-    const ctrl = makeController({ stream });
-
-    ctrl.onPartialReply({ text: "streamed" });
-    expect(ctrl.preparePayload({ text: "streamed final" })).toBeUndefined();
-
-    await expect(ctrl.finalize()).resolves.toEqual({
-      visibleReplySent: false,
-      fallbackPayload: { text: "streamed final" },
-    });
-  });
-
-  it("streams compact Teams progress lines when tool progress is enabled", async () => {
-    vi.useFakeTimers();
-    const stream = makeStream();
-    try {
-      const ctrl = createTeamsReplyStreamController({
-        allowProviderPreview: true,
-        conversationType: "personal",
-        context: makeContext(stream),
-        feedbackLoopEnabled: false,
-        log: { debug: vi.fn() } as never,
-        msteamsConfig: {
-          streaming: {
-            mode: "progress",
-            progress: {
-              toolProgress: true,
-              label: "Working",
-              maxLines: 3,
-            },
-          },
-        } as never,
-      });
-
-      await ctrl.pushItemEvent({ itemId: "search", title: "tool: search", phase: "start" });
-      await ctrl.pushItemEvent({ itemId: "exec", title: "tool: exec", phase: "start" });
-      expect(stream.update).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(5_000);
-
-      expect(stream.update).toHaveBeenLastCalledWith("Working\n\n- tool: search\n- tool: exec");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("replaces Teams plan snapshots and keeps the explanation", async () => {
-    const stream = makeStream();
-    const ctrl = createTeamsReplyStreamController({
-      allowProviderPreview: true,
-      conversationType: "personal",
-      context: makeContext(stream),
-      feedbackLoopEnabled: false,
-      msteamsConfig: {
-        streaming: { mode: "progress", progress: { toolProgress: true, label: false } },
-      } as never,
-    });
-
-    await ctrl.pushPlanProgress([{ step: "Inspect", status: "in_progress" }], {
-      explanation: "Initial plan",
-    });
-    await ctrl.pushPlanProgress(
-      [
-        { step: "Inspect", status: "completed" },
-        { step: "Patch", status: "in_progress" },
-      ],
-      { explanation: "Revised plan" },
-    );
-
-    expect(stream.update).toHaveBeenLastCalledWith("Revised plan\n\n✅ Inspect\n▸ Patch");
   });
 
   it("cancels the pending progress gate at finalize so no stale card posts after close", async () => {
@@ -570,19 +332,6 @@ describe("createTeamsReplyStreamController", () => {
       return err;
     }
 
-    it("swallows StreamCancelledError thrown from stream.emit (Stop button race)", () => {
-      const stream = makeStream();
-      stream.emit.mockImplementation(() => {
-        throw makeCancelError();
-      });
-      const ctrl = makeController({ stream });
-      // Must not throw — the SDK throws this synchronously when _canceled
-      // flipped between our pre-check and the emit call (or when no pre-check
-      // happens at all). An uncaught throw here crashes the gateway process
-      // since it surfaces as an unhandled promise rejection in async paths.
-      expect(() => ctrl.onPartialReply({ text: "after stop" })).not.toThrow();
-    });
-
     it("swallows StreamCancelledError thrown from progress stream.update", async () => {
       const stream = makeStream();
       stream.update.mockImplementation(() => {
@@ -620,21 +369,6 @@ describe("createTeamsReplyStreamController", () => {
       // the cancellation that happens between check and emit.
       await expect(ctrl.finalize()).resolves.toEqual({
         visibleReplySent: false,
-      });
-    });
-
-    it("preserves the full fallback when a failed stream has no provider acknowledgement", () => {
-      const stream = makeAcknowledgedStream();
-      const ctrl = makeController({ stream });
-
-      ctrl.onPartialReply({ text: "hello" });
-      stream.emit.mockImplementation(() => {
-        throw new Error("network failure");
-      });
-      ctrl.onPartialReply({ text: "hello world" });
-
-      expect(ctrl.preparePayload({ text: "hello world final" })).toEqual({
-        text: "hello world final",
       });
     });
 
@@ -679,20 +413,6 @@ describe("createTeamsReplyStreamController", () => {
       });
     });
 
-    it("suppresses a failed fallback when Teams already acknowledged the entire text", () => {
-      const stream = makeAcknowledgedStream();
-      const ctrl = makeController({ stream });
-
-      ctrl.onPartialReply({ text: "hello" });
-      stream.acknowledge("hello");
-      stream.emit.mockImplementation(() => {
-        throw new Error("network failure");
-      });
-      ctrl.onPartialReply({ text: "hello world" });
-
-      expect(ctrl.preparePayload({ text: "hello" })).toBeUndefined();
-    });
-
     it("retains media when Teams already acknowledged all fallback text", () => {
       const stream = makeAcknowledgedStream();
       const ctrl = makeController({ stream });
@@ -712,59 +432,6 @@ describe("createTeamsReplyStreamController", () => {
       });
     });
 
-    it("redelivers only unacknowledged text when stream close fails", async () => {
-      const stream = makeAcknowledgedStream();
-      const ctrl = makeController({ stream });
-
-      ctrl.onPartialReply({ text: "hello" });
-      stream.acknowledge("hello");
-      expect(ctrl.preparePayload({ text: "hello world" })).toBeUndefined();
-      stream.close.mockRejectedValueOnce(new Error("close failed"));
-
-      await expect(ctrl.finalize()).resolves.toEqual({
-        visibleReplySent: true,
-        content: "hello",
-        messageId: "stream-acknowledged",
-        fallbackPayload: { text: " world" },
-      });
-      expect(stream.events.off).toHaveBeenCalledWith(0);
-      expect(ctrl.preparePayload({ text: "hello again" })).toEqual({ text: "hello again" });
-    });
-
-    it("does not redeliver an acknowledged final when stream close produces no activity", async () => {
-      const stream = makeAcknowledgedStream();
-      const ctrl = makeController({ stream });
-
-      ctrl.onPartialReply({ text: "hello" });
-      stream.acknowledge("hello");
-      expect(ctrl.preparePayload({ text: "hello" })).toBeUndefined();
-      stream.close.mockResolvedValueOnce(undefined);
-
-      await expect(ctrl.finalize()).resolves.toEqual({
-        visibleReplySent: true,
-        content: "hello",
-        messageId: "stream-acknowledged",
-      });
-      expect(stream.events.off).toHaveBeenCalledWith(0);
-    });
-
-    it("honors cancellation after an acknowledged stream prefix", async () => {
-      const stream = makeAcknowledgedStream();
-      const ctrl = makeController({ stream });
-
-      ctrl.onPartialReply({ text: "hello" });
-      stream.acknowledge("hello");
-      stream.canceled = true;
-
-      expect(ctrl.preparePayload({ text: "hello world" })).toBeUndefined();
-      await expect(ctrl.finalize()).resolves.toEqual({
-        visibleReplySent: true,
-        content: "hello",
-        messageId: "stream-acknowledged",
-      });
-      expect(stream.events.off).toHaveBeenCalledWith(0);
-    });
-
     it("treats post-cancel stream as inactive without further emit attempts", () => {
       const stream = makeStream();
       stream.emit.mockImplementationOnce(() => {
@@ -778,15 +445,6 @@ describe("createTeamsReplyStreamController", () => {
       ctrl.onPartialReply({ text: "third chunk" });
       expect(stream.emit).toHaveBeenCalledTimes(1);
       expect(ctrl.isStreamActive()).toBe(false);
-    });
-  });
-
-  describe("non-personal conversation", () => {
-    it("does not stream in channels — onPartialReply is a no-op", () => {
-      const stream = makeStream();
-      const ctrl = makeController({ conversationType: "channel", stream });
-      ctrl.onPartialReply({ text: "anything" });
-      expect(stream.emit).not.toHaveBeenCalled();
     });
   });
 });

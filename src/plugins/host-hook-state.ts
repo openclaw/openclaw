@@ -263,14 +263,7 @@ export async function patchPluginSessionExtension(params: {
   // extension opted in via `sessionEntrySlotKey`. The slot is a read-only
   // mirror: writes still go through patchSessionExtension; the host overwrites
   // the slot value on every patch and clears it on unset.
-  const rawSlotKey = normalizeOptionalString(registration.extension.sessionEntrySlotKey);
-  const normalizedSlotKey = rawSlotKey ? normalizeSessionEntrySlotKey(rawSlotKey) : undefined;
-  if (normalizedSlotKey?.ok === false) {
-    log.warn(
-      `plugin session extension slot promotion skipped for ${pluginId}/${namespace}: ${normalizedSlotKey.error}`,
-    );
-  }
-  const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
+  const slotKey = registration.extension.sessionEntrySlotKey;
   const updated = await updateResolvedSessionEntry(
     {
       cfg: params.cfg,

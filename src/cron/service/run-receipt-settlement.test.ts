@@ -82,6 +82,68 @@ function latestReceiptStatus(storePath: string, jobId: string): string | undefin
 }
 
 describe("cron run receipt settlement", () => {
+  it.each([false, true])(
+    "retires an active on-exit schedule after a command whitespace edit (restore=%s)",
+    async (restore) => {
+      const { storePath } = await makeStorePath();
+      const started = createDeferred();
+      const release = createDeferred();
+      const service = makeService(storePath, async () => {
+        started.resolve();
+        await release.promise;
+        return { status: "ok" };
+      });
+      const schedule = { kind: "on-exit" as const, command: "printf %s hello\\" };
+      const editedSchedule = { ...schedule, command: `${schedule.command} ` };
+      const job = await service.add({
+        name: "on-exit whitespace edit",
+        enabled: true,
+        deleteAfterRun: true,
+        schedule,
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "command", argv: ["true"] },
+        delivery: { mode: "none" },
+      });
+      const run = service.runOnExit(job.id, {
+        schedule,
+        signal: new AbortController().signal,
+        commitGuard: () => {},
+        onReserved: () => {},
+      });
+      try {
+        await started.promise;
+        await service.update(job.id, { schedule: editedSchedule });
+        const edited = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)!;
+        expect(edited.state.runningScheduleChangeId).toEqual(expect.any(String));
+        if (restore) {
+          const restored = await service.update(job.id, { schedule });
+          expect(restored.state.runningScheduleChangeId).toEqual(expect.any(String));
+          expect(restored.state.runningScheduleChangeId).not.toBe(
+            edited.state.runningScheduleChangeId,
+          );
+        }
+        release.resolve();
+        await expect(run).resolves.toEqual({ ok: true, ran: true });
+        const current = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
+        expect(current).toMatchObject({
+          id: job.id,
+          enabled: false,
+          schedule: restore ? schedule : editedSchedule,
+          deleteAfterRun: true,
+          state: { lastRunStatus: "ok" },
+        });
+        expect(current?.state.runningAtMs).toBeUndefined();
+        expect(current?.state.runningScheduleChangeId).toBeUndefined();
+        expect(latestReceiptStatus(storePath, job.id)).toBe("ok");
+      } finally {
+        release.resolve();
+        await run;
+        service.stop();
+      }
+    },
+  );
+
   it.each(["on-exit", "stream", "empty-stream", "startup", "manual"] as const)(
     "retains the execution owner through %s execution and settlement",
     async (source) => {

@@ -1,3 +1,4 @@
+import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
@@ -9,7 +10,6 @@ import { findOpenClawStateDatabaseFailure } from "./openclaw-state-db-failure.js
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type {
   OpenClawStateWorkerOperations,
-  OpenClawStateWorkerInspectionOperations,
   OpenClawStateWorkerOperationOptions as OperationOptions,
 } from "./openclaw-state-worker-contract.js";
 import { hydrateOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
@@ -25,6 +25,11 @@ import { getOpenClawStateWorkerOwner as owner } from "./openclaw-state-worker-ow
 import type { DomainScope } from "./openclaw-state-worker-store.types.js";
 
 export type { OpenClawStateWorkerLease } from "./openclaw-state-worker-lease.js";
+
+/** Prepare only code for a shared-state operation after the next database drain. */
+export function prepareOpenClawStateWorkerRuntime() {
+  return owner().prepareRuntime();
+}
 
 /** Retired cleanup uses the retained owner's backend without renewing read admission. */
 export function openOpenClawStateWorkerCleanupStore(
@@ -78,17 +83,19 @@ export async function runOpenClawStateWorkerOperation<T>(
 ): Promise<T | undefined> {
   return runWithCapturedWorkerContext(context, async () => {
     try {
+      options?.signal?.throwIfAborted();
       context.admission.assertCurrent();
       options?.assertCurrent?.();
-      const failure = await getOpenClawStateDatabaseTerminalFailureAsync(context);
+      const failure = await getOpenClawStateDatabaseTerminalFailureAsync(context, options?.signal);
       if (failure) {
         throw failure;
       }
       context.admission.assertCurrent();
       options?.assertCurrent?.();
       const store = await owner().open(context, options);
-      context.admission.assertCurrent();
       if (!store) {
+        options?.signal?.throwIfAborted();
+        context.admission.assertCurrent();
         if (options?.existingOnly) {
           return undefined;
         }
@@ -96,6 +103,7 @@ export async function runOpenClawStateWorkerOperation<T>(
       }
       const releaseOperation = owner().retainOperation(store);
       try {
+        options?.signal?.throwIfAborted();
         context.admission.assertCurrent();
         options?.assertCurrent?.();
         return await runWithOpenClawStateWorkerStore(
@@ -104,6 +112,7 @@ export async function runOpenClawStateWorkerOperation<T>(
           operation,
           options?.assertCurrent,
           options?.createAdmission,
+          options?.signal,
         );
       } finally {
         // The owner observes retirement; other clients may await this operation's result.
@@ -132,16 +141,14 @@ export async function runOpenClawStateWorkerOperation<T>(
 }
 
 /** Inspect the existing file without recursively admitting a domain operation. */
-export async function inspectOpenClawStateDatabase(
+export async function inspectOpenClawStateDatabaseGeneration(
   context: OpenClawStateWorkerContext,
-  command: {
-    type: "database.generationMatches";
-    input: OpenClawStateWorkerInspectionOperations["database.generationMatches"]["input"];
-  },
+  generation: SqliteFileGeneration,
+  signal?: AbortSignal,
 ): Promise<boolean | undefined> {
   return runWithCapturedWorkerContext(context, async () => {
     try {
-      const store = await owner().open(context, { existingOnly: true });
+      const store = await owner().open(context, { existingOnly: true, signal });
       context.admission.assertCurrent();
       if (!store) {
         return undefined;
@@ -149,8 +156,13 @@ export async function inspectOpenClawStateDatabase(
       const releaseOperation = owner().retainOperation(store);
       try {
         context.admission.assertCurrent();
-        return await runWithOpenClawStateWorkerStore(store, context, (scope) =>
-          scope.execute(command),
+        return await runWithOpenClawStateWorkerStore(
+          store,
+          context,
+          (scope) => scope.execute({ type: "database.generationMatches", input: { generation } }),
+          undefined,
+          undefined,
+          signal,
         );
       } finally {
         void releaseOperation();

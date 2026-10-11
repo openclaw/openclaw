@@ -2,6 +2,7 @@ import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
+import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
@@ -21,15 +22,22 @@ import {
   SqliteWorkerOpenRefusedError,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { withAgentCreationClaimWitness } from "./agent-creation-claim.js";
+import { withAgentDeletionWorkerCleanup } from "./agent-deletion-cleanup.worker.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
+import type { AgentDeletionWorkerGuard } from "./agent-deletion-worker-contract.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseRegistrationCommit,
 } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
-import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import {
+  recordOpenClawAgentDatabaseBackgroundVerification,
+  retainAgentDatabase,
+} from "./openclaw-agent-db-lifecycle.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
+import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   getOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
@@ -44,7 +52,6 @@ import type {
   AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionOpen,
   AgentDatabaseFileExecutionOpen,
-  AgentDatabaseIncognitoOperations,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
 import {
@@ -56,11 +63,14 @@ import { createIncognitoAgentDatabaseBackend } from "./openclaw-agent-execution-
 import { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
 import {
   loadAgentTranscriptOperations,
+  loadAgentTranscriptReadOperations,
   loadAgentReplacementOperations,
   loadAgentRestartRecoveryOperations,
   loadAgentEntryReadOperations,
   loadAgentEntryPatchOperations,
   loadAgentCompoundOperations,
+  loadAgentPurgeOperations,
+  loadAgentMaintenanceFinalizationOperations,
   loadAgentNativeBindingOperations,
   loadAgentMessageCutOperations,
   prepareAgentNativeBindingOperation,
@@ -70,12 +80,14 @@ import {
   loadAgentProviderReviewOperations,
   loadAgentReactionOperations,
   loadConversationDeliveryOperations,
+  loadConversationRegistryOperations,
   loadAgentPendingInputOperations,
   loadAgentArchivePruningOperations,
   loadUsageCacheOperations,
   prepareAgentTranscript,
   type RegisteredAgentWorkerOperations,
 } from "./openclaw-agent-execution-operations.js";
+import { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import {
   requireOpenClawStateDatabaseIdentity,
@@ -92,7 +104,7 @@ export function createSqliteWorkerBackend(
   opening: { databasePath: string },
 ):
   | SqliteWorkerPreparedBackend<AgentDatabaseOperations>
-  | SqliteWorkerPreparedBackend<AgentDatabaseIncognitoOperations> {
+  | SqliteWorkerPreparedBackend<IncognitoSessionOperations> {
   if (input.kind === "ephemeral") {
     return createIncognitoAgentDatabaseBackend(input, opening);
   }
@@ -175,7 +187,8 @@ function openAgentDatabaseBackend(
   let identity: AgentDatabaseFileExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
   let startupJournalRequested = false;
-  let publicationStartupJournal: boolean | undefined;
+  type RequestPreparation = { startupJournal: boolean; deletion?: AgentDeletionWorkerGuard };
+  let publicationPreparation: RequestPreparation | undefined;
   const readRequestPreparation = () => {
     const attachment = takeSqliteWorkerOperationAdmissionAttachment();
     if (
@@ -185,28 +198,57 @@ function openAgentDatabaseBackend(
     ) {
       throw new Error("Agent execution requires its request-local preparation facts");
     }
-    return attachment.startupJournal;
+    return {
+      startupJournal: attachment.startupJournal,
+      // SAFETY: The host sends this typed guard; its live owner compares it before SQL.
+      deletion: attachment.deletion as AgentDeletionWorkerGuard | undefined,
+    };
+  };
+  const openShared = () => {
+    if (!shared) {
+      shared = openOpenClawStateDatabase({
+        path: input.stateDatabasePath,
+        env: input.environment,
+        initializationAgentPaths: [input.databasePath],
+      });
+      sharedBorrow = retainOpenClawStateDatabase(shared);
+    }
+    return shared;
+  };
+  const withPreparation = <T>(preparation: RequestPreparation, run: () => T): T => {
+    startupJournalRequested = preparation.startupJournal;
+    try {
+      return preparation.deletion
+        ? withAgentDeletionWorkerCleanup(
+            preparation.deletion,
+            {
+              agentId: input.agentId,
+              path: input.databasePath,
+              statePath: input.stateDatabasePath,
+              env: input.environment,
+              shared: openShared,
+              assertFileCurrent: assertFileIdentity,
+            },
+            run,
+          )
+        : run();
+    } finally {
+      startupJournalRequested = false;
+    }
   };
   const readDeletionJournal = () =>
     readAgentDeletionJournalStatusInDatabase(
       expectDefined(shared, "Agent execution shared-state owner").db,
       input.agentId,
     ) !== "absent";
-  const openWriter = () => {
+  const openClaimedWriter = (refreshSchema = false) => {
     let validation: OpenClawAgentDatabaseValidation | undefined;
     if (!database) {
       // Promotion needs the current command's source authority before any durable open work.
       admitOpen();
       assertFileIdentity();
-      if (!shared) {
-        shared = openOpenClawStateDatabase({
-          path: input.stateDatabasePath,
-          env: input.environment,
-          initializationAgentPaths: [input.databasePath],
-        });
-        sharedBorrow = retainOpenClawStateDatabase(shared);
-      }
-      const lease = prepareOpenClawAgentDatabaseWorkerLease(options, shared, input.leaseId);
+      const sharedDatabase = openShared();
+      const lease = prepareOpenClawAgentDatabaseWorkerLease(options, sharedDatabase, input.leaseId);
       const { port1, port2 } = new MessageChannel();
       try {
         requestSqliteWorkerOperationAdmission(
@@ -214,7 +256,7 @@ function openAgentDatabaseBackend(
             stage: "prepare",
             facts: {
               kind: "shared-owner",
-              identity: requireOpenClawStateDatabaseIdentity(shared),
+              identity: requireOpenClawStateDatabaseIdentity(sharedDatabase),
               lease: lease.receipt,
               validationPort: port2,
             },
@@ -223,9 +265,12 @@ function openAgentDatabaseBackend(
         );
         // The host posts before granting admission; shared revocation remains live after transfer.
         // SAFETY: this private port receives only the host's typed validation receipt.
-        lease.validation = receiveMessageOnPort(port1)?.message as
-          | OpenClawAgentDatabaseValidation
-          | undefined;
+        const preparation = receiveMessageOnPort(port1)?.message as {
+          validation?: OpenClawAgentDatabaseValidation;
+          deferUnverifiedIntegrity: boolean;
+        };
+        lease.validation = preparation.validation;
+        lease.deferUnverifiedIntegrity = preparation.deferUnverifiedIntegrity;
       } catch (error) {
         throw new SqliteWorkerOpenRefusedError(error);
       } finally {
@@ -308,6 +353,9 @@ function openAgentDatabaseBackend(
     if (!database || !database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options) !== database) {
       throw new Error("Agent execution lost its retained native database");
     }
+    if (refreshSchema) {
+      validation = refreshOpenClawAgentDatabaseSchema(database, admitOpen);
+    }
     requestSqliteWorkerOperationAdmission({
       stage: "prepare",
       facts: {
@@ -318,6 +366,12 @@ function openAgentDatabaseBackend(
     });
     return database;
   };
+  const openWriter = (refreshSchema = false) =>
+    input.creationClaim
+      ? withAgentCreationClaimWitness(input.creationClaim, admitOpen, () =>
+          openClaimedWriter(refreshSchema),
+        )
+      : openClaimedWriter(refreshSchema);
   const admit = (
     stage: "transaction" | "commit",
     publication?: unknown,
@@ -359,6 +413,10 @@ function openAgentDatabaseBackend(
     databaseOptions: options,
     assertFileIdentity,
     openWriter,
+    readPreparedDatabase() {
+      assertFileIdentity();
+      return expectDefined(database, "Maintenance read requires its admitted native owner");
+    },
     admit,
   });
   const loadMaintenanceOperations = async () => maintenance.operations;
@@ -368,25 +426,40 @@ function openAgentDatabaseBackend(
     keyof RegisteredAgentWorkerOperations
   >({
     "session.entry.read": loadAgentEntryReadOperations,
+    "voice.session.read": loadAgentVoiceSessionOperations,
+    "voice.session.mutate": loadAgentVoiceSessionOperations,
     "session.entry.patch.prepare": loadAgentEntryPatchOperations,
     "session.entry.patch.commit": loadAgentEntryPatchOperations,
     "session.turn.prepare": loadAgentCompoundOperations,
     "session.turn.commit": loadAgentCompoundOperations,
     "session.lifecycle.reset": loadAgentCompoundOperations,
     "session.lifecycle.project": loadAgentCompoundOperations,
+    "session.agentPurge.prepare": loadAgentPurgeOperations,
+    "session.agentPurge.commit": loadAgentPurgeOperations,
+    "session.maintenance.finalize": loadAgentMaintenanceFinalizationOperations,
+    "session.maintenance.size": loadAgentMaintenanceFinalizationOperations,
     "session.nativeBindings.delete": loadAgentNativeBindingOperations,
     "session.messageCut.commit": loadAgentMessageCutOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
+    "trajectory.retention.begin": loadAgentTrajectoryOperations,
     "trajectory.retention.delete": loadAgentTrajectoryOperations,
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,
     "session.transcript.initialize": loadAgentTranscriptOperations,
+    "session.transcript.rawDelta.read": loadAgentTranscriptReadOperations,
+    "session.transcript.watermark.read": loadAgentTranscriptReadOperations,
+    "session.transcript.visibleDelta.read": loadAgentTranscriptReadOperations,
+    "session.transcript.memoryCapture.read": loadAgentTranscriptReadOperations,
+    "session.transcript.anchors.read": loadAgentTranscriptReadOperations,
+    "session.transcript.coldMetadata.read": loadAgentTranscriptReadOperations,
     "session.entries.replace": loadAgentReplacementOperations,
     "session.restart.recover": loadAgentRestartRecoveryOperations,
     "session.entry.acp": loadAgentAcpOperations,
     "session.providerReview.compare": loadAgentProviderReviewOperations,
     "session.reaction.set": loadAgentReactionOperations,
     "conversation.delivery.begin": loadConversationDeliveryOperations,
+    "conversation.register": loadConversationRegistryOperations,
+    "conversation.authority": loadConversationRegistryOperations,
     "conversation.delivery.transition": loadConversationDeliveryOperations,
     "session.pendingInputs.withdraw": loadAgentPendingInputOperations,
     "session.pendingInputs.read": loadAgentPendingInputOperations,
@@ -397,6 +470,7 @@ function openAgentDatabaseBackend(
     "session.archivePruning.removeLegacy": loadAgentArchivePruningOperations,
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
     "session.maintenance.prepare": loadMaintenanceOperations,
+    "session.maintenance.read": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
     "session.maintenance.release": loadMaintenanceOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
@@ -465,8 +539,13 @@ function openAgentDatabaseBackend(
       return domain.execute(command);
     }
     if (command.type === "database.prepareWrite") {
-      openWriter();
+      openWriter(true);
       return undefined;
+    }
+    if (command.type === "database.recordIntegrity") {
+      const opened = openWriter();
+      admit("transaction");
+      return recordOpenClawAgentDatabaseBackgroundVerification(opened, () => admit("commit"));
     }
     if (command.type === "database.walMaintenance") {
       return (
@@ -499,12 +578,23 @@ function openAgentDatabaseBackend(
         return domain.prepare(command);
       }
       const preparing = registry.prepare(command.type);
+      if (command.type === "session.turn.commit" && command.input.options.voiceTranscript) {
+        return Promise.all([
+          preparing,
+          import("../config/sessions/session-turn.worker.js").then((turn) =>
+            turn.prepareVoiceTranscriptCommit(),
+          ),
+        ]).then(() => {});
+      }
       const nativeBindings =
         command.type === "session.nativeBindings.delete"
           ? command.input
           : command.type === "session.messageCut.commit"
             ? command.input.nativeBindings
-            : undefined;
+            : command.type === "session.agentPurge.commit" ||
+                command.type === "session.maintenance.finalize"
+              ? command.input.nativeBindings
+              : undefined;
       if (nativeBindings) {
         return Promise.all([
           preparing,
@@ -513,6 +603,7 @@ function openAgentDatabaseBackend(
       }
       if (
         command.type === "session.maintenance.prepare" ||
+        command.type === "session.maintenance.read" ||
         command.type === "session.maintenance.metadata"
       ) {
         return Promise.all([preparing, maintenance.prepare()]).then(() => {});
@@ -526,25 +617,22 @@ function openAgentDatabaseBackend(
       if (command.type !== "database.domain.publish") {
         return undefined;
       }
-      publicationStartupJournal = readRequestPreparation();
-      startupJournalRequested = publicationStartupJournal;
-      try {
-        return domain.preparePublication(command.input);
-      } finally {
-        startupJournalRequested = false;
-      }
+      publicationPreparation = readRequestPreparation();
+      return withPreparation(publicationPreparation, () =>
+        domain.preparePublication(command.input),
+      );
     },
     [SQLITE_WORKER_OPERATION_CLEANUP](command) {
       if (command.type === "session.maintenance.metadata") {
         maintenance.cleanup(command.input);
       }
       if (command.type === "database.domain.publish") {
-        startupJournalRequested = publicationStartupJournal ?? false;
         try {
-          domain.cleanupPublication(command.input.id);
+          withPreparation(publicationPreparation ?? { startupJournal: false }, () =>
+            domain.cleanupPublication(command.input.id),
+          );
         } finally {
-          startupJournalRequested = false;
-          publicationStartupJournal = undefined;
+          publicationPreparation = undefined;
         }
       }
     },
@@ -570,18 +658,12 @@ function openAgentDatabaseBackend(
     execute(command) {
       assertOpen();
       if (command.type === "database.domain.publish") {
-        if (publicationStartupJournal === undefined) {
+        if (publicationPreparation === undefined) {
           throw new Error("Agent publication lost its request-local preparation facts");
         }
-        startupJournalRequested = publicationStartupJournal;
-      } else {
-        startupJournalRequested = readRequestPreparation();
+        return withPreparation(publicationPreparation, () => executeCommand(command));
       }
-      try {
-        return executeCommand(command);
-      } finally {
-        startupJournalRequested = false;
-      }
+      return withPreparation(readRequestPreparation(), () => executeCommand(command));
     },
   };
 }

@@ -55,7 +55,6 @@ export function createChannelsViewProps(
       secretVisible: false,
       blockedByDirtyConfig: false,
       toggleMultiselect: () => {},
-      setTextValue: () => {},
       toggleSecretVisibility: () => {},
       answer: () => {},
       close: () => {},

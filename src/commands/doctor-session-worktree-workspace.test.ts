@@ -71,7 +71,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
       env,
       sessionKey: `agent:${agentId}:legacy-worktree`,
     }));
-    insertRegistryWorktree(env, {
+    await insertRegistryWorktree(env, {
       id: "legacy",
       name: "legacy",
       repoFingerprint: "0123456789abcdef",

@@ -55,11 +55,15 @@ export async function persistPendingFinalDeliveryMarker(
   const recoverableText = buildRecoverablePendingFinalDeliveryText(
     normalizePendingFinalRecoveryPayloads(params.payloads),
   );
+  const entry =
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined) ??
+    params.sessionEntry;
 
   if (
     !params.deliver ||
     !params.sessionStore ||
     !params.sessionKey ||
+    !entry ||
     params.suppressVisibleSessionEffects ||
     params.sessionReboundDuringRun ||
     isSubagentSessionKey(params.sessionKey) ||
@@ -68,15 +72,6 @@ export async function persistPendingFinalDeliveryMarker(
     // target) must not leave a custody marker restart recovery could act on.
     !params.deliveryContext
   ) {
-    return {
-      sessionEntry: params.sessionEntry,
-      pendingFinalDeliveryMarkerPersisted: false,
-      hasSendableFinalPayload,
-    };
-  }
-
-  const entry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
-  if (!entry) {
     return {
       sessionEntry: params.sessionEntry,
       pendingFinalDeliveryMarkerPersisted: false,

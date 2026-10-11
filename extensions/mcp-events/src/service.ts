@@ -16,25 +16,21 @@ import {
   McpEventsSourceAuthority,
   SourceRevokedError,
   isAuthorityUnavailable,
-  type PreparedEventSource,
+  type SourceBinding,
 } from "./source-authority.js";
-import { createMcpEventsState, type SubscriptionBinding } from "./state.js";
+import { createMcpEventsState, type McpEventsState, type SubscriptionBinding } from "./state.js";
 import type { EventSourceSnapshot, McpEventsDependencies } from "./types.js";
 
-type LiveBinding = {
-  facts: SubscriptionBinding;
-  source?: PreparedEventSource;
-  live: boolean;
+type LiveBinding = SourceBinding & {
   pending?: Promise<void>;
   writes: Promise<void>;
 };
-type State = ReturnType<typeof createMcpEventsState>;
 const REQUEST_TTL_MS = 60 * 60_000;
 const ROTATION_WINDOW_MS = 5 * 60_000;
 const MAX_CLEANUP_RETRIES = 8;
 
 export class McpEventsService {
-  private readonly state: State;
+  private readonly state: McpEventsState;
   private readonly authority: McpEventsSourceAuthority;
   private readonly bindings = new Map<string, LiveBinding>();
   private readonly ingress: McpEventsIngress<LiveBinding>;
@@ -111,6 +107,11 @@ export class McpEventsService {
     );
   }
 
+  private cancelScheduled(id: string) {
+    this.scheduled.get(id)?.cancel();
+    this.scheduled.delete(id);
+  }
+
   /** Serializes facts, not network calls: callbacks can verify during subscribe. */
   private mutate(
     binding: LiveBinding,
@@ -180,7 +181,6 @@ export class McpEventsService {
     }
   }
 
-  /** Hooks and durable enqueue wake the existing host scheduler; empty queues have no timer. */
   requestDrain(jobId?: string) {
     this.ingress.requestDrain(jobId);
   }
@@ -238,7 +238,7 @@ export class McpEventsService {
     for (const [jobId, failed] of this.unavailable) {
       if (desired.get(jobId)?.sourceIdentity !== failed.source.sourceIdentity) {
         this.unavailable.delete(jobId);
-        this.scheduled.get("source:" + jobId)?.cancel();
+        this.cancelScheduled("source:" + jobId);
       }
     }
     const started: Promise<void>[] = [];
@@ -282,6 +282,8 @@ export class McpEventsService {
         !binding.pending
       ) {
         await this.beginCleanup(binding);
+      } else if (!binding.live) {
+        this.armCleanup(binding);
       }
     }
   }
@@ -328,12 +330,13 @@ export class McpEventsService {
     try {
       const discovered = record(await source.request("server/discover", {}, this.signal));
       source.assertCurrent();
+      const capabilities = record(discovered?.capabilities);
       if (
         !discovered ||
         !Array.isArray(discovered.supportedVersions) ||
         !discovered.supportedVersions.includes("2026-07-28") ||
-        !record(discovered.capabilities) ||
-        !Object.hasOwn(record(discovered.capabilities)!, "events")
+        !capabilities ||
+        !Object.hasOwn(capabilities, "events")
       ) {
         throw new Error("Configured MCP server does not advertise MCP 2.0 events");
       }
@@ -510,28 +513,39 @@ export class McpEventsService {
   }
 
   private async revoke(binding: LiveBinding, reason?: SubscriptionBinding["lastError"]) {
-    if (!binding.live) {
+    if (!binding.live && binding.facts.status === "revoked") {
+      this.armCleanup(binding);
       return;
     }
     // Invalidate local authority before persistence, remote cleanup, or any other await.
     binding.live = false;
-    this.scheduled.get("refresh:" + binding.facts.bindingId)?.cancel();
-    await this.mutate(
-      binding,
-      (facts) => ({
-        ...facts,
-        status: "revoked",
-        cleanupPending: true,
-        retiredAt: this.now,
-        failures: 0,
-        lastError: reason,
-        nextAttemptAt: this.now,
-        updatedAt: this.now,
-      }),
-      this.assertService,
-    );
-    // A refresh in flight may still activate remotely. Cleanup runs only after it settles.
-    this.armCleanup(binding);
+    this.cancelScheduled("refresh:" + binding.facts.bindingId);
+    let retryAt = this.now;
+    try {
+      await this.mutate(
+        binding,
+        (facts) => ({
+          ...facts,
+          status: "revoked",
+          cleanupPending: true,
+          retiredAt: this.now,
+          failures: 0,
+          lastError: reason,
+          nextAttemptAt: this.now,
+          updatedAt: this.now,
+        }),
+        this.assertService,
+      );
+    } catch (error) {
+      retryAt = this.now + 1_000;
+      throw error;
+    } finally {
+      // The local retirement owns recovery even when its durable write fails.
+      this.armCleanup(binding, retryAt);
+      if (reason === "source_unavailable") {
+        this.requestReconcile();
+      }
+    }
   }
 
   private async forgetBinding(binding: LiveBinding) {
@@ -542,39 +556,58 @@ export class McpEventsService {
       }
     };
     await this.state.withCurrent({ assertCurrent }).delete(binding.facts.bindingId);
+    this.cancelScheduled("cleanup:" + binding.facts.bindingId);
     binding.source?.dispose();
     binding.source = undefined;
     this.bindings.delete(binding.facts.bindingId);
   }
 
-  private armCleanup(binding: LiveBinding) {
-    if (!binding.facts.cleanupPending) {
-      return;
-    }
-    if (binding.facts.failures >= MAX_CLEANUP_RETRIES) {
-      const expiry =
-        binding.facts.refreshBefore ??
-        (binding.facts.retiredAt ?? binding.facts.updatedAt) + REQUEST_TTL_MS + ROTATION_WINDOW_MS;
-      this.schedule("cleanup:" + binding.facts.bindingId, Math.max(this.now, expiry), () =>
-        this.forgetBinding(binding),
-      );
-      return;
-    }
-    this.schedule(
-      "cleanup:" + binding.facts.bindingId,
-      Math.max(this.now, binding.facts.nextAttemptAt),
-      async () => {
-        await binding.pending?.catch(() => {});
-        if (!this.stopped && binding.facts.cleanupPending) {
-          await this.beginCleanup(binding);
-        }
-      },
+  private cleanupExpiry(binding: LiveBinding) {
+    return (
+      binding.facts.refreshBefore ??
+      (binding.facts.retiredAt ?? binding.facts.updatedAt) + REQUEST_TTL_MS + ROTATION_WINDOW_MS
     );
+  }
+
+  private armCleanup(binding: LiveBinding, retryAt = this.now) {
+    if (binding.live || this.bindings.get(binding.facts.bindingId) !== binding) {
+      return;
+    }
+    const deadline =
+      binding.facts.status === "revoked" &&
+      binding.facts.cleanupPending &&
+      binding.facts.failures >= MAX_CLEANUP_RETRIES
+        ? this.cleanupExpiry(binding)
+        : binding.facts.status === "revoked"
+          ? binding.facts.nextAttemptAt
+          : this.now;
+    this.schedule("cleanup:" + binding.facts.bindingId, Math.max(retryAt, deadline), async () => {
+      // A refresh in flight may still activate remotely; join it before cleanup.
+      await binding.pending?.catch(() => {});
+      if (
+        !this.stopped &&
+        !binding.live &&
+        this.bindings.get(binding.facts.bindingId) === binding
+      ) {
+        await this.beginCleanup(binding);
+      }
+    });
   }
 
   private beginCleanup(binding: LiveBinding) {
     return this.begin(binding, async () => {
+      const retryAt =
+        this.now + Math.min(300_000, 1_000 * 2 ** Math.min(binding.facts.failures, 8));
       try {
+        if (binding.facts.status !== "revoked") {
+          await this.revoke(binding);
+        }
+        if (!binding.facts.cleanupPending || binding.facts.failures >= MAX_CLEANUP_RETRIES) {
+          if (!binding.facts.cleanupPending || this.now >= this.cleanupExpiry(binding)) {
+            await this.forgetBinding(binding);
+          }
+          return;
+        }
         if (!binding.source) {
           throw new Error("Original account authority unavailable after restart");
         }
@@ -600,19 +633,18 @@ export class McpEventsService {
             ...facts,
             lastError: "cleanup_failed",
             failures: facts.failures + 1,
-            nextAttemptAt: this.now + Math.min(300_000, 1_000 * 2 ** Math.min(facts.failures, 8)),
+            nextAttemptAt: retryAt,
             updatedAt: this.now,
           }),
           this.assertService,
         );
-      }
-      if (!this.stopped) {
-        this.armCleanup(binding);
+      } finally {
+        // Neither failed bookkeeping nor deletion may consume the last cleanup wake.
+        this.armCleanup(binding, retryAt);
       }
     });
   }
 
-  /** Called only after bounded raw-body admission by the registered HTTP route. */
   receive(bindingId: string, headers: IncomingHttpHeaders, body: Buffer) {
     if (this.initialization !== "ready") {
       throw new CallbackError(503, "Subscription state is loading; retry later");

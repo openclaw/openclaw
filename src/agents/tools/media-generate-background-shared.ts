@@ -20,10 +20,13 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   resolveRequiredCompletionDeliveryFailureTerminalResult,
@@ -101,6 +104,7 @@ type CreateMediaGenerationTaskRunParams = {
   requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
+  inputProvenance?: InputProvenance;
   prompt: string;
   providerId?: string;
   assertCurrent?: () => void;
@@ -250,7 +254,13 @@ async function createMediaGenerationTaskRun(
           )
         : undefined;
     assertCurrent();
-    const requesterOrigin = resolveAnnounceOrigin(entry, params.requesterOrigin);
+    // Interactive WebChat media returns to its session. Internal wakes can use
+    // the same channel sentinel and still need their saved external route.
+    const requesterOrigin =
+      params.inputProvenance?.kind === "external_user" &&
+      normalizeMessageChannel(params.requesterOrigin?.channel) === INTERNAL_MESSAGE_CHANNEL
+        ? { channel: INTERNAL_MESSAGE_CHANNEL }
+        : resolveAnnounceOrigin(entry, params.requesterOrigin);
     const requesterTranscript =
       entry?.sessionId && agentId && storePath
         ? {
@@ -360,6 +370,12 @@ export function scheduleMediaGenerationTaskCompletion(params: {
   run: () => Promise<MediaGenerationExecutionResult>;
   onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
 }) {
+  const reportFailure = (message: string, meta?: { error: unknown }) =>
+    params.onWakeFailure(message, {
+      taskId: params.handle.taskId,
+      runId: params.handle.runId,
+      ...meta,
+    });
   const runBackgroundWork = async () => {
     let executed: MediaGenerationExecutionResult;
     if (!isMediaGenerationOperationCurrent(params.handle.runId)) {
@@ -394,17 +410,10 @@ export function scheduleMediaGenerationTaskCompletion(params: {
             }),
         });
         if (wakeOutcome.status !== "delivered") {
-          params.onWakeFailure(`${params.toolName} failure completion delivery was not confirmed`, {
-            taskId: params.handle.taskId,
-            runId: params.handle.runId,
-          });
+          reportFailure(`${params.toolName} failure completion delivery was not confirmed`);
         }
       } catch (wakeError) {
-        params.onWakeFailure(`${params.toolName} failure wake failed`, {
-          taskId: params.handle.taskId,
-          runId: params.handle.runId,
-          error: wakeError,
-        });
+        reportFailure(`${params.toolName} failure wake failed`, { error: wakeError });
       }
       params.lifecycle.failTaskRun({ handle: params.handle, error });
       return;
@@ -421,11 +430,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
           progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
         });
       } catch (error) {
-        params.onWakeFailure(`${params.toolName} completion progress update failed`, {
-          taskId: params.handle.taskId,
-          runId: params.handle.runId,
-          error,
-        });
+        reportFailure(`${params.toolName} completion progress update failed`, { error });
       }
     };
     recordCompletionDeliveryProgress();
@@ -448,23 +453,15 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       if (wakeOutcome.status !== "delivered") {
         const failureReason = "completion delivery was not confirmed after successful generation";
         terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(failureReason);
-        params.onWakeFailure(`${params.toolName} ${failureReason}`, {
-          taskId: params.handle.taskId,
-          runId: params.handle.runId,
-        });
+        reportFailure(`${params.toolName} ${failureReason}`);
       }
     } catch (error) {
       terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
         formatErrorMessage(error),
       );
-      params.onWakeFailure(
-        `${params.toolName} completion wake failed after successful generation`,
-        {
-          taskId: params.handle.taskId,
-          runId: params.handle.runId,
-          error,
-        },
-      );
+      reportFailure(`${params.toolName} completion wake failed after successful generation`, {
+        error,
+      });
     }
     terminalResult = retainBlockedMediaReferences(terminalResult, executed.attachments);
     try {
@@ -475,11 +472,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
         mediaUrls: executed.mediaUrls,
       });
     } catch (error) {
-      params.onWakeFailure(`${params.toolName} blocked completion retention failed`, {
-        taskId: params.handle.taskId,
-        runId: params.handle.runId,
-        error,
-      });
+      reportFailure(`${params.toolName} blocked completion retention failed`, { error });
     }
     try {
       params.lifecycle.completeTaskRun({
@@ -490,11 +483,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
         terminalResult,
       });
     } catch (error) {
-      params.onWakeFailure(`${params.toolName} completion state update failed`, {
-        taskId: params.handle.taskId,
-        runId: params.handle.runId,
-        error,
-      });
+      reportFailure(`${params.toolName} completion state update failed`, { error });
       params.lifecycle.failTaskRun({
         handle: params.handle,
         error,

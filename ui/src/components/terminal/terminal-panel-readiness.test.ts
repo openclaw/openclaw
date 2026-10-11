@@ -13,6 +13,7 @@ function createTerminalController() {
   return {
     readOnly: false,
     terminal: {
+      options: { fontFamily: "" },
       cols: 100,
       rows: 30,
       viewportY: 0,

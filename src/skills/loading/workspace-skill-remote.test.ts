@@ -17,6 +17,7 @@ import {
   readWorkspaceSkillSources,
   resolveWorkspaceSkillPromptEntries,
 } from "./workspace-skill-loader.js";
+import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,
@@ -107,6 +108,41 @@ async function fixture() {
   };
   return { gateway, remote, sources, bridge, options };
 }
+
+it("keeps explicitly hidden remote collision losers out of snapshot hydration", async () => {
+  const { gateway, sources, bridge, options } = await fixture();
+  const hidden = sources.entries.find((entry) => entry.skill.name === "available")!;
+  hidden.exposure = {
+    includeInRuntimeRegistry: true,
+    includeInAvailableSkillsPrompt: false,
+    userInvocable: true,
+  };
+  hidden.sourceOrder = -1;
+  await writeSkill({
+    dir: path.join(options.managedSkillsDir, "available"),
+    name: "available",
+    description: "Gateway winner",
+  });
+  const release = registerAgentWorkspaceAccess(gateway, {
+    bridge,
+    loadSkills: async () => sources,
+  });
+  try {
+    const prepared = await resolveWorkspaceSkillPromptEntries(gateway, options);
+    expect(
+      prepared.eligible.find((entry) => entry.skill.name === "available")?.skill.filePath,
+    ).toBe(path.join(options.managedSkillsDir, "available", "SKILL.md"));
+    const selected = await buildSkillSnapshot(gateway, {
+      ...options,
+      matchesSnapshotSkill: (skill) => skill.filePath === hidden.skill.filePath,
+    });
+    expect(selected.skills).toHaveLength(1);
+    expect(selected.discoverySkills).toEqual([]);
+    expect(selected.resolvedSkills).toEqual([]);
+  } finally {
+    release();
+  }
+});
 
 describe.each(["prompt", "runtime"] as const)("remote %s skill discovery", (caller) => {
   it.each([false, true])(

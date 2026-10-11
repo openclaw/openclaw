@@ -41,9 +41,7 @@ import {
   focusFormField,
   renderFieldRow,
   renderCronInput,
-  renderCronInputField,
   renderCronSelect,
-  renderCronSelectField,
   renderToggleRow,
 } from "./view-fields.ts";
 import {
@@ -82,6 +80,10 @@ export function renderCron(props: CronProps) {
     ${mode === "overview" ? renderListView(props) : renderDetailView(props, mode)}
     ${renderCronSuggestionLists(props)}
   `;
+}
+
+function renderErrorBanner(error: string | null) {
+  return error ? html`<div class="cron-error-banner" role="alert">${error}</div>` : nothing;
 }
 
 function renderAdminRequired(props: CronProps) {
@@ -132,16 +134,7 @@ function renderListView(props: CronProps) {
               `
             : nothing
         }
-        ${
-          props.listError
-            ? html`<div class="cron-error-banner" role="alert">${props.listError}</div>`
-            : nothing
-        }
-        ${
-          props.error
-            ? html`<div class="cron-error-banner" role="alert">${props.error}</div>`
-            : nothing
-        }
+        ${renderErrorBanner(props.listError)} ${renderErrorBanner(props.error)}
         ${renderToolbar(props, hasAdvancedJobsFilters)}
       </div>
     `,
@@ -402,14 +395,7 @@ function renderJobRow(job: CronJob, props: CronProps) {
                 >
                   ${icon("play")}
                 </button>
-                ${
-                  systemOwned
-                    ? nothing
-                    : renderEnabledSwitch(props, job, {
-                        compact: true,
-                        testId: `cron-row-toggle-${job.id}`,
-                      })
-                }
+                ${systemOwned ? nothing : renderEnabledSwitch(props, job, true)}
                 ${renderJobMenu(props, job)}
               </span>
             `
@@ -485,11 +471,7 @@ function renderJobMenu(props: CronProps, job: CronJob) {
       </button>
       ${job.schedule.kind === "event" ? nothing : renderMenuItem(props, "run-if-due", t("cron.actions.runIfDue"))}
       ${systemOwned ? nothing : renderMenuItem(props, "clone", t("cron.actions.clone"))}
-      ${
-        systemOwned
-          ? nothing
-          : renderMenuItem(props, "remove", t("cron.actions.remove"), { danger: true })
-      }
+      ${systemOwned ? nothing : renderMenuItem(props, "remove", t("cron.actions.remove"), true)}
     </wa-dropdown>
   `;
 }
@@ -549,7 +531,7 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
     renderDetailHeader(props, mode, selectedJob),
     renderAdminRequired(props),
     hasDetailTabs ? renderDetailTabs(props) : nothing,
-    props.error ? html`<div class="cron-error-banner" role="alert">${props.error}</div>` : nothing,
+    renderErrorBanner(props.error),
     html`
       <div
         id="cron-detail-panel"
@@ -639,11 +621,7 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
   `;
 }
 
-function renderEnabledSwitch(
-  props: CronProps,
-  job: CronJob,
-  opts?: { compact?: boolean; testId?: string },
-) {
+function renderEnabledSwitch(props: CronProps, job: CronJob, compact = false) {
   const stateLabel = job.enabled ? t("cron.detail.active") : t("cron.detail.paused");
   const actionLabel = t(job.enabled ? "cron.actions.pauseJob" : "cron.actions.resumeJob", {
     name: job.displayName ?? job.name,
@@ -651,20 +629,20 @@ function renderEnabledSwitch(
   return html`
     <span
       class="cron-enabled-toggle"
-      data-test-id=${opts?.testId ?? "cron-toggle-enabled"}
-      title=${opts?.compact ? actionLabel : nothing}
+      data-test-id=${compact ? `cron-row-toggle-${job.id}` : "cron-toggle-enabled"}
+      title=${compact ? actionLabel : nothing}
     >
       ${renderSettingsToggle({
         checked: job.enabled,
         disabled: props.busy || !props.canManage,
-        ariaLabel: opts?.compact ? actionLabel : stateLabel,
+        ariaLabel: compact ? actionLabel : stateLabel,
         onChange: (checked) => {
           if (props.canManage) {
             props.onToggle(job, checked);
           }
         },
       })}
-      ${opts?.compact ? nothing : html`<span class="cron-detail-sub">${stateLabel}</span>`}
+      ${compact ? nothing : html`<span class="cron-detail-sub">${stateLabel}</span>`}
     </span>
   `;
 }
@@ -796,17 +774,12 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
   `;
 }
 
-function renderMenuItem(
-  props: CronProps,
-  value: string,
-  label: string,
-  options?: { danger?: boolean },
-) {
+function renderMenuItem(props: CronProps, value: string, label: string, danger = false) {
   return html`
     <wa-dropdown-item
-      class=${options?.danger ? "cron-job-menu__item danger" : "cron-job-menu__item"}
+      class=${danger ? "cron-job-menu__item danger" : "cron-job-menu__item"}
       value=${value}
-      variant=${options?.danger ? "danger" : "default"}
+      variant=${danger ? "danger" : "default"}
       ?disabled=${props.busy || !props.canManage}
     >
       ${label}
@@ -907,7 +880,7 @@ function renderPromptSection(
           />
         `,
       })
-    : renderCronSelectField(props, "payloadKind", {
+    : renderCronSelect(props, "payloadKind", {
         label: actionLabel,
         options: [
           { value: "systemEvent", label: t("cron.form.systemEvent") },
@@ -943,7 +916,7 @@ function renderPromptSection(
             onChange: (payloadModel) => props.onFormChange({ payloadModel }),
           }),
         })}
-        ${renderCronInputField(props, "payloadThinking", {
+        ${renderCronInput(props, "payloadThinking", {
           label: t("cron.form.thinking"),
           help: t("cron.form.thinkingHelp"),
           errorKey: "payloadThinking",
@@ -962,20 +935,20 @@ function renderGeneralSection(props: CronProps) {
   return renderSettingsSection(
     { title: t("cron.detail.generalSection") },
     html`
-      ${renderCronInputField(props, "name", {
+      ${renderCronInput(props, "name", {
         label: t("cron.form.fieldName"),
         required: true,
         errorKey: "name",
         placeholder: t("cron.form.namePlaceholder"),
       })}
-      ${renderCronInputField(props, "agentId", {
+      ${renderCronInput(props, "agentId", {
         label: t("cron.form.agentId"),
         help: t("cron.form.agentHelp"),
         list: "cron-agent-suggestions",
         disabled: props.form.clearAgent,
         placeholder: t("cron.form.agentPlaceholder"),
       })}
-      ${renderCronSelectField(props, "sessionTarget", {
+      ${renderCronSelect(props, "sessionTarget", {
         label: t("cron.form.runsIn"),
         help: t("cron.form.sessionHelp"),
         options: [
@@ -1027,6 +1000,43 @@ function describeFormSchedule(form: CronFormState): string | null {
     return t("cron.form.repeatOnExit");
   }
   return form.scheduleKind === "stream" ? t("cron.form.repeatStream") : null;
+}
+
+function renderDurationRow(props: CronProps, kind: "every" | "stagger") {
+  const recurring = kind === "every";
+  const amountField = recurring ? "everyAmount" : "staggerAmount";
+  const unitField = recurring ? "everyUnit" : "staggerUnit";
+  const label = t(recurring ? "cron.form.every" : "cron.form.staggerWindow");
+  const required = recurring ? true : undefined;
+  const disabled = recurring ? undefined : props.form.scheduleExact;
+  const units = recurring ? ["seconds", "minutes", "hours", "days"] : ["seconds", "minutes"];
+  return renderFieldRow({
+    label,
+    controlId: inputIdForField(amountField),
+    required,
+    error: props.fieldErrors[amountField],
+    errorId: errorIdForField(amountField),
+    control: html`
+      <div class="cron-inline-controls">
+        ${renderCronInput(props, amountField, {
+          inline: true,
+          label,
+          required,
+          disabled,
+          errorKey: amountField,
+          placeholder: t(
+            recurring ? "cron.form.everyAmountPlaceholder" : "cron.form.staggerPlaceholder",
+          ),
+        })}
+        ${renderCronSelect(props, unitField, {
+          label: t(recurring ? "cron.form.unit" : "cron.form.staggerUnit"),
+          inline: true,
+          disabled,
+          options: units.map((value) => ({ value, label: t(`cron.form.${value}`) })),
+        })}
+      </div>
+    `,
+  });
 }
 
 function renderScheduleSection(props: CronProps) {
@@ -1084,7 +1094,7 @@ function renderScheduleSection(props: CronProps) {
       })}
       ${
         form.scheduleKind === "at"
-          ? renderCronInputField(props, "scheduleAt", {
+          ? renderCronInput(props, "scheduleAt", {
               label: t("cron.form.runAt"),
               required: true,
               errorKey: "scheduleAt",
@@ -1092,48 +1102,18 @@ function renderScheduleSection(props: CronProps) {
             })
           : nothing
       }
-      ${
-        form.scheduleKind === "every"
-          ? renderFieldRow({
-              label: t("cron.form.every"),
-              controlId: "cron-every-amount",
-              required: true,
-              error: props.fieldErrors.everyAmount,
-              errorId: errorIdForField("everyAmount"),
-              control: html`
-                <div class="cron-inline-controls">
-                  ${renderCronInput(props, "everyAmount", {
-                    label: t("cron.form.every"),
-                    required: true,
-                    errorKey: "everyAmount",
-                    placeholder: t("cron.form.everyAmountPlaceholder"),
-                  })}
-                  ${renderCronSelect(props, "everyUnit", {
-                    label: t("cron.form.unit"),
-                    standalone: true,
-                    options: [
-                      { value: "seconds", label: t("cron.form.seconds") },
-                      { value: "minutes", label: t("cron.form.minutes") },
-                      { value: "hours", label: t("cron.form.hours") },
-                      { value: "days", label: t("cron.form.days") },
-                    ],
-                  })}
-                </div>
-              `,
-            })
-          : nothing
-      }
+      ${form.scheduleKind === "every" ? renderDurationRow(props, "every") : nothing}
       ${
         form.scheduleKind === "cron"
           ? html`
-              ${renderCronInputField(props, "cronExpr", {
+              ${renderCronInput(props, "cronExpr", {
                 label: t("cron.form.expression"),
                 required: true,
                 errorKey: "cronExpr",
                 mono: true,
                 placeholder: t("cron.form.expressionPlaceholder"),
               })}
-              ${renderCronInputField(props, "cronTz", {
+              ${renderCronInput(props, "cronTz", {
                 label: t("cron.form.timezoneOptional"),
                 help: t("cron.form.timezoneHelp"),
                 list: "cron-tz-suggestions",
@@ -1163,7 +1143,7 @@ function renderDeliverySection(
   return renderSettingsSection(
     { title: t("cron.detail.deliverySection") },
     html`
-      ${renderCronSelectField(props, "deliveryMode", {
+      ${renderCronSelect(props, "deliveryMode", {
         label: t("cron.form.deliveryModeLabel"),
         help: t("cron.form.deliveryHelp"),
         value: ctx.selectedDeliveryMode,
@@ -1182,14 +1162,13 @@ function renderDeliverySection(
       ${
         ctx.selectedDeliveryMode === "announce"
           ? html`
-              ${renderCronSelectField(props, "deliveryChannel", {
+              ${renderCronSelect(props, "deliveryChannel", {
                 label: t("cron.form.channel"),
                 help: t("cron.form.channelHelp"),
-                value: props.form.deliveryChannel || "last",
                 options: channelOptions,
                 channel: true,
               })}
-              ${renderCronInputField(props, "deliveryTo", {
+              ${renderCronInput(props, "deliveryTo", {
                 label: t("cron.form.to"),
                 help: t("cron.form.toHelp"),
                 list: "cron-delivery-to-suggestions",
@@ -1200,7 +1179,7 @@ function renderDeliverySection(
       }
       ${
         ctx.selectedDeliveryMode === "webhook"
-          ? renderCronInputField(props, "deliveryTo", {
+          ? renderCronInput(props, "deliveryTo", {
               label: t("cron.form.webhookUrl"),
               required: true,
               help: t("cron.form.webhookHelp"),
@@ -1242,7 +1221,7 @@ function renderAdvanced(
         <p class="settings-section__desc">${t("cron.form.advancedHelp")}</p>
         <div class="settings-group">
           ${renderTriggerRows(props)}
-          ${renderCronInputField(props, "description", {
+          ${renderCronInput(props, "description", {
             label: t("cron.form.description"),
             placeholder: t("cron.form.descriptionPlaceholder"),
           })}
@@ -1253,7 +1232,7 @@ function renderAdvanced(
                 })
               : nothing
           }
-          ${renderCronSelectField(props, "wakeMode", {
+          ${renderCronSelect(props, "wakeMode", {
             label: t("cron.form.wakeMode"),
             help: t("cron.form.wakeModeHelp"),
             options: [
@@ -1263,7 +1242,7 @@ function renderAdvanced(
           })}
           ${
             ctx.isAgentTurn
-              ? renderCronInputField(props, "timeoutSeconds", {
+              ? renderCronInput(props, "timeoutSeconds", {
                   label: t("cron.form.timeoutSeconds"),
                   help: t("cron.form.timeoutHelp"),
                   errorKey: "timeoutSeconds",
@@ -1283,7 +1262,7 @@ function renderAdvanced(
             label: t("cron.form.clearAgentOverride"),
             help: t("cron.form.clearAgentHelp"),
           })}
-          ${renderCronInputField(props, "sessionKey", {
+          ${renderCronInput(props, "sessionKey", {
             label: t("cron.form.sessionKey"),
             help: t("cron.form.sessionKeyHelp"),
             placeholder: "agent:main:main",
@@ -1295,38 +1274,14 @@ function renderAdvanced(
                     label: t("cron.form.exactTiming"),
                     help: t("cron.form.exactTimingHelp"),
                   })}
-                  ${renderFieldRow({
-                    label: t("cron.form.staggerWindow"),
-                    controlId: "cron-stagger-amount",
-                    error: props.fieldErrors.staggerAmount,
-                    errorId: errorIdForField("staggerAmount"),
-                    control: html`
-                      <div class="cron-inline-controls">
-                        ${renderCronInput(props, "staggerAmount", {
-                          label: t("cron.form.staggerWindow"),
-                          disabled: props.form.scheduleExact,
-                          errorKey: "staggerAmount",
-                          placeholder: t("cron.form.staggerPlaceholder"),
-                        })}
-                        ${renderCronSelect(props, "staggerUnit", {
-                          label: t("cron.form.staggerUnit"),
-                          standalone: true,
-                          disabled: props.form.scheduleExact,
-                          options: [
-                            { value: "seconds", label: t("cron.form.seconds") },
-                            { value: "minutes", label: t("cron.form.minutes") },
-                          ],
-                        })}
-                      </div>
-                    `,
-                  })}
+                  ${renderDurationRow(props, "stagger")}
                 `
               : nothing
           }
           ${
             ctx.isAgentTurn
               ? html`
-                  ${renderCronInputField(props, "deliveryAccountId", {
+                  ${renderCronInput(props, "deliveryAccountId", {
                     label: t("cron.form.accountId"),
                     help: t("cron.form.accountIdHelp"),
                     list: "cron-delivery-account-suggestions",
@@ -1426,7 +1381,7 @@ function renderTriggerRows(props: CronProps) {
 
 function renderFailureAlertRows(props: CronProps, channelOptions: readonly ChannelPickerOption[]) {
   return html`
-    ${renderCronSelectField(props, "failureAlertMode", {
+    ${renderCronSelect(props, "failureAlertMode", {
       label: t("cron.form.failureAlerts"),
       help: t("cron.form.failureAlertsHelp"),
       options: [
@@ -1438,31 +1393,30 @@ function renderFailureAlertRows(props: CronProps, channelOptions: readonly Chann
     ${
       props.form.failureAlertMode === "custom"
         ? html`
-            ${renderCronInputField(props, "failureAlertAfter", {
+            ${renderCronInput(props, "failureAlertAfter", {
               label: t("cron.form.failureAlertAfter"),
               help: t("cron.form.failureAlertAfterHelp"),
               errorKey: "failureAlertAfter",
               placeholder: t("cron.form.failureAlertInherit"),
             })}
-            ${renderCronInputField(props, "failureAlertCooldownSeconds", {
+            ${renderCronInput(props, "failureAlertCooldownSeconds", {
               label: t("cron.form.failureAlertCooldown"),
               help: t("cron.form.failureAlertCooldownHelp"),
               errorKey: "failureAlertCooldownSeconds",
               placeholder: t("cron.form.failureAlertInherit"),
             })}
-            ${renderCronSelectField(props, "failureAlertChannel", {
+            ${renderCronSelect(props, "failureAlertChannel", {
               label: t("cron.form.failureAlertChannel"),
-              value: props.form.failureAlertChannel || "last",
               options: channelOptions,
               channel: true,
             })}
-            ${renderCronInputField(props, "failureAlertTo", {
+            ${renderCronInput(props, "failureAlertTo", {
               label: t("cron.form.failureAlertTo"),
               help: t("cron.form.failureAlertToHelp"),
               list: "cron-failure-alert-to-suggestions",
               placeholder: t("cron.form.failureAlertToPlaceholder"),
             })}
-            ${renderCronSelectField(props, "failureAlertDeliveryMode", {
+            ${renderCronSelect(props, "failureAlertDeliveryMode", {
               label: t("cron.form.failureAlertMode"),
               options: [
                 { value: "", label: t("cron.form.failureAlertInherit") },
@@ -1470,7 +1424,7 @@ function renderFailureAlertRows(props: CronProps, channelOptions: readonly Chann
                 { value: "webhook", label: t("cron.form.failureAlertWebhook") },
               ],
             })}
-            ${renderCronInputField(props, "failureAlertAccountId", {
+            ${renderCronInput(props, "failureAlertAccountId", {
               label: t("cron.form.failureAlertAccountId"),
               placeholder: t("cron.form.failureAlertAccountPlaceholder"),
             })}

@@ -2,11 +2,6 @@ import {
   asPositiveFiniteNumber,
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-/**
- * Shared compact tool-call display helpers.
- * Redacts and summarizes arguments into short labels/details for chat and UI
- * tool update streams.
- */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -23,7 +18,6 @@ type ToolDisplayActionSpec = {
   detailKeys?: string[];
 };
 
-/** Display metadata for a tool and optional per-action labels/details. */
 export type ToolDisplaySpec = {
   title?: string;
   label?: string;
@@ -35,12 +29,10 @@ type CoerceDisplayValueOptions = {
   includeFalsy?: boolean;
 };
 
-/** Normalize a tool name for fallback display. */
 export function normalizeToolDisplayName(name?: string): string {
   return (name ?? "tool").trim();
 }
 
-/** Convert a tool identifier into a human-readable title. */
 export function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
   if (!cleaned) {
@@ -132,7 +124,6 @@ function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
-/** Format a detail path/key into a short display label. */
 export function formatDetailKey(raw: string, overrides: Record<string, string>): string {
   const last = raw.split(".").findLast(Boolean) || raw;
   const override = overrides[last];
@@ -346,7 +337,6 @@ function resolveDetailFromKeys(
   return parts.join(", ");
 }
 
-/** Resolve display verb/detail from tool args and optional display metadata. */
 export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
   args?: unknown;

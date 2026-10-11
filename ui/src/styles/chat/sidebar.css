@@ -1,4 +1,3 @@
-/* Split View Layout */
 .chat-workbench {
   position: relative;
   display: grid;
@@ -9,7 +8,6 @@
   overflow: hidden;
 }
 
-/* Compact icon button shared by the pane header actions. */
 .chat-icon-btn {
   width: 28px;
   min-width: 28px;
@@ -44,7 +42,6 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* Smooth transition when sidebar opens/closes */
   transition: flex 250ms ease-out;
   flex: 1 1 0;
 }
@@ -391,7 +388,6 @@
   line-height: 1.2;
 }
 
-/* Sidebar Panel */
 .sidebar-panel {
   display: flex;
   flex-direction: column;
@@ -412,7 +408,6 @@
   background: var(--panel);
 }
 
-/* Smaller close button for sidebar */
 .sidebar-header .btn {
   padding: 4px 8px;
   font-size: var(--control-ui-text-md);
@@ -707,7 +702,6 @@ openclaw-session-discussion {
   caret-color: var(--text);
 }
 
-/* Word wrap: the editor wraps long lines at the panel width instead of scrolling. */
 .sidebar-file-view--wrap .cm-content {
   min-width: 0;
 }
@@ -1183,9 +1177,6 @@ openclaw-session-discussion {
   font-size: var(--control-ui-text-sm);
   overflow-wrap: anywhere;
 }
-
-/* Mobile: Full-screen modal */
-/* ── Session diff panel (sessions.diff sidebar content) ── */
 
 .session-diff {
   display: flex;

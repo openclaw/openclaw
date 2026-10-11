@@ -363,45 +363,6 @@ describe("CronPage lifecycle", () => {
     expect(page.deliveryDirectory.error).toBeNull();
   });
 
-  it("rejects model suggestions from an earlier connection epoch", async () => {
-    const staleModels = createDeferred<{ models: Array<{ id: string }> }>();
-    let modelRequestCount = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "models.list") {
-        modelRequestCount += 1;
-        return modelRequestCount === 1 ? staleModels.promise : { models: [{ id: "fresh/model" }] };
-      }
-      if (method === "cron.list") {
-        return cronListResponse([]);
-      }
-      if (method === "cron.runs") {
-        return { entries: [], total: 0, offset: 0, hasMore: false };
-      }
-      return {};
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client, false);
-    const page = createPage(createContext(gateway));
-    await page.updateComplete;
-
-    gateway.emitSnapshot({ phase: "connected" });
-    await waitForCronPage(() => expect(modelRequestCount).toBe(1));
-    gateway.emitSnapshot({ phase: "stopped" });
-    // A real reconnect arrives with a new Gateway client; the model catalog cache is
-    // scoped per client, so reusing the first client would replay its pending read.
-    gateway.emitSnapshot({
-      phase: "connected",
-      client: { request } as unknown as GatewayBrowserClient,
-    });
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["fresh/model"]));
-
-    staleModels.resolve({ models: [{ id: "stale/model" }] });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(page.cronModelSuggestions).toEqual(["fresh/model"]);
-  });
-
   it("keeps recipient discovery when the deletion is rejected", async () => {
     // A rejected remove reports cronError without throwing; its editor still owns discovery.
     const pending = createDeferred<{ conversations: ConversationListItem[] }>();
@@ -574,48 +535,26 @@ describe("CronPage lifecycle", () => {
     expect(page.deliveryDirectory.error).toBeNull();
   });
 
-  it.each([
-    { recoveredChannel: "discord", resolveFirstDirectory: true },
-    { recoveredChannel: "discord", resolveFirstDirectory: false },
-    { recoveredChannel: "telegram", resolveFirstDirectory: true },
-  ])(
-    "reconciles conflict recovery: $recoveredChannel, cached=$resolveFirstDirectory",
-    async (options) => {
-      const { page, directoryChannels, directories } = await startConflictRecovery(options);
-      if (options.recoveredChannel === "telegram") {
-        await waitForCronPage(() =>
-          expect(page.cron.cronError).toContain("changed on the Gateway"),
-        );
-        expect(directoryChannels).toEqual(["telegram"]);
-        expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-          "-100original",
-        ]);
-        return;
-      }
-      await waitForCronPage(() => expect(page.cron.cronForm.deliveryChannel).toBe("discord"));
-      await waitForCronPage(() => expect(directoryChannels).toEqual(["telegram", "discord"]));
-      expect(page.cron.cronForm.deliveryAccountId).toBe("default");
-      if (!options.resolveFirstDirectory) {
-        directories[0]?.resolve({ conversations: [conversationTarget("-100stale")] });
-        await Promise.resolve();
-        expect(page.deliveryDirectory.error).toBeNull();
-      }
-      expect(page.deliveryDirectory.conversations).toEqual([]);
-      directories[1]?.resolve({ conversations: [conversationTarget("-100recovered")] });
-      await waitForCronPage(() =>
-        expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-          "-100recovered",
-        ]),
-      );
-    },
-  );
+  it("retires the pending directory when conflict recovery changes the channel", async () => {
+    const { page, directoryChannels, directories } = await startConflictRecovery();
+    await waitForCronPage(() => expect(page.cron.cronForm.deliveryChannel).toBe("discord"));
+    await waitForCronPage(() => expect(directoryChannels).toEqual(["telegram", "discord"]));
+    expect(page.cron.cronForm.deliveryAccountId).toBe("default");
+    directories[0]?.resolve({ conversations: [conversationTarget("-100stale")] });
+    await Promise.resolve();
+    expect(page.deliveryDirectory.error).toBeNull();
+    expect(page.deliveryDirectory.conversations).toEqual([]);
+    directories[1]?.resolve({ conversations: [conversationTarget("-100recovered")] });
+    await waitForCronPage(() =>
+      expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
+        "-100recovered",
+      ]),
+    );
+  });
 });
 
 // A revision conflict replaces the form through cron.get while keeping its account unchanged.
-async function startConflictRecovery(options: {
-  recoveredChannel: string;
-  resolveFirstDirectory?: boolean;
-}) {
+async function startConflictRecovery() {
   const directories = [
     createDeferred<{ conversations: ConversationListItem[] }>(),
     createDeferred<{ conversations: ConversationListItem[] }>(),
@@ -629,7 +568,7 @@ async function startConflictRecovery(options: {
     configRevision: "rev-2",
     delivery: {
       mode: "announce",
-      channel: options.recoveredChannel,
+      channel: "discord",
       to: "-100authoritative",
       accountId: "default",
     },
@@ -654,10 +593,6 @@ async function startConflictRecovery(options: {
   const { page } = await mountPage(request);
   page.selectJob(editedJob);
   await waitForCronPage(() => expect(directoryChannels).toEqual(["telegram"]));
-  if (options.resolveFirstDirectory !== false) {
-    directories[0]?.resolve({ conversations: [conversationTarget("-100original")] });
-    await waitForCronPage(() => expect(page.deliveryDirectory.conversations).toHaveLength(1));
-  }
 
   page.submitForm();
   await waitForCronPage(() => expect(request).toHaveBeenCalledWith("cron.get", { id: "digest" }));

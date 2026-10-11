@@ -27,6 +27,7 @@ function runDiskTask(context: OpenClawStateWorkerContext, pathname: string) {
       const task = await operation.startTask(
         {
           mode: "disk",
+          sessionIds: [],
           agentId: "main",
           path: pathname,
           stateDir: context.environment.OPENCLAW_STATE_DIR,

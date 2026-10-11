@@ -17,7 +17,7 @@ import * as processRuntime from "../../src/plugin-sdk/process-runtime.js";
 import { createPluginRuntimeMock } from "../../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import type { OpenClawPluginApi, WorkerProvider } from "../../src/plugins/types.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
-import { closeOpenClawAgentDatabases } from "../../src/state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "../../src/state/openclaw-agent-db-lifecycle.js";
 
 describe("Crabbox allocation through Gateway ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();

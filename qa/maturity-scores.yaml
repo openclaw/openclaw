@@ -2518,7 +2518,7 @@ surfaces:
           reason: none
           human_override: false
   - id: containers
-    name: Fleet, containers, and cloud execution
+    name: Containers and cloud execution
     family: platform-app
     level:
       id: beta

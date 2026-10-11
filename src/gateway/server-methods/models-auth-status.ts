@@ -29,7 +29,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
-import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
+import { abortChatRunsForProvider } from "../chat-abort.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
@@ -92,17 +92,6 @@ function readLogoutProfileSelection(params: Record<string, unknown>): LogoutProf
   return { ok: true, profileIds: normalizeUniqueStringEntries(params.profileIds) };
 }
 
-function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps {
-  return {
-    chatAbortControllers: context.chatAbortControllers,
-    chatRunState: context.chatRunState,
-    removeChatRun: context.removeChatRun,
-    agentRunSeq: context.agentRunSeq,
-    broadcast: context.broadcast,
-    nodeSendToSession: context.nodeSendToSession,
-  };
-}
-
 // UI expiry fields are emitted only when both timestamp and remaining duration
 // are valid, keeping profile/provider expiry shapes all-or-nothing.
 function buildExpiry(
@@ -154,13 +143,11 @@ export function aggregateRefreshableAuthStatus(
   expectsOAuth = false,
 ): ModelAuthStatusRollup {
   const profiles = prov.effectiveProfiles ?? prov.profiles;
-  const oauth = profiles.filter((profile) => profile.type === "oauth");
-  if (oauth.length > 0) {
-    return aggregateProfileStatus(oauth, now);
-  }
-  const tokens = profiles.filter((profile) => profile.type === "token");
-  if (tokens.length > 0) {
-    return aggregateProfileStatus(tokens, now);
+  for (const type of ["oauth", "token"] as const) {
+    const selected = profiles.filter((profile) => profile.type === type);
+    if (selected.length > 0) {
+      return aggregateProfileStatus(selected, now);
+    }
   }
   if (expectsOAuth) {
     return { status: "missing" };
@@ -281,12 +268,22 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const { runIds: abortedRunIds } =
         selection.profileIds || apiKeyOnly
           ? { runIds: [] as string[] }
-          : abortChatRunsForProvider(createAuthLogoutAbortOps(context), {
-              cfg,
-              providerId: authProvider,
-              agentId: scope.agentId,
-              stopReason: "auth-revoked",
-            });
+          : abortChatRunsForProvider(
+              {
+                chatAbortControllers: context.chatAbortControllers,
+                chatRunState: context.chatRunState,
+                removeChatRun: context.removeChatRun,
+                agentRunSeq: context.agentRunSeq,
+                broadcast: context.broadcast,
+                nodeSendToSession: context.nodeSendToSession,
+              },
+              {
+                cfg,
+                providerId: authProvider,
+                agentId: scope.agentId,
+                stopReason: "auth-revoked",
+              },
+            );
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelAuthLogoutResult = {

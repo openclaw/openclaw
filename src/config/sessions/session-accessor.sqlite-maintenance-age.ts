@@ -8,8 +8,8 @@ import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import { hasCanonicalSessionValidationProjection } from "./session-canonical-key.js";
+import { getSessionMaintenanceActivityAt } from "./store-maintenance-activity.js";
 import {
-  getSessionMaintenanceActivityAt,
   shouldPreserveMaintenanceEntry,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -185,12 +185,7 @@ export function applySessionEntryMaintenanceAgeChange(
     return;
   }
   const { entry, previousEntry } = update;
-  if (
-    previousEntry &&
-    (previousEntry.archivedAt !== undefined ||
-      entry.updatedAt < previousEntry.updatedAt ||
-      getSessionMaintenanceActivityAt(entry) < getSessionMaintenanceActivityAt(previousEntry))
-  ) {
+  if (previousEntry && !isMonotoneSessionEntryMaintenanceAgeChange(update)) {
     // Exact replacement/lifecycle writers also own backdates and archive restores.
     invalidateSessionEntryMaintenanceAgeFact(db);
     return;
@@ -205,6 +200,19 @@ export function applySessionEntryMaintenanceAgeChange(
   if (!previousEntry || at < fact.next.at) {
     stageSessionEntryMaintenanceAgeFact(db, { ...fact, next: { at: Math.min(at, fact.next.at) } });
   }
+}
+
+export function isMonotoneSessionEntryMaintenanceAgeChange({
+  entry,
+  previousEntry,
+}: SessionEntryMaintenanceAgeChange): boolean {
+  return (
+    previousEntry !== undefined &&
+    previousEntry.archivedAt === undefined &&
+    entry.archivedAt === undefined &&
+    entry.updatedAt >= previousEntry.updatedAt &&
+    getSessionMaintenanceActivityAt(entry) >= getSessionMaintenanceActivityAt(previousEntry)
+  );
 }
 
 function agePolicy(maintenance: ResolvedSessionMaintenanceConfig): string {
@@ -315,7 +323,7 @@ export function recordSessionEntryMaintenanceAgeFact(
 
 /** The kick uses the same periodic deadline as inline maintenance callers. */
 export function readSessionEntryMaintenanceNextAgeAt(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   maintenance: ResolvedSessionMaintenanceConfig,
 ): number | undefined {
   if (maintenance.mode !== "enforce") {

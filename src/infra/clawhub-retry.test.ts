@@ -68,39 +68,51 @@ describe("retryClawHubRead", () => {
     }
   });
 
-  it("uses the bounded schedule when Retry-After exceeds the ClawHub cap", async () => {
-    const { result, delays } = await retryResponse(
+  it("returns the response without replay when Retry-After exceeds the ClawHub budget", async () => {
+    const { result, delays, attempts } = await retryResponse(
       new Response("limited", {
         status: 503,
         headers: { "Retry-After": "61" },
       }),
     );
-    expect(await result.response.text()).toBe("ok");
-    expect(delays).toEqual([1_000]);
+    expect(result.response.status).toBe(503);
+    expect(await result.response.text()).toBe("limited");
+    expect(attempts).toBe(1);
+    expect(delays).toEqual([]);
   });
 
-  it("retries transport failures with the bounded schedule", async () => {
-    const delays: number[] = [];
-    let attempts = 0;
-    const result = await retryClawHubRead(
-      async () => {
-        attempts += 1;
-        if (attempts === 1) {
-          throw new TypeError("fetch failed");
-        }
-        return { response: new Response("ok") };
-      },
-      {
-        disposeRetry: async () => {},
-        sleep: async (ms) => {
-          delays.push(ms);
+  it.each([undefined, "ECONNRESET", "CERT_HAS_EXPIRED"])(
+    "recovers only transient transport failures: %s",
+    async (code) => {
+      const delays: number[] = [];
+      let attempts = 0;
+      const failure = new TypeError("fetch failed", code ? { cause: { code } } : undefined);
+      const result = retryClawHubRead(
+        async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw failure;
+          }
+          return { response: new Response("ok") };
         },
-      },
-    );
-    expect(await result.response.text()).toBe("ok");
-    expect(attempts).toBe(2);
-    expect(delays).toEqual([1_000]);
-  });
+        {
+          disposeRetry: async () => {},
+          sleep: async (ms) => {
+            delays.push(ms);
+          },
+        },
+      );
+      if (code === "CERT_HAS_EXPIRED") {
+        await expect(result).rejects.toBe(failure);
+        expect(attempts).toBe(1);
+        expect(delays).toEqual([]);
+        return;
+      }
+      expect(await (await result).response.text()).toBe("ok");
+      expect(attempts).toBe(2);
+      expect(delays).toEqual([1_000]);
+    },
+  );
 
   it("retries transient internal server errors", async () => {
     const { result, attempts, delays } = await retryResponse(

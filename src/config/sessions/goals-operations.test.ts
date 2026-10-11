@@ -1,8 +1,13 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -80,7 +85,7 @@ describe("typed Goal operation persistence", () => {
         },
       ],
       sessionTurnMutation: { kind: "goal", operation, runId: "run-1" },
-      sessionLifecyclePatch: { status: "running", lastRunId: "run-1" },
+      sessionLifecyclePatch: { status: undefined, lastRunId: "run-1" },
       updateMode: "none",
     });
 
@@ -155,8 +160,8 @@ describe("typed Goal operation persistence", () => {
       action: "start",
       goal: { objective: startOperation().objective, tokenStart: 100 },
     });
+    expect(loadSessionEntry(scope())?.status).toBeUndefined();
     expect(loadSessionEntry(scope())).toMatchObject({
-      status: "running",
       lastRunId: "run-1",
       goal: receipt?.goal,
       skillsSnapshot,
@@ -188,11 +193,13 @@ describe("typed Goal operation persistence", () => {
     } satisfies SessionGoalOperation;
     const editReads = trackSqliteStatementExecutions(
       database().db,
-      ["sessionNodeSelects"],
+      ["sessionNodeSelects", "receiptStatements"],
       (sql) =>
         /^select\b/i.test(sql) && /\bfrom\s+"session_nodes"/i.test(sql)
           ? "sessionNodeSelects"
-          : null,
+          : /\b(?:from|into)\s+"session_goal_operations"/i.test(sql)
+            ? "receiptStatements"
+            : null,
     );
     let edited: Awaited<ReturnType<typeof mutateSessionGoal>>;
     try {
@@ -201,17 +208,17 @@ describe("typed Goal operation persistence", () => {
         expectedSessionId: sessionId,
         operation: editOperation,
       });
-      expect.soft(editReads.counts.sessionNodeSelects).toBeLessThanOrEqual(3);
-      expect.soft(editReads.rowCounts.sessionNodeSelects).toBeGreaterThan(0);
-      expect
-        .soft(editReads.textBytes.sessionNodeSelects)
-        .toBeLessThan(3.5 * Buffer.byteLength(skillsSnapshot.prompt));
+      expect.soft(editReads.counts.sessionNodeSelects).toBe(0);
+      expect.soft(editReads.rowCounts.sessionNodeSelects).toBe(0);
+      expect.soft(editReads.counts.receiptStatements).toBe(0);
+      expect.soft(editReads.textBytes.sessionNodeSelects).toBe(0);
     } finally {
       editReads.restore();
     }
     expect(identityMutation).not.toHaveBeenCalled();
     expect(hasPendingCanonicalSessionValidation(database())).toBe(false);
-    expect(edited.sessionEntry).toMatchObject({ sessionId, status: "running", lastRunId: "run-1" });
+    expect(edited.sessionEntry).toMatchObject({ sessionId, lastRunId: "run-1" });
+    expect(edited.sessionEntry?.status).toBeUndefined();
     expect(edited.result.goal?.objective).toBe(editedObjective);
     expect(edited.sessionEntry?.skillsSnapshot).toEqual(skillsSnapshot);
     expect(loadSessionEntry(scope())?.goal?.objective).toBe(editedObjective);
@@ -448,7 +455,7 @@ describe("typed Goal operation persistence", () => {
           },
         },
       ],
-      sessionLifecyclePatch: { status: "running" },
+      sessionLifecyclePatch: { status: undefined },
       updateMode: "none",
     });
     expect(resumed.sessionTurnMutationResult?.result.goal).toMatchObject({
@@ -555,4 +562,108 @@ describe("typed Goal operation persistence", () => {
     ).rejects.toThrow("authority closed");
     expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
   });
+
+  it("keeps later Goal edits behind an accepted edit's authority preparation", async () => {
+    const goal = await createSessionGoal({ ...scope(), objective: "original" });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const first = mutateSessionGoal({
+      ...scope(),
+      expectedSessionId: sessionId,
+      operation: { ...identity("fifo-first"), action: "edit", goalId: goal.id, objective: "first" },
+      assertCurrent: Object.assign(() => {}, {
+        async prepareSessionSource() {
+          entered.resolve();
+          await release.promise;
+          return { assertCurrent() {}, checks: [] };
+        },
+      }),
+    });
+    let second: ReturnType<typeof mutateSessionGoal> | undefined;
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        first,
+        "Goal edit skipped authority preparation",
+      );
+      second = mutateSessionGoal({
+        ...scope(),
+        expectedSessionId: sessionId,
+        operation: {
+          ...identity("fifo-second"),
+          action: "edit",
+          goalId: goal.id,
+          objective: "second",
+        },
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, second]);
+    }
+    expect((await first).result.goal?.objective).toBe("first");
+    expect((await second)?.result.goal?.objective).toBe("second");
+    expect(loadSessionEntry(scope())?.goal?.objective).toBe("second");
+  });
+
+  it.each([
+    { stage: "transaction", failure: "revocation" },
+    { stage: "commit", failure: "revocation" },
+    { stage: "commit", failure: "expiry" },
+  ] as const)(
+    "rolls back management and its receipt after $stage $failure",
+    async ({ stage, failure }) => {
+      const goal = await createSessionGoal({ ...scope(), objective: "finish" });
+      const operation = {
+        ...identity(`pause-${stage}-${failure}`),
+        action: "pause" as const,
+        goalId: goal.id,
+      };
+      let admitted = false;
+      const clock = vi.spyOn(Date, "now");
+      const assertCurrent = () => {
+        if (admitted) {
+          if (failure === "revocation") {
+            throw new Error("Goal caller closed");
+          }
+          clock.mockReturnValue(operation.issuedAtMs + 24 * 60 * 60 * 1000);
+        }
+      };
+      probe.admission(workerAdmission, (request, grant, callback) => {
+        if (
+          request.stage === stage &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind ===
+            (stage === "commit" ? "session-entry-patch-committed" : "session-entry-patch-transfer")
+        ) {
+          admitted = true;
+        }
+        callback(request, grant);
+      });
+      try {
+        const mutation = mutateSessionGoal({
+          ...scope(),
+          expectedSessionId: sessionId,
+          operation,
+          assertCurrent: Object.assign(assertCurrent, {
+            async prepareSessionSource() {
+              return { assertCurrent, checks: [] };
+            },
+          }),
+        });
+        if (failure === "revocation") {
+          await expect(mutation).rejects.toThrow("Goal caller closed");
+        } else {
+          await expect(mutation).rejects.toMatchObject({ code: "expired" });
+        }
+      } finally {
+        clock.mockRestore();
+      }
+      expect(admitted).toBe(true);
+      expect(loadSessionEntry(scope())?.goal).toEqual(goal);
+      expect(
+        await lookupSessionGoalOperation({ ...scope(), expectedSessionId: sessionId, operation }),
+      ).toBeUndefined();
+    },
+  );
 });

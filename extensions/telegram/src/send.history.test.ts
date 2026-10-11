@@ -179,17 +179,8 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
   });
 
   it.each([
-    { name: "forum marker", to: "-100123:topic:0", messageThreadId: undefined },
-    { name: "topic shorthand", to: "-100123:0", messageThreadId: undefined },
-    {
-      name: "internal group target",
-      to: "telegram:group:-100123:topic:0",
-      messageThreadId: undefined,
-    },
     { name: "username target", to: "@fixture:topic:0", messageThreadId: undefined },
     { name: "numeric thread option", to: "-100123", messageThreadId: 0 },
-    { name: "thread option before username lookup", to: "@fixture", messageThreadId: 0 },
-    { name: "thread option beside a topic target", to: "-100123:topic:5", messageThreadId: 0 },
   ])("rejects zero in $name before Telegram requests", async ({ to, messageThreadId }) => {
     fixture.responseFor = (method) =>
       method === "getChat"

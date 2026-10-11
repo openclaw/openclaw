@@ -186,9 +186,7 @@ export function buildSystemRunApprovalPlan(
   }
   const commandText = formatExecCommand(hardening.argv);
   const commandPreview =
-    command.previewText?.trim() && command.previewText.trim() !== commandText
-      ? command.previewText.trim()
-      : null;
+    command.previewText && command.previewText !== commandText ? command.previewText : null;
   const mutableFileOperand = bindApproval
     ? resolveMutableFileOperandSnapshotSync({
         argv: hardening.argv,

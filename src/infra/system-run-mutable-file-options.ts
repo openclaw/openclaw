@@ -1,5 +1,3 @@
-/** Interpreter and runtime option tables used by mutable operand detection. */
-
 export const BUN_SUBCOMMANDS = new Set([
   "add",
   "audit",

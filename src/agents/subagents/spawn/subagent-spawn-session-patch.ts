@@ -1,9 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildSessionCreationStamp,
   inheritSessionGitContributorProfileIds,
 } from "../../../config/sessions/session-entry-provenance.js";
+import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildDashboardSessionTitleSource } from "../../../gateway/dashboard-session-title.js";
@@ -21,13 +28,13 @@ import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import type { SpawnSubagentParams } from "./subagent-spawn-contract.js";
-import { type resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
+import type { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
 import {
   loadSessionEntry,
   emitSessionLifecycleEvent,
   resolveGatewaySessionStoreTargetInWorker,
   upsertSessionEntryCore,
-  withSessionEntryReadOnlyInWorker,
+  readSessionEntryReadOnlyInWorker,
 } from "./subagent-spawn.runtime.js";
 
 export async function createInitialSubagentSession(params: {
@@ -40,7 +47,7 @@ export async function createInitialSubagentSession(params: {
   requesterInternalKey: string;
   senderIsOwner?: boolean;
   expectedParentSessionId?: string;
-  assertActive?: () => void;
+  assertActive?: SessionSourceAssertion;
   creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
@@ -53,6 +60,7 @@ export async function createInitialSubagentSession(params: {
   >["childSessionPatch"];
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  inheritedToolPolicySource?: "sender";
   modelPatch: Partial<
     Extract<
       Awaited<ReturnType<typeof resolveSubagentModelAndThinkingPlan>>,
@@ -64,38 +72,16 @@ export async function createInitialSubagentSession(params: {
   outputSchema?: Record<string, unknown>;
 }): Promise<{ status: "ok"; entry?: SessionEntry } | { status: "error"; error: string }> {
   const { subagentRole, ...admissionPatch } = params.admissionPatch ?? {};
-  const {
-    model: modelRef,
-    modelOverrideSource,
-    modelOverrideFallbackOriginProvider,
-    modelOverrideFallbackOriginModel,
-    ...modelPatch
-  } = params.modelPatch;
-  const { provider, model } = splitModelRef(modelRef);
-  const fallbackOriginProvider = normalizeOptionalString(modelOverrideFallbackOriginProvider);
-  const fallbackOriginModel = normalizeOptionalString(modelOverrideFallbackOriginModel);
   const initialChildSessionPatch: Partial<InternalSessionEntry> = {
     ...admissionPatch,
     ...(subagentRole ? { subagentRole } : {}),
     inheritedToolPolicyVersion: 1,
+    ...(params.inheritedToolPolicySource
+      ? { inheritedToolPolicySource: params.inheritedToolPolicySource }
+      : {}),
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
-    ...modelPatch,
-    ...(model
-      ? {
-          model,
-          modelOverride: model,
-          modelOverrideSource: modelOverrideSource === "auto" ? "auto" : "user",
-          modelOverrideRouteResolution: "resolved",
-          ...(provider ? { modelProvider: provider, providerOverride: provider } : {}),
-          ...(fallbackOriginProvider && fallbackOriginModel
-            ? {
-                modelOverrideFallbackOriginProvider: fallbackOriginProvider,
-                modelOverrideFallbackOriginModel: fallbackOriginModel,
-              }
-            : {}),
-        }
-      : {}),
+    ...params.modelPatch,
     ...(params.collect ? { swarmCollector: true } : {}),
     ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     ...(params.incognito ? { incognito: true } : {}),
@@ -131,19 +117,13 @@ export async function createInitialSubagentSession(params: {
     params.assertActive?.();
     // Parent rows are read on the session read worker, never on the Gateway thread.
     const readParentEntry = () =>
-      withSessionEntryReadOnlyInWorker(
+      readSessionEntryReadOnlyInWorker(
         {
           agentId: parentTarget.agentId,
           storePath: parentStorePath,
           sessionKey: parentTarget.canonicalKey,
         },
         () => params.assertActive?.(),
-        async (read) => {
-          if (!read.ok) {
-            throw read.error;
-          }
-          return read.value;
-        },
       );
     const parentEntry = await readParentEntry();
     params.assertActive?.();
@@ -206,7 +186,7 @@ export async function createInitialSubagentSession(params: {
         titleSource: buildDashboardSessionTitleSource({ message: params.worktree.task }),
         useRequestedTitleSelection: false,
         runSetupScript: false,
-        commitGuard: () => params.assertActive?.(),
+        commitGuard: composeSessionSourceAssertion([params.assertActive]),
         onTitleError: (error) => console.warn("subagent worktree title failed", error),
         onTitlePersisted: () =>
           emitSessionLifecycleEvent({
@@ -221,8 +201,47 @@ export async function createInitialSubagentSession(params: {
       initialChildSessionPatch.projectId = projectId;
       initialChildSessionPatch.pendingWorktree = preparedWorktree.pendingWorktree;
     }
-    const commit = async (assertSourceCurrent?: () => void) => {
+    const commit = async (assertSourceCurrent?: SessionSourceAssertion) => {
       await parentLineage.assertParentUnchanged();
+      const fields = ["sessionId", "lifecycleRevision", "skillLibrarySelections"] as const;
+      const expected = parentEntry?.skillLibrarySelections
+        ? {
+            sessionId: parentEntry.sessionId,
+            lifecycleRevision: parentEntry.lifecycleRevision,
+            skillLibrarySelections: parentEntry.skillLibrarySelections,
+          }
+        : undefined;
+      const refuse = (): never => {
+        throw new Error(
+          "Parent skill selection changed before spawn; retry from the current turn.",
+        );
+      };
+      const assertParentSkills = () => {
+        if (!expected) {
+          return;
+        }
+        const latest = loadSessionEntry({
+          storePath: parentStorePath,
+          sessionKey: parentTarget.canonicalKey,
+        });
+        if (!latest || fields.some((field) => !isDeepStrictEqual(latest[field], expected[field]))) {
+          refuse();
+        }
+      };
+      const source = expected
+        ? captureSessionEntrySourceAssertion({
+            scope: {
+              agentId: parentTarget.agentId,
+              storePath: parentStorePath,
+              sessionKey: parentTarget.canonicalKey,
+            },
+            readSource: parentTarget.capturedReadSource,
+            expected,
+            fields,
+            assertCurrent: assertParentSkills,
+            refuse,
+          })
+        : undefined;
       return await upsertSessionEntryCore(
         {
           storePath: target.readSource?.path ?? target.storePath,
@@ -238,7 +257,9 @@ export async function createInitialSubagentSession(params: {
                 ...(!params.worktree
                   ? {
                       sessionRoot: resolveUserPath(
-                        params.spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root,
+                        params.inheritedToolPolicySource === "sender"
+                          ? params.sessionPermissionPolicy.root
+                          : (params.spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root),
                       ),
                     }
                   : {}),
@@ -256,7 +277,6 @@ export async function createInitialSubagentSession(params: {
             : {}),
           ...buildSessionCreationStamp({
             via: "spawn",
-            conversationLink: parentEntry?.conversationLink,
             ...params.creationPolicy,
             ...(!params.incognito
               ? {
@@ -266,28 +286,9 @@ export async function createInitialSubagentSession(params: {
               : {}),
           }),
         },
-        {
-          assertCommitAllowed: () => {
-            params.assertActive?.();
-            assertSourceCurrent?.();
-            if (parentEntry?.skillLibrarySelections) {
-              const latest = loadSessionEntry({
-                storePath: parentStorePath,
-                sessionKey: parentTarget.canonicalKey,
-              });
-              if (
-                latest?.sessionId !== parentEntry.sessionId ||
-                latest.lifecycleRevision !== parentEntry.lifecycleRevision ||
-                JSON.stringify(latest.skillLibrarySelections) !==
-                  JSON.stringify(parentEntry.skillLibrarySelections)
-              ) {
-                throw new Error(
-                  "Parent skill selection changed before spawn; retry from the current turn.",
-                );
-              }
-            }
-          },
-        },
+        sessionEntryCommitGuardOptions(
+          composeSessionSourceAssertion([params.assertActive, source, assertSourceCurrent]),
+        ),
       );
     };
     const entry = preparedWorktree?.withCommit

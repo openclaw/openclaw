@@ -1,6 +1,10 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
 import {
+  createPlacementMoveOps,
+  readWorkerPlacementMovesReadOnly,
+} from "./placement-move-intent.js";
+import {
   nextGeneration,
   normalizeEpoch,
   placementTurnOwner,
@@ -8,7 +12,13 @@ import {
   required,
   type WorkerSessionPlacementTransitionPatch,
 } from "./placement-record.js";
-import { getRequired, query, transitionValues, updateTransition } from "./placement-row-codec.js";
+import {
+  getRequired,
+  query,
+  transitionValues,
+  turnClaimValues,
+  updateTransition,
+} from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
@@ -65,6 +75,23 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
             environmentActivation = { environmentId, lastActivatedAtMs };
           },
         );
+        if (current.state === "reconciling" && input.to === "reclaimed") {
+          const move = readWorkerPlacementMovesReadOnly(db, [sessionId]).get(sessionId);
+          if (
+            move &&
+            move.source.generation + 2 === current.generation &&
+            move.source.environmentId === current.environmentId &&
+            move.source.ownerEpoch === current.activeOwnerEpoch
+          ) {
+            // Stop supersedes this source's Move only after safe teardown commits.
+            // The reclaimed tuple and exact intent retirement share this transaction.
+            createPlacementMoveOps({
+              ...runtime,
+              read: () => db,
+              write: (run) => run(db),
+            }).cancelPlacementMove(move);
+          }
+        }
         return { placement, environmentActivation };
       });
     },
@@ -133,16 +160,7 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
           .where("environment_id", "=", environmentId)
           .where("active_owner_epoch", "=", ownerEpoch);
         const guardedUpdate = claim
-          ? update
-              .where("turn_claim_owner", "=", claim.owner)
-              .where("turn_claim_id", "=", claim.claimId)
-              .where("turn_claim_run_id", "=", claim.runId)
-              .where("turn_claim_generation", "=", claim.generation)
-              .where(
-                "turn_claim_owner_epoch",
-                claim.owner === "worker" ? "=" : "is",
-                claim.ownerEpoch,
-              )
+          ? update.where((eb) => eb.and(turnClaimValues(claim)))
           : update.where("turn_claim_owner", "is", null);
         const result = executeSqliteQuerySync(db, guardedUpdate);
         if (result.numAffectedRows !== 1n) {
@@ -209,11 +227,7 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
               recovery_error: recoveryError,
               terminal_reason: recoveryError,
               terminal_at_ms: updatedAtMs,
-              turn_claim_owner: localClaim ? "local" : null,
-              turn_claim_id: localClaim?.claimId ?? null,
-              turn_claim_run_id: localClaim?.runId ?? null,
-              turn_claim_generation: localClaim?.generation ?? null,
-              turn_claim_owner_epoch: null,
+              ...turnClaimValues(localClaim),
               updated_at_ms: updatedAtMs,
               state_changed_at_ms: updatedAtMs,
             })

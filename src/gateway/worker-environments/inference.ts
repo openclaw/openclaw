@@ -502,7 +502,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     if (
       existing &&
       existing.request.turnId === params.request.turnId &&
-      existing.requestHash === hash &&
+      existing.storeInput.requestHash === hash &&
       !existing.settled
     ) {
       existing.identity = params.identity;
@@ -537,7 +537,6 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       identity: params.identity,
       request: structuredClone(params.request),
       sessionTarget: params.sessionTarget,
-      requestHash: hash,
       storeInput: {
         environmentId: params.identity.environmentId,
         sessionId: params.request.sessionId,

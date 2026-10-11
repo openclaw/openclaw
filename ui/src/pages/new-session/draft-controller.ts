@@ -92,7 +92,7 @@ export class NewSessionDraftController {
         if (!discard) {
           return;
         }
-        this.submission.attachmentDraft.reset({ release: true });
+        this.submission.attachmentDraft.reset();
         this.submission.setMessage("", []);
         await retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...reloadOptions });
       } catch {

@@ -113,6 +113,9 @@ export class McpEventsIngress<TBinding extends BindingAuthority> {
           if (isAuthorityUnavailable(error)) {
             return { kind: "pending" };
           }
+          if (error instanceof SourceRevokedError) {
+            await this.owner.revoke(binding);
+          }
           throw error;
         }
       },

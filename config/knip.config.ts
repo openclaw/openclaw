@@ -41,6 +41,8 @@ const repositoryScriptEntries = [
   ".github/actions/frozen-node-test-compat/apply.mjs!",
   // The compiler below exposes this workflow's inline and generated-config imports.
   ".github/workflows/plugin-prerelease.yml!",
+  // Labeler steps import their shared helper through workspace file URLs.
+  ".github/workflows/labeler.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -110,11 +112,6 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
-  "scripts/e2e/lib/fleet-cache/assert-cell.mjs!",
-  "scripts/e2e/lib/fleet-cache/assert-podman-cell.mjs!",
-  "scripts/e2e/lib/fleet-cache/prepare-podman-storage.mjs!",
-  "scripts/e2e/lib/fleet-cache/probe-podman-cell.mjs!",
-  "scripts/e2e/lib/fleet-cache/runtime-preflight.mjs!",
   // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
   "scripts/e2e/lib/node-auto-update/scenario.mjs!",
   // Installed-package authority proof runs by path and injects its worker preload via NODE_OPTIONS.
@@ -162,6 +159,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   // run.sh starts this persistent native peer as a separate process.
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
+  // package-activation-recovery.sh preloads this observer into the released updater.
+  "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
@@ -270,6 +269,8 @@ const repositoryScriptEntries = [
   "scripts/github/security-review.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
+  // CI launches the desktop resize proof through its bootstrap path.
+  "scripts/test-desktop-resize-real.mts!",
   // Native shell UI tests connect to this manually launched loopback Gateway fixture.
   "scripts/test-ios-shell-gateway.mjs!",
   "scripts/test-ios-sidebar-attention-gateway.mjs!",
@@ -305,7 +306,21 @@ function listScriptShimEntries(dir = "scripts"): string[] {
   });
 }
 
-function compileFrvWorkflowConsumers(source: string, filePath: string): string {
+function compileWorkflowConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
+    return [
+      ...new Set(
+        [
+          ...source.matchAll(
+            /\bconst\s*\{([^}]+)\}\s*=\s*await\s+import\(\s*pathToFileURL\(`\$\{process\.env\.GITHUB_WORKSPACE\}\/(scripts\/[^`\r\n]+)`\)\.href\s*\)/gu,
+          ),
+        ].map(
+          ([, names, specifier]) =>
+            `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
+        ),
+      ),
+    ].join("\n");
+  }
   if (path.resolve(filePath) !== path.resolve(".github/workflows/plugin-prerelease.yml")) {
     return "";
   }
@@ -394,6 +409,8 @@ const rootEntries = [
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Startup metadata renders source help through a generated child module's file-URL import.
+  "src/cli/program/root-help.ts!",
   // Packaged postinstall imports this private compiled entry before stage activation.
   "src/commands/doctor-update-schema-guard.ts!",
   // Built as the official image's Docker HEALTHCHECK entrypoint.
@@ -416,7 +433,6 @@ const rootEntries = [
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
-  "src/agents/compaction-planning.worker.ts!",
   "src/config/sessions/disk-budget.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
@@ -433,6 +449,11 @@ const rootEntries = [
   "scripts/bench-cron-session-reaper.ts!",
   // docs/reference/test/performance.md invokes this standalone comparison harness.
   "scripts/bench-workspace-computation.ts!",
+  // packages/worker-runtime/README.md invokes the benchmark; its worker is loaded by URL.
+  "scripts/bench-worker-runtime.ts!",
+  "scripts/bench-worker-runtime.worker.ts!",
+  // docs/help/testing/control-ui-load.md invokes this opt-in Linux process/protocol proof.
+  "scripts/bench-gateway-control-ui-proof.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
@@ -448,8 +469,7 @@ const rootEntries = [
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",
-  // Jiti exposes this SDK barrel and its type-only declaration owner.
-  "src/agents/sessions/extension-sdk.ts!",
+  // The session extension SDK exposes this type-only declaration owner.
   "src/agents/sessions/extensions/types.ts!",
   // Plugin-SDK ACP facades expose the registry's runtime signatures.
   "src/acp/runtime/registry.ts!",
@@ -688,7 +708,7 @@ const ignoredTestSupportFiles = [
 
 const config = {
   compilers: {
-    yml: compileFrvWorkflowConsumers,
+    yml: compileWorkflowConsumers,
     sh: compileShellConsumers,
     mjs: compileNativeProtocolConsumer,
   },

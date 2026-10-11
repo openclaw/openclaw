@@ -56,6 +56,7 @@ async function mount(
 }
 const scope = {
   agentId: "main",
+  excludeDock: true,
   includeGlobal: true,
   includeUnknown: false,
   configuredAgentsOnly: true,
@@ -76,7 +77,12 @@ describe("Sessions transcript search", () => {
     expect(request).toHaveBeenCalledWith("sessions.search", {
       query: "launch code",
       limit: 25,
-      scope: { includeGlobal: true, includeUnknown: false, configuredAgentsOnly: true },
+      scope: {
+        includeGlobal: true,
+        includeUnknown: false,
+        configuredAgentsOnly: true,
+        excludeDock: true,
+      },
     });
     await page.updateComplete;
     expect(find("status")?.getAttribute("aria-busy")).toBe("true");

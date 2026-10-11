@@ -29,6 +29,7 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
+import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
@@ -205,7 +206,9 @@ function renderToolLine(originalCall: ToolCard) {
 }
 
 function renderToolGroup(entry: Extract<Entry, { kind: "tools" }>) {
-  const overview = describeToolGroup(entry.activity);
+  const overview = describeToolGroup(entry.activity, {
+    ownSessionLaunches: ownSessionLaunchCalls(entry.calls.map(({ card }) => card)),
+  });
   return html`<details class="chat-task-feed__tool-group">
     <summary>
       <span class="chat-task-feed__overview">

@@ -43,6 +43,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { isGoogleNativeVideoModelId } from "./provider-models.js";
@@ -634,8 +635,8 @@ function buildGoogleTransportRequestUrl(
     : buildGoogleGenerativeAiRequestUrl(model);
 }
 
-function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
-  const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
+function resolveGoogleGemini3FirstResponseRetryMs(): number {
+  const raw = process.env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 
@@ -726,24 +727,22 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
   };
 }
 
-function iteratorToAsyncGenerator<T>(
-  iterator: AsyncIterator<T>,
+async function* iterateGoogleSseChunks(
+  iterator: AsyncIterator<GoogleSseChunk>,
   cleanup?: () => void,
-): AsyncGenerator<T> {
-  return (async function* () {
-    try {
-      for (;;) {
-        const next = await iterator.next();
-        if (next.done) {
-          return;
-        }
-        yield next.value;
+): AsyncGenerator<GoogleSseChunk> {
+  try {
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) {
+        return;
       }
-    } finally {
-      cleanup?.();
-      await iterator.return?.();
+      yield next.value;
     }
-  })();
+  } finally {
+    cleanup?.();
+    await iterator.return?.();
+  }
 }
 
 type GoogleSseAttempt =
@@ -817,7 +816,7 @@ async function openGoogleSseAttempt(params: {
   return {
     type: "ready",
     ...(!first.done ? { firstChunk: first.value } : {}),
-    chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
+    chunks: iterateGoogleSseChunks(iterator, attemptSignal?.cleanup),
   };
 }
 
@@ -922,12 +921,7 @@ async function* parseGoogleSseChunks(
           completed = true;
           break;
         }
-        let trailingChunk: unknown;
-        try {
-          trailingChunk = JSON.parse(trailingPayload);
-        } catch {
-          throw new Error("Google SSE stream ended with an incomplete frame");
-        }
+        const trailingChunk = safeParseJson(trailingPayload);
         if (!isRecord(trailingChunk) || !isRecord(trailingChunk.error)) {
           throw new Error("Google SSE stream ended with an incomplete frame");
         }

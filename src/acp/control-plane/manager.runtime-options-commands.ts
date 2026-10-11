@@ -17,7 +17,6 @@ import {
 import {
   inferRuntimeOptionPatchFromConfigOption,
   mergeRuntimeOptions,
-  normalizeRuntimeOptions,
   reconcileAcceptedRuntimeOptions,
   resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
@@ -220,8 +219,8 @@ async function persistManagerRuntimeOptions(
     options: AcpSessionRuntimeOptions;
   },
 ): Promise<void> {
-  const normalized = normalizeRuntimeOptions(params.options);
-  const hasOptions = Object.keys(normalized).length > 0;
+  const options = params.options;
+  const hasOptions = Object.keys(options).length > 0;
   assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
   await params.writeSessionMeta({
     assertCommitAllowed: params.assertCommitAllowed,
@@ -239,8 +238,8 @@ async function persistManagerRuntimeOptions(
         runtimeSessionName: current.runtimeSessionName,
         ...(current.identity ? { identity: current.identity } : {}),
         mode: current.mode,
-        runtimeOptions: hasOptions ? normalized : undefined,
-        cwd: normalized.cwd,
+        runtimeOptions: hasOptions ? options : undefined,
+        cwd: options.cwd,
         state: current.state,
         lastActivityAt: Date.now(),
         ...(current.lastError ? { lastError: current.lastError } : {}),

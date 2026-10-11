@@ -19,7 +19,6 @@ import {
   prepareTelegramAccount,
   writeTelegramUpdateOffset,
   type TelegramOffsetRotationReason,
-  type TelegramAccountRotationInfo,
 } from "./update-offset-store.js";
 
 const TELEGRAM_OFFSET_ROTATION_LABELS: Record<TelegramOffsetRotationReason, string> = {
@@ -28,25 +27,10 @@ const TELEGRAM_OFFSET_ROTATION_LABELS: Record<TelegramOffsetRotationReason, stri
   "token-rotated": "token rotation",
 };
 
-function formatTelegramOffsetRotationMessage(
-  accountId: string,
-  info: TelegramAccountRotationInfo,
-): string {
-  const previousLabel = info.previousBotId ?? "(legacy unscoped offset)";
-  const reasonLabel = TELEGRAM_OFFSET_ROTATION_LABELS[info.reason];
-  return `[telegram] Detected ${reasonLabel} for account "${accountId}" (was ${previousLabel}, now ${info.currentBotId}); discarding stale update offset ${info.staleLastUpdateId ?? "(none)"} and starting fresh.`;
-}
-
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);
   const logError = (line: string) => (opts.runtime?.error ?? console.error)(line);
-  const log = (line: string) => {
-    if (line.includes("[telegram][diag]")) {
-      logInfo(line);
-      return;
-    }
-    logError(line);
-  };
+  const log = (line: string) => (line.includes("[telegram][diag]") ? logInfo : logError)(line);
   const cfg = opts.config ?? getRuntimeConfig();
   const account = resolveTelegramAccount({
     cfg,
@@ -104,28 +88,36 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           accountId: account.accountId,
           botToken: token,
           abortSignal: opts.abortSignal,
-          onRotationDetected: (info) =>
-            log(formatTelegramOffsetRotationMessage(account.accountId, info)),
+          onRotationDetected: (info) => {
+            const previousLabel = info.previousBotId ?? "(legacy unscoped offset)";
+            const reasonLabel = TELEGRAM_OFFSET_ROTATION_LABELS[info.reason];
+            log(
+              `[telegram] Detected ${reasonLabel} for account "${account.accountId}" (was ${previousLabel}, now ${info.currentBotId}); discarding stale update offset ${info.staleLastUpdateId ?? "(none)"} and starting fresh.`,
+            );
+          },
         });
+    const botOptions = () => ({
+      token,
+      accountId: account.accountId,
+      ownerAgentId,
+      config: cfg,
+      runtime: opts.runtime,
+      buildContext: pluginChannelRuntime?.inbound.buildContext,
+      // Pass the owning runtime's bound dispatcher through to the turn plan.
+      dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
+      abortSignal: opts.abortSignal,
+      setStatus: opts.setStatus,
+    });
     if (opts.useWebhook) {
       const { startTelegramWebhook } = await import("./webhook.js");
       const webhook = await startTelegramWebhook({
-        token,
-        accountId: account.accountId,
-        ownerAgentId,
-        config: cfg,
+        ...botOptions(),
         path: opts.webhookPath,
         legacyWebhook: opts.legacyWebhook ?? account.config.legacyWebhook,
         secret: opts.webhookSecret ?? account.config.webhookSecret,
-        runtime: opts.runtime,
-        buildContext: pluginChannelRuntime?.inbound.buildContext,
-        // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
-        dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
         fetch: proxyFetch,
-        abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl ?? account.config.webhookUrl,
         webhookCertPath: opts.webhookCertPath,
-        setStatus: opts.setStatus,
       });
       try {
         await waitForAbortSignal(opts.abortSignal);
@@ -172,23 +164,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const telegramTransport = createTelegramTransportForPolling();
 
     const pollingSession = new TelegramPollingSession({
-      token,
-      config: cfg,
-      accountId: account.accountId,
-      ownerAgentId,
-      runtime: opts.runtime,
-      buildContext: pluginChannelRuntime?.inbound.buildContext,
-      // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
-      dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
+      ...botOptions(),
       proxyFetch,
       botInfo: opts.botInfo,
-      abortSignal: opts.abortSignal,
       getCommittedUpdateId: offsetPersistence.getCommittedUpdateId,
       persistUpdateId: offsetPersistence.persistUpdateId,
       log,
       telegramTransport,
       createTelegramTransport: createTelegramTransportForPolling,
-      setStatus: opts.setStatus,
       ingress: {
         apiRoot: account.config.apiRoot,
         proxy: account.config.proxy,

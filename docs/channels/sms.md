@@ -361,7 +361,7 @@ Later delivery callbacks update the same plugin-scoped SQLite record. Semantic r
 After the Gateway starts:
 
 1. Confirm the Gateway log shows the SMS webhook route.
-2. Run a Twilio-side probe (checks the configured Twilio webhook URL/method, recent inbound errors, and the most recent stored outbound delivery state):
+2. Run a Twilio-side check (checks the configured Twilio webhook URL/method, recent inbound errors, and the most recent stored outbound delivery state):
 
 ```bash
 openclaw channels capabilities --channel sms

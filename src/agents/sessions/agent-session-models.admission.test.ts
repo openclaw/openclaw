@@ -12,6 +12,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -22,10 +23,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import {
   createTestSession,
@@ -534,8 +533,7 @@ describe("model transitions after SQLite write admission", () => {
     const { session, sessionManager, settingsManager, target, readModelChanges } =
       await createModelSession();
     await session.setModel(nextModel);
-    const publicationFailure = new Error("Scalar publication failed");
-    publicationFailure.name = "SqliteTranscriptMutationConflictError";
+    const publicationFailure = new SqliteTranscriptMutationConflictError(target.sessionId);
     const publication = vi
       .spyOn(settingsManager, "setDefaultModelAndProvider")
       .mockImplementationOnce(() => {

@@ -36,7 +36,8 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.cron-admin-note svg {
+.cron-admin-note svg,
+.cron-row-run svg {
   width: 12px;
   height: 12px;
 }
@@ -96,7 +97,9 @@
   pointer-events: none;
 }
 
-.cron-search-box__icon svg {
+.cron-search-box__icon svg,
+.cron-trigger-icon svg,
+.cron-trigger-summary svg {
   width: 100%;
   height: 100%;
   stroke: currentColor;
@@ -130,7 +133,8 @@
   gap: 6px;
 }
 
-.cron-new-task svg {
+.cron-new-task svg,
+.cron-filter-popover__trigger svg {
   width: 14px;
   height: 14px;
 }
@@ -143,7 +147,9 @@
   flex: 0 0 auto;
 }
 
-.cron-refresh svg {
+.cron-refresh svg,
+.cron-detail-actions .btn svg,
+.cron-trigger-summary svg {
   width: 13px;
   height: 13px;
 }
@@ -175,11 +181,6 @@
   justify-content: center;
   padding: 0;
   height: 32px;
-}
-
-.cron-filter-popover__trigger svg {
-  width: 14px;
-  height: 14px;
 }
 
 .cron-filter-popover__panel {
@@ -281,7 +282,9 @@
   color: var(--muted);
 }
 
-.cron-table__state svg {
+.cron-table__state svg,
+.cron-back svg,
+.cron-condition-activity__icon svg {
   width: 13px;
   height: 13px;
   stroke: currentColor;
@@ -339,7 +342,8 @@
   min-width: 0;
 }
 
-.cron-table__name-text {
+.cron-table__name-text,
+.cron-table__cell-value {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -385,13 +389,6 @@
 
 .cron-table__cell-label {
   display: none;
-}
-
-.cron-table__cell-value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .cron-table__last {
@@ -454,11 +451,6 @@
   flex: 0 0 auto;
 }
 
-.cron-row-run svg {
-  width: 12px;
-  height: 12px;
-}
-
 .cron-empty-state {
   padding: var(--space-6) var(--space-4);
   display: grid;
@@ -473,7 +465,8 @@
   font-weight: 650;
 }
 
-.cron-empty-state__copy {
+.cron-empty-state__copy,
+.cron-help {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
@@ -499,13 +492,6 @@
 
 .cron-back:hover {
   color: var(--text-strong);
-}
-
-.cron-back svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .cron-detail-header {
@@ -580,11 +566,6 @@
   flex: 0 0 auto;
 }
 
-.cron-detail-actions .btn svg {
-  width: 13px;
-  height: 13px;
-}
-
 /* Bare fieldset wrapper so busy-state disabling covers every section. */
 .cron-editor {
   display: flex;
@@ -652,12 +633,6 @@
   width: 100%;
 }
 
-.cron-help {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.45;
-}
-
 .cron-error {
   color: var(--danger);
 }
@@ -720,14 +695,6 @@
   vertical-align: middle;
 }
 
-.cron-trigger-icon svg,
-.cron-trigger-summary svg {
-  width: 100%;
-  height: 100%;
-  stroke: currentColor;
-  fill: none;
-}
-
 .cron-trigger-summary {
   display: inline-flex;
   align-items: center;
@@ -737,11 +704,6 @@
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   vertical-align: middle;
-}
-
-.cron-trigger-summary svg {
-  width: 13px;
-  height: 13px;
 }
 
 .cron-trigger-script {
@@ -889,13 +851,6 @@
 .cron-condition-activity__icon {
   display: inline-flex;
   color: var(--accent-2);
-}
-
-.cron-condition-activity__icon svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .cron-condition-activity__metrics {
@@ -1200,11 +1155,6 @@
     padding: 0;
     justify-content: center;
     font-size: 0;
-  }
-
-  .cron-new-task svg {
-    width: 14px;
-    height: 14px;
   }
 }
 

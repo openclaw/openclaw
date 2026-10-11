@@ -7,15 +7,24 @@ const fixture = vi.hoisted(() => {
   const rows = new Map<string, unknown>();
   const store = {
     lookup: async (key: string) => rows.get(key),
+    entries: async () => [...rows].map(([key, value]) => ({ key, value, createdAt: 0 })),
+    delete: async (key: string) => rows.delete(key),
     register: async (key: string, value: unknown, options?: { assertCurrent?: () => void }) => {
       options?.assertCurrent?.();
       rows.set(key, structuredClone(value));
     },
   };
+  let generation = 0;
+  let stateDir = "synthetic-x-client:0";
+  const state = { openKeyedStore: () => store, resolveStateDir: () => stateDir };
   return {
+    nextTest: () => {
+      stateDir = `synthetic-x-client:${++generation}`;
+    },
+    state,
     rows,
     store,
-    runtime: { state: { openKeyedStore: () => store } },
+    runtime: { state },
     fetch: vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(),
   };
 });
@@ -52,7 +61,7 @@ function config(overrides: Partial<XAccountConfig> = {}): OpenClawConfig {
 }
 
 function restartRuntime() {
-  fixture.runtime = { state: { openKeyedStore: () => fixture.store } };
+  fixture.runtime = { state: fixture.state };
 }
 
 function requestBody(init?: RequestInit): string {
@@ -64,6 +73,7 @@ function requestBody(init?: RequestInit): string {
 
 beforeEach(() => {
   fixture.rows.clear();
+  fixture.nextTest();
   fixture.fetch.mockReset();
   restartRuntime();
 });

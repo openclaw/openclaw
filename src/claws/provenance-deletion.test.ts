@@ -5,12 +5,12 @@ import {
   withAgentDeletion,
   type AgentDeletionOperation,
 } from "../agents/agent-lifecycle-registry.js";
+import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import {
-  beginAgentDeletionJournal,
-  readAgentDeletionJournal,
-  readAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { releaseClawRemoveRows } from "./lifecycle-delete-support.js";
 import {
@@ -72,20 +72,16 @@ describe("Claw installation identity during deletion", () => {
         const removal = withAgentDeletion(
           "worker",
           async (begin) => {
-            const deletion = await begin(deletionEntry(root));
+            const deletion = await begin(deletionEntry(root), { expectedClawInstall: original });
             paused.resolve(deletion);
             await resume.promise;
             const beforeHandoff = readAgentDeletionJournal("worker", options);
-            updateClawInstallRecordStatus("worker", "partial", {
-              ...options,
-              nowMs: 2,
-              deletionOperation: deletion,
-            });
+            await deletion.handoffClawRetry();
             const handedOff = readAgentDeletionJournal("worker", options);
             expect(handedOff).toEqual({ ...beforeHandoff, operationId: expect.any(String) });
             expect(handedOff?.operationId).not.toBe(deletion.entry.operationId);
             expect(handedOff?.cleanupCompleted).toBe(false);
-            expect(() => deletion.assertCurrent()).toThrow("no longer owns");
+            await expect(deletion.assertCurrentAsync()).rejects.toThrow("no longer owns");
             return deletion;
           },
           options,
@@ -117,12 +113,8 @@ describe("Claw installation identity during deletion", () => {
             async (begin) => {
               const foreign = await begin(deletionEntry(root, "other"));
               try {
-                expect(() =>
-                  updateClawInstallRecordStatus("worker", "partial", {
-                    ...options,
-                    deletionOperation: foreign,
-                  }),
-                ).toThrow("does not belong to the current deletion");
+                await foreign.handoffClawRetry();
+                expect(readClawInstallRecord("worker", options)).toEqual(original);
               } finally {
                 await foreign.rollback();
               }
@@ -136,34 +128,17 @@ describe("Claw installation identity during deletion", () => {
         expect(readClawInstallRecord("worker", options)).toEqual({
           ...original,
           status: "partial",
-          updatedAtMs: 2,
+          updatedAtMs: expect.any(Number),
         });
-        expect(() =>
-          updateClawInstallRecordStatus("worker", "partial", {
-            ...options,
-            deletionOperation: operation,
-          }),
-        ).toThrow("does not belong to the current deletion");
+        await expect(operation.assertCurrentAsync()).rejects.toThrow("no longer owns");
         await withAgentDeletion(
           "worker",
           async (begin) => {
-            const recovery = await begin(deletionEntry(root));
-            expect(() =>
-              updateClawInstallRecordStatus("worker", "partial", {
-                ...options,
-                deletionOperation: operation,
-              }),
-            ).toThrow("does not belong to the current deletion");
-            expect(
-              releaseClawRemoveRows(
-                "worker",
-                [],
-                [],
-                recovery.assertCurrent,
-                recovery.completeInTransaction,
-                options,
-              ),
-            ).toBe(true);
+            const recovery = await begin(deletionEntry(root), {
+              expectedClawInstall: readClawInstallRecord("worker", options),
+            });
+            await expect(operation.assertCurrentAsync()).rejects.toThrow("no longer owns");
+            expect(await releaseClawRemoveRows(recovery, [], [], options)).toBe(true);
           },
           options,
         );
@@ -187,27 +162,20 @@ describe("Claw installation identity during deletion", () => {
         await withAgentDeletion(
           "worker",
           async (begin) => {
-            const deletion = await begin(deletionEntry(root));
+            const deletion = await begin(deletionEntry(root), { expectedClawInstall: original });
             const journal = readAgentDeletionJournal("worker", options);
-            const failure = new Error("abort retry publication");
-            expect(() =>
-              runOpenClawStateWriteTransaction((database) => {
-                updateClawInstallRecordStatus("worker", "partial", {
-                  ...options,
-                  database,
-                  nowMs: 2,
-                  deletionOperation: deletion,
-                });
-                expect(
-                  readAgentDeletionJournalInDatabase(database, "worker")?.operationId,
-                ).not.toBe(deletion.entry.operationId);
-                expect(() => deletion.assertCurrent(database)).toThrow("no longer owns");
-                throw failure;
-              }, options),
-            ).toThrow(failure);
+            const { db } = openOpenClawStateDatabase(options);
+            db.exec(`CREATE TRIGGER reject_claw_retry
+              BEFORE UPDATE OF operation_id ON agent_deletion_journal
+              BEGIN SELECT RAISE(ABORT, 'abort retry publication'); END`);
+            try {
+              await expect(deletion.handoffClawRetry()).rejects.toThrow("abort retry publication");
+            } finally {
+              db.exec("DROP TRIGGER reject_claw_retry");
+            }
             expect(readAgentDeletionJournal("worker", options)).toEqual(journal);
             expect(readClawInstallRecord("worker", options)).toEqual(original);
-            expect(() => deletion.assertCurrent()).not.toThrow();
+            await expect(deletion.assertCurrentAsync()).resolves.toBeUndefined();
             await deletion.rollback();
           },
           options,

@@ -16,11 +16,17 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
+import {
+  classifyWorkerBootstrapArtifactTransferPath,
+  WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH,
+} from "../gateway-http-route-contracts.js";
+import {
+  createArtifactTransferHttpCallback,
+  handleArtifactTransferHttpRequest,
+} from "./artifact-transfer-http.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
@@ -425,7 +431,9 @@ describe("worker node enrollment", () => {
     });
     const callback = createArtifactTransferHttpCallback(transfer);
     const server = http.createServer((req, res) => {
-      void handleWorkerBootstrapArtifactTransferHttpRequest({
+      void handleArtifactTransferHttpRequest({
+        classifyPath: classifyWorkerBootstrapArtifactTransferPath,
+        routePrefix: `${WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH}/artifacts/`,
         req,
         res,
         clientIp: "127.0.0.1",

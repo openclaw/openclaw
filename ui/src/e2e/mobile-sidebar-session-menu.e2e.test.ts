@@ -1,5 +1,11 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
-import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  captureControlUiE2eFailureDiagnostics,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
@@ -13,6 +19,156 @@ import {
 const suite = createSessionManagementE2eSuite(true);
 
 suite.define(() => {
+  it.each(["coarse", "fine"] as const)(
+    "separates reorder controls, colored session glyphs, and section labels with a %s pointer",
+    async (pointer) => {
+      await suite.withPage(
+        {
+          hasTouch: pointer === "coarse",
+          colorScheme: "dark",
+          viewport: { width: 390, height: 844 },
+        },
+        async ({ page }) => {
+          const pinnedKey = "agent:main:release-plan";
+          const groupedKey = "agent:main:review-notes";
+          await installMockGateway(page, {
+            sessionKey: groupedKey,
+            sessionGroups: ["Research", "Operations"],
+            sessions: [
+              sessionRow(pinnedKey, "Release planning", 3, {
+                pinned: true,
+                icon: "📌",
+                color: "blue",
+              }),
+              sessionRow(groupedKey, "Review notes", 2, {
+                category: "Research",
+                icon: "🔬",
+                color: "purple",
+              }),
+              sessionRow("agent:main:follow-up", "Follow-up questions", 1, {
+                category: "Operations",
+              }),
+            ],
+            controlUiTabs: [
+              { id: "reports", pluginId: "reports", label: "Reports", icon: "chartBar" },
+            ],
+          });
+          await page.addInitScript(
+            ({ key }) =>
+              localStorage.setItem(
+                key,
+                JSON.stringify({
+                  sidebarEntries: [
+                    "session:agent:main:release-plan",
+                    "plugin:reports/reports",
+                    "route:cron",
+                  ],
+                }),
+              ),
+            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
+          );
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, groupedKey));
+          await page
+            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
+            .first()
+            .click();
+          await waitForMobileSidebarDrawerOpen(page);
+          const pinned = page.locator('[data-sidebar-entry="session:agent:main:release-plan"]');
+          const plugin = page.locator('[data-sidebar-entry="plugin:reports/reports"]');
+          const group = page.locator('[data-session-section="category:Research"]');
+          await pinned.locator(".session-glyph").waitFor();
+          await plugin.locator(".nav-item__icon").waitFor();
+          await group.locator(".sidebar-recent-session").waitFor();
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator(".shell-nav"),
+              [pinned, plugin, group],
+              { animations: "disabled" },
+            );
+            await writeFile(
+              path.join(suite.artifactDir, "sidebar-spacing-" + pointer + ".png"),
+              frame.png,
+            );
+          }
+          for (const width of [320, 390, 768]) {
+            await page.setViewportSize({ width, height: 844 });
+            for (const row of [pinned, plugin]) {
+              const grip = row.locator(".sidebar-reorder-trigger");
+              await row.hover();
+              const [button, icon, glyph] = await Promise.all([
+                grip.boundingBox(),
+                grip.locator("svg").boundingBox(),
+                row.locator(".session-glyph, .nav-item__icon").first().boundingBox(),
+              ]);
+              expect(button).not.toBeNull();
+              expect(icon).not.toBeNull();
+              expect(glyph).not.toBeNull();
+              expect(button!.width).toBeGreaterThanOrEqual(24);
+              expect(icon!.x).toBeGreaterThanOrEqual(button!.x);
+              expect(icon!.x + icon!.width).toBeLessThanOrEqual(button!.x + button!.width);
+              expect(glyph!.x + glyph!.width).toBeLessThanOrEqual(button!.x);
+              if (width === 390) {
+                const previous = await row.evaluate((element) =>
+                  element.previousElementSibling?.getAttribute("data-sidebar-entry"),
+                );
+                if (pointer === "coarse") {
+                  await grip.tap();
+                } else {
+                  await grip.focus();
+                  await page.keyboard.press("Enter");
+                }
+                const move = page.getByRole("menuitem", { name: "Move up", exact: true });
+                if (pointer === "coarse") {
+                  await move.tap();
+                } else {
+                  await move.press("Enter");
+                }
+                await move.waitFor({ state: "hidden" });
+                expect(
+                  await row.evaluate((element) =>
+                    element.nextElementSibling?.getAttribute("data-sidebar-entry"),
+                  ),
+                ).toBe(previous);
+              }
+            }
+            const menuBox = await pinned.locator("[data-sidebar-session-menu]").boundingBox();
+            const reorderBox = await pinned.locator(".sidebar-reorder-trigger").boundingBox();
+            expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(reorderBox!.x);
+            expect(menuBox!.width).toBe(44);
+            for (const colored of [
+              pinned.locator(".sidebar-recent-session"),
+              group.locator(".sidebar-recent-session"),
+            ]) {
+              const clearance = await colored.evaluate((row) => {
+                const stripe = getComputedStyle(row, "::before");
+                return (
+                  row.querySelector(".session-glyph")!.getBoundingClientRect().left -
+                  row.getBoundingClientRect().left -
+                  Number.parseFloat(stripe.left) -
+                  Number.parseFloat(stripe.width)
+                );
+              });
+              // Pinned rows center the glyph in a narrower lead than grouped rows.
+              expect(clearance).toBeGreaterThanOrEqual(2);
+            }
+            const header = group.locator(".sidebar-recent-sessions__head");
+            const [handle, lead] = await Promise.all([
+              header.locator(".sidebar-session-group-drag-handle").boundingBox(),
+              header.locator(".sidebar-session-group-toggle__lead").boundingBox(),
+            ]);
+            expect(handle!.x + handle!.width).toBeLessThanOrEqual(lead!.x);
+          }
+          const toggle = group.locator(".sidebar-session-group-toggle");
+          await toggle.click();
+          await group.locator(".sidebar-recent-session").waitFor({ state: "hidden" });
+          await toggle.click();
+          await group.locator(".sidebar-recent-session").waitFor();
+        },
+      );
+    },
+  );
+
   it.each(["coarse", "fine"] as const)(
     "keeps mobile sidebar titles and menus usable with a %s pointer",
     async (pointer) => {
@@ -72,7 +228,8 @@ suite.define(() => {
         const drawerBox = await page.locator(".shell-nav").boundingBox();
         expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
         expect(drawerBox?.width).toBeLessThanOrEqual(336);
-        expect(restingWidth).toBeGreaterThanOrEqual(240);
+        // Desktop-sized glyph spacing keeps the color stripe clear without losing the menu.
+        expect(restingWidth).toBeGreaterThanOrEqual(230);
         const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
         const plainTitle = plainRow.locator(".sidebar-recent-session__name");
         await plainTitle.waitFor({ state: "visible" });

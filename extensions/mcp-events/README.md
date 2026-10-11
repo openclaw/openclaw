@@ -55,6 +55,8 @@ and canonical JSON arguments.
   history survive restart. Refresh replaces the signing key with a short overlap.
 - Pause, removal, source replacement, and account revocation stop local acceptance
   before remote unsubscribe. A stale refresh reply cannot revive the binding.
+  Enabled sources retry automatically after credential replacement or reconnect,
+  using a new binding and signing key; old callbacks and queued claims stay invalid.
   When the original account is unavailable after restart, remote cleanup can be
   blocked until the server's finite expiry; diagnostics retain that condition.
 - A null cursor means the source cannot replay missed events. A truncated flag

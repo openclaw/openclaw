@@ -34,16 +34,7 @@ type DirFetchParams = {
   expectedBinding?: unknown;
 };
 
-type DirFetchErrCode =
-  | "INVALID_PATH"
-  | "NOT_FOUND"
-  | "IS_FILE"
-  | "TREE_TOO_LARGE"
-  | "SYMLINK_REDIRECT"
-  | "CANONICAL_PATH_CHANGED"
-  | "READ_ERROR";
-
-function classifyFsError(err: unknown): DirFetchErrCode {
+function classifyFsError(err: unknown) {
   const safeCode = classifyFsSafeReadError(err);
   if (safeCode) {
     return safeCode;

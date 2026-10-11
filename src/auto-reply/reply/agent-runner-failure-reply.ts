@@ -32,6 +32,7 @@ import {
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderCodexAppServerFailureCopy,
   renderFailoverCodeUserCopy,
   renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
@@ -152,33 +153,6 @@ export function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): 
   return level === "on" || level === "full";
 }
 
-const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
-  /\bcodex app-server client closed before turn completed\b/iu;
-const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
-  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
-const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
-  /\bcodex session generation is no longer current\b/iu;
-const CODEX_EXECUTION_NODE_DISCONNECTED_RE =
-  /^Codex execution node disconnected; start a fresh attempt\. \((?:execution node (?:failed|disconnected)|execution socket (?:closed|failed))(?:: [^\r\n]{1,240})?\)(?:\r?\n|$)/u;
-
-function buildCodexAppServerFailureText(message: string): string | null {
-  const normalizedMessage = collapseRepeatedFailureDetail(message);
-  if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
-    return "⚠️ This Codex session changed before your message could run. Please send it again.";
-  }
-  if (CODEX_EXECUTION_NODE_DISCONNECTED_RE.test(normalizedMessage)) {
-    return "⚠️ Codex execution node disconnected. Start a fresh attempt.";
-  }
-  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
-    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
-  }
-  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
-    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
-  }
-  return null;
-}
-
-/** Formats the reply shown when preflight compaction fails before a run. */
 export function buildPreflightCompactionFailureText(
   message: string,
   options?: { includeDetails?: boolean },
@@ -263,6 +237,19 @@ export function buildExternalRunFailureReply(
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   const useHeartbeatFailureCopy = options?.useHeartbeatFailureCopy ?? options?.isHeartbeat === true;
+  const buildUnclassifiedReply = (includeHeartbeatDetails: boolean): ExternalRunFailureReply => {
+    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
+    return {
+      text: useHeartbeatFailureCopy
+        ? renderHeartbeatRunFailureCopy(
+            includeHeartbeatDetails ? resolveExternalRunFailureDetail(sanitizedMessage) : undefined,
+          )
+        : options?.includeDetails
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: !options?.isHeartbeat,
+    };
+  };
   const approvalMessage = resolveExecutionApprovalFailureMessage(normalizedMessage);
   if (approvalMessage) {
     return { text: `⚠️ ${approvalMessage}`, isGenericRunnerFailure: false };
@@ -288,15 +275,7 @@ export function buildExternalRunFailureReply(
         isGenericRunnerFailure: false,
       };
     }
-    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
-    return {
-      text: useHeartbeatFailureCopy
-        ? renderHeartbeatRunFailureCopy(resolveExternalRunFailureDetail(sanitizedMessage))
-        : options?.includeDetails
-          ? formatForwardedExternalRunFailureText(sanitizedMessage)
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      isGenericRunnerFailure: !options?.isHeartbeat,
-    };
+    return buildUnclassifiedReply(true);
   }
   const failoverFacts =
     options?.failoverFacts ??
@@ -389,21 +368,10 @@ export function buildExternalRunFailureReply(
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
-    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
-    const detail = options.includeDetails
-      ? resolveExternalRunFailureDetail(sanitizedMessage)
-      : undefined;
-    return {
-      text: useHeartbeatFailureCopy
-        ? renderHeartbeatRunFailureCopy(detail)
-        : options.includeDetails
-          ? formatForwardedExternalRunFailureText(sanitizedMessage)
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      // Heartbeat-backed event turns must remain visible even when they use generic wording.
-      isGenericRunnerFailure: false,
-    };
+    // Heartbeat-backed event turns remain visible even with generic wording.
+    return buildUnclassifiedReply(options.includeDetails === true);
   }
-  const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
+  const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
@@ -504,7 +472,6 @@ export function buildEmptyInteractiveReplyPayload(params: {
   });
 }
 
-/** Converts known agent-run failures into user-facing reply payloads. */
 export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;

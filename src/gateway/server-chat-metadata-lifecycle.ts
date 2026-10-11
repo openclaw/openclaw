@@ -18,6 +18,7 @@ export function broadcastChatMetadataChanged(
     modelSelectionChanged?: boolean;
     modelCatalogChanged?: boolean;
     authChanged?: boolean;
+    commandsChanged?: false;
   } = {},
 ): void {
   try {
@@ -29,7 +30,6 @@ export function broadcastChatMetadataChanged(
 
 export async function createGatewayChatMetadataLifecycle(params: {
   getConfig: () => OpenClawConfig;
-  minimalTestGateway: boolean;
   log: GatewayLogger;
 }) {
   let context: GatewayRequestContext | undefined;
@@ -47,44 +47,6 @@ export async function createGatewayChatMetadataLifecycle(params: {
       }
       return context;
     },
-    ...(params.minimalTestGateway
-      ? {
-          beforeRefresh: async () => {
-            const [
-              { listAgentIds },
-              { getPreparedModelCatalogOwnerSnapshot },
-              { readAgentDatabaseAdmissionRefusal },
-            ] = await Promise.all([
-              import("../agents/agent-scope.js"),
-              import("../agents/prepared-model-catalog.js"),
-              import("../state/agent-database-admission.js"),
-            ]);
-            const config = params.getConfig();
-            // Catalog and skill publications can change metadata while its model owner stays current.
-            if (
-              listAgentIds(config).every(
-                (agentId) =>
-                  readAgentDatabaseAdmissionRefusal(agentId) ||
-                  getPreparedModelCatalogOwnerSnapshot({
-                    agentId,
-                    config,
-                    allowGatewaySubagentBinding: true,
-                  })?.isCurrent(),
-              )
-            ) {
-              return;
-            }
-            const { refreshPreparedModelRuntimeSnapshots } =
-              await import("../agents/prepared-model-runtime.js");
-            await refreshPreparedModelRuntimeSnapshots(config, {
-              gatewayLifecycle: true,
-              catalogMode: "static",
-              allowGatewaySubagentBinding: true,
-            });
-          },
-          refreshOnRead: true,
-        }
-      : {}),
     onChanged: (change) => {
       if (context) {
         broadcastChatMetadataChanged(context, change);
@@ -109,10 +71,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       refreshLogged(notifyIfUnchanged);
     }
   };
-  const registerRefreshListeners = async (): Promise<(() => void) | undefined> => {
-    if (params.minimalTestGateway) {
-      return undefined;
-    }
+  const registerRefreshListeners = async (): Promise<() => void> => {
     const [
       { registerRuntimeAuthProfileStoreMutationListener },
       { registerPreparedModelRuntimePublicationListener },
@@ -124,6 +83,18 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ]);
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
+        if (event.phase === "catalog-observation") {
+          if (context) {
+            invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
+            broadcastChatMetadataChanged(context, {
+              agentId: event.agentId,
+              modelCatalogChanged: true,
+              authChanged: false,
+              commandsChanged: false,
+            });
+          }
+          return;
+        }
         if (
           event.phase === "catalog-status" ||
           (event.phase === "catalog-published" &&
@@ -197,6 +168,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
           ...publication,
           modelCatalogChanged: false,
           authChanged: false,
+          commandsChanged: false,
         });
       });
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
@@ -205,49 +177,62 @@ export async function createGatewayChatMetadataLifecycle(params: {
           const unchanged = modelSelectionPoliciesMatch(selectionConfig, config);
           selectionConfig = config;
           if (!unchanged) {
-            broadcastChatMetadataChanged(next, { modelSelectionChanged: true });
+            broadcastChatMetadataChanged(next, {
+              modelSelectionChanged: true,
+              commandsChanged: false,
+            });
           }
         }
       });
-      // Minimal Gateways still own read-triggered preparation. Every lifetime
-      // must join it before shutdown retires the config and model owners.
       publishSidecars({
         stop: async () => {
           unregisterUsage();
           unregisterRolePolicy();
-          unregister?.();
+          unregister();
           await runtime.stop();
         },
       });
-      if (unregister) {
-        // Publications that complete before listener registration would otherwise be missed.
-        // During ordinary startup the owner is published after attachment, so an unavailable
-        // snapshot here is expected and the publication listener performs the first refresh.
-        const eventVersion = preparedModelRuntimeEventVersion;
-        await runtime.refresh().then(
-          () => {
-            // A successful catch-up proves availability when publication completed before the
-            // listener was registered. Do not overwrite a newer invalidation or failure event.
+      // Publications that complete before listener registration would otherwise be missed.
+      // During ordinary startup the owner is published after attachment, so an unavailable
+      // snapshot here is expected and the publication listener performs the first refresh.
+      const eventVersion = preparedModelRuntimeEventVersion;
+      await runtime.refresh().then(
+        () => {
+          // A successful catch-up proves availability when publication completed before the
+          // listener was registered. Do not overwrite a newer invalidation or failure event.
+          if (preparedModelRuntimeEventVersion === eventVersion) {
+            preparedModelRuntimeState = "available";
+          }
+        },
+        (error: unknown) => {
+          if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
+            // Capture reached a published owner before this later metadata build failed. Keep
+            // stable auth/skill changes able to retry unless a newer owner event says otherwise.
             if (preparedModelRuntimeEventVersion === eventVersion) {
               preparedModelRuntimeState = "available";
             }
-          },
-          (error: unknown) => {
-            if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
-              // Capture reached a published owner before this later metadata build failed. Keep
-              // stable auth/skill changes able to retry unless a newer owner event says otherwise.
-              if (preparedModelRuntimeEventVersion === eventVersion) {
-                preparedModelRuntimeState = "available";
-              }
-              params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
-            }
-          },
-        );
-      }
+            params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
+          }
+        },
+      );
     },
-    read: runtime.read,
+    read: async (readParams: Parameters<typeof runtime.read>[0]) => {
+      const { ensureGatewayPreparedModelRuntimeReady } =
+        await import("../agents/prepared-model-runtime.js");
+      readParams.assertCurrent?.();
+      await ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId });
+      readParams.assertCurrent?.();
+      return await runtime.read(readParams);
+    },
     readModelsList: runtime.readModelsList,
-    readStartup: runtime.readStartup,
+    readStartup: async (readParams: Parameters<typeof runtime.readStartup>[0]) => {
+      if (readParams.readPolicy !== "ready") {
+        const { ensureGatewayPreparedModelRuntimeReady } =
+          await import("../agents/prepared-model-runtime.js");
+        await ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId });
+      }
+      return await runtime.readStartup(readParams);
+    },
     refresh: runtime.refresh,
   };
 }

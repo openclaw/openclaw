@@ -3,12 +3,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatMs } from "../../lib/format.ts";
-import {
-  errorIdForField,
-  renderCronSelect,
-  renderCronSelectField,
-  renderFieldRow,
-} from "./view-fields.ts";
+import { errorIdForField, renderCronSelect, renderFieldRow } from "./view-fields.ts";
 import type { CronProps } from "./view-types.ts";
 
 export function renderEventSourceFields(props: CronProps) {
@@ -25,7 +20,7 @@ export function renderEventSourceFields(props: CronProps) {
   const errors = props.fieldErrors;
   const serverOptions = [...new Set([...source.servers, props.form.eventServer].filter(Boolean))];
   return html`
-    ${renderCronSelectField(props, "eventServer", {
+    ${renderCronSelect(props, "eventServer", {
       label: t("cron.events.server"),
       help: t("cron.events.serverHelp"),
       errorKey: "eventServer",
@@ -35,25 +30,19 @@ export function renderEventSourceFields(props: CronProps) {
       ],
     })}
     ${!serverOptions.length ? html`<p class="muted">${t("cron.events.noServers")}</p>` : nothing}
-    ${renderFieldRow({
+    ${renderCronSelect(props, "eventName", {
       label: t("cron.events.name"),
-      controlId: "cron-event-name",
       required: true,
       help: definition?.description,
-      error: errors.eventName,
-      errorId: errorIdForField("eventName"),
-      control: renderCronSelect(props, "eventName", {
-        label: t("cron.events.name"),
-        errorKey: "eventName",
-        disabled: source.loading || !props.form.eventServer,
-        options: [
-          { value: "", label: t("cron.events.chooseEvent") },
-          ...source.events.map((event) => ({ value: event.name, label: event.name })),
-          ...(props.form.eventName && !definition
-            ? [{ value: props.form.eventName, label: props.form.eventName }]
-            : []),
-        ],
-      }),
+      errorKey: "eventName",
+      disabled: source.loading || !props.form.eventServer,
+      options: [
+        { value: "", label: t("cron.events.chooseEvent") },
+        ...source.events.map((event) => ({ value: event.name, label: event.name })),
+        ...(props.form.eventName && !definition
+          ? [{ value: props.form.eventName, label: props.form.eventName }]
+          : []),
+      ],
     })}
     <div class="cron-inline-controls">
       <button

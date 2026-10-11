@@ -1,5 +1,3 @@
-// Update gateway methods run self-update flows, report status, write restart
-// sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
@@ -588,11 +586,13 @@ export const updateHandlers: GatewayRequestHandlers = {
           context?.logGateway?.warn(
             `update.run managed-service handoff failed ${formatControlPlaneActor(actor)} error=${formatErrorMessage(err)}`,
           );
+          const stage = managedHandoffOwner ? "prepared" : "prepare";
           result = recordHandoffFailure(
             runId,
             err,
             refusedUpdate("error", "managed-service-handoff-failed"),
             warn,
+            stage,
           );
         }
       }
@@ -672,7 +672,8 @@ export const updateHandlers: GatewayRequestHandlers = {
       } catch (error) {
         try {
           // Cancellation settles the helper's ledger; persist its cause first.
-          result = recordHandoffFailure(runId, error, result, warn);
+          const stage = sentinelPersisted ? "transfer" : "sentinel";
+          result = recordHandoffFailure(runId, error, result, warn, stage);
         } finally {
           await cancelManagedServiceUpdateHandoff(managedHandoffOwner);
         }

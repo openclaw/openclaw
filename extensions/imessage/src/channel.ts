@@ -303,7 +303,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       messaging: {
         normalizeTarget: normalizeIMessageMessagingTarget,
         inferTargetChatType: ({ to }) => inferIMessageTargetChatType(to),
-        resolveOutboundSessionRoute: (params) => resolveIMessageOutboundSessionRoute(params),
+        resolveOutboundSessionRoute: resolveIMessageOutboundSessionRoute,
         targetResolver: {
           looksLikeId: looksLikeIMessageExplicitTargetId,
           hint: "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",

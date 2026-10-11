@@ -37,10 +37,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
@@ -102,7 +100,7 @@ afterAll(() => runtimeFixture.cleanup());
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let presentation: ReturnType<typeof createUpdateProgress> | undefined;
-afterEach(() => {
+afterEach(async () => {
   presentation?.suspend();
   presentation?.dispose();
   presentation = undefined;
@@ -110,7 +108,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 it.each([

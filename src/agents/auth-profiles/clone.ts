@@ -7,19 +7,13 @@ import {
   copyAuthProfileAuthorizationIntent,
   copyAuthProfileAuthorizationInheritance,
 } from "./authorization-lifetime.js";
+import { cloneAuthProfileJsonValue } from "./clone-value.js";
 import { copyCanonicalAuthProfileCredentialObservations } from "./credential-observation.js";
 import type { AuthProfileStore } from "./types.js";
 
 /** Deep-clones an auth profile store and rejects non-JSON values. */
 export function cloneAuthProfileStore<T extends AuthProfileStore>(store: T): T {
-  const cloned = JSON.parse(
-    JSON.stringify(store, (_key, value: unknown) => {
-      if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol") {
-        throw new TypeError(`AuthProfileStore contains non-JSON value: ${typeof value}`);
-      }
-      return value;
-    }),
-  ) as T;
+  const cloned = cloneAuthProfileJsonValue(store);
   for (const [profileId, credential] of Object.entries(store.profiles)) {
     const target = cloned.profiles[profileId];
     if (target) {

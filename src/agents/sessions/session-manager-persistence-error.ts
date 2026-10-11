@@ -79,14 +79,3 @@ export class SessionEntryCommittedError extends Error {
     recordModelFallbackStop(this);
   }
 }
-
-export function isSqliteTranscriptMutationConflict(error: unknown): boolean {
-  let current = error;
-  for (let depth = 0; depth < 3 && current instanceof Error; depth += 1) {
-    if (current.name === "SqliteTranscriptMutationConflictError") {
-      return true;
-    }
-    current = current.cause;
-  }
-  return false;
-}

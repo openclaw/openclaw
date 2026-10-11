@@ -52,9 +52,7 @@ export class LobsterPetInteractions implements ReactiveController {
     if (event.button !== 0 || prefersReducedMotion()) {
       return;
     }
-    if (this.holdTimer !== null) {
-      window.clearTimeout(this.holdTimer);
-    }
+    this.handleHoldCancel();
     this.holdTimer = window.setTimeout(() => {
       this.holdTimer = null;
       this.hooks.onGrumpyChange(false);
@@ -68,8 +66,7 @@ export class LobsterPetInteractions implements ReactiveController {
       return;
     }
     if (this.holdTimer !== null) {
-      window.clearTimeout(this.holdTimer);
-      this.holdTimer = null;
+      this.handleHoldCancel();
       this.pokeNow();
     }
   };

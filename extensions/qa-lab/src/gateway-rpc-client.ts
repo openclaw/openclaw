@@ -25,16 +25,11 @@ type QaGatewayRpcClient = {
   stop(): Promise<void>;
 };
 
-type QaGatewayConnectionGate = {
-  connected: boolean;
-  promise: Promise<void>;
-  resolve: () => void;
-  reject: (error: Error) => void;
-};
+type QaGatewayConnectionGate = ReturnType<typeof createQaGatewayConnectionGate>;
 
 const QA_GATEWAY_RPC_TIMEOUT_MS = 20_000;
 
-function createQaGatewayConnectionGate(): QaGatewayConnectionGate {
+function createQaGatewayConnectionGate() {
   const { promise, resolve, reject } = createDeferred<void>();
   // A terminal reconnect error can arrive without an active request waiter.
   void promise.catch(() => {});

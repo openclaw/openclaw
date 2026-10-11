@@ -220,6 +220,7 @@ async function preparedHarness(
       environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
       preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION,
       capturedExecPolicy: true,
+      promptContext: 1,
     },
     commands: ["codex.exec-server.stdio.v1"],
   };

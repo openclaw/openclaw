@@ -12,9 +12,12 @@ import type {
 } from "./goals-operations.types.js";
 import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionEntryProjection } from "./session-entry-snapshots.js";
+import type { SessionSourceAssertion } from "./session-source-authority.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -82,9 +85,13 @@ export type SessionEntryListScope = Partial<
   Omit<SessionEntryReadScope, "sessionKey" | "projection">
 > & {
   projection?: "full" | "list";
+  /** Retain the physical source assertion independently of this synchronous read. */
+  captureSource?: (assertCurrent: () => void) => void;
   /** Select exact persisted keys after validating the complete listing snapshot. */
   sessionKeys?: readonly string[];
-  /** Retain full cron-run entries for deletion guards, and only metadata for ordinary sessions. */
+  /** Set false for readers that do not consume derived participant identities or counts. */
+  includeParticipants?: boolean;
+  /** Validate the complete listing, retaining full cron-run entries for deletion guards. */
   cronRetention?: true;
   /** Validate the complete listing, retaining full expired cron rows only for this logical owner. */
   expiredCronRuns?: { agentId: string; updatedBefore: number };
@@ -302,6 +309,14 @@ export type SessionTranscriptVisibleMessageDeltaResult = SessionTranscriptDeltaR
 >;
 
 export type TranscriptMessageAppendOptions<TMessage> = {
+  /** Detached preparation; fresh commit compares the exact transcript version before insertion. */
+  preparation?: {
+    prepareMessage?: (message: TMessage) => Promise<TMessage | undefined>;
+    /** Owner-prepared row predicates and live lifecycle authority; opaque SQL callbacks are unsupported. */
+    source?: SessionSourceAssertion;
+  };
+  /** Exact read snapshot required for a fresh insertion; replay keeps its original receipt. */
+  expectedTranscript?: SessionTranscriptContextVersion;
   /** Rebase a stale explicit parent when the current tail still descends from it. */
   appendIntent?: "active-branch";
   /** Runtime config used for message redaction and transcript header metadata. */
@@ -320,9 +335,9 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   eventId?: string;
   /** Existing parent id owned by a caller with its own session tree. */
   parentId?: string | null;
-  /** Optional finalizer that runs after duplicate detection but before persistence. */
+  /** @deprecated Use preparation.prepareMessage. Removed at the next Plugin SDK major. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
-  /** Synchronous assertion after replay, custody, preparation, and redaction, before insertion. */
+  /** @deprecated Use preparation.source. Removed at the next Plugin SDK major. */
   beforeFreshMessageCommit?: () => void;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
@@ -343,7 +358,7 @@ export type TranscriptMessageAppendResult<TMessage> = {
 
 /** Transcript update fields supplied by callers; the target is resolved here. */
 export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate> &
-  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision">;
+  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision" | "assistantItemIds">;
 
 export type LatestTranscriptAssistantText = {
   id?: string;
@@ -353,12 +368,13 @@ export type LatestTranscriptAssistantText = {
 };
 
 export type SessionTranscriptWriteLockAccessorContext = {
+  publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   appendMessage: <TMessage>(
-    options: TranscriptMessageAppendOptions<TMessage>,
+    options: LockedTranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   /** Appends with commit-time idempotency and returns the committed visible sequence. */
   appendMessageWithMessageSequence: <TMessage>(
-    options: TranscriptMessageAppendOptions<TMessage>,
+    options: LockedTranscriptMessageAppendOptions<TMessage>,
   ) => Promise<{
     /** Unfenced imports omit ownership and retain canonical-history refresh. */
     lifecycleRevision?: string;
@@ -375,6 +391,16 @@ export type SessionTranscriptWriteLockAccessorContext = {
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
 };
 
+export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
+  TranscriptMessageAppendOptions<TMessage>,
+  "prepareMessageAfterIdempotencyCheck"
+> & {
+  /** @deprecated Use preparation.prepareMessage. Removed at the next Plugin SDK major. */
+  prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+  /** Awaited after duplicate detection; undefined suppresses a fresh append. */
+  prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
+};
+
 /** Canonical transcript identity owned by the transaction. */
 export type SessionTranscriptWriteTransactionContext = SessionTranscriptRuntimeTarget;
 
@@ -385,7 +411,10 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
   workerPreparation?: Pick<
     TranscriptMessageAppendOptions<unknown>,
     "prepareMessageAfterIdempotencyCheck" | "beforeFreshMessageCommit"
-  >;
+  > & {
+    /** Requires expectedSessionId and one message without transaction predicates; awaited after duplicate detection. */
+    prepareMessageAfterIdempotencyCheckAsync?: (message: unknown) => Promise<unknown>;
+  };
   predicate?:
     | { kind: "latest-assistant-differs"; runId: string; text: string }
     | { kind: "active-entry"; entryId: string; errorMessage: string };
@@ -472,6 +501,11 @@ export interface SessionTranscriptRuntimeTarget {
   sessionKey: string;
   storePath: string;
 }
+
+export type ResolvedSessionTranscriptRuntimeTarget = SessionTranscriptRuntimeTarget & {
+  selectedSessionId?: string | null;
+  selectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
+};
 
 export type SessionTranscriptManualTrimResult =
   | {
@@ -781,11 +815,7 @@ export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
   | { ok: true; entry: SessionEntry; transcriptEvents?: readonly TranscriptEvent[] }
   | { ok: false; error: TError };
 
-/** Original physical writer custody; captured facts are not a new admission. */
-export type SessionEntryCommitContext = {
-  readonly env: NodeJS.ProcessEnv;
-  assertCurrent: () => void;
-};
+export type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 
 export type SessionEntryCreationPhase =
   | "snapshot"

@@ -23,6 +23,18 @@ External-plugin compatibility work follows this order:
 
 ### Retained helper contracts
 
+Transcript append and lock preparation now uses
+[`preparation.prepareMessage`, `preparation.source`, and `withSessionTranscriptWrite`](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
+The `transcript-lock-sync-message-preparation` and
+`transcript-strict-sync-message-preparation` records retain the old lock functions,
+`prepareMessageAfterIdempotencyCheck`, and `beforeFreshMessageCommit` for durable
+targets with their original transaction ordering. One deprecation warning is
+emitted per plugin for this family. Incognito and actor-bound targets reject the
+old form with an actionable replacement error. The old exports and fields remain
+available to compile existing plugins and will be removed at the **next Plugin SDK
+major**. This target-specific deprecation does not activate actor routing for
+ordinary incognito sessions or change stored data, schema, retention, or updates.
+
 Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.
 They use the newer prepared-expiry, DM-policy refinement, and live-catalog outcome
 helpers when those exports are available, with plugin-local fallbacks for the
@@ -141,6 +153,45 @@ propagate to the caller, and ingress retains its fail-closed handling. Prepared
 entries do not replace current message or channel authority. No schema, retention,
 or update migration is required, and no runtime warning is emitted.
 
+### Inbound envelope timestamps
+
+Await `readSessionUpdatedAtAsync` from `openclaw/plugin-sdk/session-store-runtime`
+or `runtime.channel.session.readSessionUpdatedAtAsync`. The existing session
+reader captures the physical store and reads current activity in its worker.
+Missing stores return `undefined` without creating or migrating a database.
+Read failures propagate; there is no synchronous fallback.
+
+From `openclaw/plugin-sdk/channel-inbound`, await
+`createChannelInboundEnvelopeBuilderAsync` or `resolveInboundSessionEnvelopeContextAsync`
+at the message's formatting boundary. Resolve the route through `resolveAgentRoute`
+from `openclaw/plugin-sdk/routing` before preparing its envelope.
+Create a fresh builder for each inbound message. Its returned formatter is
+synchronous and reuses that message's prepared timestamp; `previousTimestamp: null`
+still suppresses timestamps for history entries. Prepared timestamps describe
+activity and never replace current channel or session authority.
+
+The synchronous timestamp and envelope APIs shipped in OpenClaw 2026.9.8 remain
+deprecated compatibility until the next Plugin SDK major and explicit breaking-release
+approval. This includes the callback-based `inbound-envelope` helpers and
+`dispatchInboundDirectDmWithRuntime`; bundled callers use the awaited preparation
+and `dispatchInboundDirectDm`. Existing synchronous signatures and callback timing
+remain unchanged. No schema, stored data, retention, or update migration is required.
+
+### Progress card handoff
+
+`ReplyDispatchRuntimeInfo.adoptProgressContinuation(receipt)` from
+`openclaw/plugin-sdk/reply-runtime` is deprecated as of October 6, 2026. Editable
+progress adapters use `adoptProgressDraft(draft)` instead: they keep the card and
+its rendering, and the host pushes prepared items and retires the card once. See
+[progress card handoff](/plugins/sdk-channel-plugins/status-and-media#progress-card-handoff).
+
+The receipt type shipped in OpenClaw 2026.9.8 stays source-compatible until the
+next Plugin SDK major and explicit breaking-release approval. The host never
+offers it, so a published adapter that checks for it keeps ordinary waiting-reply
+delivery and the host never receives a receipt. Telegram, the only bundled
+adopter, uses the draft handoff. No schema, stored data, retention, or update
+migration is required.
+
 ### Watched-session harness context
 
 `buildWatchedSessionsHarnessContext` from
@@ -159,6 +210,47 @@ its `string | undefined` result and behavior until the next Plugin SDK major and
 explicit breaking-release approval. JSDoc and the compatibility registry record
 the deprecation; no runtime warning, schema migration, or update change is needed.
 
+### Reply tool authority preparation
+
+The October 4, 2026 `reply-tool-authority-sync-preparation` record retains the
+synchronous fingerprint, projection, and binding methods reachable through
+`EmbeddedRunAttemptParams.replyOperation` and `AgentHarnessAttemptParams.replyOperation`,
+including their V2 types. These contracts shipped in OpenClaw 2026.9.8.
+Existing snapshot literals containing only `fingerprint` and `project` remain
+valid; their awaited companions are optional.
+
+The record also retains the original V2 queue method. External implementations can add
+the optional awaited queue companion described in
+[awaited reply tool authority](/plugins/sdk-migration/how-to-migrate#await-reply-tool-authority).
+Legacy external V2 injection backends retain fresh native policy checks; an earlier
+prepared fingerprint never replaces current authority.
+Supplied Talk control adapters retain fully rendered steering and follow-up input,
+including prepared context and the transcript recorder, even when they ignore
+optional preparation callbacks. The built-in runtime prepares that input inside
+its queue reservation to preserve ordering across awaited policy reads.
+Legacy V1 backends retain unbound run-owned input; caller-bound input still
+requires V2. Worker preparation does not change that distinction.
+Legacy ordinary queue preparation stays inside its FIFO reservation, with
+synchronous final checks outside worker grants. Complete worker preparations
+bind their final policy and target reads to enqueue; cleanup or notification
+failure after enqueue preserves input custody and cannot authorize replay.
+Question claims and cancellation retain their existing synchronous assertions,
+with optional awaited companions for prepared backends.
+Native session binding authorities retain their original `withCurrent` contract.
+The optional `withPreparedCurrent` companion composes fresh tool policy with native
+lineage admission; older authority implementations remain valid and use the full
+synchronous compatibility check.
+
+Custom question dispatchers retain their original `authority.assertCurrent`
+callback and can add the optional awaited companion. Legacy external V2
+dispatchers retain fresh native policy checks. Retained commit guards for
+store-bound secret answers still recheck their original session owner.
+
+Removal requires the next Plugin SDK major and explicit breaking-release
+approval. TypeScript annotations and migration documentation provide diagnostics;
+there is no runtime warning. Stored data, schema, retention, and update behavior
+are unchanged.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from
@@ -174,6 +266,24 @@ canonical result, and the host lifecycle normalizes legacy results before
 core consumes them. New producers should construct `terminal`; consumers of
 the union must narrow the result before reading it. The current
 `EmbeddedRunAttemptResult` contract keeps `terminal` required.
+
+### Session observer and progress visibility
+
+The October 4, 2026 `session-observer-progress-sync-reads` record retains the
+synchronous observer methods and progress visibility contracts shipped in
+2026.9.8. `context.sessionObserver.handleEvent`, `getCompanionSnapshot`, and
+`dispose` retain their synchronous signatures and completion behavior.
+`PluginHookReplyDispatchEvent.shouldSendToolSummaries` remains a live boolean
+getter, `shouldSendFullToolDetails` remains a dispatch-time boolean, and
+`GetReplyOptions.onVerboseProgressVisibility` still receives a synchronous getter.
+
+Core and bundled callers use the [awaited replacements](/plugins/sdk-migration/how-to-migrate#await-session-observer-and-progress-visibility).
+The released ACP hook helper still accepts boolean-only events from external
+callers; host-created events provide fresh awaited predicates. Deprecated native
+reads remain compatibility debt until the next Plugin SDK major and explicit
+breaking-release approval. JSDoc and the compatibility registry record the
+deprecation without runtime warnings. Schemas, retained data, and update behavior
+are unchanged.
 
 ### Mention Inbox persistence
 
@@ -248,6 +358,24 @@ explicit breaking-release approval. The compatibility registry records the
 migration without runtime warnings. Schemas, retained data, and update behavior
 are unchanged.
 
+### Agent execution preparation compatibility
+
+The execution object accepted by
+`openclaw/plugin-sdk/sqlite-runtime.openOpenClawAgentSqliteWorkerStore` retains the
+`prepare(source, signal?) => Promise<void>` contract published in
+`v2026.10.1-beta.1`. Existing callers and two-argument implementations remain
+supported. The publication source also accepts the execution object shape shipped
+in `v2026.9.9`. The `v2026.10.1-beta.1` shape retains its callable
+`capturePreparedGenerationClaim` method in parameter-derived types; internal
+native-adoption capabilities are not required from plugins. Ordinary preparation
+reuses a completed native generation; host
+admission can request current schema proof through an optional third argument.
+
+The `agent-execution-preparation-released-signature` compatibility record is
+active, with no deprecation warning or required migration. Breaking the released
+contract requires an explicitly approved Plugin SDK major release. Schemas,
+stored data, and update behavior are unchanged.
+
 ### ACP metadata binding compatibility
 
 `openclaw/plugin-sdk/acp-runtime` retains the one-argument
@@ -260,6 +388,34 @@ The `acp-session-metadata-released-signatures` compatibility record is active:
 these APIs remain supported, with no deprecation warning or required migration.
 Worker activation must preserve them; changing these released contracts requires
 an explicitly approved Plugin SDK major release.
+
+### Memory session binding compatibility
+
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` retains the readers
+published in `v2026.9.8`: `buildSessionEntry(path, options?)`,
+`listSessionTranscriptCorpusEntriesForAgent(agentId, options?)`, and
+`readSessionResetRecallCutoff(scope)`. Their Promise results and synchronous
+`onTranscriptMessage(message, observedAt)` observer remain unchanged. Internal
+incognito actor sources are not plugin arguments.
+
+The `memory-session-released-signatures` compatibility record is active. These
+APIs remain supported without warnings or a required migration; changing their
+released contracts requires an explicitly approved Plugin SDK major release.
+
+### Session upstream-link writes
+
+`openclaw/plugin-sdk/session-catalog` retains the synchronous
+`upsertSessionUpstreamLink` and `deleteSessionUpstreamLink` contracts released in
+`v2026.9.8`, including their immediate return values and completion timing. The
+production-private `agent-harness-session-runtime` initializer also retains its
+synchronous `prepare().link(input)` method for released official harnesses.
+
+The `session-upstream-links-sync-persistence` compatibility record deprecates
+those methods without runtime warnings. Core and bundled callers await
+`upsertSessionUpstreamLinkAsync`, `deleteSessionUpstreamLinkAsync`, or the
+initializer's `linkAsync`. The synchronous contracts remain until the next
+Plugin SDK major and explicit breaking-release approval. See
+[await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
 
 ### Native session generation authority
 
@@ -342,6 +498,24 @@ Bundled memory search and memory-forget use the awaited readers. The synchronous
 exports retain their signatures and behavior for existing consumers until removal
 at the next Plugin SDK major. Deprecation is communicated through JSDoc and the
 compatibility registry; these readers emit no runtime warnings.
+
+The prepared incognito actor adapters remain inactive for ordinary unbound
+calls. Under an explicit actor binding, Memory entry, reset-cutoff, corpus, and
+selector reads retain that actor; a selected missing actor returns the normal
+missing result, while a retained ended actor rejects. Archive discovery returns
+no durable artifacts for that actor. Private transcripts are not added to the
+durable Memory ingestion corpus.
+
+The synchronous `loadMemorySessionMetadata` and
+`loadMemorySessionMetadataBatch` helpers remain durable ingestion admission
+guards. `statSessionEntrySync`, batch transcript stats, and synchronous archive
+and selector readers retain their existing native/offline contracts. Explicitly
+bound actor calls refuse synchronous database access with
+`IncognitoSessionSyncAccessError`: await `resolveMemorySessionTargetsAsync`,
+`loadArchivedSessionsAsync`, or `buildSessionEntry` as named by the error.
+Worker snapshot kernels and supplied transcript statistics remain synchronous;
+this preparation does not change production incognito selection or the
+released synchronous full-row session getter.
 
 ### Memory read missing results
 

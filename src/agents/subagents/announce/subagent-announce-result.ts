@@ -25,6 +25,10 @@ type SubagentAnnounceResultDeps = Pick<
 
 export type PreparedAnnounceResult = { text: string | undefined; isCurrent: () => boolean };
 
+export class SubagentAnnouncePreparationConflictError extends Error {
+  override name = "SubagentAnnouncePreparationConflictError";
+}
+
 function announceResultFacts(child: SubagentRunRecord) {
   return {
     task: child.task,
@@ -65,7 +69,9 @@ export async function readSubagentRunAnnounceResultUsing(
 ): Promise<PreparedAnnounceResult> {
   const child = deps.readSubagentRun(observed.runId);
   if (!child || !isSameSubagentRunOwner(child, observed)) {
-    throw new Error("The completed child run's owner changed before announcement.");
+    throw new SubagentAnnouncePreparationConflictError(
+      "The completed child run's owner changed before announcement.",
+    );
   }
   const isCurrent = captureAnnounceResultAuthority(child, deps.readSubagentRun);
   const terminalReply = child.completion?.terminalReply;
@@ -98,7 +104,9 @@ export async function readSubagentRunAnnounceResultUsing(
       ?.event;
   }
   if (!isCurrent()) {
-    throw new Error("The completed child run's transcript identity changed during announcement.");
+    throw new SubagentAnnouncePreparationConflictError(
+      "The completed child run's transcript identity changed during announcement.",
+    );
   }
   const answer = isRecord(event) ? extractStoredAssistantText(event.message) : undefined;
   if (!answer) {
@@ -130,15 +138,6 @@ function describeSubagentOutcome(child: ChildCompletionRow): string {
     return error ? `${outcome.status}: ${error}` : outcome.status;
   }
   return "unknown";
-}
-
-function formatChildResultData(resultText?: string | null): string {
-  return (
-    wrapPromptDataBlock({
-      label: "Child result",
-      text: resultText?.trim() || "(no output)",
-    }) || "Child result: (no output)"
-  );
 }
 
 export type ChildCompletionRow = Pick<
@@ -212,7 +211,10 @@ export function buildChildCompletionFindings(
           truncationMarker: "…",
         }),
         `status: ${truncateUtf16WithEllipsis(outcome, MAX_CHILD_COMPLETION_FIELD_CHARS)}`,
-        formatChildResultData(resultText),
+        wrapPromptDataBlock({
+          label: "Child result",
+          text: resultText?.trim() || "(no output)",
+        }) || "Child result: (no output)",
       ].join("\n"),
     );
   }

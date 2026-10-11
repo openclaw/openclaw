@@ -43,12 +43,6 @@ type MSTeamsIngressOptions = {
   queue?: ChannelIngressQueue<MSTeamsIngressPayload>;
 };
 
-type MSTeamsIngress = {
-  accept: (activity: MSTeamsIngressActivity, liveContext?: MSTeamsTurnContext) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 const MSTeamsIngressPayloadError = createChannelIngressError<
   "invalid-activity" | "invalid-json" | "unsupported-activity"
 >("MSTeamsIngressPayloadError", { withReason: true });
@@ -134,7 +128,7 @@ function parseClaimedActivity(
   return parsed;
 }
 
-export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIngress {
+export function createMSTeamsIngress(options: MSTeamsIngressOptions) {
   const queue =
     options.queue ??
     getMSTeamsRuntime().state.openChannelIngressQueue<MSTeamsIngressPayload>({
@@ -203,7 +197,7 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
   let stopTask: Promise<void> | undefined;
 
   return {
-    accept: async (activity, liveContext) => {
+    accept: async (activity: MSTeamsIngressActivity, liveContext?: MSTeamsTurnContext) => {
       const facts = inspectMSTeamsIngressActivity(activity);
       if (!facts) {
         return;

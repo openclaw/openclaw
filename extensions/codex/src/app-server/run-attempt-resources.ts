@@ -1,6 +1,5 @@
 import {
   embeddedAgentLog,
-  runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
@@ -32,7 +31,10 @@ import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
-import { reportCodexBackgroundCleanupFailure } from "./run-attempt-lifecycle.js";
+import {
+  reportCodexBackgroundCleanupFailure,
+  runCodexCleanupStep,
+} from "./run-attempt-lifecycle.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
 import {
   releaseCodexSandboxExecServerEnvironment,
@@ -46,10 +48,10 @@ import {
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type {
+  CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
   CodexThreadFinalConfigPatchDecision,
 } from "./thread-lifecycle-types.js";
-import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
 import {
   isSameCodexAppServerThreadOwner,
   retainCodexAppServerBindingSubscription,
@@ -221,14 +223,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     await retireSharedCodexClientForOneShotCleanup();
   };
   const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
-    runAgentCleanupStep({
-      runId: params.runId,
-      sessionId: params.sessionId,
-      step,
-      log: embeddedAgentLog,
-      cleanup: async () => {
-        await operation();
-      },
+    runCodexCleanupStep(params, step, async () => {
+      await operation();
     });
   let nativeSubagentMonitorSettlement: Promise<void> | undefined;
   let nativeSubagentMonitorGeneration = 0;
@@ -248,7 +244,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     const generation = ++nativeSubagentMonitorGeneration;
     const sessionKey = params.sessionKey;
     const storePath = params.sessionTarget?.storePath;
-    const parentSession =
+    const readParentSession = () =>
       sessionKey && storePath
         ? getSessionEntry({
             agentId: sessionAgentId,
@@ -258,6 +254,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             hydrateSkillPromptRefs: false,
           })
         : undefined;
+    const parentSession = readParentSession();
     const historyOwner = createCodexNativeSubagentHistoryOwner({
       parentThreadId,
       sessionId: params.sessionId,
@@ -269,13 +266,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     const { bindingStore, bindingIdentity } = connection;
     const assertParentSessionCurrent = () => {
       if (historyOwner?.lifecycleRevision && sessionKey && storePath) {
-        const currentSession = getSessionEntry({
-          agentId: sessionAgentId,
-          sessionKey,
-          storePath,
-          readConsistency: "latest",
-          hydrateSkillPromptRefs: false,
-        });
+        const currentSession = readParentSession();
         if (currentSession?.lifecycleRevision !== historyOwner.lifecycleRevision) {
           throw new Error("Native submission session lifecycle is no longer current.");
         }
@@ -499,7 +490,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       threadId: thread.threadId,
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
       assertCurrent,
-      withCurrent: connection.withCurrent,
+      withCurrent: cleanupAuthority.withCurrent,
     });
     if (!released) {
       await closeCodexStartupClientBestEffort(client);
@@ -559,12 +550,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const startupTimeoutMs = resolveCodexStartupTimeoutMs({
     timeoutMs: params.timeoutMs,
+    requestTimeoutMs: appServer.requestTimeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
   });
-  const requesterChannel = params.messageChannel ?? params.messageProvider;
   const requester = buildCodexHookRequester(params);
   const buildNativeHookRelayFinalConfigPatch = async (
     decision: CodexThreadFinalConfigPatchDecision,
+    relayClient: CodexAppServerClient,
   ) => {
     state.nativeSpawnAdmissionInstalled = false;
     const previousRelay = state.nativeHookRelay;
@@ -610,7 +602,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       approvalContext: {
         trigger: params.trigger,
         approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-        turnSourceChannel: requesterChannel,
+        turnSourceChannel: params.messageChannel ?? params.messageProvider,
         turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
         turnSourceAccountId: params.agentAccountId,
         turnSourceThreadId: params.currentThreadTs,
@@ -633,6 +625,12 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
               getCodexInferenceThreadQualification(state.client, threadId),
           }
         : undefined,
+      remoteCallback: appServer.nativeHookRelay && {
+        config: appServer.nativeHookRelay,
+        client: relayClient,
+        timeoutMs: appServer.requestTimeoutMs,
+        onCleanupFailure: (error) => reportCodexBackgroundCleanupFailure(params, error),
+      },
       assertCurrent: connection.assertLegacyCurrent,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
@@ -698,9 +696,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     nativeModelAdmission,
     nativeProcessAuthority,
     releaseNativeProcessAuthority,
-    markTrajectoryEndRecorded: () => {
-      state.trajectoryEndRecorded = true;
-    },
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
     runCleanupStep,

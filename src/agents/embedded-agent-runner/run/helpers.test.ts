@@ -333,6 +333,25 @@ describe("buildErrorAgentMeta", () => {
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
   });
 
+  it("keeps the run's context provenance on error exits", () => {
+    const build = (contextTokensSource?: "resolved-v1") =>
+      buildErrorAgentMeta({
+        sessionId: "session-error",
+        provider: "opencode-go",
+        model: "deepseek-v4.1-flash",
+        contextTokens: 1_000_000,
+        contextTokensSource,
+        usageAccumulator: createUsageAccumulator(),
+        lastRunPromptUsage: undefined,
+      });
+
+    expect(build("resolved-v1")).toMatchObject({
+      contextTokens: 1_000_000,
+      contextTokensSource: "resolved-v1",
+    });
+    expect(build()).toMatchObject({ contextTokens: 1_000_000, contextTokensSource: "resolved" });
+  });
+
   it("preserves active session file for error exits after transcript rotation", () => {
     // Error metadata follows the active session after transcript rotation so
     // diagnostics and resume links point at the file that contains the failure.

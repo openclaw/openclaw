@@ -148,7 +148,7 @@ describe("Codex native hook relay managed policy", () => {
     },
   );
 
-  it.each(["native load", "routing replacement", "unknown active"] as const)(
+  it.each(["native load", "routing replacement", "unadmitted active"] as const)(
     "refuses an unqualified receiver read after %s",
     async (change) => {
       const client = createClient();
@@ -161,7 +161,7 @@ describe("Codex native hook relay managed policy", () => {
       const parent = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource:
-          change === "unknown active"
+          change === "unadmitted active"
             ? {
                 ...source,
                 modelPolicyRequired: false,
@@ -176,6 +176,7 @@ describe("Codex native hook relay managed policy", () => {
       });
       parent.bindTurn("parent-b");
       const threadId = "00000000-0000-4000-8000-000000000042";
+      await notifyChildStarted(client, "parent-thread", threadId);
       const entered = createDeferred<void>();
       const returned = createDeferred<ReturnType<typeof threadRead>>();
       client.setThreadReadFactory(threadId, () => {
@@ -207,12 +208,12 @@ describe("Codex native hook relay managed policy", () => {
         }
         const stale = threadRead({
           childThreadId: threadId,
-          threadStatus: change === "unknown active" ? "active" : "notLoaded",
+          threadStatus: change === "unadmitted active" ? "active" : "notLoaded",
         });
         stale.thread.modelProvider = "unqualified-provider";
         returned.resolve(stale);
         await expect(pending).rejects.toThrow(
-          change === "unknown active"
+          change === "unadmitted active"
             ? "receiver's exact admitted execution"
             : "receiver changed during input preparation",
         );

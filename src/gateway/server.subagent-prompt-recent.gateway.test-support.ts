@@ -8,8 +8,10 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  persistRegistryFixture,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   listSubagentRunsForRequester,
   registerSubagentRun,

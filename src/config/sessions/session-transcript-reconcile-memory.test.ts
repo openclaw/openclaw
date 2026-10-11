@@ -27,6 +27,7 @@ import {
   replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.js";
 import { prepareSessionTranscriptProjection } from "./session-transcript-projection-rebuild.js";
+import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import { createMemoryTranscriptProjectionSource } from "./session-transcript-reconcile-memory.js";
 import {
   reconcileSessionTranscriptIndexes,
@@ -36,6 +37,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
+import { searchSessionTranscriptsReadOnlySync } from "./session-transcript-search.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
@@ -87,6 +89,32 @@ describe("incognito transcript reconciliation", () => {
     expect(fs.readdirSync(ambient.stateDir, { recursive: true })).toEqual([]);
     expect(fs.readdirSync(explicit.stateDir, { recursive: true })).toEqual([]);
   }
+
+  it("removes orphan-only projections before reporting native status clean", async () => {
+    const { scope, options } = target(explicit.env);
+    await replaceTranscriptEvents(scope, [message("orphan", "retained orphan text")]);
+    await waitForSessionTranscriptIndexReconcile(options);
+    const database = openOpenClawAgentDatabase(options);
+    database.db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(sessionId);
+    const search = () => searchSessionTranscriptsReadOnlySync({ ...scope, query: "orphan" });
+    expect(search().hits).toMatchObject([{ sessionId, messageId: "orphan" }]);
+
+    await expect(readSessionTranscriptIndexStatus(options)).resolves.toBe(false);
+
+    expect(search().hits).toEqual([]);
+    for (const table of [
+      "session_transcript_active_events",
+      "session_transcript_fts_rows",
+      "session_transcript_index_state",
+    ]) {
+      expect(
+        database.db
+          .prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE session_id = ?`)
+          .get(sessionId),
+      ).toEqual({ count: 0 });
+    }
+    expectNoDiskState();
+  });
 
   it.each(["ambient", "explicit"] as const)(
     "repairs a supported branch through the scheduled worker (%s environment)",
@@ -443,81 +471,93 @@ describe("incognito transcript reconciliation", () => {
     expectNoDiskState();
   }, 20_000);
 
-  it("hands a successor's scheduled work over after successful old-owner settlement", async () => {
-    const { scope, options } = target(ambient.env);
-    await replaceTranscriptEvents(scope, [message("old-owner")]);
-    const database = openOpenClawAgentDatabase(options);
-    const state = () =>
-      getOpenClawAgentDatabaseIfOpen(options)
-        ?.db.prepare(
-          "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
-        )
-        .get(sessionId);
-    database.db
-      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-      .run(sessionId);
-    const joined = createDeferred();
-    const workers = new Set<Worker>();
-    let tasks = 0;
-    let finishPrevious: (() => void) | undefined;
-    observer.onTask = ({ worker, taskId }) => {
-      workers.add(worker);
-      tasks += 1;
-      if (tasks === 1) {
-        const emit = worker.emit.bind(worker);
-        worker.emit = (...args: Parameters<typeof emit>) => {
-          const [event, reply] = args;
-          if (
-            event === "message" &&
-            isRecord(reply) &&
-            reply.taskId === taskId &&
-            reply.status === "ok"
-          ) {
-            finishPrevious = () => {
-              emit(...args);
-            };
-            joined.resolve();
-            return true;
-          }
-          return emit(...args);
-        };
+  it.each([false, true])(
+    "hands a successor's scheduled work over after successful old-owner settlement (canceled distinct request=%s)",
+    async (cancelDistinctRequest) => {
+      const { scope, options } = target(ambient.env);
+      await replaceTranscriptEvents(scope, [message("old-owner")]);
+      const database = openOpenClawAgentDatabase(options);
+      const state = () =>
+        getOpenClawAgentDatabaseIfOpen(options)
+          ?.db.prepare(
+            "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
+          )
+          .get(sessionId);
+      database.db
+        .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+        .run(sessionId);
+      const joined = createDeferred();
+      const workers = new Set<Worker>();
+      let tasks = 0;
+      let finishPrevious: (() => void) | undefined;
+      observer.onTask = ({ worker, taskId }) => {
+        workers.add(worker);
+        tasks += 1;
+        if (tasks === 1) {
+          const emit = worker.emit.bind(worker);
+          worker.emit = (...args: Parameters<typeof emit>) => {
+            const [event, reply] = args;
+            if (
+              event === "message" &&
+              isRecord(reply) &&
+              reply.taskId === taskId &&
+              reply.status === "ok"
+            ) {
+              finishPrevious = () => {
+                emit(...args);
+              };
+              joined.resolve();
+              return true;
+            }
+            return emit(...args);
+          };
+        }
+      };
+      startSessionTranscriptIndexReconcile(options);
+      const pending = waitForSessionTranscriptIndexReconcile(options);
+      try {
+        await withTestTimeout(joined.promise, 10_000, "old memory worker did not settle");
+        expect(state()).toEqual({ needs_rebuild: 0 });
+        await runExclusiveSqliteSessionWrite(
+          options,
+          async () => undefined,
+          "sessions.transcript-index.preflight",
+        );
+        expect([...workers][0]?.threadId).toBeGreaterThan(0);
+        closeOpenClawAgentDatabaseByPath(database.path);
+        await persistSessionTranscriptTurn(scope, {
+          messages: [
+            transcriptMessage("root", null, { role: "user", content: "root" }),
+            transcriptMessage("abandoned", "root", { role: "assistant", content: "abandoned" }),
+            transcriptMessage("active", "root", { role: "assistant", content: "active" }),
+          ],
+          touchSessionEntry: false,
+        });
+        expect(getOpenClawAgentDatabaseIfOpen(options)).not.toBe(database);
+        expect(state()).toEqual({ needs_rebuild: 1 });
+        if (cancelDistinctRequest) {
+          const controller = new AbortController();
+          startSessionTranscriptIndexReconcile({ ...options, signal: controller.signal });
+          controller.abort(new Error("distinct successor request canceled"));
+        }
+      } finally {
+        finishPrevious?.();
+        await pending;
       }
-    };
-    startSessionTranscriptIndexReconcile(options);
-    const pending = waitForSessionTranscriptIndexReconcile(options);
-    try {
-      await withTestTimeout(joined.promise, 10_000, "old memory worker did not settle");
       expect(state()).toEqual({ needs_rebuild: 0 });
-      await runExclusiveSqliteSessionWrite(
-        options,
-        async () => undefined,
-        "sessions.transcript-index.preflight",
-      );
+      expect(
+        readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 }).events.map(
+          ({ event }) => event,
+        ),
+      ).toEqual([
+        expect.objectContaining({ id: "root" }),
+        expect.objectContaining({ id: "active" }),
+      ]);
+      expect(tasks).toBe(2);
+      expect(workers.size).toBe(1);
       expect([...workers][0]?.threadId).toBeGreaterThan(0);
-      closeOpenClawAgentDatabaseByPath(database.path);
-      await persistSessionTranscriptTurn(scope, {
-        messages: [
-          transcriptMessage("root", null, { role: "user", content: "root" }),
-          transcriptMessage("abandoned", "root", { role: "assistant", content: "abandoned" }),
-          transcriptMessage("active", "root", { role: "assistant", content: "active" }),
-        ],
-        touchSessionEntry: false,
-      });
-      expect(getOpenClawAgentDatabaseIfOpen(options)).not.toBe(database);
-      expect(state()).toEqual({ needs_rebuild: 1 });
-    } finally {
-      finishPrevious?.();
-      await pending;
-    }
-    expect(state()).toEqual({ needs_rebuild: 0 });
-    expect(
-      readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 }).events.map(
-        ({ event }) => event,
-      ),
-    ).toEqual([expect.objectContaining({ id: "root" }), expect.objectContaining({ id: "active" })]);
-    expect(tasks).toBe(2);
-    expect(workers.size).toBe(1);
-    expect([...workers][0]?.threadId).toBeGreaterThan(0);
-    expectNoDiskState();
-  }, 20_000);
+      expectNoDiskState();
+    },
+    20_000,
+  );
 });

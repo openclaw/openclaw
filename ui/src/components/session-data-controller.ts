@@ -88,7 +88,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   presenceInstanceId?: string;
   readonly ownerCounts = new SidebarOwnerSessionCounts(() => this.requestSessionDataUpdate());
 
-  // These caches were not Lit state on the element and stay non-reactive here.
   sessionResultsByAgent: Record<string, SessionsListResult> = {};
 
   private readonly subscriptions: SubscriptionsController;
@@ -127,8 +126,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   constructor(private readonly host: SessionDataControllerHost) {
     host.addController(this);
-    // The element used to enter subscriptions before connecting catalog listeners,
-    // then tear subscriptions down after all session cleanup. Keep that ordering.
+    // Subscribe before connecting catalog listeners; unsubscribe after session cleanup.
     this.subscriptions = new SubscriptionsController({
       addController: () => undefined,
       removeController: () => undefined,

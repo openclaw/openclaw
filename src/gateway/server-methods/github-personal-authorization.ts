@@ -100,6 +100,7 @@ export async function prepareGitHubPublicationOptionsRead(
       "req" | "hasCurrentClientAuthority" | "sessionMutationCommitGuard"
     >,
   { sessionKey, agentId: requestedAgentId }: SessionMutationTarget,
+  signal?: AbortSignal,
 ) {
   // Store discovery is stable within this request; session rows remain live reads.
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
@@ -109,6 +110,7 @@ export async function prepareGitHubPublicationOptionsRead(
   const userId = client?.authenticatedUserId;
   const access = client?.internal?.operatorAccessAuthority;
   const assertConnection = () => {
+    signal?.throwIfAborted();
     authority.assertCurrent();
     if (
       client?.authenticatedUserProfile?.profileId !== profileReference ||
@@ -142,7 +144,10 @@ export async function prepareGitHubPublicationOptionsRead(
       ? { kind: "ineligible" }
       : !profile
         ? { kind: "absent" }
-        : { kind: "eligible", action: preparePersonalGitHubAction(options) };
+        : {
+            kind: "eligible",
+            action: preparePersonalGitHubAction(options, "operator.read", signal),
+          };
   const readSession = (key: string, agentId?: string) => {
     const loaded = loadGatewaySessionEntryReadOnly(key, { agentId, targetDiscoveryCache });
     const filter = createSessionListEntryFilter({
@@ -195,9 +200,11 @@ export async function prepareGitHubPublicationOptionsRead(
 export function preparePersonalGitHubAction(
   options: Request,
   scope: "operator.read" | "operator.write" = "operator.read",
+  signal?: AbortSignal,
 ): PersonalGitHubAction {
   const { client, context } = options;
   const resolveOwner = () => {
+    signal?.throwIfAborted();
     if (
       !client?.connId ||
       client.connect?.role !== "operator" ||

@@ -337,7 +337,7 @@ describe("Gateway GitHub publication attribution", () => {
       createdAt: 1,
       lastActiveAt: 1,
     };
-    insertRegistryWorktree(process.env, worktree);
+    await insertRegistryWorktree(process.env, worktree);
     mocks.findWorktree.mockReturnValue(worktree);
     mocks.findWorktreeById.mockReturnValue(worktree);
     mocks.resolveRepository.mockResolvedValue({

@@ -28,7 +28,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { getSystemErrorMap } from "node:util";
-import { build, type BuildOptions } from "esbuild";
+import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -186,6 +186,12 @@ async function main() {
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
   if (args[0] === "doctor") {
     const provider = optionValue("provider"); const target = optionValue("target"); const windowsMode = optionValue("windows-mode");
+    if (process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_RESPONSE) {
+      const response = JSON.parse(process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_RESPONSE);
+      process.stdout.write(response.stdout ?? JSON.stringify({ ...response.report, provider }));
+      process.stderr.write(response.stderr ?? "");
+      process.exit(response.status);
+    }
     if (process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_PROGRESS) process.stderr.write(process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_PROGRESS + "\n");
     await wait(Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_DELAY_MS || "0", 10));
     if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET && target !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET) { process.stderr.write("doctor target mismatch: got=" + target + "\n"); process.exit(64); }
@@ -946,9 +952,11 @@ if (entry === ${JSON.stringify(implementationPath)}) {
           scripts: { "crabbox:run": "node scripts/crabbox-wrapper.mjs run" },
         }),
       );
+      // Match the repository policy: pnpm run must not reconcile borrowed dependencies.
+      writeFileSync(path.join(producer, "pnpm-workspace.yaml"), "verifyDepsBeforeRun: false\n");
       writeFileSync(
         path.join(producer, ".gitignore"),
-        "scripts/\nnode_modules/\npackage.json\npnpm-lock.yaml\n.crabbox/\n",
+        "scripts/\nnode_modules/\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\n.crabbox/\n",
       );
       writeFileSync(path.join(producer, "fixture.txt"), "original source\n");
       git("init", "-q", "-b", "main");
@@ -1628,17 +1636,47 @@ afterAll(() => {
 describe("scripts/crabbox-wrapper", () => {
   beforeAll(async () => {
     mkdirSync(path.dirname(bundledWrapperPath), { recursive: true });
-    const bundleOptions = {
+    const wrapperEntry = path.join(repoRoot, "scripts/crabbox-wrapper.mts");
+    const stubNamespace = "crabbox-wrapper-fixture";
+    // Routing fixtures substitute only the capsule producer; real-Git fixtures retain it.
+    const producerStub = path.join(
+      makeTempDir(tempDirs, "openclaw-source-owner-stub-"),
+      "producer.mjs",
+    );
+    writeFileSync(
+      producerStub,
+      String.raw`
+      import fs from "node:fs";
+      import path from "node:path";
+      export function prepareCrabboxSourceCapsule({syncRoot, base}) {
+        fs.mkdirSync(syncRoot, {recursive:true});
+        const directory = fs.mkdtempSync(path.join(syncRoot,"openclaw-crabbox-sync-"));
+        const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
+        fs.writeFileSync(path.join(directory,bundlePath), "fixture capsule");
+        return {directory,bundlePath,staging:{admitted(){},settled(){},preserved(){},hold(){}},sourceSha:"d".repeat(40),baseSha:base === "origin/main" ? process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123" : base,tree:"e".repeat(40),carrier:"f".repeat(40),digest:"a".repeat(64),cleanup(){fs.rmSync(directory,{recursive:true,force:true});}};
+      }
+    `,
+    );
+    const setupEntryName = `crabbox-setup-test-${process.pid}`;
+    const setupOutput = path.join(path.dirname(realBundledWrapperPath), `${setupEntryName}.mjs`);
+    // Share the dependency graph while preserving each fixture's lazy imports.
+    const result = await build({
       bundle: true,
-      // Preserve lazy imports so each fixture loads only the operation's runtime graph.
       splitting: true,
-      entryPoints: [path.join(repoRoot, "scripts/crabbox-wrapper.mts")],
+      entryPoints: {
+        [path.basename(realBundledWrapperPath, ".mjs")]: wrapperEntry,
+        [path.basename(bundledWrapperPath, ".mjs")]: stubNamespace,
+        [setupEntryName]: path.join(repoRoot, "scripts/crabbox-setup.mts"),
+      },
+      outdir: path.dirname(bundledWrapperPath),
+      entryNames: "[name]",
+      chunkNames: `crabbox-wrapper-test-${process.pid}-[name]-[hash]`,
+      outExtension: { ".js": ".mjs" },
+      metafile: true,
       format: "esm",
       logLevel: "silent",
       platform: "node",
       target: "node22",
-      // Keep the Windows worker and native dependency resolution at their source owner.
-      // Relocating this module into a fixture would relocate its import.meta.url too.
       plugins: [
         {
           name: "canonical-state-schemas",
@@ -1658,10 +1696,29 @@ describe("scripts/crabbox-wrapper", () => {
         {
           name: "managed-child-source-owner",
           setup(builder) {
+            // Keep Windows worker and native dependency resolution at their source owner.
             builder.onResolve({ filter: /lib\/managed-child-process\.mts$/ }, (args) => ({
               path: pathToFileURL(path.resolve(args.resolveDir, args.path)).href,
               external: true,
             }));
+          },
+        },
+        {
+          name: "source-capsule-fixture",
+          setup(builder) {
+            builder.onResolve({ filter: /^crabbox-wrapper-fixture$/ }, () => ({
+              path: wrapperEntry,
+              namespace: stubNamespace,
+            }));
+            builder.onLoad({ filter: /./, namespace: stubNamespace }, () => ({
+              contents: readFileSync(wrapperEntry, "utf8"),
+              loader: "ts",
+              resolveDir: path.dirname(wrapperEntry),
+            }));
+            builder.onResolve(
+              { filter: /crabbox-source-capsule\.mts$/, namespace: stubNamespace },
+              () => ({ path: producerStub }),
+            );
           },
         },
       ],
@@ -1669,64 +1726,29 @@ describe("scripts/crabbox-wrapper", () => {
       banner: {
         js: 'import { createRequire as createBundleRequire } from "node:module"; const require = createBundleRequire(import.meta.url);',
       },
-    } satisfies BuildOptions;
-    const buildFixture = async (outfile: string, options: BuildOptions = {}) => {
-      const result = await build({
-        ...bundleOptions,
-        ...options,
-        outdir: path.dirname(outfile),
-        entryNames: path.basename(outfile, ".mjs"),
-        chunkNames: `crabbox-wrapper-test-${process.pid}-[name]-[hash]`,
-        outExtension: { ".js": ".mjs" },
-        metafile: true,
-      });
-      const outputs = Object.keys(result.metafile.outputs).map((output) => path.resolve(output));
-      for (const output of outputs) {
-        bundledOutputPaths.add(output);
-      }
-      return outputs;
-    };
-    realWrapperOutputPaths = await buildFixture(realBundledWrapperPath);
+    });
+    const outputs = Object.keys(result.metafile.outputs).map((output) => path.resolve(output));
+    for (const output of outputs) {
+      bundledOutputPaths.add(output);
+    }
+    realWrapperOutputPaths = outputs.filter(
+      (output) => output !== setupOutput && output !== bundledWrapperPath,
+    );
     bundledSetupPath = path.join(
       makeTempDir(tempDirs, "openclaw-crabbox-setup-"),
       "openclaw/scripts/crabbox-setup.mjs",
     );
-    await buildFixture(bundledSetupPath, {
-      entryPoints: [path.join(repoRoot, "scripts/crabbox-setup.mts")],
-    });
-    // Argument routing tests isolate source preparation; the real-Git fixture below
-    // executes the unmocked producer and generated receiver together.
-    const producerStub = path.join(
-      makeTempDir(tempDirs, "openclaw-source-owner-stub-"),
-      "producer.mjs",
-    );
-    writeFileSync(
-      producerStub,
-      String.raw`
-      import fs from "node:fs";
-      import path from "node:path";
-      export function prepareCrabboxSourceCapsule({syncRoot, base}) {
-        fs.mkdirSync(syncRoot, {recursive:true});
-        const directory = fs.mkdtempSync(path.join(syncRoot,"openclaw-crabbox-sync-"));
-        const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
-        fs.writeFileSync(path.join(directory,bundlePath), "fixture capsule");
-        return {directory,bundlePath,staging:{admitted(){},settled(){},preserved(){},hold(){}},sourceSha:"d".repeat(40),baseSha:base === "origin/main" ? process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123" : base,tree:"e".repeat(40),carrier:"f".repeat(40),digest:"a".repeat(64),cleanup(){fs.rmSync(directory,{recursive:true,force:true});}};
+    mkdirSync(path.dirname(bundledSetupPath), { recursive: true });
+    for (const output of outputs) {
+      if (output !== realBundledWrapperPath && output !== bundledWrapperPath) {
+        copyFileSync(
+          output,
+          output === setupOutput
+            ? bundledSetupPath
+            : path.join(path.dirname(bundledSetupPath), path.basename(output)),
+        );
       }
-    `,
-    );
-    await buildFixture(bundledWrapperPath, {
-      plugins: [
-        ...bundleOptions.plugins,
-        {
-          name: "source-capsule-fixture",
-          setup(builder) {
-            builder.onResolve({ filter: /crabbox-source-capsule\.mts$/ }, () => ({
-              path: producerStub,
-            }));
-          },
-        },
-      ],
-    });
+    }
   });
 
   it("prepares the supported executable for later workflow steps", () => {
@@ -1827,6 +1849,7 @@ describe("scripts/crabbox-wrapper", () => {
       },
       includes: [
         "provider=aws requires managed Crabbox broker authentication for OpenClaw proof",
+        "provider (failed): class=broker_auth hint=crabbox_login",
         "login --url https://crabbox.openclaw.ai",
       ],
     },
@@ -1898,7 +1921,7 @@ describe("scripts/crabbox-wrapper", () => {
       includes: [
         "no ready provider for workload=ci-fast",
         "provider readiness",
-        '{"ok":false,"provider":"blacksmith-testbox","checks":',
+        "blacksmith-testbox:doctor exited 1: provider (failed)",
       ],
       matches: [/recovery: run `\S+crabbox doctor --provider blacksmith-testbox --json`/u],
     },
@@ -2065,6 +2088,83 @@ describe("scripts/crabbox-wrapper", () => {
     for (const pattern of matches) {
       expect(result.stderr).toMatch(pattern);
     }
+  });
+
+  it.each([
+    { route: "explicit", args: ["--provider", "aws"] },
+    { route: "workload", args: ["--workload", "ci-fast"] },
+  ])("reports bounded failed doctor checks after a long success prefix ($route)", ({ args }) => {
+    const result = runWrapper(brokerProviderHelp, ["run", ...args, "--", "echo ok"], {
+      env: {
+        OPENCLAW_FAKE_CRABBOX_DOCTOR_RESPONSE: JSON.stringify({
+          status: 1,
+          report: {
+            ok: false,
+            checks: [
+              { status: "ok", check: "config", message: "private-config-value".repeat(80) },
+              {
+                status: "failed",
+                check: "broker",
+                message:
+                  "Connection refused \u001b[31mtoken\u001b[0m=example-secret-not-real to\u0000ken=example-control-secret",
+                details: {
+                  class: "network",
+                  hint: "check_network_and_provider_endpoint",
+                  error: "private-provider-payload",
+                  token: "private-detail-token",
+                },
+              },
+              { status: "missing", check: "ssh" },
+              { status: " FaIlEd ", check: "provider", message: "unavailable ".repeat(300) },
+              {
+                status: "failed",
+                check: "coord",
+                message: "coordinator GET /v1/health: http 503: service unavailable",
+              },
+              { status: "failed", check: "extra", message: "omitted-payload" },
+            ],
+          },
+        }),
+      },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("doctor exited 1: broker (failed): class=network");
+    expect(result.stderr).toContain("hint=check_network_and_provider_endpoint Connection refused");
+    expect(result.stderr).toContain("ssh (missing)");
+    expect(result.stderr).toContain("provider (failed): unavailable");
+    expect(result.stderr).toContain(
+      "coord (failed): coordinator GET /v1/health: http 503: service unavailable; 1 more failed checks omitted",
+    );
+    for (const privateText of [
+      "private-config-value",
+      "example-secret-not-real",
+      "example-control-secret",
+      "private-provider-payload",
+      "private-detail-token",
+      "omitted-payload",
+      "\u001b",
+    ]) {
+      expect(result.stderr).not.toContain(privateText);
+    }
+    const diagnostic = result.stderr.split("\n").find((line) => line.includes("doctor exited"));
+    expect(diagnostic?.length).toBeLessThan(2400);
+  });
+
+  it("keeps sanitized CLI context when doctor JSON is incomplete", () => {
+    const result = runWrapper(brokerProviderHelp, ["run", "--provider", "aws", "--", "echo ok"], {
+      env: {
+        OPENCLAW_FAKE_CRABBOX_DOCTOR_RESPONSE: JSON.stringify({
+          status: 7,
+          stdout: '{"ok":false,"private":"private-partial-report",',
+          stderr: "[error] Connection refused token=example-secret-not-real\n",
+        }),
+      },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("invalid doctor JSON (exit 7): [error] Connection refused");
+    expect(result.stderr).not.toContain("private-partial-report");
+    expect(result.stderr).not.toContain("example-secret-not-real");
   });
 
   it("reuses the admitted version and runs one provider-scoped doctor per candidate", () => {

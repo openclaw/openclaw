@@ -21,14 +21,11 @@ function revealAttentionWithoutNavigation(event: MouseEvent) {
   event.stopPropagation();
 }
 
-export function renderSessionAttentionIcon(
-  attention: SidebarSessionAttention,
-  showTooltip = false,
-) {
+export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
   if (attention.kind === "none") {
     return nothing;
   }
-  const label = showTooltip ? sessionAttentionTooltipLabel(attention) : undefined;
+  const label = sessionAttentionTooltipLabel(attention);
   const icon =
     attention.kind === "question"
       ? icons.hand
@@ -48,7 +45,7 @@ export function renderSessionAttentionIcon(
     @click=${label ? revealAttentionWithoutNavigation : nothing}
     >${icon}</span
   >`;
-  return showTooltip && label ? renderSessionAttentionTooltip(attention, content) : content;
+  return label ? renderSessionAttentionTooltip(attention, content) : content;
 }
 
 export function sessionAttentionSubtitle(attention: SidebarSessionAttention): string | undefined {
@@ -193,8 +190,8 @@ export function renderTeamSessionSlots(
       row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
   }
   const state =
-    attention && attention.kind !== "none"
-      ? renderSessionAttentionIcon(attention, true)
+    attention.kind !== "none"
+      ? renderSessionAttentionIcon(attention)
       : failed
         ? html`<span
             class="sidebar-child-session__status--failed"

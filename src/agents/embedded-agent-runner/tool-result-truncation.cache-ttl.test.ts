@@ -1,12 +1,12 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import { serializeCacheTtlToolResultProjections } from "./cache-ttl-checkpoint.js";
 import { appendAttemptCacheTtlIfNeeded } from "./run/attempt-thread-helpers.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
-  serializeCacheTtlToolResultProjections,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
 import {

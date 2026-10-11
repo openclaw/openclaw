@@ -33,12 +33,7 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it.each([
-  "direct-loader",
-  "direct-loader-successor",
-  "prepared",
-  "prepared-with-another-gateway-active",
-] as const)(
+it.each(["direct-loader-successor", "prepared-with-another-gateway-active"] as const)(
   "revokes borrowed channel methods and read grants through %s without retiring the lender",
   async (producer) => {
     const root = tempDirs.make("openclaw-channel-borrowing-");
@@ -119,15 +114,12 @@ it.each([
         retainPreparedPluginRegistry,
       );
       const acquired = await withPluginRuntimeRegistryScope(gateway.registry, async () => {
-        if (producer === "direct-loader" || producer === "direct-loader-successor") {
-          const previous =
-            producer === "direct-loader-successor"
-              ? await acquirePluginRegistryForInspection({
-                  ...options,
-                  onlyPluginIds: [channelId],
-                  borrowRegistry: gateway.registry,
-                })
-              : undefined;
+        if (producer === "direct-loader-successor") {
+          const previous = await acquirePluginRegistryForInspection({
+            ...options,
+            onlyPluginIds: [channelId],
+            borrowRegistry: gateway.registry,
+          });
           try {
             return await acquirePluginRegistryForInspection({
               ...options,

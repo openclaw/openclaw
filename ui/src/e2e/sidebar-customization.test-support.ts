@@ -104,7 +104,7 @@ export async function openSidebarMoreMenu(page: Page): Promise<Locator> {
     return { shown, dispose: () => controller.abort() };
   });
   try {
-    await sidebar.locator(".sidebar-nav__head-action").click();
+    await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
     await transition.evaluate(({ shown }) => shown);
   } finally {
     await transition.evaluate(({ dispose }) => dispose());

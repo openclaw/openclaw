@@ -314,7 +314,7 @@ describe("session accessor readonly listing", () => {
     listSessionEntriesReadOnly(scope);
     const database = openOpenClawAgentDatabase(scope);
     const update = database.db.prepare(
-      "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
+      "UPDATE session_nodes SET entry_json = ?, updated_at = ?, entry_valid = 0 WHERE session_key = ?",
     );
     update.run(
       JSON.stringify({ sessionId: "pending-updated", updatedAt: 30, label: "fresh" }),

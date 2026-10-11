@@ -2548,6 +2548,10 @@
     "target": "Gateway 网关服务与进程"
   },
   {
+    "source": "Config validation and checks",
+    "target": "配置验证与检查"
+  },
+  {
     "source": "Config validation and probes",
     "target": "配置校验与探针"
   },
@@ -5038,5 +5042,13 @@
   {
     "source": "Deploy a team server",
     "target": "部署团队服务器"
+  },
+  {
+    "source": "Worker-local inference",
+    "target": "工作器本地推理"
+  },
+  {
+    "source": "Recommended models",
+    "target": "推荐模型"
   }
 ]

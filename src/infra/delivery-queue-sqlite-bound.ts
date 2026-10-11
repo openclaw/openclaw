@@ -183,6 +183,10 @@ export function inflateDeliveryQueueRow(
   };
 }
 
+export function inflateDeliveryQueueRows(rows: readonly DeliveryQueueSqliteRow[]) {
+  return rows.flatMap((row) => inflateDeliveryQueueRow(row) ?? []);
+}
+
 function deliveryQueueMetadata(
   queueName: string,
   entry: DeliveryQueueEntryState | Record<string, unknown>,
@@ -350,8 +354,7 @@ export function loadDeliveryQueueEntryInDatabase(
   mode: DeliveryQueueReadMode = "all",
 ): DeliveryQueueEntryState | null {
   const queries = deliveryQueueReads(database.db);
-  const readMode = mode === "all" || mode === "pending" ? mode : "unfinished";
-  const query = (queries[readMode] ??= createDeliveryQueueRead(database, readMode));
+  const query = (queries[mode] ??= createDeliveryQueueRead(database, mode));
   const row = query({ queueName, id });
   return row ? inflateDeliveryQueueRow(row) : null;
 }

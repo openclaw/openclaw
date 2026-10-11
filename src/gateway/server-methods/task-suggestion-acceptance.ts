@@ -1,4 +1,3 @@
-// Settlement and rollback for claimed task suggestions and partial sessions.
 import {
   ErrorCodes,
   errorShape,

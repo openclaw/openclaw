@@ -26,11 +26,11 @@ import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.j
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
-  loadSubagentRunsForSessionFromSqlite,
-} from "./subagent-registry.store.sqlite.js";
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
+import { loadSubagentRunsForSessionFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -123,7 +123,7 @@ describe("parent runtime facts from retained completion obligations", () => {
       const agentWrites = agent.prepare("SELECT total_changes() AS count").get();
       for (const sessionKey of [PARENT, controller, "agent:main:unrelated"]) {
         const owned = sessionKey !== "agent:main:unrelated";
-        const loaded = loadSubagentRunsForSessionFromSqlite(sessionKey);
+        const loaded = loadSubagentRunsForSessionFromSqlite(sessionKey, { db: shared });
         expect(loaded).toHaveLength(owned ? 1 : 0);
         if (owned) {
           expect(loaded[0]).toMatchObject({

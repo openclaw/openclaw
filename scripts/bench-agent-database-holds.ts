@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate as yieldTurn } from "node:timers/promises";
-import { readMainSessionRecoveryCheckpoint } from "../src/agents/main-session-recovery/main-session-restart-recovery-replay-safety.js";
+import { readMainSessionRecoveryCheckpoint } from "../src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { SessionManager } from "../src/agents/sessions/session-manager.js";
 import {
   replaceTranscriptEvents,

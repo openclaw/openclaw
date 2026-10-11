@@ -388,7 +388,6 @@ const REEF_DELIVERY_OVERDUE_NOTICE_MS = 10 * 60 * 1_000;
 interface ReefOverdueDeliveryStore {
   overdueOutboundDeliveries(
     olderThanMs: number,
-    now?: number,
   ): Array<{ peer: string; id: string; sentAt: number }>;
   markOutboundDeliveryOverdueNotified(peer: string, id: string): boolean;
 }
@@ -403,12 +402,9 @@ interface ReefOverdueDeliveryStore {
 export async function notifyOverdueReefDeliveries(params: {
   trust: ReefOverdueDeliveryStore;
   ownerNotice: (notice: ReefOwnerNotice) => Promise<void>;
-  thresholdMs?: number;
-  now?: number;
 }): Promise<void> {
-  const thresholdMs = params.thresholdMs ?? REEF_DELIVERY_OVERDUE_NOTICE_MS;
-  for (const overdue of params.trust.overdueOutboundDeliveries(thresholdMs, params.now)) {
-    const elapsedMs = (params.now ?? Date.now()) - overdue.sentAt;
+  for (const overdue of params.trust.overdueOutboundDeliveries(REEF_DELIVERY_OVERDUE_NOTICE_MS)) {
+    const elapsedMs = Date.now() - overdue.sentAt;
     const minutes = Math.max(1, Math.round(elapsedMs / 60_000));
     // Dispatch before marking: a crash in between re-sends one deduped notice
     // on the next tick, whereas marking first could silence it permanently —
@@ -434,14 +430,13 @@ export async function notifyOverdueReefDeliveries(params: {
 export function createReefOwnerNoticeHandler(params: {
   runtime: PluginRuntime;
   cfg: ResolveAgentRouteParams["cfg"];
-  accountId: string;
   handle: string;
 }): (notice: ReefOwnerNotice) => Promise<void> {
   return async (notice) => {
     const route = params.runtime.channel.routing.resolveAgentRoute({
       cfg: params.cfg,
       channel: "reef",
-      accountId: params.accountId,
+      accountId: "default",
       peer: { kind: "direct", id: notice.peer ?? params.handle },
     });
     const queued = params.runtime.system.enqueueSystemEvent(notice.text, {

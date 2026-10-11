@@ -207,6 +207,7 @@ type WorkerSessionToolTestOptions = {
   collectExecutionIdentity?: boolean;
   operatorProfileId?: string;
   operatorScopes?: readonly string[];
+  inheritedToolPolicySource?: "sender";
 };
 
 async function createWorkerSessionToolTestFixture(
@@ -385,6 +386,7 @@ async function createWorkerSessionToolTestFixture(
     },
   );
   const executorParams: Parameters<typeof createWorkerSessionToolExecutor>[0] = {
+    inheritedToolPolicySource: options.inheritedToolPolicySource,
     resolveGatewayContext,
     placements,
     dispatchChild,

@@ -28,8 +28,13 @@ import {
   getRuntimeExternalCliProfileIds,
   setRuntimeExternalCliProfileIds,
 } from "./runtime-external-profile-references.js";
-import { resolveAuthProfileDatabasePath, type AuthProfileStoreOwner } from "./sqlite.js";
-import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  AuthProfileStoreOwner,
+  RuntimeAuthProfileStore,
+} from "./types.js";
 
 export function createEmptyAuthProfileStore(): AuthProfileStore {
   return { version: AUTH_STORE_VERSION, profiles: {} };
@@ -60,14 +65,22 @@ export function markRuntimePersistedProfiles(
 }
 
 export function setRuntimeLocalProfileMetadata(
-  store: AuthProfileStore,
+  store: RuntimeAuthProfileStore,
   localProfileIds: Iterable<string>,
   runtimeInheritsMainState = false,
+  localStore?: AuthProfileStore,
 ): RuntimeAuthProfileStore {
   return {
     ...store,
     runtimeLocalProfileIds: [...new Set(localProfileIds)].toSorted(),
     ...(runtimeInheritsMainState ? { runtimeInheritsMainState: true } : {}),
+    ...(localStore
+      ? {
+          runtimeHasLocalOAuthProfiles: Object.values(localStore.profiles).some(
+            (credential) => credential.type === "oauth",
+          ),
+        }
+      : {}),
   };
 }
 
@@ -116,7 +129,70 @@ export function mergeLocalAuthProfileStoreWithInheritedStore(
     stripRuntimeExternalProfileMetadata(merged),
     listRuntimeLocalProfileIds(localStore, inheritedStore),
     runtimeStoreInheritsMainState(merged, localStore),
+    localStore,
   );
+}
+
+/** Unchanged local rows and selection state need only the committed shared credentials. */
+export function updateRuntimeAuthProfileStoreInheritedCredentials(
+  store: RuntimeAuthProfileStore,
+  inherited: AuthProfileStore,
+  mutation: { stateChanged: boolean; profileSetChanged?: boolean; profileIds: Iterable<string> },
+): RuntimeAuthProfileStore | undefined {
+  if (
+    store.runtimeHasLocalOAuthProfiles !== false ||
+    !store.runtimeLocalProfileIds ||
+    mutation.stateChanged ||
+    mutation.profileSetChanged
+  ) {
+    return undefined;
+  }
+  const local = new Set(store.runtimeLocalProfileIds);
+  const changed = [...mutation.profileIds].filter((id) => !local.has(id));
+  return replaceRuntimeAuthProfileStoreCredentials(store, inherited, changed);
+}
+
+/** Replace only admitted credential identities, retaining the host's same-ref materializations. */
+export function replaceRuntimeAuthProfileStoreCredentials(
+  store: RuntimeAuthProfileStore,
+  committed: AuthProfileStore,
+  changed: readonly string[],
+): RuntimeAuthProfileStore | undefined {
+  if (changed.length === 0) {
+    return store;
+  }
+  const profiles = { ...store.profiles };
+  const external = new Set(store.runtimeExternalProfileIds);
+  for (const id of changed) {
+    const next = committed.profiles[id];
+    const credential = next && preserveResolvedCredential(next, profiles[id]);
+    if (!profiles[id] || !credential) {
+      return undefined;
+    }
+    if (!isDeepStrictEqual(profiles[id], credential)) {
+      external.delete(id);
+    }
+    profiles[id] = credential;
+  }
+  const next: RuntimeAuthProfileStore = {
+    ...store,
+    version: Math.max(store.version, committed.version),
+    profiles,
+    runtimePersistedProfileIds: [
+      ...new Set([...(store.runtimePersistedProfileIds ?? []), ...changed]),
+    ].toSorted(),
+    runtimeExternalProfileIds:
+      external.size > 0 || store.runtimeExternalProfileIdsAuthoritative
+        ? [...external].toSorted()
+        : undefined,
+  };
+  setRuntimeExternalCliProfileIds(
+    next,
+    getRuntimeExternalCliProfileIds(store).filter(
+      (id) => !changed.includes(id) || external.has(id),
+    ),
+  );
+  return next;
 }
 
 /** Compose the selected durable owner without publishing or discovering an ambient environment. */
@@ -281,15 +357,6 @@ export function runtimeAuthSharedOwnerRebound(
     : !isDeepStrictEqual(previous, next);
 }
 
-export function runtimeAuthCredentialState(
-  entries: Iterable<[string, RuntimeAuthProfileStore]>,
-): Array<readonly [string, AuthProfileStore["profiles"]]> {
-  return Array.from(entries)
-    .filter(([, store]) => Object.keys(store.profiles).length > 0)
-    .map(([key, store]) => [key, store.profiles] as const)
-    .toSorted(([left], [right]) => left.localeCompare(right));
-}
-
 /** Model metadata follows credentials and availability, never rotation bookkeeping. */
 export function runtimeAuthMetadataState(store: RuntimeAuthProfileStore) {
   return {
@@ -358,18 +425,16 @@ export function pruneAuthProfileStoreReferences(
         ),
       )
     : undefined;
-  store.runtimePersistedProfileIds = store.runtimePersistedProfileIds
-    ?.filter((profileId) => keptProfileIds.has(profileId))
-    .toSorted();
+  for (const field of [
+    "runtimePersistedProfileIds",
+    "runtimeLocalProfileIds",
+    "runtimeExternalProfileIds",
+  ] as const) {
+    store[field] = store[field]?.filter((profileId) => keptProfileIds.has(profileId)).toSorted();
+  }
   if (store.runtimePersistedProfileIds?.length === 0) {
     store.runtimePersistedProfileIds = undefined;
   }
-  store.runtimeLocalProfileIds = store.runtimeLocalProfileIds
-    ?.filter((profileId) => keptProfileIds.has(profileId))
-    .toSorted();
-  store.runtimeExternalProfileIds = store.runtimeExternalProfileIds
-    ?.filter((profileId) => keptProfileIds.has(profileId))
-    .toSorted();
   setRuntimeExternalCliProfileIds(
     store,
     getRuntimeExternalCliProfileIds(store).filter((profileId) => keptProfileIds.has(profileId)),
@@ -391,41 +456,37 @@ export function preserveResolvedSecretBackedCredentials(params: {
 }): AuthProfileStore {
   const next = cloneAuthProfileStore(params.next);
   for (const [profileId, credential] of Object.entries(next.profiles)) {
-    const existing = params.existing.profiles[profileId];
-    if (
-      credential.type === "api_key" &&
-      existing?.type === "api_key" &&
-      credential.key === undefined &&
-      existing.key !== undefined &&
-      isSecretRef(credential.keyRef) &&
-      isDeepStrictEqual(credential.keyRef, existing.keyRef)
-    ) {
-      next.profiles[profileId] = { ...credential, key: existing.key };
-    } else if (
-      credential.type === "token" &&
-      existing?.type === "token" &&
-      credential.token === undefined &&
-      existing.token !== undefined &&
-      isSecretRef(credential.tokenRef) &&
-      isDeepStrictEqual(credential.tokenRef, existing.tokenRef)
-    ) {
-      next.profiles[profileId] = { ...credential, token: existing.token };
-    }
+    next.profiles[profileId] = preserveResolvedCredential(
+      credential,
+      params.existing.profiles[profileId],
+    );
   }
   return next;
 }
 
-export function withCredentialSources(
-  store: AuthProfileStore,
-  databasePath: string,
-): RuntimeAuthProfileStore {
-  return {
-    ...store,
-    runtimeCredentialSources: Object.fromEntries(
-      Object.entries(store.profiles).map(([profileId, credential]) => [
-        profileId,
-        { databasePath, provider: credential.provider },
-      ]),
-    ),
-  };
+function preserveResolvedCredential(
+  credential: AuthProfileCredential,
+  existing: AuthProfileCredential | undefined,
+): AuthProfileCredential {
+  if (
+    credential.type === "api_key" &&
+    existing?.type === "api_key" &&
+    credential.key === undefined &&
+    existing.key !== undefined &&
+    isSecretRef(credential.keyRef) &&
+    isDeepStrictEqual(credential.keyRef, existing.keyRef)
+  ) {
+    return { ...credential, key: existing.key };
+  }
+  if (
+    credential.type === "token" &&
+    existing?.type === "token" &&
+    credential.token === undefined &&
+    existing.token !== undefined &&
+    isSecretRef(credential.tokenRef) &&
+    isDeepStrictEqual(credential.tokenRef, existing.tokenRef)
+  ) {
+    return { ...credential, token: existing.token };
+  }
+  return credential;
 }

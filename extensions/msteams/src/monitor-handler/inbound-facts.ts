@@ -37,20 +37,12 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
   return "";
 }
 
-export type MSTeamsDebounceEntry = {
-  context: MSTeamsTurnContext;
-  rawText: string;
-  text: string;
-  attachments: MSTeamsAttachmentLike[];
-  wasMentioned: boolean;
-  implicitMentionKinds: Array<"reply_to_bot">;
-  turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
-};
+export type MSTeamsDebounceEntry = Awaited<ReturnType<typeof prepareMSTeamsDebounceEntry>>;
 
 export async function prepareMSTeamsDebounceEntry(params: {
   context: MSTeamsTurnContext;
   turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
-}): Promise<MSTeamsDebounceEntry> {
+}) {
   const activity = params.context.activity;
   const attachments: MSTeamsAttachmentLike[] = Array.isArray(activity.attachments)
     ? activity.attachments

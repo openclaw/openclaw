@@ -97,12 +97,9 @@ export class NativeModelSetup {
       if (!isCurrent()) {
         return;
       }
-      if (!mutation.ok) {
-        this.nativeModelError = mutation.error;
-        return;
-      }
-      if (!mutation.refresh.ok) {
-        this.nativeModelError = mutation.refresh.error;
+      const result = mutation.ok ? mutation.refresh : mutation;
+      if (!result.ok) {
+        this.nativeModelError = result.error;
         return;
       }
       await context.agents.refreshList();

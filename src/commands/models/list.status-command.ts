@@ -24,7 +24,6 @@ import {
 } from "../../agents/auth-profiles/store-runtime.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   resolveAgentHarnessOwnerPluginIds,
@@ -77,6 +76,7 @@ import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../run
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
+import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
 import {
   formatProviderAuthProfileCounts,
   resolveProviderAuthOverview,
@@ -118,10 +118,7 @@ type StatusProviderUseRef = {
   routeScope: "text" | "image";
 };
 
-type StatusProviderUse = {
-  provider: string;
-  model: string;
-  allowCodexRuntimeFallback: boolean;
+type StatusProviderUse = Omit<StatusProviderUseRef, "routeScope"> & {
   evaluation: ModelAuthAvailabilityEvaluation;
   usesCodexRuntimeAuth: boolean;
   runtimeAvailability?: AgentHarnessRuntimeAvailability;
@@ -131,6 +128,16 @@ type StatusProviderUse = {
 function resolveStatusProviderUseIncompatibility(usage: StatusProviderUse) {
   const routeResolution = usage.evaluation.routeResolution;
   return routeResolution?.kind === "incompatible" ? routeResolution : usage.runtimeIncompatibility;
+}
+
+function groupByProvider<T extends { provider: string }>(entries: readonly T[]): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const entry of entries) {
+    const group = groups.get(entry.provider) ?? [];
+    group.push(entry);
+    groups.set(entry.provider, group);
+  }
+  return groups;
 }
 
 type StatusRuntimeAuthStatus = "usable" | "missing" | "indeterminate";
@@ -155,47 +162,38 @@ type StatusRuntimeAuthRoute =
       runtimePluginIds: string[];
     });
 
-type StatusModelRouteIssue =
+type StatusModelRouteIssue = {
+  provider: string;
+  model: string;
+  message: string;
+} & (
   | {
       kind: "incompatible";
-      provider: string;
-      model: string;
       code: string;
-      message: string;
     }
   | {
       kind: "indeterminate";
-      provider: string;
-      model: string;
       evidence?: ModelAuthAvailabilityEvaluation["evidence"];
-      message: string;
     }
   | {
       kind: "missing-auth";
-      provider: string;
-      model: string;
       authRequirement: ProviderModelRouteCandidate["authRequirement"];
-      message: string;
-    };
+    }
+);
 
-function parseOptionalPositiveFiniteOption(raw: unknown, label: string, fallback: number): number {
+function parseProbeOption(
+  raw: unknown,
+  label: string,
+  fallback: number,
+  kind: "number" | "integer" = "number",
+): number {
   if (raw === undefined || raw === null) {
     return fallback;
   }
-  const parsed = parseStrictFiniteNumber(raw);
+  const parsed =
+    kind === "integer" ? parseStrictPositiveInteger(raw) : parseStrictFiniteNumber(raw);
   if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be a positive number.`);
-  }
-  return parsed;
-}
-
-function parseOptionalPositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
-  if (raw === undefined || raw === null) {
-    return fallback;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    throw new Error(`${label} must be a positive integer.`);
+    throw new Error(`${label} must be a positive ${kind}.`);
   }
   return parsed;
 }
@@ -232,13 +230,9 @@ function finishModelsStatusOutput(
   check: boolean | undefined,
   checkStatus: number,
 ): void {
-  if (check) {
-    if (!requestExitAfterOneShotOutput(runtime, checkStatus)) {
-      runtime.exit(checkStatus);
-    }
-    return;
+  if (!requestExitAfterOneShotOutput(runtime, check ? checkStatus : undefined) && check) {
+    runtime.exit(checkStatus);
   }
-  requestExitAfterOneShotOutput(runtime);
 }
 
 export async function modelsStatusCommand(
@@ -427,47 +421,35 @@ export async function modelsStatusCommand(
           .filter(Boolean),
       );
       const providersFromModels = new Set<string>();
+      const modelCandidates: string[] = [];
       const providerUseRefs: StatusProviderUseRef[] = [];
-      const addProviderUse = (
-        raw: string | undefined,
-        allowCodexRuntimeFallback: boolean,
-        routeScope: StatusProviderUseRef["routeScope"],
-      ) => {
-        const ref = resolveStatusModelRef(raw);
-        if (ref?.provider) {
-          const provider = normalizeProviderId(ref.provider);
-          providerUseRefs.push({
-            provider,
-            model: ref.model,
-            allowCodexRuntimeFallback,
-            routeScope,
-          });
-        }
-      };
-      for (const raw of [
-        defaultLabel,
-        ...fallbacks,
-        imageModel,
-        ...imageFallbacks,
-        utilityModelRef ?? "",
-        ...configuredAllowRefs,
-      ]) {
-        const ref = resolveStatusModelRef(raw);
-        if (ref?.provider) {
-          providersFromModels.add(normalizeProviderId(ref.provider));
+      for (const [refs, routeScope, allowCodexRuntimeFallback] of [
+        [[defaultLabel, ...fallbacks], "text", true],
+        [[imageModel, ...imageFallbacks], "image", false],
+        // Utility completions use their own text route without the primary's runtime fallback.
+        [[utilityModelRef], "text", false],
+        [configuredAllowRefs, undefined, false],
+      ] as const) {
+        for (const raw of refs) {
+          const ref = resolveStatusModelRef(raw);
+          if (!ref) {
+            continue;
+          }
+          modelCandidates.push(`${ref.provider}/${ref.model}`);
+          if (ref.provider) {
+            const provider = normalizeProviderId(ref.provider);
+            providersFromModels.add(provider);
+            if (routeScope) {
+              providerUseRefs.push({
+                provider,
+                model: ref.model,
+                allowCodexRuntimeFallback,
+                routeScope,
+              });
+            }
+          }
         }
       }
-      for (const raw of [defaultLabel, ...fallbacks]) {
-        addProviderUse(raw, true, "text");
-      }
-      for (const raw of [imageModel, ...imageFallbacks]) {
-        addProviderUse(raw, false, "image");
-      }
-      // Utility completions (narration/titles) are a text-route auth consumer in
-      // their own right: an OAuth-healthy primary does not prove the utility's
-      // plain API path, so the ref gets full route analysis without inheriting
-      // the primary's codex-runtime fallback.
-      addProviderUse(utilityModelRef, false, "text");
       // Display the canonical provider/model: utilityModel accepts aliases, and
       // route issues/probes always report the resolved ref.
       const resolvedUtilityRef = utilityModelRef
@@ -882,6 +864,10 @@ export async function modelsStatusCommand(
             candidate.model === usage.model &&
             candidate.allowCodexRuntimeFallback === usage.allowCodexRuntimeFallback,
         )?.runtime;
+      const evaluateProviderUseAuth = (usage: StatusProviderUse) => {
+        const runtimeProvider = resolveCliRuntimeAuthProvider(usage);
+        return runtimeProvider ? authResolver.evaluateModelAuth(runtimeProvider) : usage.evaluation;
+      };
       const hasUsableAuthForProviderInUse = (usage: (typeof providerUses)[number]): boolean => {
         const cliRuntimeAuthProvider = resolveCliRuntimeAuthProvider(usage);
         if (cliRuntimeAuthProvider) {
@@ -894,14 +880,8 @@ export async function modelsStatusCommand(
         // Unknown evidence is reported as indeterminate, not missing auth.
         return usage.evaluation.availability !== false;
       };
-      const codexRuntimeUsagesByProvider = new Map<string, StatusProviderUse[]>();
-      for (const usage of codexRuntimeAuthUsages) {
-        const usages = codexRuntimeUsagesByProvider.get(usage.provider) ?? [];
-        usages.push(usage);
-        codexRuntimeUsagesByProvider.set(usage.provider, usages);
-      }
       const runtimeAuthRouteEntries: Array<readonly [string, StatusRuntimeAuthRoute]> = [
-        ...Array.from(codexRuntimeUsagesByProvider.entries()).map(([provider, usages]) => {
+        ...Array.from(groupByProvider(codexRuntimeAuthUsages)).map(([provider, usages]) => {
           const representative =
             usages.find((usage) => usage.evaluation.availability === true) ?? usages[0];
           const effective = resolveRuntimeAuthRouteEffective(
@@ -915,27 +895,25 @@ export async function modelsStatusCommand(
               ? "missing"
               : "indeterminate";
           const runtimeAvailability = representative?.runtimeAvailability;
+          const base: StatusRuntimeAuthRoute = {
+            provider,
+            runtime: "codex",
+            authProvider: codexProvider,
+            status: authStatus,
+            effective,
+          };
           const route: StatusRuntimeAuthRoute =
             runtimeAvailability?.status === "unavailable"
               ? {
-                  provider,
-                  runtime: "codex",
-                  authProvider: codexProvider,
+                  ...base,
                   status: "unavailable",
-                  effective,
                   authStatus,
                   runtimeStatus: runtimeAvailability.status,
                   runtimeReason: runtimeAvailability.reason,
                   runtimeDetail: runtimeAvailability.detail,
                   runtimePluginIds: runtimeAvailability.ownerPluginIds,
                 }
-              : {
-                  provider,
-                  runtime: "codex",
-                  authProvider: codexProvider,
-                  status: authStatus,
-                  effective,
-                };
+              : base;
           return [`${provider}:codex:${codexProvider}`, route] as const;
         }),
         ...cliRuntimeAuthUsages.map((usage) => {
@@ -962,46 +940,37 @@ export async function modelsStatusCommand(
         new Map<string, StatusRuntimeAuthRoute>(runtimeAuthRouteEntries).values(),
       ).toSorted((a, b) => a.provider.localeCompare(b.provider));
       const modelRouteIssues = providerUses.flatMap<StatusModelRouteIssue>((usage) => {
-        const cliRuntimeAuthProvider = resolveCliRuntimeAuthProvider(usage);
-        const evaluation = cliRuntimeAuthProvider
-          ? authResolver.evaluateModelAuth(cliRuntimeAuthProvider)
-          : usage.evaluation;
+        const evaluation = evaluateProviderUseAuth(usage);
         const incompatibility = resolveStatusProviderUseIncompatibility(usage);
         if (incompatibility) {
-          return [
-            {
-              kind: "incompatible" as const,
-              provider: usage.provider,
-              model: usage.model,
-              code: incompatibility.code,
-              message: incompatibility.message,
-            },
-          ];
+          return {
+            kind: "incompatible" as const,
+            provider: usage.provider,
+            model: usage.model,
+            code: incompatibility.code,
+            message: incompatibility.message,
+          };
         }
         if (evaluation.availability === undefined) {
-          return [
-            {
-              kind: "indeterminate" as const,
-              provider: usage.provider,
-              model: usage.model,
-              ...(evaluation.evidence ? { evidence: evaluation.evidence } : {}),
-              message: `Auth readiness could not be confirmed for ${usage.provider}/${usage.model}.`,
-            },
-          ];
+          return {
+            kind: "indeterminate" as const,
+            provider: usage.provider,
+            model: usage.model,
+            ...(evaluation.evidence ? { evidence: evaluation.evidence } : {}),
+            message: `Auth readiness could not be confirmed for ${usage.provider}/${usage.model}.`,
+          };
         }
         if (!usage.evaluation.selectedRoute || evaluation.availability) {
           return [];
         }
         const authRequirement = usage.evaluation.selectedRoute.authRequirement;
-        return [
-          {
-            kind: "missing-auth" as const,
-            provider: usage.provider,
-            model: usage.model,
-            authRequirement,
-            message: `No usable ${authRequirement} authentication is available for ${usage.provider}/${usage.model}.`,
-          },
-        ];
+        return {
+          kind: "missing-auth" as const,
+          provider: usage.provider,
+          model: usage.model,
+          authRequirement,
+          message: `No usable ${authRequirement} authentication is available for ${usage.provider}/${usage.model}.`,
+        };
       });
       // Utility (or duplicate fallback) refs can repeat a configured model;
       // identical diagnostics collapse while genuinely different evaluations
@@ -1023,46 +992,24 @@ export async function modelsStatusCommand(
         )
         .toSorted((a, b) => a.localeCompare(b));
 
-      const probeProfileIds = (() => {
-        if (!opts.probeProfile) {
-          return [];
-        }
-        const raw = Array.isArray(opts.probeProfile) ? opts.probeProfile : [opts.probeProfile];
-        return raw
-          .flatMap((value) => (value ?? "").split(","))
-          .map((value) => value.trim())
-          .filter(Boolean);
-      })();
-      const probeTimeoutMs = parseOptionalPositiveFiniteOption(
-        opts.probeTimeout,
-        "--probe-timeout",
-        8000,
-      );
-      const probeConcurrency = parseOptionalPositiveIntegerOption(
+      const probeProfileIds = [opts.probeProfile ?? []]
+        .flat()
+        .flatMap((value) => (value ?? "").split(","))
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const probeTimeoutMs = parseProbeOption(opts.probeTimeout, "--probe-timeout", 8000);
+      const probeConcurrency = parseProbeOption(
         opts.probeConcurrency,
         "--probe-concurrency",
         2,
+        "integer",
       );
-      const probeMaxTokens = parseOptionalPositiveIntegerOption(
+      const probeMaxTokens = parseProbeOption(
         opts.probeMaxTokens,
         "--probe-max-tokens",
         8,
+        "integer",
       );
-
-      const rawCandidates = [
-        rawModel || resolvedLabel,
-        ...fallbacks,
-        imageModel,
-        ...imageFallbacks,
-        // Probe the configured utility model itself; an arbitrary catalog model
-        // from the same provider can sit on a different auth route.
-        utilityModelRef ?? "",
-        ...configuredAllowRefs,
-      ].filter(Boolean);
-      const resolvedCandidates = rawCandidates
-        .map(resolveStatusModelRef)
-        .filter((ref): ref is { provider: string; model: string } => Boolean(ref));
-      const modelCandidates = resolvedCandidates.map((ref) => `${ref.provider}/${ref.model}`);
 
       let probeSummary: AuthProbeSummary | undefined;
       if (opts.probe) {
@@ -1071,7 +1018,7 @@ export async function modelsStatusCommand(
           listProbeRuntimeLoader.load(),
         ]);
         probeSummary = await withProgressTotals(
-          { label: "Probing auth profiles…", total: 1 },
+          { label: "Checking auth profiles…", total: 1 },
           async (update) => {
             return await runAuthProbes({
               cfg,
@@ -1096,68 +1043,36 @@ export async function modelsStatusCommand(
         );
       }
 
-      const providersWithOauth = providerAuth
-        .filter(
-          (entry) =>
-            entry.profiles.oauth > 0 ||
-            entry.profiles.token > 0 ||
-            entry.env?.value === "OAuth (env)",
-        )
-        .map((entry) => {
-          const count =
-            entry.profiles.oauth +
-            entry.profiles.token +
-            (entry.env?.value === "OAuth (env)" ? 1 : 0);
-          return `${entry.provider} (${count})`;
-        });
+      const providersWithOauth = providerAuth.flatMap((entry) => {
+        const count =
+          entry.profiles.oauth +
+          entry.profiles.token +
+          (entry.env?.value === "OAuth (env)" ? 1 : 0);
+        return count > 0 ? [`${entry.provider} (${count})`] : [];
+      });
 
       const oauthProfiles = authHealth.profiles.filter(
         (profile) => profile.type === "oauth" || profile.type === "token",
       );
 
-      const unusableProfiles = (() => {
-        const now = Date.now();
-        const out: Array<{
-          profileId: string;
-          provider?: string;
-          kind: "cooldown" | "disabled";
-          reason?: string;
-          classification?: string;
-          recoveryHint: string;
-          until: number;
-          remainingMs: number;
-        }> = [];
-        for (const profileId of Object.keys(store.usageStats ?? {})) {
-          const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
-          if (!unusableUntil || now >= unusableUntil) {
-            continue;
-          }
-          const stats = store.usageStats?.[profileId];
-          const kind =
-            typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
-              ? "disabled"
-              : "cooldown";
-          const reason = kind === "disabled" ? stats?.disabledReason : stats?.cooldownReason;
-          const classification = kind === "cooldown" ? stats?.cooldownClassification : undefined;
-          const provider = store.profiles[profileId]?.provider;
-          out.push({
-            profileId,
-            provider,
-            kind,
-            reason,
-            ...(classification ? { classification } : {}),
-            recoveryHint: buildAuthProfileUnusableHint({
-              kind,
-              reason,
-              provider: provider ?? profileId,
-              profileId,
-            }),
-            until: unusableUntil,
-            remainingMs: unusableUntil - now,
-          });
-        }
-        return out.toSorted((a, b) => a.remainingMs - b.remainingMs);
-      })();
+      const unusableProfiles = listUnavailableAuthProfiles(store)
+        .map(({ profileId, provider, kind, reason, classification, until, remainingMs }) =>
+          Object.assign(
+            { profileId, provider, kind, reason },
+            classification ? { classification } : {},
+            {
+              recoveryHint: buildAuthProfileUnusableHint({
+                kind,
+                reason,
+                provider: provider ?? profileId,
+                profileId,
+              }),
+              until,
+              remainingMs,
+            },
+          ),
+        )
+        .toSorted((a, b) => a.remainingMs - b.remainingMs);
 
       const checkStatus = (() => {
         type RequirementHealth = "ok" | "expiring" | "missing" | "indeterminate";
@@ -1165,10 +1080,7 @@ export async function modelsStatusCommand(
           if (resolveStatusProviderUseIncompatibility(usage)) {
             return "missing";
           }
-          const cliRuntimeAuthProvider = resolveCliRuntimeAuthProvider(usage);
-          const evaluation = cliRuntimeAuthProvider
-            ? authResolver.evaluateModelAuth(cliRuntimeAuthProvider)
-            : usage.evaluation;
+          const evaluation = evaluateProviderUseAuth(usage);
           if (evaluation.availability === undefined) {
             return "indeterminate";
           }
@@ -1270,6 +1182,23 @@ export async function modelsStatusCommand(
         runtime.log(
           `${label(source ? `${name} (${source})` : name)}${colorize(rich, theme.muted, ":")} ${colorize(rich, style, value)}`,
         );
+      const logList = (
+        name: string,
+        values: string[],
+        style: (value: string) => string,
+        source?: ModelConfigSource,
+        empty = "-",
+      ) =>
+        logField(
+          `${name} (${values.length})`,
+          values.length ? values.join(", ") : empty,
+          values.length ? style : theme.muted,
+          source,
+        );
+      const logSection = (heading: string) => {
+        runtime.log("");
+        runtime.log(colorize(rich, theme.heading, heading));
+      };
       const displayDefault =
         rawModel && rawModel !== resolvedLabel
           ? `${resolvedLabel} (from ${rawModel})`
@@ -1283,10 +1212,10 @@ export async function modelsStatusCommand(
         theme.success,
         agentId ? (agentModelPrimary ? "agent" : "defaults") : undefined,
       );
-      logField(
-        `Fallbacks (${fallbacks.length})`,
-        fallbacks.length ? fallbacks.join(", ") : "-",
-        fallbacks.length ? theme.warn : theme.muted,
+      logList(
+        "Fallbacks",
+        fallbacks,
+        theme.warn,
         agentId ? (agentFallbacksOverride !== undefined ? "agent" : "defaults") : undefined,
       );
       logField(
@@ -1304,34 +1233,25 @@ export async function modelsStatusCommand(
         imageModel ? theme.accentBright : theme.muted,
         agentId ? "defaults" : undefined,
       );
-      logField(
-        `Image fallbacks (${imageFallbacks.length})`,
-        imageFallbacks.length ? imageFallbacks.join(", ") : "-",
-        imageFallbacks.length ? theme.accentBright : theme.muted,
+      logList(
+        "Image fallbacks",
+        imageFallbacks,
+        theme.accentBright,
         agentId ? "defaults" : undefined,
       );
       const aliasEntries = Object.entries(aliases);
-      logField(
-        `Aliases (${aliasEntries.length})`,
-        aliasEntries.length
-          ? aliasEntries
-              .map(([alias, target]) =>
-                rich
-                  ? `${theme.accentDim(alias)} ${theme.muted("->")} ${theme.info(target)}`
-                  : `${alias} -> ${target}`,
-              )
-              .join(", ")
-          : "-",
-        aliasEntries.length ? theme.accent : theme.muted,
+      logList(
+        "Aliases",
+        aliasEntries.map(([alias, target]) =>
+          rich
+            ? `${theme.accentDim(alias)} ${theme.muted("->")} ${theme.info(target)}`
+            : `${alias} -> ${target}`,
+        ),
+        theme.accent,
       );
-      logField(
-        `Allowed models (${allowed.length})`,
-        allowed.length ? allowed.join(", ") : "all",
-        allowed.length ? theme.info : theme.muted,
-      );
+      logList("Allowed models", allowed, theme.info, undefined, "all");
 
-      runtime.log("");
-      runtime.log(colorize(rich, theme.heading, "Auth overview"));
+      logSection("Auth overview");
       logField("Auth store", shortenHomePath(resolveAuthStorePathForDisplay(agentDir)), theme.info);
       runtime.log(
         `${label("Shell env")}${colorize(rich, theme.muted, ":")} ${colorize(
@@ -1340,30 +1260,21 @@ export async function modelsStatusCommand(
           shellFallbackEnabled ? "on" : "off",
         )}${applied.length ? colorize(rich, theme.muted, ` (applied: ${applied.join(", ")})`) : ""}`,
       );
-      logField(
-        `Providers w/ OAuth/tokens (${providersWithOauth.length})`,
-        providersWithOauth.length ? providersWithOauth.join(", ") : "-",
-        providersWithOauth.length ? theme.info : theme.muted,
-      );
+      logList("Providers w/ OAuth/tokens", providersWithOauth, theme.info);
 
       const formatKey = (key: string) => colorize(rich, theme.warn, key);
       const formatKeyValue = (key: string, value: string) =>
         `${formatKey(key)}=${colorize(rich, theme.info, value)}`;
       const formatSeparator = () => colorize(rich, theme.muted, " | ");
+      const formatEffective = (effective: ProviderAuthOverview["effective"]) =>
+        formatKeyValue(
+          "effective",
+          `${colorize(rich, theme.accentBright, effective.kind)}:${colorize(rich, theme.muted, effective.detail)}`,
+        );
 
       for (const entry of providerAuth) {
         const separator = formatSeparator();
-        const bits: string[] = [];
-        bits.push(
-          formatKeyValue(
-            "effective",
-            `${colorize(rich, theme.accentBright, entry.effective.kind)}:${colorize(
-              rich,
-              theme.muted,
-              entry.effective.detail,
-            )}`,
-          ),
-        );
+        const bits = [formatEffective(entry.effective)];
         if (entry.profiles.count > 0) {
           bits.push(formatKeyValue("profiles", formatProviderAuthProfileCounts(entry.profiles)));
           if (entry.profiles.labels.length > 0) {
@@ -1388,8 +1299,7 @@ export async function modelsStatusCommand(
       }
 
       if (runtimeAuthRoutes.length > 0) {
-        runtime.log("");
-        runtime.log(colorize(rich, theme.heading, "Runtime auth"));
+        logSection("Runtime auth");
         for (const route of runtimeAuthRoutes) {
           const runtimeAvailability =
             route.status === "unavailable"
@@ -1407,42 +1317,27 @@ export async function modelsStatusCommand(
               rich,
               theme.accentBright,
               route.runtime,
-            )} uses ${theme.heading(route.authProvider)} ${formatKeyValue(
-              "effective",
-              `${colorize(rich, theme.accentBright, route.effective.kind)}:${colorize(
-                rich,
-                theme.muted,
-                route.effective.detail,
-              )}`,
-            )}${formatSeparator()}${formatKeyValue("status", route.status)}${runtimeAvailability}`,
+            )} uses ${theme.heading(route.authProvider)} ${formatEffective(route.effective)}${formatSeparator()}${formatKeyValue("status", route.status)}${runtimeAvailability}`,
           );
         }
       }
 
       if (dedupedModelRouteIssues.length > 0) {
-        runtime.log("");
-        runtime.log(colorize(rich, theme.heading, "Model route issues"));
+        logSection("Model route issues");
         for (const issue of dedupedModelRouteIssues) {
           const modelRef = `${issue.provider}/${issue.model}`;
-          if (issue.kind === "incompatible") {
-            runtime.log(`- ${theme.heading(modelRef)} [${issue.code}] ${issue.message}`);
-            continue;
-          }
-          if (issue.kind === "indeterminate") {
-            runtime.log(`- ${theme.heading(modelRef)} [indeterminate] ${issue.message}`);
-            continue;
-          }
-          runtime.log(
-            `- ${theme.heading(modelRef)} requires ${issue.authRequirement} auth: ${issue.message}`,
-          );
+          const requirement =
+            issue.kind === "missing-auth"
+              ? `requires ${issue.authRequirement} auth:`
+              : `[${issue.kind === "incompatible" ? issue.code : "indeterminate"}]`;
+          runtime.log(`- ${theme.heading(modelRef)} ${requirement} ${issue.message}`);
         }
       }
 
       if (missingProvidersInUse.length > 0) {
         const { buildProviderAuthRecoveryHint } =
           await import("../../agents/provider-auth-recovery-hint.js");
-        runtime.log("");
-        runtime.log(colorize(rich, theme.heading, "Missing auth"));
+        logSection("Missing auth");
         for (const provider of missingProvidersInUse) {
           const requiresSubscription = dedupedModelRouteIssues.some(
             (issue) =>
@@ -1460,8 +1355,7 @@ export async function modelsStatusCommand(
       }
 
       if (unusableProfiles.length > 0) {
-        runtime.log("");
-        runtime.log(colorize(rich, theme.heading, "Unavailable auth profiles"));
+        logSection("Unavailable auth profiles");
         for (const profile of unusableProfiles) {
           const diagnostic = profile.classification ?? profile.reason;
           const reason = diagnostic ? `:${diagnostic}` : "";
@@ -1472,8 +1366,7 @@ export async function modelsStatusCommand(
         }
       }
 
-      runtime.log("");
-      runtime.log(colorize(rich, theme.heading, "OAuth/token status"));
+      logSection("OAuth/token status");
       if (oauthProfiles.length === 0) {
         runtime.log(colorize(rich, theme.muted, "- none"));
       } else {
@@ -1511,33 +1404,14 @@ export async function modelsStatusCommand(
           }
         }
 
-        const formatStatus = (status: string) => {
-          if (status === "ok") {
-            return colorize(rich, theme.success, "ok");
-          }
-          if (status === "static") {
-            return colorize(rich, theme.muted, "static");
-          }
-          if (status === "expiring") {
-            return colorize(rich, theme.warn, "expiring");
-          }
-          if (status === "missing") {
-            return colorize(rich, theme.warn, "unknown");
-          }
-          return colorize(rich, theme.error, "expired");
-        };
+        const statusLabels = new Map([
+          ["ok", colorize(rich, theme.success, "ok")],
+          ["static", colorize(rich, theme.muted, "static")],
+          ["expiring", colorize(rich, theme.warn, "expiring")],
+          ["missing", colorize(rich, theme.warn, "unknown")],
+        ]);
 
-        const profilesByProvider = new Map<string, typeof oauthProfiles>();
-        for (const profile of oauthProfiles) {
-          const current = profilesByProvider.get(profile.provider);
-          if (current) {
-            current.push(profile);
-          } else {
-            profilesByProvider.set(profile.provider, [profile]);
-          }
-        }
-
-        for (const [provider, profiles] of profilesByProvider) {
+        for (const [provider, profiles] of groupByProvider(oauthProfiles)) {
           const usageKey = resolveUsageProviderId(provider, {
             credentialType: profiles[0]?.type,
           });
@@ -1547,7 +1421,8 @@ export async function modelsStatusCommand(
           for (const profile of profiles) {
             const labelText = profile.label || profile.profileId;
             const labelLocal = colorize(rich, theme.accent, labelText);
-            const status = formatStatus(profile.status);
+            const status =
+              statusLabels.get(profile.status) ?? colorize(rich, theme.error, "expired");
             const expiry =
               profile.status === "static"
                 ? ""
@@ -1565,8 +1440,7 @@ export async function modelsStatusCommand(
             import("../../../packages/terminal-core/src/table.js"),
             listProbeRuntimeLoader.load(),
           ]);
-        runtime.log("");
-        runtime.log(colorize(rich, theme.heading, "Auth probes"));
+        logSection("Auth checks");
         if (probeSummary.results.length === 0) {
           runtime.log(colorize(rich, theme.muted, "- none"));
         } else {

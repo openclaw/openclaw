@@ -124,16 +124,6 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
   });
 
-  it("is a no-op when chatAbortControllers is not a Map (unpopulated context)", () => {
-    expect(
-      snap({
-        chatAbortControllers: undefined as never,
-        chatRunBuffers: undefined as never,
-        sessionKey: "agent:main:s",
-      }),
-    ).toBeUndefined();
-  });
-
   it("matches a run stored under the canonical key when requested with a different key", () => {
     // Abort entry holds the canonical store key; the client requests history with
     // a different (requested) key for the same logical session.
@@ -146,11 +136,12 @@ describe("resolveInFlightRunSnapshot", () => {
     expect(result).toEqual({ runId: "run-1", text: "partial" });
   });
 
-  it("ignores aborted, completed (not projected active), and other-session runs", () => {
+  it("ignores aborted, completed, hidden, internal agent, and other-session runs", () => {
     const variants: ChatAbortControllerEntry[] = [
       inFlightEntry("agent:main:s", { aborted: true }),
       inFlightEntry("agent:main:s", { projectSessionActive: false }),
       inFlightEntry("agent:main:s", { controlUiVisible: false }),
+      inFlightEntry("agent:main:s", { kind: "agent" }),
       inFlightEntry("agent:main:other"),
     ];
     for (const entry of variants) {
@@ -164,18 +155,6 @@ describe("resolveInFlightRunSnapshot", () => {
     }
   });
 
-  it("ignores hidden agent runs that are not visible chat sends", () => {
-    expect(
-      snap({
-        chatAbortControllers: new Map([
-          ["run-agent", inFlightEntry("agent:main:s", { kind: "agent" })],
-        ]),
-        chatRunBuffers: new Map([["run-agent", "hidden partial"]]),
-        sessionKey: "agent:main:s",
-      }),
-    ).toBeUndefined();
-  });
-
   it("does not surface suppressed control-token lead fragments from the live buffer", () => {
     expect(
       snap({
@@ -186,52 +165,33 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run", text: "" });
   });
 
-  it("scopes the shared global session by agent so one agent's run is not restored into another", () => {
-    const controllers = new Map<string, ChatAbortControllerEntry>([
-      ["run-a", inFlightEntry("global", { agentId: "main" })],
-      ["run-b", inFlightEntry("global", { agentId: "work" })],
-    ]);
-    const buffers = new Map([
-      ["run-a", "main agent global text"],
-      ["run-b", "work agent global text"],
-    ]);
-    expect(
-      snap({
-        chatAbortControllers: controllers,
-        chatRunBuffers: buffers,
-        sessionKey: "global",
-        agentId: "work",
-      }),
-    ).toEqual({ runId: "run-b", text: "work agent global text" });
-    expect(
-      snap({
-        chatAbortControllers: controllers,
-        chatRunBuffers: buffers,
-        sessionKey: "global",
-        agentId: "main",
-      }),
-    ).toEqual({ runId: "run-a", text: "main agent global text" });
-  });
+  it.each([
+    { agentId: "main", defaultAgentId: undefined, expected: "main" },
+    { agentId: "work", defaultAgentId: undefined, expected: "work" },
+    { agentId: undefined, defaultAgentId: "main", expected: "main" },
+  ])(
+    "scopes global history to $expected when requested agent is $agentId",
+    ({ agentId, defaultAgentId, expected }) => {
+      const controllers = new Map<string, ChatAbortControllerEntry>([
+        ["run-main", inFlightEntry("global", { agentId: "main", startedAtMs: 1_000 })],
+        ["run-work", inFlightEntry("global", { agentId: "work", startedAtMs: 2_000 })],
+      ]);
+      const buffers = new Map([
+        ["run-main", "main global text"],
+        ["run-work", "work global text"],
+      ]);
 
-  it("resolves bare global history snapshots to the default agent", () => {
-    const controllers = new Map<string, ChatAbortControllerEntry>([
-      ["run-main", inFlightEntry("global", { agentId: "main", startedAtMs: 1_000 })],
-      ["run-work", inFlightEntry("global", { agentId: "work", startedAtMs: 2_000 })],
-    ]);
-    const buffers = new Map([
-      ["run-main", "main default text"],
-      ["run-work", "work global text"],
-    ]);
-
-    expect(
-      snap({
-        chatAbortControllers: controllers,
-        chatRunBuffers: buffers,
-        sessionKey: "global",
-        defaultAgentId: "main",
-      }),
-    ).toEqual({ runId: "run-main", text: "main default text" });
-  });
+      expect(
+        snap({
+          chatAbortControllers: controllers,
+          chatRunBuffers: buffers,
+          sessionKey: "global",
+          agentId,
+          defaultAgentId,
+        }),
+      ).toEqual({ runId: `run-${expected}`, text: `${expected} global text` });
+    },
+  );
 
   it("prefers the newest startedAtMs when several runs match the same session+agent", () => {
     // A fast restart/retry/stale-controller race can leave two active entries for
@@ -254,30 +214,18 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run-new", text: "current partial" });
   });
 
-  it("breaks startedAtMs ties deterministically by runId regardless of insertion order", () => {
+  it.each([false, true])("breaks startedAtMs ties by runId (reverse insertion=%s)", (reverse) => {
     const buffers = new Map([
       ["run-a", "a"],
       ["run-b", "b"],
     ]);
-    const ascending = new Map<string, ChatAbortControllerEntry>([
+    const entries: [string, ChatAbortControllerEntry][] = [
       ["run-a", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
       ["run-b", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
-    ]);
-    const descending = new Map<string, ChatAbortControllerEntry>([
-      ["run-b", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
-      ["run-a", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
-    ]);
-    // Same winner ("run-b" > "run-a") no matter which order the map was built in.
+    ];
     expect(
       snap({
-        chatAbortControllers: ascending,
-        chatRunBuffers: buffers,
-        sessionKey: "agent:main:s",
-      }),
-    ).toEqual({ runId: "run-b", text: "b" });
-    expect(
-      snap({
-        chatAbortControllers: descending,
+        chatAbortControllers: new Map(reverse ? entries.toReversed() : entries),
         chatRunBuffers: buffers,
         sessionKey: "agent:main:s",
       }),

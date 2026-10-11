@@ -1,7 +1,7 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { captureGatewayReplyRunRestartAbort } from "../auto-reply/reply/reply-run-registry.js";
+import { formatGatewayDrainCounts, waitForGatewayDrain } from "../infra/gateway-drain.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   abortChatRunById,
@@ -24,25 +24,26 @@ const RESTART_REPLY_DRAIN_POLL_MS = 100;
 const RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS = 1_000;
 const RESTART_MARKER_SLOW_WARNING_MS = 1_000;
 
-function getRestartReplyDrainCounts(params: {
+function inspectRestartReplyDrain(params: {
   getPendingReplyCount: () => number;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: QueuedChatTurnMap;
 }) {
   const pendingReplyCount = params.getPendingReplyCount();
-  const activeRuns = listRestartDrainRuns(params.chatAbortControllers).length;
+  const chatRuns = listRestartDrainRuns(params.chatAbortControllers).length;
   const queuedTurns = Array.from(
     params.chatQueuedTurns.values(),
     (entry) => entry.controller.signal.aborted,
   ).filter((aborted) => !aborted).length;
-  return {
+  const counts = {
     pendingReplies:
       Number.isFinite(pendingReplyCount) && pendingReplyCount > 0
         ? Math.floor(pendingReplyCount)
         : 0,
-    activeRuns,
+    chatRuns,
     queuedTurns,
   };
+  return { counts, idle: Object.values(counts).every((count) => count === 0) };
 }
 
 function listUnabortedRuns(
@@ -72,24 +73,6 @@ function listRestartRecoveryRuns(
   );
 }
 
-function formatRestartReplyDrainDetails(counts: {
-  pendingReplies: number;
-  activeRuns: number;
-  queuedTurns: number;
-}): string {
-  const details: string[] = [];
-  if (counts.pendingReplies > 0) {
-    details.push(`${counts.pendingReplies} pending reply(ies)`);
-  }
-  if (counts.activeRuns > 0) {
-    details.push(`${counts.activeRuns} active run(s)`);
-  }
-  if (counts.queuedTurns > 0) {
-    details.push(`${counts.queuedTurns} queued turn(s)`);
-  }
-  return details.length > 0 ? details.join(", ") : "no pending reply work";
-}
-
 export type GatewayRunShutdownParams = {
   resolveGatewayContext: GatewayContextResolver;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -112,41 +95,6 @@ export type GatewayRunShutdownParams = {
   }) => Promise<void> | void;
   resolveActiveSessionIdForKey?: (sessionKey: string) => string | undefined;
 };
-
-async function waitForRestartReplyDrain(params: {
-  getPendingReplyCount: () => number;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatQueuedTurns: QueuedChatTurnMap;
-  timeoutMs: number;
-}): Promise<{
-  drained: boolean;
-  elapsedMs: number;
-  counts: { pendingReplies: number; activeRuns: number; queuedTurns: number };
-}> {
-  const timeoutMs = Math.max(0, Math.floor(params.timeoutMs));
-  let counts = getRestartReplyDrainCounts(params);
-  if (counts.pendingReplies <= 0 && counts.activeRuns <= 0 && counts.queuedTurns <= 0) {
-    return { drained: true, elapsedMs: 0, counts };
-  }
-  if (timeoutMs <= 0) {
-    return { drained: false, elapsedMs: 0, counts };
-  }
-
-  const startedAt = Date.now();
-  for (;;) {
-    const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= timeoutMs) {
-      return { drained: false, elapsedMs, counts };
-    }
-    await sleep(Math.min(RESTART_REPLY_DRAIN_POLL_MS, timeoutMs - elapsedMs), undefined, {
-      ref: false,
-    });
-    counts = getRestartReplyDrainCounts(params);
-    if (counts.pendingReplies <= 0 && counts.activeRuns <= 0 && counts.queuedTurns <= 0) {
-      return { drained: true, elapsedMs: Date.now() - startedAt, counts };
-    }
-  }
-}
 
 function collectActiveRestartSessionRefs(
   params: Pick<
@@ -356,28 +304,25 @@ export async function prepareGatewayRunShutdown(
     abortActiveRuns(params, false);
     return;
   }
-  const initialCounts = getRestartReplyDrainCounts(params);
-  let drainResult: Awaited<ReturnType<typeof waitForRestartReplyDrain>> | undefined;
-  if (
-    initialCounts.pendingReplies > 0 ||
-    initialCounts.activeRuns > 0 ||
-    initialCounts.queuedTurns > 0
-  ) {
-    const timeoutMs = Math.max(0, Math.floor(params.timeoutMs));
-    if (timeoutMs > 0) {
+  const initialSnapshot = inspectRestartReplyDrain(params);
+  let drainResult;
+  if (!initialSnapshot.idle) {
+    if (params.timeoutMs > 0) {
       shutdownLog.info(
-        `waiting for ${formatRestartReplyDrainDetails(initialCounts)} before restart shutdown (timeout ${timeoutMs}ms)`,
+        `waiting for ${formatGatewayDrainCounts(initialSnapshot)} before restart shutdown (timeout ${params.timeoutMs}ms)`,
       );
     }
-    drainResult = await waitForRestartReplyDrain({
-      getPendingReplyCount: params.getPendingReplyCount,
-      chatAbortControllers: params.chatAbortControllers,
-      chatQueuedTurns: params.chatQueuedTurns,
-      timeoutMs,
-    });
+    drainResult = await waitForGatewayDrain(
+      () => inspectRestartReplyDrain(params),
+      params.timeoutMs,
+      {
+        pollMs: RESTART_REPLY_DRAIN_POLL_MS,
+        ref: false,
+      },
+    );
     if (!drainResult.drained) {
       shutdownLog.warn(
-        `restart reply drain timed out after ${drainResult.elapsedMs}ms with ${formatRestartReplyDrainDetails(drainResult.counts)} still active; continuing shutdown`,
+        `restart reply drain timed out after ${drainResult.elapsedMs}ms with ${formatGatewayDrainCounts(drainResult.snapshot)} still active; continuing shutdown`,
       );
       recordGatewayShutdownWarning(params.warnings, "restart-reply-drain");
     }

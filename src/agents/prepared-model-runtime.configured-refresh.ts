@@ -482,6 +482,17 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
     for (const config of new Set(candidates.map((owner) => owner.input.config))) {
       await racePromiseWithAbortSignal(prepareModelPricingContext(config), pricingSignal);
     }
+    // Readers keep the committed generation until each candidate has discovered its own rows.
+    // A failed discovery publishes the candidate's static rows, never the previous catalog's.
+    await racePromiseWithAbortSignal(
+      Promise.allSettled(
+        candidates.map(
+          async (owner) =>
+            await owner.snapshot?.loadFullModelCatalog?.({ refresh: true, wait: true }),
+        ),
+      ),
+      controller.signal,
+    );
     await params.commit(() => {
       assertCurrent();
       // Any candidate retirement (lost loan or retired cache) leaves it unpublishable.
@@ -513,9 +524,6 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
       claims.length = 0;
       staged.clear();
     });
-    for (const owner of candidates) {
-      void owner.snapshot?.loadFullModelCatalog?.({ refresh: true }).catch(() => undefined);
-    }
     return true;
   } catch (error) {
     if (

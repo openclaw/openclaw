@@ -62,10 +62,7 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import { ensureOpenClawStateRuntimeSchema } from "./openclaw-state-db-schema-runtime.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
-import {
-  readStateSchemaContentVersion,
-  readStateSchemaMigrationVersion,
-} from "./openclaw-state-db-schema-version.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import * as retirements from "./openclaw-state-db-table-retirements.js";
 import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
@@ -192,7 +189,7 @@ export function repairStateSchema(
       pathname,
       () => {
         applied.push(...recoverOrphanTaskDeliveryRows(db, pathname));
-        const previousVersion = readStateSchemaMigrationVersion(db);
+        const previousVersion = readStateSchemaContentVersion(db);
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") || hasPreJournalStateSchema(db);
         const preAuditSchema = previousVersion === 1 && !tableExists(db, "audit_events");

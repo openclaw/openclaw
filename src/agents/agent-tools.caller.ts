@@ -11,6 +11,7 @@ export function createCodingToolsGatewayCaller(params: {
   sessionKey?: string;
   accountId?: string;
   capabilityProfile: ResolvedConversationCapabilityProfile;
+  sessionEventToolsAllow?: readonly string[];
 }) {
   const { options, agentId, sessionKey, capabilityProfile } = params;
   const settleBatch =
@@ -22,6 +23,11 @@ export function createCodingToolsGatewayCaller(params: {
       ? {
           agentId,
           sessionKey: sessionKey.trim(),
+          sessionEventToolsAllow: params.sessionEventToolsAllow,
+          sessionEventSettings: { permissionMode: options.sessionPermissionPolicy?.mode },
+          ...(options.sourceReplyDeliveryMode === "message_tool_only"
+            ? { sessionEventDelivery: false as const }
+            : {}),
           // The existing source fence rechecks this after tool preparation and at final I/O.
           receiptAuthority: settleBatch?.isCurrent,
           receiptAdmissions: settleBatch?.receiptAdmission

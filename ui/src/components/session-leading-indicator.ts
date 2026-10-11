@@ -79,7 +79,7 @@ export function renderSessionLeadingState(
   // Transient attention always outranks the persistent decorative icon.
   const iconContent =
     session.attention.kind !== "none" && !trailingState
-      ? renderSessionAttentionIcon(session.attention, true)
+      ? renderSessionAttentionIcon(session.attention)
       : (icon ?? (session.icon ? renderPersistentSessionIcon(session.icon) : nothing));
   if (iconContent !== nothing) {
     return {

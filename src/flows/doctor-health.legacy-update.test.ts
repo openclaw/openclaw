@@ -5,13 +5,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
-import { createGatewayCloseTransportError } from "../gateway/transport-error.js";
 import * as legacyGatewayLock from "../infra/gateway-lock-legacy.js";
 import * as packageJson from "../infra/package-json.js";
 import * as builtRuntime from "../infra/update-git-runtime.js";
@@ -132,101 +130,6 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
     vi.unstubAllEnvs();
   });
 
-  it("admits maintenance when the same legacy update's Gateway is already stopped", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await state.writeConfig({});
-      const service = managedService(state, false);
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-
-      await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
-
-      expect(mocks.runContributions).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ gatewayMaintenanceActive: true }),
-      );
-      expect(service.stop).not.toHaveBeenCalled();
-      expect(service.restart).not.toHaveBeenCalled();
-      expect(await service.readRuntime()).toMatchObject({ status: "stopped" });
-      expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-    });
-  });
-
-  it.each(["mismatched build", "missing RPC chunks"])(
-    "replaces %s and verifies it after offline maintenance",
-    async (failure) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        await state.writeConfig({});
-        const events: string[] = [];
-        const service = managedService(state, true, events);
-        mocks.probePortUsage.mockImplementation(async () => {
-          expect(await service.readRuntime()).toMatchObject({ status: "stopped" });
-          events.push("verified-stop");
-          return "free";
-        });
-        inspectStaleBuild();
-        if (failure === "missing RPC chunks") {
-          mocks.inspectGatewayRestart.mockImplementation(async (params) => ({
-            runtime: await service.readRuntime(),
-            portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
-            healthy: false,
-            staleGatewayPids: [],
-            gatewayVersion: null,
-            staleConnection: "legacy-handler-unavailable",
-            probeError: sanitizeTerminalText(
-              createGatewayCloseTransportError({
-                code: 1011,
-                reason: "gateway message handler unavailable",
-                connectionDetails: {
-                  url: "ws://127.0.0.1:18789",
-                  urlSource: "local loopback",
-                  message: "Gateway target: ws://127.0.0.1:18789",
-                },
-                requestDispatched: false,
-              }).message,
-            ),
-          }));
-        }
-        mocks.waitForGatewayHealthyRestart.mockImplementation(async (params) => {
-          expect(params.port).toBe(19754);
-          events.push("verified");
-          return {
-            runtime: await service.readRuntime(),
-            portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
-            healthy: true,
-            staleGatewayPids: [],
-            gatewayVersion: candidateVersion,
-            gatewayBuildId: candidateBuildId,
-            gatewayBootId: "candidate-boot",
-            outcome: "ready",
-            waitOutcome: "healthy",
-          };
-        });
-        mocks.runContributions.mockImplementation(async (ctx) => {
-          events.push("repair");
-          expect(ctx.gatewayMaintenanceActive).toBe(true);
-        });
-        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-
-        await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
-
-        expect(events).toEqual(["stop", "verified-stop", "repair", "restart", "verified"]);
-        expect(service.restart).toHaveBeenNthCalledWith(
-          1,
-          expect.objectContaining({ preserveDefinition: true }),
-        );
-        expect(mocks.waitForGatewayHealthyRestart).toHaveBeenNthCalledWith(
-          1,
-          expect.objectContaining({
-            expectedVersion: candidateVersion,
-            expectedBuildId: candidateBuildId,
-            requireRunningService: true,
-            env: expect.objectContaining({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
-          }),
-        );
-        expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-      });
-    },
-  );
-
   it("imports retained legacy sessions after verified stop and before any candidate RPC", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
@@ -307,34 +210,6 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
     });
   });
 
-  it("repairs unavailable identity without treating it as a stale build", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await state.writeConfig({});
-      const events: string[] = [];
-      const service = managedService(state, true, events);
-      mocks.inspectGatewayRestart.mockImplementation(async (params) => ({
-        runtime: await service.readRuntime(),
-        portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
-        healthy: false,
-        staleGatewayPids: [],
-        gatewayBuildId: null,
-        buildIdMismatch: { expected: candidateBuildId, actual: null },
-        probeError: "Gateway TLS certificate unavailable",
-      }));
-      mocks.runContributions.mockImplementation(async () => {
-        events.push("repair");
-      });
-
-      await runDoctorHealthFlow(
-        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        { repair: true, nonInteractive: true },
-      );
-
-      expect(events).toEqual(["stop", "repair", "restart"]);
-      expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-    });
-  });
-
   it.each(["manager-refused", "old-listener-remains"] as const)(
     "reports stale stop failure before repair mutations: %s",
     async (failure) => {
@@ -384,70 +259,106 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
     },
   );
 
-  it("records restoration verification failure after offline repair without publishing success", async () => {
-    // This case refuses Gateway readiness after repair, not runtime capability admission.
-    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue({
-      status: "supported",
-      version: "26.8.1",
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      nodeSharedSqlite: false,
-    });
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await state.writeConfig({});
-      const resultPath = state.path("doctor-result.json");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", resultPath);
-      const events: string[] = [];
-      const service = managedService(state, true, events);
-      inspectStaleBuild();
-      mocks.runContributions.mockImplementation(async () => {
-        events.push("repair");
+  it.each(["running", "stopped"] as const)(
+    "records unverified restoration after offline repair when the service is %s",
+    async (serviceStatus) => {
+      // Exercise Gateway readiness after repair, not runtime capability admission.
+      vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue({
+        status: "supported",
+        version: "26.8.1",
+        sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+        nodeSharedSqlite: false,
       });
-      mocks.waitForGatewayHealthyRestart.mockImplementation(async (params) => {
-        expect(events).toEqual(["stop", "repair", "restart"]);
-        return {
-          runtime: await service.readRuntime(),
-          portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
-          healthy: false,
-          staleGatewayPids: [],
-          gatewayVersion: candidateVersion,
-          gatewayBuildId: null,
-          probeError: "synthetic replacement identity unavailable",
-          outcome: "failed",
-          waitOutcome: "timeout",
-        };
-      });
-      const run = runDoctorHealthFlow(
-        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        { repair: true, nonInteractive: true },
-      );
-      await expect(run).rejects.toMatchObject({
-        name: "UpdateDoctorError",
-        failureFacts: expect.arrayContaining([
-          expect.objectContaining({
-            check: "gateway-restoration",
-            code: "doctor-gateway-rpc-verification-failed",
-          }),
-          expect.objectContaining({ code: "stale-gateway-recovery-command" }),
-        ]),
-      });
-      expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
-      expect(service.restart).toHaveBeenCalledOnce();
-      expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
-        resultPath,
-        result: expect.objectContaining({
-          status: "error",
-          failureFacts: expect.arrayContaining([
-            expect.objectContaining({
-              check: "gateway-restoration",
-              code: "doctor-gateway-rpc-verification-failed",
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await state.writeConfig({});
+        const resultPath = state.path("doctor-result.json");
+        vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", resultPath);
+        const events: string[] = [];
+        const service = managedService(state, true, events);
+        inspectStaleBuild();
+        mocks.runContributions.mockImplementation(async () => {
+          events.push("repair");
+        });
+        mocks.waitForGatewayHealthyRestart.mockImplementation(async (params) => {
+          expect(events).toEqual(["stop", "repair", "restart"]);
+          return {
+            runtime:
+              serviceStatus === "running"
+                ? await service.readRuntime()
+                : { status: "stopped", state: "failed", lastExitStatus: 1 },
+            portUsage: {
+              port: params.port,
+              status: serviceStatus === "running" ? "busy" : "free",
+              listeners: [],
+              hints: [],
+            },
+            healthy: false,
+            staleGatewayPids: [],
+            gatewayVersion: candidateVersion,
+            gatewayBuildId: null,
+            probeError: "synthetic replacement identity unavailable",
+            outcome: "failed",
+            waitOutcome: serviceStatus === "running" ? "timeout" : "stopped-free",
+          };
+        });
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const run = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+        if (serviceStatus === "running") {
+          await expect(run).resolves.toBeUndefined();
+          expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+            resultPath,
+            result: expect.objectContaining({
+              status: "ok",
+              warnings: expect.arrayContaining([
+                expect.stringContaining("Gateway started but readiness was not verified"),
+                expect.stringContaining("synthetic readiness failure"),
+                expect.stringContaining(
+                  formatCliCommand("openclaw gateway status --deep", state.env),
+                ),
+                expect.stringContaining(
+                  formatCliCommand("openclaw gateway diagnostics export", state.env),
+                ),
+              ]),
             }),
-          ]),
-        }),
+          });
+          expect(runtime.error).not.toHaveBeenCalled();
+          expect(runtime.exit).not.toHaveBeenCalledWith(1);
+          expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+        } else {
+          await expect(run).rejects.toMatchObject({
+            name: "UpdateDoctorError",
+            failureFacts: expect.arrayContaining([
+              expect.objectContaining({
+                check: "gateway-restoration",
+                code: "doctor-gateway-rpc-verification-failed",
+              }),
+              expect.objectContaining({ code: "stale-gateway-recovery-command" }),
+            ]),
+          });
+          expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+            resultPath,
+            result: expect.objectContaining({
+              status: "error",
+              failureFacts: expect.arrayContaining([
+                expect.objectContaining({
+                  check: "gateway-restoration",
+                  code: "doctor-gateway-rpc-verification-failed",
+                }),
+              ]),
+            }),
+          });
+          expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+        }
+        expect(events).toEqual(["stop", "repair", "restart"]);
+        expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
+        expect(service.restart).toHaveBeenCalledOnce();
+        expect(runtime.log).not.toHaveBeenCalledWith(
+          "Gateway restarted and verified after Doctor repair.",
+        );
       });
-      expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
-    });
-  });
+    },
+  );
 
   it.each([false, true])(
     "refuses repair behind a live legacy tempfile lock (external=%s)",

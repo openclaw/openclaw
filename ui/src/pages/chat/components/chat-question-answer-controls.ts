@@ -2,7 +2,7 @@ import type { Question } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
-import { renderKbd, renderShortcutText } from "../../../components/kbd.ts";
+import { renderKbd } from "../../../components/kbd.ts";
 import { t } from "../../../i18n/index.ts";
 
 export function questionDraftValues(
@@ -151,13 +151,6 @@ export function renderQuestionFreeText(props: QuestionFreeTextProps) {
             )}
             ${question.options.length < 9 ? renderKbd(question.options.length + 1) : nothing}
           </label>`
-    }
-    ${
-      question.isSecret
-        ? nothing
-        : html`<div class="chat-question-panel__input-hint">
-            ${renderShortcutText(t("chat.questions.multilineHint", { shortcut: "{shortcut}" }), renderKbd(["Ctrl", "/", "⌘", "+", "Enter"], { inline: true }))}
-          </div>`
     }
   `;
 }

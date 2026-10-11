@@ -54,7 +54,7 @@ export function isClaudeLikeLiveAgent(raw: string): boolean {
 export function assertLiveImageProbeReply(text: string): void {
   const normalized = normalizeOptionalLowercaseString(text);
   if (normalized !== "cat" && !/(^|[^a-z])cat[.!?`'")\]]*$/.test(normalized ?? "")) {
-    throw new Error(`image probe expected 'cat', got: ${normalized}`);
+    throw new Error(`image check expected 'cat', got: ${normalized}`);
   }
 }
 

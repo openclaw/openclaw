@@ -1,4 +1,5 @@
 import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
+import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
 import type {
   SessionTranscriptHistoryWorkerInput,
@@ -19,6 +20,7 @@ export async function withHistoryDatabase<T>(
   database: SessionTranscriptHistoryWorkerInput["database"],
   operationLabel: string,
   operation: () => T | Promise<T>,
+  validation?: OpenClawAgentDatabaseReadValidation,
 ): Promise<SessionTranscriptWorkerSuccess<T>> {
   const key = JSON.stringify(database);
   let retained = historyDatabaseScopes.get(key);
@@ -31,7 +33,7 @@ export async function withHistoryDatabase<T>(
   try {
     const value = await withSqliteReaderOwner(
       { operation: `sessions.${operationLabel}`, ownerKind: "worker" },
-      () => scope.run(database, operation),
+      () => scope.run({ ...database, validation }, operation),
     );
     historyDatabaseScopes.delete(key);
     // Tasks without retained connections must not evict useful connections or retain empty scopes.

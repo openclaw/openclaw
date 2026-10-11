@@ -40,11 +40,11 @@ function normalizeAnnounceRouteTarget(
   context?: DeliveryContext,
   fallbackChannel?: string,
 ): { id: string; threadId?: string } | undefined {
-  const rawTo = normalizeOptionalString(context?.to);
+  const rawTo = context?.to;
   if (!rawTo) {
     return undefined;
   }
-  const channel = normalizeOptionalString(context?.channel ?? fallbackChannel);
+  const channel = context?.channel ?? fallbackChannel;
   const messaging = channel
     ? getLoadedChannelPluginForRead(channel as ChannelId)?.messaging
     : undefined;
@@ -171,15 +171,13 @@ export async function resolveSubagentCompletionOrigin(params: {
   expectsCompletionMessage: boolean;
 }): Promise<DeliveryContext | undefined> {
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
-  const channel = normalizeOptionalLowercaseString(requesterOrigin?.channel);
-  const to = requesterOrigin?.to?.trim();
+  const channel = requesterOrigin?.channel;
+  const to = requesterOrigin?.to;
   const accountId = normalizeAccountId(requesterOrigin?.accountId);
-  const threadId =
-    requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
-      ? requesterOrigin.threadId
-      : undefined;
   const conversationId =
-    stringifyRouteThreadId(threadId) || resolveConversationIdFromTargets({ targets: [to] }) || "";
+    stringifyRouteThreadId(requesterOrigin?.threadId) ||
+    resolveConversationIdFromTargets({ targets: [to] }) ||
+    "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
   for (const targetSessionKey of [params.requesterSessionKey, params.childSessionKey]) {
@@ -230,11 +228,7 @@ export async function resolveSubagentCompletionOrigin(params: {
 
 function stripNonDeliverableChannel(context?: DeliveryContext): DeliveryContext | undefined {
   const normalized = normalizeDeliveryContext(context);
-  if (!normalized?.channel) {
-    return normalized;
-  }
-  const channel = normalizeMessageChannel(normalized.channel);
-  if (!channel || isDeliverableMessageChannel(channel)) {
+  if (!normalized?.channel || isDeliverableMessageChannel(normalized.channel)) {
     return normalized;
   }
   const { channel: _channel, ...rest } = normalized;
@@ -308,8 +302,8 @@ export function resolveGeneratedMediaSessionDeliveryRoute(params: {
     ...params,
     expectsCompletionMessage: true,
   });
-  const channel = normalizeMessageChannel(deliveryContext?.channel);
-  const to = deliveryContext?.to?.trim();
+  const channel = deliveryContext?.channel;
+  const to = deliveryContext?.to;
   const inferredRouteChatType = inferDeliveryTargetChatType({ channel, to });
   const derivedChatType = deriveSessionChatTypeFromKey(params.sessionKey);
   const chatType =

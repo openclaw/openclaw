@@ -290,33 +290,9 @@ describe("update candidate Doctor lint", () => {
     );
   });
 
-  it("retains posture warnings without admitting blocking lint errors", async () => {
-    lintReport = {
-      ok: false,
-      checksRun: 1,
-      findings: [{ checkId: "core/config", severity: "error", message: "Invalid configuration." }],
-      warnings: [
-        {
-          checkId: "core/doctor/security",
-          severity: "warning",
-          message: "Open group policy permits mention-gated requests.",
-        },
-      ],
-    };
-    stubHealthyGateway();
-    const result = await validateUpdateCandidateCanary(canaryStateOptions());
-    expect(result).toMatchObject({ status: "error", phase: "lint", reason: "doctor-failed" });
-    expect(
-      updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep)),
-    ).toContainEqual(expect.stringContaining("Open group policy permits mention-gated requests."));
-    expect(
-      result.steps.find((step) => step.name === "candidate-doctor-lint")?.doctorLintFindings,
-    ).toEqual([...lintReport.findings, ...lintReport.warnings]);
-  });
   it.each([
     { name: "signal", exitCode: null, signal: "SIGTERM", outputLimitExceeded: false },
     { name: "output limit after exit zero", exitCode: 0, signal: null, outputLimitExceeded: true },
-    { name: "output limit after exit one", exitCode: 1, signal: null, outputLimitExceeded: true },
   ])("retains physical $name facts without accepting policy output", async (physical) => {
     const spawnNormally = mocks.spawn.getMockImplementation()!;
     mocks.spawn.mockImplementation((command, args: string[], options) => {

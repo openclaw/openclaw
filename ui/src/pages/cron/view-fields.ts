@@ -154,6 +154,7 @@ type CronInputOptions = {
   mono?: boolean;
   errorKey?: CronFieldKey;
   describeError?: boolean;
+  inline?: boolean;
 };
 
 export function renderCronInput(
@@ -166,7 +167,7 @@ export function renderCronInput(
     error && options.errorKey && options.describeError !== false
       ? errorIdForField(options.errorKey)
       : undefined;
-  return html`
+  const control = html`
     <input
       id=${inputIdForField(field)}
       class=${options.mono ? "settings-input mono" : "settings-input"}
@@ -185,32 +186,27 @@ export function renderCronInput(
       }}
     />
   `;
-}
-
-export function renderCronInputField(
-  props: CronProps,
-  field: CronStringFormField,
-  options: CronInputOptions,
-) {
-  const errorKey = options.errorKey;
-  return renderFieldRow({
-    label: options.label,
-    controlId: inputIdForField(field),
-    required: options.required,
-    help: options.help,
-    error: errorKey ? props.fieldErrors[errorKey] : undefined,
-    errorId: errorKey ? errorIdForField(errorKey) : undefined,
-    control: renderCronInput(props, field, options),
-  });
+  return options.inline
+    ? control
+    : renderFieldRow({
+        label: options.label,
+        controlId: inputIdForField(field),
+        required: options.required,
+        help: options.help,
+        error,
+        errorId: options.errorKey ? errorIdForField(options.errorKey) : undefined,
+        control,
+      });
 }
 
 type CronSelectOptions = {
   label: string;
+  required?: boolean;
   options: readonly PickerOption[];
   help?: string;
   value?: string;
   disabled?: boolean;
-  standalone?: boolean;
+  inline?: boolean;
   channel?: boolean;
   errorKey?: CronFieldKey;
 };
@@ -223,8 +219,8 @@ export function renderCronSelect(
   const selected = options.value ?? props.form[field];
   const error = options.errorKey ? props.fieldErrors[options.errorKey] : undefined;
   const picker = options.channel ? renderChannelPicker : renderPicker;
-  return picker({
-    id: options.standalone ? undefined : inputIdForField(field),
+  const control = picker({
+    id: options.inline ? undefined : inputIdForField(field),
     label: options.label,
     value: options.channel ? selected || "last" : selected,
     options: options.options,
@@ -233,21 +229,17 @@ export function renderCronSelect(
     describedBy: error && options.errorKey ? errorIdForField(options.errorKey) : undefined,
     onChange: (value) => props.onFormChange({ [field]: value }),
   });
-}
-
-export function renderCronSelectField(
-  props: CronProps,
-  field: CronStringFormField,
-  options: CronSelectOptions,
-) {
-  return renderFieldRow({
-    label: options.label,
-    controlId: inputIdForField(field),
-    help: options.help,
-    error: options.errorKey ? props.fieldErrors[options.errorKey] : undefined,
-    errorId: options.errorKey ? errorIdForField(options.errorKey) : undefined,
-    control: renderCronSelect(props, field, options),
-  });
+  return options.inline
+    ? control
+    : renderFieldRow({
+        label: options.label,
+        controlId: inputIdForField(field),
+        help: options.help,
+        required: options.required,
+        error,
+        errorId: options.errorKey ? errorIdForField(options.errorKey) : undefined,
+        control,
+      });
 }
 
 export function renderToggleRow(

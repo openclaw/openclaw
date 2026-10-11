@@ -451,8 +451,11 @@ if (repositoryLocatorRequest) {
   console.log(JSON.stringify({ full_name: 'fixture/repo', html_url: 'https://github.com/fixture/repo' }));
   process.exit(0);
 }
+const repositoryAuthorityArgs = ['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'];
+const repositoryAuthorityRequests = [repositoryAuthorityArgs,
+  [...repositoryAuthorityArgs, '-H', 'X-GitHub-Api-Version: 2026-03-10']];
 if (args[0] === 'api' && args.includes('repos/fixture/repo') &&
-    JSON.stringify(args.filter(arg => arg !== '--include')) !== JSON.stringify(['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'])) {
+    !repositoryAuthorityRequests.some(expected => JSON.stringify(args.filter(arg => arg !== '--include')) === JSON.stringify(expected))) {
   throw new Error('Unexpected authoritative repository request');
 }
 let value;

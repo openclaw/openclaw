@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
+import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseBooleanValue, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -42,10 +42,10 @@ import {
   type JsonlReplayInput,
 } from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
-import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
+import { resolveQaChannelDriverSelection } from "./profile-channel-selection.runtime.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import {
   resolveQaRunProfileExecutionSelection,
@@ -68,11 +68,7 @@ import {
 } from "./qa-credentials-admin.runtime.js";
 import { parseQaCredentialPositiveIntegerEnv } from "./qa-credentials-common.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
-import {
-  normalizeQaTransportId,
-  qaTransportSupportsModuleFlows,
-  type QaTransportId,
-} from "./qa-transport-registry.js";
+import { normalizeQaTransportId, type QaTransportId } from "./qa-transport-registry.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -695,27 +691,16 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
           ...scenarioPack.scenarios.filter((scenario) => missingScenarioIdSet.has(scenario.id)),
         ]
       : taxonomyScenarios;
-  const liveAdapterFactories =
-    profileReport.channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
+  const { defaultChannel, supportsChannel, resolveModuleFlowSupport } =
+    resolveQaChannelDriverSelection(profileReport.channelDriver);
   const executionSelection = resolveQaRunProfileExecutionSelection({
     scenarios: executionScenarios,
     providerMode: normalizedProviderMode,
     primaryModel,
     channelDriver: profileReport.channelDriver,
-    defaultChannel:
-      profileReport.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
-    supportsChannel:
-      profileReport.channelDriver === "crabline" ? isCrablineServerChannel : undefined,
-    resolveModuleFlowSupport:
-      profileReport.channelDriver === "live"
-        ? (channel) =>
-            channel
-              ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
-                  channelId: channel,
-                  driver: "live",
-                })
-              : false
-        : undefined,
+    defaultChannel,
+    supportsChannel,
+    resolveModuleFlowSupport,
   });
   if (requestedScenarioIds.length > 0 && executionSelection.excludedScenarios.length > 0) {
     const exclusions = executionSelection.excludedScenarios
@@ -850,24 +835,14 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     scenarioIds: opts.scenarioIds,
   });
   const liveChannelId = channelDriver === "live" ? opts.channel?.trim() : undefined;
-  const liveAdapterFactories =
-    channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
-  const resolveModuleFlowSupport =
-    channelDriver === "live"
-      ? (channel?: string) =>
-          channel
-            ? qaTransportSupportsModuleFlows(liveAdapterFactories, {
-                channelId: channel,
-                driver: "live",
-              })
-            : false
-      : undefined;
+  const { liveAdapterFactories, defaultChannel, resolveModuleFlowSupport } =
+    resolveQaChannelDriverSelection(channelDriver);
   const runtimePairLanes = parseQaRuntimePairLaneFilters(opts.runtimePairLane);
   const runtimePairLaneSelection = resolveQaRuntimePairLaneScenarioIds({
     channel: opts.channel,
     channelDriver,
     claudeCliAuthMode,
-    defaultChannel: channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
+    defaultChannel,
     primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
     providerMode,
     scenarioIds: explicitScenarioIds,

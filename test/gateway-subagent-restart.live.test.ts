@@ -9,7 +9,7 @@ import { createToolCallOccurrenceQueue } from "../packages/agent-core/src/harnes
 import { inspectManagedProcessGroup } from "../scripts/lib/managed-child-process.mts";
 import { isLiveTestEnabled, logLiveProgress } from "../src/agents/live-test-helpers.js";
 import { createExternalGates } from "../src/agents/subagents/announce/subagent-external-gate.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import {
   prepareToolSearchDispatcherArguments,

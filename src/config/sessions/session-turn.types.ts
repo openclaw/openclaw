@@ -1,9 +1,13 @@
+import type {
+  ClientVoiceRunBinding,
+  ClientVoiceSessionRecord,
+} from "../../talk/client-voice-session-store.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
-import type { CliHistoryWriterFacts } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
   SessionPendingInputWorkerFacts,
@@ -11,9 +15,16 @@ import type {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import type {
   SessionTranscriptTurnMessageAppend,
+  SessionTranscriptWriteScope,
   SessionTranscriptTurnPersistOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type {
+  PreparedSessionSourceAuthority,
+  SessionSourcePredicate,
+} from "./session-source-authority.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -21,6 +32,8 @@ import type {
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { SessionEntry } from "./types.js";
 export type SqliteExpectedSessionTranscriptTurnResult = {
+  voiceSession?: ClientVoiceSessionRecord;
+  transcriptVersion?: SessionTranscriptContextVersion;
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   appendedMessages: TranscriptMessageAppendResult<unknown>[];
   rejectedReason?: "session-rebound";
@@ -30,6 +43,9 @@ export type SqliteExpectedSessionTranscriptTurnResult = {
 };
 
 export type SqliteSessionTurnOptions = {
+  /** Same-store voice bookkeeping commits atomically with its reserved transcript event. */
+  voiceTranscript?: ClientVoiceRunBinding & { failureKey: string; role: "user" | "assistant" };
+  ownerSource?: PreparedSessionSourceAuthority;
   workerPrepared?: true;
   preparedGoalId?: string;
   assertCurrent?: () => void;
@@ -40,6 +56,7 @@ export type SqliteSessionTurnOptions = {
   cwd?: string;
   expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
+  expectedOwner?: SessionTranscriptWriteScope["expectedOwner"];
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   expectedSessionId: string;
   selectedSessionId?: string | null;
@@ -47,6 +64,7 @@ export type SqliteSessionTurnOptions = {
   initialSessionEntry?: SessionEntry;
   messages: readonly SessionTranscriptTurnMessageAppend[];
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
+  onCommittedSource?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   sessionFile: string;
@@ -56,9 +74,16 @@ export type SqliteSessionTurnOptions = {
 export type SessionTurnPlan = {
   agentId: string;
   sessionKey: string;
+  prepareColdTranscript?: true;
   options: Omit<
     SqliteSessionTurnOptions,
-    "messages" | "onMessageCommitted" | "assertCurrent" | "sessionTurnMutation" | "config"
+    | "messages"
+    | "onMessageCommitted"
+    | "onCommittedSource"
+    | "assertCurrent"
+    | "sessionTurnMutation"
+    | "config"
+    | "ownerSource"
   > & {
     sessionTurnMutation?: Omit<SessionTranscriptTurnMutation, "assertCurrent">;
     messages: Array<
@@ -70,14 +95,20 @@ export type SessionTurnPlan = {
         | "prepareMessageAfterIdempotencyCheck"
         | "beforeFreshMessageCommit"
         | "workerPreparation"
+        | "preparation"
       > & {
-        preparation?: {
+        preparationVersion?: SessionTranscriptContextVersion;
+        sources?: SessionSourcePredicate[];
+        freshGuard?: true;
+        preparedMessage?: {
+          prepared: boolean;
           expected: { messageId: string; message: unknown } | undefined;
           message: unknown;
         };
       }
     >;
   };
+  ownerSources?: SessionSourcePredicate[];
   custody?: SessionPendingInputWorkerFacts;
   relocation?: string;
   cliWriter?: CliHistoryWriterFacts;
@@ -88,5 +119,14 @@ export type SessionTurnCommitted = {
   sequences: Array<number | undefined>;
   projectionNeedsReconcile: boolean;
   custody?: SessionPendingInputWorkerReceipt;
+  authority?: import("./session-pending-input-authority.js").SessionPendingInputAuthorityFacts;
   publication?: SessionEntryReplacementPublication;
+};
+
+export type IncognitoSessionTurnOperations = {
+  "session.turn.prepare": {
+    input: SessionTurnPlan;
+    output: ReturnType<typeof import("./session-turn.worker.js").prepareSessionTurn>;
+  };
+  "session.turn.commit": { input: SessionTurnPlan; output: SessionTurnCommitted };
 };

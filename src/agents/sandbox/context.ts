@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -11,6 +12,7 @@ import {
   resolveBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
+import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
@@ -26,6 +28,10 @@ import {
 } from "../subagents/subagent-attachment-paths.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import { ensureSandboxWorkspace } from "../workspace.js";
+import {
+  timeWorktreePreparationPhase,
+  withWorktreePreparationTiming,
+} from "../worktrees/preparation-timing.js";
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -35,7 +41,7 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { hashTextSha256 } from "./hash.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
 import { readRegisteredSandboxRuntimeIds } from "./registry.js";
-import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { resolveSandboxRuntimeStatus, withSandboxRuntimeStatusInWorker } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import { captureSandboxStateOwner, SandboxStateOwnerRequiredError } from "./state-owner.js";
@@ -210,19 +216,13 @@ function resolveSandboxSession(params: {
       sessionKey: `${rawSessionKey}:skills:${hashTextSha256(JSON.stringify(librarySelections))}`,
     };
   }
-  const configuredSandbox = librarySelections?.length
-    ? { ...configured, scope: "agent" as const }
-    : configured;
-  if (!runtime.sandboxRequired) {
-    return { rawSessionKey, runtime, cfg: configuredSandbox };
-  }
   // Docker and browser backends replace shared scope keys with a literal name;
   // agent scope lets the prepared isolation subject own every sandbox resource.
-  const cfg = {
-    ...configuredSandbox,
-    scope: "agent" as const,
-    workspaceAccess: runtime.workspaceAccess,
-  };
+  const cfg = runtime.sandboxRequired
+    ? { ...configured, scope: "agent" as const, workspaceAccess: runtime.workspaceAccess }
+    : librarySelections?.length
+      ? { ...configured, scope: "agent" as const }
+      : configured;
   return { rawSessionKey, runtime, cfg };
 }
 
@@ -346,7 +346,9 @@ async function resolveProvisionedSandboxContext(
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
-  } = await ensureSandboxWorkspaceLayout(params, selected, guard);
+  } = await timeWorktreePreparationPhase("workspaceLayout", () =>
+    ensureSandboxWorkspaceLayout(params, selected, guard),
+  );
   localWorkspace?.assertCurrent();
 
   const docker = await resolveSandboxDockerUser({
@@ -427,9 +429,9 @@ async function resolveProvisionedSandboxContext(
     );
   };
 
-  const backend = localWorkspace
-    ? await localWorkspace.provision(provisionBackend)
-    : await provisionBackend();
+  const backend = await timeWorktreePreparationPhase("containerStart", () =>
+    localWorkspace ? localWorkspace.provision(provisionBackend) : provisionBackend(),
+  );
   params.assertCurrent?.();
 
   const resolvedBrowserConfig = resolvedCfg.browser.enabled
@@ -537,10 +539,12 @@ export async function resolveSandboxContext(
   // registry, and filesystem-bridge setup so model fallback never retries it.
   try {
     assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
-    const context = await resolveProvisionedSandboxContext(ownedParams, resolved, {
-      assertHost: assertStateOwner,
-      beforeLegacyApply: assertCurrent,
-    });
+    const context = await withWorktreePreparationTiming("sandbox", () =>
+      resolveProvisionedSandboxContext(ownedParams, resolved, {
+        assertHost: assertStateOwner,
+        beforeLegacyApply: assertCurrent,
+      }),
+    );
     assertStateOwner();
     return context;
   } catch (error) {
@@ -551,44 +555,49 @@ export async function resolveSandboxContext(
   }
 }
 
-export async function ensureSandboxWorkspaceForSession(params: {
-  skillsSnapshot?: SkillSnapshot;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  workspaceDir?: string;
-}): Promise<SandboxWorkspaceInfo | null> {
-  const resolved = resolveSandboxSession(params);
-  if (!resolved) {
-    return null;
-  }
-  assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
-  const selected = await prepareSandboxWorkspaceSelection(params, resolved);
-  const { rawSessionKey, cfg } = selected;
+export async function ensureSandboxWorkspaceForSession(
+  params: {
+    skillsSnapshot?: SkillSnapshot;
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionKey?: string;
+    workspaceDir?: string;
+  },
+  readSource?: CapturedSessionEntryReadSource,
+): Promise<SandboxWorkspaceInfo | null> {
+  const readAuthority = captureChannelReadAuthority();
+  const assertCurrent = () => readAuthority?.();
+  const ownedParams = { ...params, assertCurrent };
+  return withSandboxRuntimeStatusInWorker(
+    { cfg: params.config, agentId: params.agentId, sessionKey: params.sessionKey },
+    { env: process.env, cwd: process.cwd(), assertCurrent, readSource },
+    async (preparedRuntimeStatus) => {
+      const resolved = resolveSandboxSession({ ...params, preparedRuntimeStatus });
+      if (!resolved) {
+        return null;
+      }
+      assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
+      const selected = await prepareSandboxWorkspaceSelection(ownedParams, resolved);
+      assertCurrent();
+      const { rawSessionKey, cfg } = selected;
 
-  const {
-    agentWorkspaceDir,
-    scopeKey,
-    skillsEligibility,
-    skillUsagePaths,
-    skillsWorkspaceDir,
-    workspaceDir,
-  } = await ensureSandboxWorkspaceLayout(params, selected);
-
-  const containerWorkdir = getSandboxBackendWorkdirResolver(cfg.backend)?.({
-    cfg,
-    sessionKey: rawSessionKey,
-    scopeKey,
-    workspaceDir,
-    agentWorkspaceDir,
-    skillsWorkspaceDir,
-  });
-  return {
-    workspaceDir,
-    ...(containerWorkdir ? { containerWorkdir } : {}),
-    skillsWorkspaceDir,
-    ...(skillsEligibility ? { skillsEligibility } : {}),
-    ...(skillUsagePaths ? { skillUsagePaths } : {}),
-    workspaceAccess: cfg.workspaceAccess,
-  };
+      const { agentWorkspaceDir, scopeKey, workspaceDir, ...workspace } =
+        await ensureSandboxWorkspaceLayout(ownedParams, selected);
+      assertCurrent();
+      const containerWorkdir = getSandboxBackendWorkdirResolver(cfg.backend)?.({
+        cfg,
+        sessionKey: rawSessionKey,
+        scopeKey,
+        workspaceDir,
+        agentWorkspaceDir,
+        skillsWorkspaceDir: workspace.skillsWorkspaceDir,
+      });
+      return {
+        workspaceDir,
+        ...(containerWorkdir ? { containerWorkdir } : {}),
+        ...workspace,
+        workspaceAccess: cfg.workspaceAccess,
+      };
+    },
+  );
 }

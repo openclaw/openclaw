@@ -14,7 +14,10 @@ import {
   buildKnownAgentRunFailureReplyPayload,
 } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { onAgentEventForRun, type AgentEventPayload } from "../../infra/agent-events.js";
+import { projectInFlightRunSnapshot } from "../../gateway/chat-inflight-snapshot.js";
+import { createAgentEventTestHarness } from "../../gateway/server-chat.agent-events.test-harness.js";
+import { subscribeAgentEvents } from "../../gateway/server-chat.agent-events.test-helpers.js";
+import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
@@ -22,6 +25,10 @@ import {
   appendSessionTranscriptMessageByIdentityStrict,
   readVisibleSessionTranscriptMessageEntries,
 } from "../../plugin-sdk/session-transcript-runtime.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  readSessionTranscriptRunId,
+} from "../../sessions/transcript-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   attemptFor,
@@ -213,7 +220,27 @@ it.for(["complete", "revoke"] as const)(
       });
       const attempt = await attemptFor(state, config, "opencode", "full");
       const updates: AgentEventPayload[] = [];
-      const unsubscribe = onAgentEventForRun(attempt.input.runId, (event) => {
+      const gateway = createAgentEventTestHarness();
+      gateway.register(attempt.input.runId, attempt.target.sessionKey, attempt.input.runId);
+      const snapshot = () => {
+        gateway.chatRunState.flushPendingText(attempt.input.runId);
+        return projectInFlightRunSnapshot({
+          chatRunState: gateway.chatRunState,
+          runId: attempt.input.runId,
+        }).text;
+      };
+      const committedSnapshots: string[] = [];
+      const unsubscribeTranscript = onInternalSessionTranscriptUpdate((event) => {
+        if (readSessionTranscriptRunId(event.message) === attempt.input.runId) {
+          gateway.handler.retireTranscript(event);
+          committedSnapshots.push(snapshot());
+        }
+      });
+      const unsubscribe = subscribeAgentEvents(async (event) => {
+        if (event.runId !== attempt.input.runId) {
+          return;
+        }
+        await gateway.handler(event);
         if (event.stream === "assistant") {
           updates.push(event);
         }
@@ -234,19 +261,36 @@ it.for(["complete", "revoke"] as const)(
         await expect.poll(() => updates.at(-1)?.data.text).toBe("First chunk");
         expect(finished).toBe(false);
         expect(updates[0]?.sessionKey).toBe(attempt.target.sessionKey);
+        expect(snapshot()).toBe("First chunk");
         if (completion === "revoke") {
           attempt.close();
         }
         await fs.writeFile(path.join(native.peerDirectory, "prompt-reply-release"), "release");
         const result = await run;
+        await unsubscribe.drain();
         expect(result.terminal.kind).toBe(completion === "complete" ? "ok" : "failed");
         expect(updates.map((event) => event.data.delta)).toEqual(
           completion === "complete" ? ["First chunk", " second chunk"] : ["First chunk"],
         );
+        if (completion === "complete") {
+          const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
+          const assistant = transcript.find((row) => row.role === "assistant");
+          expect(assistant?.idempotencyKey).toBe(result.assistantTranscriptIdempotencyKey);
+          expect(updates.map((event) => event.data.itemId)).toEqual([
+            assistant?.idempotencyKey,
+            assistant?.idempotencyKey,
+          ]);
+          expect(committedSnapshots).toEqual([""]);
+        } else {
+          expect(committedSnapshots).toEqual([]);
+        }
       } finally {
         await fs.writeFile(path.join(native.peerDirectory, "prompt-reply-release"), "release");
         await Promise.allSettled([run]);
-        unsubscribe();
+        await unsubscribe();
+        unsubscribeTranscript();
+        await gateway.handler.dispose();
+        gateway.chatRunState.clear();
         attempt.close();
         await native.service.stop?.(native.context);
       }
@@ -311,19 +355,34 @@ it.for([
         const upstream: typeof import("acpx/runtime") = await import(
           pathToFileURL(require.resolve("acpx/runtime")).href
         );
-        const upstreamOperation =
-          operation === "model"
-            ? vi.spyOn(upstream.AcpxRuntime.prototype, "setModel")
-            : vi.spyOn(upstream.AcpxRuntime.prototype, "startTurn");
-        // The warmed manager queues this call before polling returns; the earlier native control stays held.
+        const upstreamEntered = createDeferred();
+        const method = operation === "model" ? "setModel" : "startTurn";
+        const originalOperation = upstream.AcpxRuntime.prototype[method];
+        const upstreamOperation = vi
+          .spyOn(upstream.AcpxRuntime.prototype, method)
+          .mockImplementation(
+            new Proxy(originalOperation, {
+              apply(target, receiver, args) {
+                upstreamEntered.resolve();
+                return Reflect.apply(target, receiver, args);
+              },
+            }),
+          );
+        // Observe upstream admission while the earlier native control keeps its queue occupied.
         run = runAgentHarnessAttempt(attempt.input);
         void run.catch(() => {});
-        await Promise.race([
-          expect.poll(() => upstreamOperation.mock.calls.length).toBe(1),
-          run.then((result) => {
-            throw new Error(`Attempt ended before native ${operation} boundary`, { cause: result });
-          }),
-        ]);
+        await withinTest(
+          Promise.race([
+            upstreamEntered.promise,
+            run.then((result) => {
+              throw new Error(`Attempt ended before native ${operation} boundary`, {
+                cause: result,
+              });
+            }),
+          ]),
+          signal,
+        );
+        expect(upstreamOperation).toHaveBeenCalledOnce();
         if (kind === "revoke") {
           attempt.close();
         }

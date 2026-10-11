@@ -89,3 +89,20 @@ export function makeBaseParams(overrides: {
     abortReason: () => "aborted",
   };
 }
+
+type SourceOutcome = DispatchCronDeliveryParams["sourceDeliveryOutcome"];
+export function messageToolOutcome(
+  targets: SourceOutcome["visibleDeliveries"][number]["target"][],
+  verified = true,
+): SourceOutcome {
+  return {
+    visibleDeliveries: targets.map((target) => ({
+      via: "message_tool",
+      target,
+      verifiedTarget: verified,
+    })),
+    verifiedMessageToolDelivery: verified,
+    satisfiesSourceDelivery: verified,
+    unverifiedMessageToolDelivery: !verified,
+  };
+}

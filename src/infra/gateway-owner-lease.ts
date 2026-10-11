@@ -27,6 +27,7 @@ import type { OpenClawStateReadOutcome } from "../state/openclaw-state-read.type
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   classifyGatewayOwnerProcessNamespace,
+  describeGatewayLockHolder,
   GATEWAY_OWNER_HEARTBEAT_MS,
   GatewayLockNamespaceError,
   readGatewayLockProcessNamespace,
@@ -69,12 +70,14 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
     return previous;
   }
   if (namespace === "unknown") {
-    throw new GatewayLockNamespaceError();
+    throw new GatewayLockNamespaceError(previous);
   }
   if (previous.expired && previous.state !== "live") {
     return previous;
   }
-  throw new Error("Another Gateway owner lease is still active for this state directory");
+  throw new Error(
+    `Another Gateway owner lease is still active for this state directory: ${describeGatewayLockHolder(previous, undefined, previous.state === "live" ? "live" : "unknown")}`,
+  );
 }
 
 /** Physical custody alone must not bypass a fresh, unverifiable lease during maintenance. */
@@ -250,50 +253,38 @@ export function acquireGatewayOwnerLease(params: {
     mode: params.mode,
     supervisor: params.supervisor,
   });
-  const expiresAt = withOpenClawStateStartupMigrationCheckpointDatabase(
-    (db) =>
-      runSqliteImmediateTransactionSync(
-        db,
-        () => {
-          assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-          const previous = resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));
-          if (previous) {
-            releaseOpenClawStateLeaseInTransaction(db, { ...identity, owner: previous.owner });
-          }
-          const acquired = acquireOpenClawStateLeaseInTransaction(
-            db,
-            identity,
-            STARTUP_MIGRATION_LEASE_TTL_MS,
-            payloadJson,
-          );
-          if (acquired.kind === "held") {
-            throw new Error("Another Gateway owner lease is still active for this state directory");
-          }
-          return acquired.expiresAt;
-        },
-        {
-          databaseLabel: databasePath,
-          operationLabel: "gateway.owner-lease.acquire",
-        },
-      ),
-    { env, path: databasePath },
-  );
-  const releaseRow = () =>
+  const mutateLease = <T>(operation: "acquire" | "release", mutate: (db: DatabaseSync) => T) =>
     withOpenClawStateStartupMigrationCheckpointDatabase(
       (db) =>
         runSqliteImmediateTransactionSync(
           db,
           () => {
             assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-            releaseOpenClawStateLeaseInTransaction(db, identity);
+            return mutate(db);
           },
           {
             databaseLabel: databasePath,
-            operationLabel: "gateway.owner-lease.release",
+            operationLabel: `gateway.owner-lease.${operation}`,
           },
         ),
       { env, path: databasePath },
     );
+  const expiresAt = mutateLease("acquire", (db) => {
+    const previous = resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));
+    if (previous) {
+      releaseOpenClawStateLeaseInTransaction(db, { ...identity, owner: previous.owner });
+    }
+    const acquired = acquireOpenClawStateLeaseInTransaction(
+      db,
+      identity,
+      STARTUP_MIGRATION_LEASE_TTL_MS,
+      payloadJson,
+    );
+    if (acquired.kind === "held") {
+      throw new Error("Another Gateway owner lease is still active for this state directory");
+    }
+    return acquired.expiresAt;
+  });
   let heartbeat: ReturnType<typeof startOpenClawStateLeaseHeartbeat> | undefined;
   let constructionFailure: { error: unknown } | undefined;
   let warned = false;
@@ -341,7 +332,9 @@ export function acquireGatewayOwnerLease(params: {
       try {
         // Lost custody may join its worker, but cannot mutate the recorded lease.
         if (!custody?.signal.aborted) {
-          releaseRow();
+          mutateLease("release", (db) => {
+            releaseOpenClawStateLeaseInTransaction(db, identity);
+          });
         }
       } catch (error) {
         if (!custody?.signal.aborted) {

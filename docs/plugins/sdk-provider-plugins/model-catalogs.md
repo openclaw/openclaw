@@ -50,13 +50,17 @@ behaviors:
 | Endpoint       | The default URL is `models` relative to the effective provider `baseUrl`, including an operator override when `allowExplicitBaseUrl` is enabled. Use `endpointPath` for another relative path. Use `endpointUrl: { url, requireBaseUrl }` only for a fixed vendor URL; discovery is skipped unless the effective base URL still equals `requireBaseUrl`, so a custom proxy credential is not sent to the vendor.                                                                                                                                                                                                  |
 | Network limits | Fetches use OpenClaw's SSRF guard, one 5-second timeout budget across pagination, a 4 MiB response limit per page, and a 50-page limit. Cross-origin pagination links are rejected; credentials are removed after a cross-origin redirect.                                                                                                                                                                                                                                                                                                                                                                        |
 | Cache          | Successful, non-empty catalogs are cached for 60 seconds by provider, endpoint, and resolved credential. Empty or unusable results are not cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Filtering      | Exact live IDs keep their trusted static metadata. New rows are projected conservatively as text/chat models. Disabled, archived, deprecated, explicitly non-chat, embedding, reranking, moderation, speech, image-only, and video-only rows are excluded. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog.                                                                                                                                                                                                           |
+| Filtering      | The listing decides which models exist. Exact live IDs keep their trusted static metadata; every other listed chat ID becomes a conservative text/chat row, so new models appear without an OpenClaw release. Disabled, archived, deprecated, past-`shutdown_date`, explicitly non-chat, embedding, reranking, moderation, speech, transcription, realtime, audio, image, video, and legacy completions rows are excluded, including static IDs. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog.                     |
 | Admission      | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and fail closed when the row carries no capability data. |
 | Failure        | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 Relative catalog cache TTLs start when a successful load completes. Cache hits
 preserve that deadline, and explicit absolute provider deadlines remain unchanged.
 Pending loads retain their initial expiry so stalled work can be replaced.
+An explicit refresh through the prepared catalog owner bypasses completed
+response-cache entries only for the keys acquired by that request. Repeated
+reads within the same acquisition share the refreshed value; concurrent callers
+share pending work. Ordinary acquisition keeps its existing cache lifetime.
 
 Bundled providers set `discoveryMode: "strict"` in their catalog options.
 This code option keeps successful empty results empty and reports failed
@@ -87,6 +91,16 @@ runtime before projecting `serviceTiers` on a public model choice. Account tier
 maps never appear in public `providerOutcomes`. Missing, failed, stale, or
 mismatched observations leave support unknown. This metadata does not authorize
 execution or guarantee upstream fulfillment.
+
+A `ready` outcome from an account-scoped subscription listing may include
+private `listedModelIds: string[]` provenance: every model id the response
+returned, including hidden rows. It never appears in public `providerOutcomes`.
+When present, the picker treats a model's subscription route as not entitled
+for that account if the id is absent, unless another usable credential class
+serves the model. An empty array is authoritative. The listing applies only to
+the credential that made it: the outcome's `profileId`, or non-profile auth
+when omitted. Another account's listing leaves entitlement unknown. Omit the
+field when the listing fails or does not describe account entitlement.
 
 Public metadata requests declare `authentication: "none"` in discovery
 options. The prepared request then has no credential or profile identity;
@@ -153,8 +167,13 @@ OpenAI-compatible projection, keep only that projection in the plugin. Pass
 it as `projectRows`; the shared runtime still owns guarded fetches,
 provider-auth headers, cache admission, and static fallback.
 
-Use `buildLiveModelProviderConfig` when the live API only tells you which
-provider-owned static catalog rows are currently available:
+Use `buildLiveModelProviderConfig` when the plugin builds the provider config
+itself. Without `projectRows`, the listing decides which models exist: every
+listed chat model is published, static `models` rows only enrich matching IDs,
+and non-chat rows are filtered by the same rules as `liveModelDiscovery`. To
+restrict the list, pass `readModelId(row)` and return `undefined` for rows the
+provider does not support; the returned string also becomes the model ID. Pass
+`projectRows` when the live API publishes richer model metadata:
 
 ```typescript index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -250,9 +269,9 @@ export default definePluginEntry({
 available. Keep an offline `staticRun` or static fallback so setup, docs,
 tests, and picker surfaces do not depend on live network access. Use a TTL
 appropriate for model-list freshness, avoid request-time filesystem polling,
-and pass a provider-specific `readRows` / `readModelId` only when the
-upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
-shape.
+and pass a provider-specific `readRows` only when the upstream response is not an
+OpenAI-compatible `{ data: [{ id, object }] }` shape. Pass `readModelId` when
+rows carry their ID elsewhere or the provider must reject some listed rows.
 
 During model-runtime preparation, `staticCatalog.run` and `prepareSyntheticAuth`
 receive an optional `signal`. Shutdown and plugin/config replacement abort it.
@@ -468,6 +487,13 @@ opt in even when a plugin is using a custom provider id.
 The live discovery examples above cover `/models`-style provider APIs. Keep
 that discovery inside `catalog.run`, gated on usable auth, and keep
 `staticRun` network-free for offline catalog generation.
+
+Runtime model preparation also runs `staticRun` when configured model refs
+need its rows, and then sets `ctx.providerIds` to the selected provider ids.
+Only in that case may the hook await provider-owned caches that its synchronous
+hooks read, such as model capabilities used for thinking levels. Catalog
+generation, `models list --all`, and doctor validation leave `ctx.providerIds`
+unset; keep those runs network-free.
 
 Official provider plugins that share credentials can use
 `resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, providerIds)` from

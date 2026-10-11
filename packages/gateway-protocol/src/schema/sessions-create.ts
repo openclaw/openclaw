@@ -18,6 +18,12 @@ export const SessionsCreateParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   idempotencyKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  surface: Type.Optional(
+    Type.Literal("plugin-dock", {
+      description:
+        "Immutable presentation surface for a new operator-created dock conversation. Preserves creator identity and permissions; ignored when adopting an existing session.",
+    }),
+  ),
   label: Type.Optional(SessionLabelString),
   displayName: Type.Optional(
     Type.String({

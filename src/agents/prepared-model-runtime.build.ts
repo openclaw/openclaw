@@ -135,6 +135,7 @@ async function buildSnapshotBatch(
   ) => {
     const catalogAccess = await createFullModelCatalogAccess(
       {
+        catalogOwner: candidate.catalogOwner,
         agentFacts,
         nativeConfigFingerprint: candidate.nativeConfigFingerprint,
         catalogFacts,

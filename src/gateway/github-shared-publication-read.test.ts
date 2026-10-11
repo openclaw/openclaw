@@ -11,7 +11,6 @@ import type { GitHubPublicationRow } from "../state/github-publication-read.type
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -389,7 +388,7 @@ describe("shared worktree receipt observation", () => {
     publishWorktree(insertSharedWorktreeReceipt("cold"));
     const database = openOpenClawStateDatabase();
     const databasePath = database.path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const before = await fs.readFile(databasePath);
     const files = await fs.readdir(path.dirname(databasePath));
     prohibitPublicationWork();

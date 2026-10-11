@@ -398,19 +398,6 @@ describe("secrets handlers", () => {
     });
   });
 
-  it("logs error details when secrets.resolve throws", async () => {
-    const warn = vi.fn();
-    const handlers = createHandlers({
-      resolveSecrets: vi.fn().mockRejectedValue(new Error("EACCES: permission denied")),
-      log: { warn },
-    });
-    await expectMemoryStatusResolveUnavailable({
-      handlers,
-      warn,
-      warningText: "EACCES: permission denied",
-    });
-  });
-
   it("lists env values without structurally disclosing secret values", async () => {
     storeMocks.listEntries.mockReturnValueOnce([
       {

@@ -17,16 +17,9 @@ type NativeGatewaysWindow = Window & {
 
 const NATIVE_GATEWAYS_CHANGED_EVENT = "openclaw:native-gateways-changed";
 
-export type NativeGatewaysCapability = {
-  readonly snapshot: NativeGatewaysSnapshot | null;
-  subscribe(listener: (snapshot: NativeGatewaysSnapshot) => void): () => void;
-  select(id: string): void;
-  openWindow(id: string): void;
-  setPrimary(id: string): void;
-  reconnect(id: string): void;
-  reconnectCancel(id: string): void;
-  openSettings(): void;
-};
+export type NativeGatewaysCapability = NonNullable<
+  ReturnType<typeof createNativeGatewaysCapability>
+>;
 
 function snapshotFrom(value: unknown): NativeGatewaysSnapshot | null {
   if (!value || typeof value !== "object") {
@@ -39,7 +32,7 @@ function snapshotFrom(value: unknown): NativeGatewaysSnapshot | null {
     : null;
 }
 
-function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
+function createNativeGatewaysCapability() {
   if (typeof window === "undefined") {
     return null;
   }
@@ -64,12 +57,13 @@ function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
     get snapshot() {
       return snapshot;
     },
-    subscribe: (listener) => registerListener(listeners, listener),
-    select: (id) => post({ type: "select", id }),
-    openWindow: (id) => post({ type: "open-window", id }),
-    setPrimary: (id) => post({ type: "set-primary", id }),
-    reconnect: (id) => post({ type: "reconnect", id }),
-    reconnectCancel: (id) => post({ type: "reconnect-cancel", id }),
+    subscribe: (listener: (snapshot: NativeGatewaysSnapshot) => void) =>
+      registerListener(listeners, listener),
+    select: (id: string) => post({ type: "select", id }),
+    openWindow: (id: string) => post({ type: "open-window", id }),
+    setPrimary: (id: string) => post({ type: "set-primary", id }),
+    reconnect: (id: string) => post({ type: "reconnect", id }),
+    reconnectCancel: (id: string) => post({ type: "reconnect-cancel", id }),
     openSettings: () => post({ type: "open-settings" }),
   };
 }

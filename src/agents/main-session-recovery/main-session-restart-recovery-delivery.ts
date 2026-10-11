@@ -74,7 +74,6 @@ export function isRestartRecoveryDeliveryCurrent(params: RestartRecoveryDelivery
   const current = loadSessionEntryReadOnly(params);
   return (
     current?.sessionId === params.sessionId &&
-    current.status === "running" &&
     current.abortedLastRun !== true &&
     current.restartRecoveryDeliveryRunId === params.recoveryRunId &&
     // A retained route is not permission for an automatic resumption notice.

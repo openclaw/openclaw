@@ -32,7 +32,7 @@ function renderGatewayTaskCommand(restartExitCode: number): string {
 
 /**
  * Runs the real Gateway inside the Windows Job Object owned by ProcessSupervisor.
- * The hidden task launcher owns an outer Job containing this supervisor. The
+ * The task launcher owns an outer Job containing this supervisor. The
  * command anchor owns the inner Job used for cancellation and extinction joins.
  */
 export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
@@ -51,12 +51,12 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   try {
     const launcher = process.env[WINDOWS_TASK_LAUNCHER_ENV];
     delete process.env[WINDOWS_TASK_LAUNCHER_ENV];
-    if (launcher === WINDOWS_TASK_LAUNCHER_ACTIVE) {
+    if (launcher === WINDOWS_TASK_LAUNCHER_ACTIVE || launcher === "cmd") {
       const [{ default: koffi }, { bindWindowsTaskLauncher }] = await Promise.all([
         import("koffi"),
         import("../../process/supervisor/service-child-windows-task-launcher.js"),
       ]);
-      bindWindowsTaskLauncher(koffi);
+      bindWindowsTaskLauncher(koffi, launcher);
     }
     while (true) {
       stderr = "";

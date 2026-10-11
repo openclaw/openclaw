@@ -4,9 +4,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   beginAgentDeletionJournal,
-  readAgentDeletionJournal,
   removeAgentDeletionJournal,
-} from "./agent-deletion-journal.js";
+} from "../test-utils/agent-deletion-journal.js";
+import { readAgentDeletionJournal } from "./agent-deletion-journal.js";
 import * as agentDeletionJournal from "./agent-deletion-journal.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,

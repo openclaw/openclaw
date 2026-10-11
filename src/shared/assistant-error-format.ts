@@ -1,8 +1,5 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -40,14 +37,6 @@ const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
   "LLM streaming response contained a malformed fragment. Please try again.";
 
 type ErrorPayload = Record<string, unknown>;
-
-type ApiErrorInfo = {
-  httpCode?: string;
-  type?: string;
-  code?: string;
-  message?: string;
-  requestId?: string;
-};
 
 export function formatProviderRefusalText(message: {
   diagnostics?: unknown;
@@ -173,7 +162,7 @@ export function isGenericProviderInternalError(raw: string): boolean {
   );
 }
 
-export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
+export function parseApiErrorInfo(raw?: string) {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
@@ -262,42 +251,33 @@ const CONNECTION_FAILED_MESSAGE =
 const TRANSPORT_ERRORS = [
   {
     code: /\beconnrefused\b/i,
-    phrases: ["connection refused", "actively refused"],
+    phrases: /connection refused|actively refused/i,
     message: CONNECTION_FAILED_MESSAGE,
   },
   {
     code: /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i,
-    phrases: ["socket hang up", "connection reset", "connection aborted"],
+    phrases: /socket hang up|connection reset|connection aborted/i,
     message:
       "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
   },
   {
     code: /\benotfound\b|\beai_again\b|\benetunreach\b|\behostunreach\b|\behostdown\b/i,
-    phrases: [
-      "getaddrinfo",
-      "no such host",
-      "dns",
-      "network is unreachable",
-      "host is unreachable",
-      "fetch failed",
-      "connection error",
-      "network request failed",
-    ],
+    phrases:
+      /getaddrinfo|no such host|\bdns\b|network is unreachable|host is unreachable|fetch failed|connection error|network request failed/i,
     message: CONNECTION_FAILED_MESSAGE,
   },
 ];
 
 export function isKnownTransportErrorCode(value: string): boolean {
-  return TRANSPORT_ERRORS.some(({ code }) => code?.exec(value)?.[0] === value);
+  return TRANSPORT_ERRORS.some(({ code }) => code.exec(value)?.[0] === value);
 }
 
 export function formatTransportErrorCopy(raw: string): string | undefined {
   if (!raw || isCloudflareOrHtmlErrorPage(raw)) {
     return undefined;
   }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
   for (const { code, phrases, message } of TRANSPORT_ERRORS) {
-    if (code?.test(raw) || phrases.some((phrase) => lower.includes(phrase))) {
+    if (code.test(raw) || phrases.test(raw)) {
       return message;
     }
   }

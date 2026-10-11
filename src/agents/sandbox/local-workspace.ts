@@ -5,6 +5,11 @@ import {
   withLocalWorkspaceProjection,
 } from "../../gateway/worker-environments/local-workspace-projection.js";
 import { withWorktreeAllocationLease } from "../worktrees/allocation.js";
+import {
+  markManagedWorktreePreparation,
+  setWorktreePreparationTemplate,
+  startWorktreePreparationPhase,
+} from "../worktrees/preparation-timing.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
 /** A writable project is an exact managed projection, never a role-policy override. */
@@ -17,31 +22,45 @@ export async function prepareLocalSandboxWorkspace(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }) {
-  const owner = resolveLocalWorkspaceOwner(params);
+  const owner = await resolveLocalWorkspaceOwner(params);
   if (!owner) {
     return undefined;
   }
+  markManagedWorktreePreparation();
   if (params.sandbox.backend !== "docker" && params.sandbox.backend !== "podman") {
     throw new Error(
       "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
     );
   }
   const existing = await withLocalWorkspaceProjection(owner, (state) => state.reuse());
-  const workspaceDir =
-    existing ??
-    (params.cfg.worktreeAcceleration === false
-      ? await withLocalWorkspaceProjection(owner, (state) => state.prepare())
-      : await withWorktreeAllocationLease(
-          {
-            env: owner.env ?? process.env,
-            signal: params.signal,
-            commitGuard: owner.assertCurrent,
-          },
-          (allocation) =>
-            withLocalWorkspaceProjection(owner, (state) =>
-              state.prepare({ sandbox: params.sandbox, allocation }),
-            ),
-        ));
+  let workspaceDir: string;
+  if (existing) {
+    setWorktreePreparationTemplate("reused");
+    workspaceDir = existing;
+  } else if (params.cfg.worktreeAcceleration === false) {
+    workspaceDir = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  } else {
+    const allocated = startWorktreePreparationPhase("allocate");
+    try {
+      workspaceDir = await withWorktreeAllocationLease(
+        {
+          env: owner.env ?? process.env,
+          signal: params.signal,
+          commitGuard: owner.assertCurrent,
+          workerAuthority: owner.workerAuthority,
+        },
+        (allocation) => {
+          allocated();
+          return withLocalWorkspaceProjection(
+            { ...owner, workerAuthority: allocation.workerAuthority },
+            (state) => state.prepare({ sandbox: params.sandbox, allocation }),
+          );
+        },
+      );
+    } finally {
+      allocated();
+    }
+  }
   owner.assertCurrent();
   return {
     workspaceDir,

@@ -1,10 +1,53 @@
 ---
-summary: "Temp-directory rules, agent reliability eval gaps, and how to add a regression"
+summary: "Behavioral integration proof, test value and cost, and regression authoring"
 title: "Writing and adding tests"
 read_when:
   - You are writing a new test
   - You are adding a regression for a provider bug
 ---
+
+## Prove behavior at the owning boundary
+
+Prefer focused integration tests through real production owners, with deterministic
+external I/O fixtures, not mocked internal decisions or whole-product boots.
+Keep independent unit contracts and the [cost budget](#cost-budget).
+
+- **Behavior:** name the caller-visible contract, credible regression, and what
+  the boundary cannot prove. Use independent expected values; exercise the same
+  interface as callers. Raw-storage assertions, call counts, ordering, and exact
+  bytes belong when they protect storage, billing, delivery, or protocol contracts.
+- **Feedback:** work in vertical slices: failing behavior, smallest coherent
+  repair, passing proof. Confirm regressions fail on the original defect, not
+  fixture setup; report unavailable baseline proof. Refactor under green tests.
+  Replace redundant tests only after checking for distinct contracts or edge cases.
+- **Requests:** capture final serialized payloads and resolved routing after real
+  assembly. Compare instructions/developer messages, tools/order, input prefix,
+  model parameters, cache identity, endpoint, and auth mode. Warm-prefix reuse
+  shares one preparation owner; document permitted differences. Standalone
+  summaries need an intentional separate contract, not accidental cache reuse.
+- **Paid work:** a paid provider result is kept or never requested.
+  - Preflight predictable failures, such as redaction or budget checks, before the call.
+  - Distinguish not sent, uncertain outcome, provider completed, and locally persisted.
+    Reconcile uncertain outcomes; exactly-once claims need external idempotency proof.
+  - Inject relevant failures and assert physical requests and observed usage,
+    including rejected results. A local processing error never silently buys another call.
+  - Preserve valid results without bypassing redaction, cancellation, or authority.
+- **Recovery:** assert a sanitized reason and outcome through the actual diagnostic
+  consumer. Warn on unexpected degradation; expected recovery may use a documented
+  structured outcome. Persist decisions that change future replay, then reconstruct
+  and exercise the next request, not merely a mocked save call. Cover compaction,
+  switching, and concurrent edits when relevant; transient errors are not permanent bans.
+- **Defaults:** enumerate affected routes, auth modes, capabilities, and stored
+  states. Exercise supported and unsupported cases through execution's eligibility
+  owner, not a copied capability table or precomputed allowed flag.
+- **Measurements:** support cost/performance claims with comparable request counts,
+  input/cached/output tokens, and latency as relevant; name model, route, and
+  conditions. Live cache/billing claims need live evidence; label local estimates.
+  Existing live-proof requirements apply, not paid benchmarks for unrelated edits.
+
+Use synthetic content and keep credentials out of captures. Select failure cases
+from the changed contract, not a universal matrix. If proof needs many private
+controls, inspect fragmented ownership rather than adding test-only exports.
 
 ## Test Temp Directories
 
@@ -201,9 +244,10 @@ When you fix a provider/model issue discovered in live:
 
 - Add a CI-safe regression if possible (mock/stub provider, or capture the exact request-shape transformation)
 - If it's inherently live-only (rate limits, auth policies), keep the live test narrow and opt-in via env vars
-- Prefer targeting the smallest layer that catches the bug:
-  - provider request conversion/replay bug -> direct models test
-  - gateway session/history/tool pipeline bug -> gateway live smoke or CI-safe gateway mock test
+- Prefer the smallest production composition that reaches the defect:
+  - provider request conversion/replay bug -> real adapter with a captured final request
+  - gateway session/history/tool pipeline bug -> CI-safe Gateway integration fixture, plus required live proof
+  - isolated parser/algorithm bug -> focused unit test of its independent contract
 - SecretRef traversal guardrail:
   - `src/secrets/exec-secret-ref-id-parity.test.ts` derives one sampled target per SecretRef class from registry metadata (`listSecretTargetRegistryEntries()`), then asserts traversal-segment exec ids are rejected.
   - If you add a new `includeInPlan` SecretRef target family in `src/secrets/target-registry-data.ts`, update `classifyTargetClass` in that test. The test intentionally fails on unclassified target ids so new classes cannot be skipped silently.

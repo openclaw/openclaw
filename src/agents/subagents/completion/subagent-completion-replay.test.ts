@@ -12,9 +12,11 @@ import {
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
-import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../registry/subagent-registry-state.fixture.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import {
   records,
   requesterWakeDriver,

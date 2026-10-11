@@ -113,7 +113,8 @@ possible. If those notes are final, **Code SHA and Release SHA are the same
 commit**: one successful fresh full qualification can supply both roles and
 their exact publication bytes. Do not create another commit or run solely to
 separate the labels. If notes change after qualification, a descendant whose
-complete delta includes `CHANGELOG/YYYY.M.PATCH.md` and only that entry, its
+complete delta includes `CHANGELOG/<version>.md` (exact beta version or stable
+base) and only that entry, its
 matching record, and root index may use `split-changelog-release-v1`
 to reuse product proof while qualifying new publication bytes. Any other
 source delta, rename, or deletion returns to the Code SHA loop. Historical

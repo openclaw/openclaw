@@ -9,19 +9,31 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import { setSignalRuntime } from "../runtime.js";
 import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
+export type TestDispatchResult = {
+  queuedFinal: boolean;
+  counts: Record<"tool" | "block" | "final", number>;
+  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+  settledReceipt?: {
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+    anyVisibleDelivered: boolean;
+  };
+};
+
 export function createBaseSignalEventHandlerDeps(
   overrides: Partial<SignalEventHandlerDeps> = {},
 ): SignalEventHandlerDeps {
   setSignalRuntime(createPluginRuntimeMock());
   return {
     runtime: { log: () => {}, error: () => {} } as SignalEventHandlerDeps["runtime"],
-    statusReactionTiming: {
-      debounceMs: 0,
-      doneHoldMs: 0,
-      errorHoldMs: 0,
-      stallSoftMs: 60_000,
-      stallHardMs: 120_000,
-    },
     cfg: {},
     baseUrl: "http://localhost",
     accountId: "default",

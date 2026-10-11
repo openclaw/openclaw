@@ -1,7 +1,9 @@
+import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
@@ -33,8 +35,13 @@ import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "../../prepared-model-runtime-generation-scope.js";
 import { assertPreparedModelRuntimeInputCurrent } from "../../prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { capturePreparedModelRuntimeLifetime } from "../../prepared-model-runtime.lifecycle.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
@@ -130,6 +137,26 @@ async function prepareNativeSessionRuntime(
       };
       if (isIncognitoSessionKey(admission.sessionKey)) {
         return consume(loadSessionEntryReadOnly(admission), () => {});
+      }
+      const reader = getReplyOperationSessionReader(runParams.replyOperation);
+      if (reader) {
+        publication.prepareSource(
+          reader.database,
+          readDatabasePathIdentitySync(reader.database.path),
+        );
+        return await reader.withRead(
+          {
+            sessionKeys: [admission.sessionKey],
+            lifecycleSessionKey: admission.sessionKey,
+            snapshotFields: [],
+          },
+          assertCallerCurrent,
+          (read, assertCurrent) =>
+            consume(
+              read.entries.find((row) => row.sessionKey === admission.sessionKey)?.entry,
+              assertCurrent,
+            ),
+        );
       }
       return await withSessionEntriesFromStoresInWorker(
         [
@@ -345,14 +372,28 @@ export async function resolveEmbeddedRunModelSetup(params: {
   let nativeCatalogFailure: { error: unknown } | undefined;
   const ownsSelectedNativeModel = (entry: ModelCatalogEntry) =>
     entry.provider === provider && entry.id === modelId && entry.nativeRuntime === agentHarness.id;
+  const hasSelectedNativeModel = () =>
+    catalog?.entries.some(ownsSelectedNativeModel) === true ||
+    catalog?.routeVariants.some(ownsSelectedNativeModel) === true;
   if (
     !nativeSessionRuntime &&
     pluginHarnessOwnsTransport &&
     agentHarness.loadModelCatalog &&
     params.preparedModelRuntime?.loadNativeModelCatalog &&
-    !catalog?.entries.some(ownsSelectedNativeModel) &&
-    !catalog?.routeVariants.some(ownsSelectedNativeModel)
+    !hasSelectedNativeModel()
   ) {
+    const assertRuntimeCurrent = capturePreparedModelRuntimeLifetime();
+    const generation = getPreparedModelRuntimePluginGeneration();
+    const borrowedSnapshot = generation
+      ? getPreparedModelRuntimeBorrowedSnapshot(generation)
+      : undefined;
+    // Run projections add prompt-project facts while keeping the owner's native operation.
+    const isCurrent =
+      generation &&
+      borrowedSnapshot?.loadNativeModelCatalog ===
+        params.preparedModelRuntime.loadNativeModelCatalog
+        ? () => getPreparedModelRuntimeBorrowedSnapshot(generation) === borrowedSnapshot
+        : params.preparedModelRuntime.isCurrent;
     try {
       catalog = await params.preparedModelRuntime.loadNativeModelCatalog({
         provider,
@@ -363,18 +404,13 @@ export async function resolveEmbeddedRunModelSetup(params: {
       nativeCatalogFailure = { error };
     }
     runParams.abortSignal?.throwIfAborted();
-    assertPreparedModelRuntimeInputCurrent(
-      params.preparedModelRuntime,
-      params.preparedModelRuntime.isCurrent,
-    );
+    params.assertCurrent();
+    assertRuntimeCurrent();
+    assertPreparedModelRuntimeInputCurrent(params.preparedModelRuntime, isCurrent);
   }
   const nativeModelOwned =
-    nativeSessionRuntime !== undefined ||
-    (pluginHarnessOwnsTransport &&
-      (catalog?.entries.some(ownsSelectedNativeModel) === true ||
-        catalog?.routeVariants.some(ownsSelectedNativeModel) === true));
+    nativeSessionRuntime !== undefined || (pluginHarnessOwnsTransport && hasSelectedNativeModel());
   const modelConfigProvider = provider;
-  let resolvedModelProvider = provider;
   let modelResolution;
   if (nativeModelOwned) {
     modelResolution = {
@@ -407,13 +443,12 @@ export async function resolveEmbeddedRunModelSetup(params: {
       preparedModelRuntime: params.preparedModelRuntime,
       staticCatalogOwnsTransport: pluginHarnessOwnsTransport,
     });
-    resolvedModelProvider = tieredResolution.provider;
+    provider = tieredResolution.provider;
     modelResolution = tieredResolution.resolution;
     if (modelResolution.model) {
       modelId = modelResolution.logicalRef.model;
     }
   }
-  provider = resolvedModelProvider;
   if (!modelResolution.model) {
     if (nativeCatalogFailure) {
       throw nativeCatalogFailure.error;

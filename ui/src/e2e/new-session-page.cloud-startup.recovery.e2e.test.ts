@@ -752,6 +752,7 @@ suite.define(() => {
           expect.objectContaining({
             params: {
               sessionKey,
+              toolResultMaxChars: 2_000,
               limit: 1000,
               inputRunIds: [(firstSend.params as { idempotencyKey: string }).idempotencyKey],
             },

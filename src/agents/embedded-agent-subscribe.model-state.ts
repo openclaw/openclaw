@@ -142,6 +142,12 @@ export function createEmbeddedModelState(
       });
     }
   };
+  const recordContextAccounting = (message: AssistantMessage, successful: boolean) =>
+    params.onContextAccountingEvent?.({
+      kind: "model",
+      contextTokens: deriveSessionTotalTokens({ lastCallUsage: normalizeUsage(message.usage) }),
+      successful,
+    });
 
   return {
     captureModelEvent: (evt: AgentSessionEvent): void => {
@@ -179,13 +185,7 @@ export function createEmbeddedModelState(
             !isProviderRefusalAssistantError(message)
           ) {
             successfulModelResponse = true;
-            params.onContextAccountingEvent?.({
-              kind: "model",
-              contextTokens: deriveSessionTotalTokens({
-                lastCallUsage: normalizeUsage(message.usage),
-              }),
-              successful: true,
-            });
+            recordContextAccounting(message, true);
           }
           return;
         case "message_start":
@@ -214,13 +214,7 @@ export function createEmbeddedModelState(
           completed = applyAssistantDeliveryDirectives(structuredClone(message));
           lastUsage ??= message.stopReason === "error" ? retryUsage : undefined;
           retryUsage = undefined;
-          params.onContextAccountingEvent?.({
-            kind: "model",
-            contextTokens: deriveSessionTotalTokens({
-              lastCallUsage: normalizeUsage(message.usage),
-            }),
-            successful: false,
-          });
+          recordContextAccounting(message, false);
       }
     },
     recordAuxiliaryUsage: (usage: Usage) => recordModelUsage(normalizeUsage(usage)),

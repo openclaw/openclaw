@@ -1,5 +1,8 @@
 import { isThemeId, normalizeThemeMode } from "../theme-ids.js";
+import { normalizeTabIconPreference } from "./tab-icon.js";
 import { UI_APPEARANCE_TYPEFACE_VALUES } from "./ui-appearance-typefaces.js";
+
+export { normalizeTabIconPreference, type TabIconPreference } from "./tab-icon.js";
 
 export const UI_APPEARANCE_PREFERENCE_KEYS = {
   theme: "ui.theme",
@@ -7,6 +10,7 @@ export const UI_APPEARANCE_PREFERENCE_KEYS = {
   accent: "ui.accent",
   fontUi: "ui.fontUi",
   fontChat: "ui.fontChat",
+  tabIcon: "ui.tabIcon",
 } as const;
 
 export type UiAppearancePreferenceKey =
@@ -18,6 +22,9 @@ export function normalizeUiAppearancePreference(
   key: UiAppearancePreferenceKey,
   value: unknown,
 ): string | undefined {
+  if (key === UI_APPEARANCE_PREFERENCE_KEYS.tabIcon) {
+    return normalizeTabIconPreference(value);
+  }
   if (typeof value !== "string") {
     return undefined;
   }

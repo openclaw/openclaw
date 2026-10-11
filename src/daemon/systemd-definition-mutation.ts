@@ -1,4 +1,3 @@
-/** Systemd service-definition authority and atomic, cross-process publication. */
 import { randomUUID } from "node:crypto";
 import { constants, promises as fs, type Stats } from "node:fs";
 import path from "node:path";

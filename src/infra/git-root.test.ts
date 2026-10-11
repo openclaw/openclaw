@@ -1,14 +1,16 @@
 // Covers git root and HEAD path discovery.
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   findGitRoot,
   readGitHead,
   readGitMetadataDirectories,
+  readGitMetadataPrefix,
   readGitObjectStorageDependencies,
   readGitWorktreeAdministrations,
 } from "./git-root.js";
@@ -39,6 +41,62 @@ async function expectGitRootResolution(params: {
 }
 
 describe("git-root", () => {
+  it("keeps short-read retries within the bounded metadata window", async () => {
+    await withTestDir({ prefix: "openclaw-git-bounded-ref-" }, async (root) => {
+      const ref = path.join(root, "main");
+      await fs.writeFile(ref, `${"x".repeat(256)}abcdef0123456789`);
+      const realReadSync = fsSync.readSync.bind(fsSync);
+      let totalBytesRead = 0;
+      const read = vi.spyOn(fsSync, "readSync").mockImplementation(((
+        fd: number,
+        buffer: NodeJS.ArrayBufferView,
+        offset: number,
+        length: number,
+        position: number | null,
+      ) => {
+        const bytesRead = realReadSync(fd, buffer, offset, Math.min(length, 4), position);
+        totalBytesRead += bytesRead;
+        return bytesRead;
+      }) as typeof fsSync.readSync);
+      try {
+        expect(readGitMetadataPrefix(ref)).toBe("x".repeat(256));
+        expect(totalBytesRead).toBe(256);
+      } finally {
+        read.mockRestore();
+      }
+    });
+  });
+
+  it.skipIf(process.platform === "win32").each(["HEAD", "refs/heads/main", "packed-refs"])(
+    "refuses a FIFO %s instead of consuming ref bytes from a writer",
+    async (name) => {
+      await withTestDir({ prefix: "openclaw-git-fifo-" }, async (root) => {
+        const directory = path.join(root, ".git");
+        await fs.mkdir(path.join(directory, "refs", "heads"), { recursive: true });
+        if (name !== "HEAD") {
+          await fs.writeFile(path.join(directory, "HEAD"), "ref: refs/heads/main\n");
+        }
+        const fifo = path.join(directory, name);
+        await execFileAsync("mkfifo", [fifo]);
+        const contents = `${"a".repeat(40)}${name === "packed-refs" ? " refs/heads/main" : ""}\n`;
+        // A writer lets the old blocking reader finish too, without a timer or a hung worker.
+        const writer = execFileAsync(process.execPath, [
+          "-e",
+          "require('node:fs').writeFileSync(process.argv[1], process.argv[2])",
+          fifo,
+          contents,
+        ]);
+        const settled = writer.catch(() => undefined);
+        try {
+          expect(() => readGitHead(root, { maxDepth: 1 })).toThrow("regular file");
+        } finally {
+          writer.child.kill();
+          await settled;
+        }
+      });
+    },
+  );
+
   it.each([
     {
       name: "starting at the repo root itself",

@@ -16,6 +16,7 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   beginGatewayShutdownCleanup,
   markGatewayRestartDraining,
@@ -85,10 +86,7 @@ beforeEach(() => {
   root = fs.realpathSync(tempDirs.make("agent-worker-publication-"));
   options = { agentId: "main", path: path.join(root, "agent.sqlite") };
 });
-async function setup(
-  input?: Parameters<typeof bindSqliteWorkerBackend>[0],
-  retainExecutionUntilClose?: true,
-) {
+async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   const { db } = openOpenClawAgentDatabase(options);
   db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
   const execution =
@@ -102,7 +100,6 @@ async function setup(
     {
       moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
       input: { ...input, receiptBroadcastName: receipts.broadcastName },
-      retainExecutionUntilClose,
     },
   );
   workers.add(worker);
@@ -173,10 +170,63 @@ it("retains an idle agent executor for thirty minutes and renews the window afte
   }
 });
 
-it.each([undefined, true] as const)(
+it("retains a warm executor through a fallback wait between publication generations", async () => {
+  const { db, worker } = await setup();
+  const firstThread = await worker.execute(
+    { type: "append", input: { value: "before preparation" } },
+    () => undefined,
+  );
+  const lifetime = captureOpenClawAgentDatabaseExecution(options);
+  executions.add(lifetime);
+  await worker.close();
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  let next: OpenClawAgentSqliteWorkerStore<AgentWorkerFixtureOperations> | undefined;
+  const publication = (async () => {
+    entered.resolve();
+    await resume.promise;
+    next = await openOpenClawAgentSqliteWorkerStore<AgentWorkerFixtureOperations>(options, db, {
+      moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
+      input: undefined,
+    });
+    workers.add(next);
+    return next.run(
+      (scope) => scope.execute({ type: "append", input: { value: "after preparation" } }),
+      () => undefined,
+    );
+  })();
+  try {
+    await entered.promise;
+    markGatewayRestartDraining();
+    resume.resolve();
+    expect(await publication).toBe(firstThread);
+    expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
+      { value: "before preparation" },
+      { value: "after preparation" },
+    ]);
+    await next?.close();
+    expect(db.isOpen).toBe(true);
+    beginGatewayShutdownCleanup();
+    await lifetime.release();
+    expect(db.isOpen).toBe(false);
+    expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
+  } finally {
+    resume.resolve();
+    await Promise.allSettled([publication]);
+    await Promise.allSettled([next?.close(), lifetime.release(), worker.close()]);
+    executions.delete(lifetime);
+    resetGatewayWorkAdmission();
+  }
+});
+
+it.each([false, true])(
   "releases settled publication leases at shutdown cleanup unless an accepted sequence retains them (%s)",
-  async (retainExecutionUntilClose) => {
-    const { db, worker } = await setup(undefined, retainExecutionUntilClose);
+  async (retainGeneration) => {
+    const { db, worker } = await setup();
+    const execution = retainGeneration ? captureOpenClawAgentDatabaseExecution(options) : undefined;
+    if (execution) {
+      executions.add(execution);
+    }
     const shared = openOpenClawStateDatabase();
     const releaseState = retainOpenClawStateDatabaseForIdle(shared);
     const readLeases = () =>
@@ -211,7 +261,7 @@ it.each([undefined, true] as const)(
         { type: "append", input: { value: "cleanup" } },
         () => undefined,
       );
-      if (retainExecutionUntilClose) {
+      if (retainGeneration) {
         expect(cleanupThread).toBe(firstThread);
         expect(readLeases()).toEqual(retainedLeases);
       } else {
@@ -224,11 +274,16 @@ it.each([undefined, true] as const)(
         { value: "cleanup" },
       ]);
       await worker.close();
+      await execution?.release();
       expect(db.isOpen).toBe(false);
       expect(readLeases()).toEqual([]);
       expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
     } finally {
       await worker.close();
+      await execution?.release();
+      if (execution) {
+        executions.delete(execution);
+      }
       resetGatewayWorkAdmission();
       releaseState();
     }
@@ -604,25 +659,20 @@ describe.each(["borrowed", "captured"] as const)(
           SELECT RAISE(ABORT, 'controlled command failure');
         END
       `);
-        const create = admission.createSqliteWorkerOperationAdmission;
         const commandRefusal = new Error("controlled command admission refusal");
         let commandRefusals = 0;
         let refusals = 0;
-        const interception = vi
-          .spyOn(admission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            create((request, grant) => {
-              if (failure === "admission" && request.stage === "transaction") {
-                commandRefusals++;
-                throw commandRefusal;
-              }
-              if (isRecord(request.facts) && request.facts.kind === "fixture-cleanup") {
-                refusals++;
-                throw new Error("controlled publication cleanup admission refusal");
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const interception = probe.admission(admission, (request, grant, admit) => {
+          if (failure === "admission" && request.stage === "transaction") {
+            commandRefusals++;
+            throw commandRefusal;
+          }
+          if (isRecord(request.facts) && request.facts.kind === "fixture-cleanup") {
+            refusals++;
+            throw new Error("controlled publication cleanup admission refusal");
+          }
+          admit(request, grant);
+        });
         const result = worker.execute(
           { type: "append", input: { value: "failed" } },
           () => undefined,
@@ -686,19 +736,14 @@ describe.each(["borrowed", "captured"] as const)(
           void work.catch(() => undefined);
           await Promise.race([entered.promise, work]);
         }
-        const create = admission.createSqliteWorkerOperationAdmission;
         let refused = 0;
-        const interception = vi
-          .spyOn(admission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            create((request, grant) => {
-              if (request.stage === "open") {
-                refused++;
-                throw new Error("controlled opening revocation");
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const interception = probe.admission(admission, (request, grant, admit) => {
+          if (request.stage === "open") {
+            refused++;
+            throw new Error("controlled opening revocation");
+          }
+          admit(request, grant);
+        });
         options = { ...options, path: path.join(root, "refused.sqlite") };
         const openMarker = path.join(root, "factory-entered");
         const { worker: refusedWorker } = await setup({ openMarker });
@@ -730,21 +775,16 @@ describe.each(["borrowed", "captured"] as const)(
         const { db, worker } = await setup();
         const committed = createDeferredCore<number>();
         const release = createDeferredCore();
-        const create = admission.createSqliteWorkerOperationAdmission;
         let refuseCleanup = false;
         let refusals = 0;
-        const interception = vi
-          .spyOn(admission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            create((request, grant) => {
-              if (refuseCleanup && request.stage === "prepare") {
-                refuseCleanup = false;
-                refusals++;
-                throw new Error("controlled publication cleanup admission refusal");
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const interception = probe.admission(admission, (request, grant, admit) => {
+          if (refuseCleanup && request.stage === "prepare") {
+            refuseCleanup = false;
+            refusals++;
+            throw new Error("controlled publication cleanup admission refusal");
+          }
+          admit(request, grant);
+        });
         const first = worker.run(
           async (scope) => {
             const result = await scope.execute({ type: "append", input: { value: "first" } });

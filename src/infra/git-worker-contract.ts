@@ -21,7 +21,7 @@ export type GitWorkerCommand = {
   [K in keyof GitWorkerOperations]: {
     type: K;
     input: GitWorkerOperations[K]["input"];
-    filesystemRefs?: boolean;
+    filesystemRefs?: string;
   };
 }[keyof GitWorkerOperations];
 export type GitWorkerResult = GitWorkerOperations[keyof GitWorkerOperations]["output"];

@@ -12,13 +12,19 @@ export async function removeSessionFixtureDirectory(
   } catch (cause) {
     let remaining: string;
     try {
-      // Dirents keep recursive enumeration from following links outside the fixture.
-      const entries = await fs.readdir(dir, { recursive: true, withFileTypes: true });
-      remaining = JSON.stringify(
-        entries
-          .map((entry) => path.relative(dir, path.join(entry.parentPath, entry.name)))
-          .toSorted(),
-      );
+      // Recursive readdir can follow directory symlinks, so own the descent.
+      const entries: string[] = [];
+      const directories = [dir];
+      for (const directory of directories) {
+        for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+          const entryPath = path.join(directory, entry.name);
+          entries.push(path.relative(dir, entryPath));
+          if (entry.isDirectory()) {
+            directories.push(entryPath);
+          }
+        }
+      }
+      remaining = JSON.stringify(entries.toSorted());
     } catch (error) {
       remaining = `unavailable (${String(error)})`;
     }

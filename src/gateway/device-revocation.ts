@@ -232,6 +232,18 @@ export function readAcceptedGatewayDeviceSourceAuthority(
   return capture?.state.sourceAccepted ? capture.isSourceCurrent : undefined;
 }
 
+/** Prepared grants consume owned facts; opaque transport callbacks keep their native fence. */
+export function hasPreparedGatewayDeviceAuthority(
+  client: { invalidated?: boolean } | null | undefined,
+  guard: (() => unknown) | undefined,
+): boolean {
+  const accepted = readAcceptedGatewayDeviceSourceAuthority(guard);
+  return (
+    (accepted ? accepted() : !client?.invalidated) &&
+    readGatewayDeviceRevocationGuard(guard)?.() !== false
+  );
+}
+
 /** Only a producer-proven dependency cohort can share queued-input custody. */
 export function readGatewayDeviceSourceIdentity(
   guard: (() => unknown) | undefined,

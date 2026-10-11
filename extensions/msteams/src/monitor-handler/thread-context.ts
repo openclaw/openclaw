@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../../runtime-api.js";
 import { formatUnknownError } from "../errors.js";
 import {
   buildThreadContext,
-  fetchChannelMessage,
   fetchChatMessageText,
   fetchThreadReplies,
   type GraphThreadMessage,
@@ -149,15 +148,13 @@ export async function resolveMSTeamsThreadContext(params: {
               teamAadGroupId,
               params.conversationId,
               threadParentId,
-              (token, groupId, requestedChannelId, messageId) =>
-                fetchChannelMessage(token, groupId, requestedChannelId, messageId, deadline),
+              deadline,
             ),
             fetchThreadReplies(
               graphToken,
               teamAadGroupId,
               params.conversationId,
               threadParentId,
-              50,
               deadline,
             ),
           ]),

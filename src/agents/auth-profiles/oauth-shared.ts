@@ -1,8 +1,3 @@
-/**
- * Shared OAuth credential identity policy.
- * Used by manager, external CLI overlays, and persistence paths to decide when
- * incoming runtime credentials may bootstrap or settle stored profiles.
- */
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
@@ -14,14 +9,12 @@ import type { AuthProfileStore, OAuthCredential, RuntimeAuthProfileStore } from 
 
 export { hasOAuthIdentity } from "./oauth-identity.js";
 
-/** OAuth profile imported from a runtime external CLI source. */
 export type RuntimeExternalOAuthProfile = {
   profileId: string;
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
 
-/** Returns true when two OAuth credentials contain the same token/identity data. */
 export function areOAuthCredentialsEquivalent(
   a: OAuthCredential | undefined,
   b: OAuthCredential,
@@ -42,7 +35,6 @@ export function areOAuthCredentialsEquivalent(
   );
 }
 
-/** Returns true when both credentials describe the same registered identity. */
 export function hasMatchingOAuthIdentity(
   existing: OAuthIdentity,
   incoming: OAuthIdentity,
@@ -50,7 +42,6 @@ export function hasMatchingOAuthIdentity(
   return hasOAuthIdentity(existing) && isSafeToCopyOAuthIdentity(existing, incoming);
 }
 
-/** Returns true when the current owner accepts its provider refresh result. */
 export function isSafeOAuthOwnerRefreshResult(
   claimed: OAuthCredential,
   refreshed: OAuthCredential,
@@ -58,7 +49,6 @@ export function isSafeOAuthOwnerRefreshResult(
   return claimed.provider === refreshed.provider && isSafeToCopyOAuthIdentity(claimed, refreshed);
 }
 
-/** Returns true when a claimed generation may settle with a live credential. */
 export function isSafeOAuthPostClaimSettlement(
   claimedGeneration: OAuthCredential,
   candidate: OAuthCredential | undefined,
@@ -71,7 +61,6 @@ export function isSafeOAuthPostClaimSettlement(
   );
 }
 
-/** Returns true when bootstrap may adopt an external OAuth identity. */
 export function isSafeToAdoptBootstrapOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
@@ -81,7 +70,6 @@ export function isSafeToAdoptBootstrapOAuthIdentity(
   );
 }
 
-/** Returns true when agent-local state may adopt a main-store OAuth identity. */
 export function isSafeToAdoptMainStoreOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
@@ -89,7 +77,6 @@ export function isSafeToAdoptMainStoreOAuthIdentity(
   return existing?.type === "oauth" && isSafeOAuthOwnerRefreshResult(existing, incoming);
 }
 
-/** Returns true when an external CLI credential should bootstrap stored OAuth. */
 export function shouldBootstrapFromExternalCliCredential(params: {
   existing: OAuthCredential | undefined;
   imported: OAuthCredential;
@@ -142,7 +129,6 @@ export function overlayRuntimeExternalOAuthProfiles(
   return next;
 }
 
-/** Returns true when a runtime external OAuth profile should be persisted. */
 export function shouldPersistRuntimeExternalOAuthProfile(params: {
   profileId: string;
   credential: OAuthCredential;
@@ -158,17 +144,4 @@ export function shouldPersistRuntimeExternalOAuthProfile(params: {
     return !areOAuthCredentialsEquivalent(profile.credential, params.credential);
   }
   return true;
-}
-
-export function canReuseOAuthCredentialAfterRefreshFailure(params: {
-  forceRefresh?: boolean;
-  attempted: OAuthCredential;
-  candidate: OAuthCredential;
-}): boolean {
-  return (
-    !params.forceRefresh ||
-    (params.attempted.provider === params.candidate.provider &&
-      params.attempted.access !== params.candidate.access &&
-      hasMatchingOAuthIdentity(params.attempted, params.candidate))
-  );
 }

@@ -273,7 +273,10 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     f.outside.focus();
     f.item.focus();
     await tooltip.updateComplete;
+    // The wrapper render completes before its lazy Web Awesome module registers.
+    await customElements.whenDefined("wa-tooltip");
     const hint = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
+    await hint.updateComplete;
     await expect.poll(() => hint.open).toBe(true);
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => hint.open).toBe(false);

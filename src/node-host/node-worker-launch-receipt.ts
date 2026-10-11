@@ -1,10 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
-import type {
-  NodeWorkerSupervisorIdentity,
-  NodeWorkerSupervisorReceipt,
-} from "../worker/node-supervisor-protocol.js";
+import type { NodeWorkerSupervisorReceipt } from "../worker/node-supervisor-protocol.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 
 export type NodeWorkerTerminalState = Exclude<
@@ -36,21 +33,7 @@ export type NodeWorkerLaunchRow = Selectable<OpenClawStateDatabase["node_worker_
   descendants_reaped?: number | null;
 };
 
-export type NodeWorkerLaunchReceipt = NodeWorkerSupervisorIdentity & {
-  gatewayNamespace: string;
-  state: NodeWorkerSupervisorReceipt["state"];
-  supervisor: NodeWorkerProcessIdentity;
-  worker: NodeWorkerProcessIdentity | null;
-  workerCleanupMode: NodeWorkerCleanupMode | null;
-  workerLineageSettled: boolean;
-  workerDescendantsReaped?: boolean;
-  container?: NodeWorkerContainerIdentity;
-  resultJson: string | null;
-  errorText: string | null;
-  completedAtMs: number | null;
-  createdAtMs: number;
-  updatedAtMs: number;
-};
+export type NodeWorkerLaunchReceipt = ReturnType<typeof nodeWorkerLaunchReceiptFromRow>;
 
 export function isNodeWorkerTerminalState(value: string): value is NodeWorkerTerminalState {
   return (
@@ -120,7 +103,7 @@ function containerIdentity(value: string | null | undefined): NodeWorkerContaine
   return identity;
 }
 
-export function nodeWorkerLaunchReceiptFromRow(row: NodeWorkerLaunchRow): NodeWorkerLaunchReceipt {
+export function nodeWorkerLaunchReceiptFromRow(row: NodeWorkerLaunchRow) {
   if (row.state !== "pending" && row.state !== "running" && !isNodeWorkerTerminalState(row.state)) {
     throw new Error(`invalid node worker launch state ${row.state}`);
   }
@@ -150,7 +133,8 @@ export function nodeWorkerLaunchReceiptFromRow(row: NodeWorkerLaunchRow): NodeWo
       row.worker_pid === null || row.worker_start_time === null
         ? null
         : { pid: row.worker_pid, startTime: row.worker_start_time },
-    workerCleanupMode: row.scope_kind === "linux-subreaper" ? "linux-subreaper" : cleanupMode,
+    workerCleanupMode:
+      row.scope_kind === "linux-subreaper" ? ("linux-subreaper" as const) : cleanupMode,
     ...(row.scope_kind === "linux-subreaper"
       ? { workerDescendantsReaped: row.descendants_reaped === 1 }
       : {}),

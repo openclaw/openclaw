@@ -6,6 +6,7 @@ import { resolveSandboxContext } from "./context.js";
 import {
   resolveSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusesForPersistedSessions,
+  withSandboxRuntimeStatusesInWorker,
 } from "./runtime-status.js";
 
 describe("session sandbox override", () => {
@@ -52,6 +53,26 @@ describe("session sandbox override", () => {
         ])[0],
       ).toMatchObject([
         { sandboxed: false, sandboxRequired: false },
+        { sandboxed: true, sandboxRequired: true },
+      ]);
+      const native = "agent:main:dashboard:incognito-batch";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: native },
+        { sessionId: "native", updatedAt: 1, sandbox: "required", sandboxMode: "off" },
+      );
+      await expect(
+        withSandboxRuntimeStatusesInWorker(
+          ["optional", required, native].map((sessionKey) => ({
+            cfg,
+            agentId: "main",
+            sessionKey,
+          })),
+          { env: state.env, cwd: state.workspaceDir, assertCurrent() {} },
+          (statuses) => statuses,
+        ),
+      ).resolves.toMatchObject([
+        { sandboxed: false, sandboxRequired: false },
+        { sandboxed: true, sandboxRequired: true },
         { sandboxed: true, sandboxRequired: true },
       ]);
       // An opted-out session must not start or prepare any sandbox backend.

@@ -52,14 +52,6 @@ public struct OpenClawSystemRunApprovalPolicySnapshot: Codable, Sendable, Equata
             uniquingKeysWith: { first, _ in first }).values.sorted(by: Self.rulePrecedes)
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case security
-        case ask
-        case askFallback
-        case autoAllowSkills
-        case allowlistRules
-    }
-
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(

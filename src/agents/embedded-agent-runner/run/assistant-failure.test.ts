@@ -56,42 +56,50 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
   const maybeMarkAuthProfileFailure = vi.fn(async () => {});
   const traceAttempts: AssistantFailureInput["traceAttempts"] = [];
   const input: AssistantFailureInput = {
-    runParams: {
-      sessionId: "session:credential-enoent",
-      runId: "run:credential-enoent",
-      config: undefined,
-    } as AssistantFailureInput["runParams"],
-    attempt,
-    attemptAssistant: assistant,
-    currentAttemptAssistant: assistant,
-    terminalState: resolveEmbeddedRunAttemptTerminalState({
-      attempt,
-      assistant,
-    }),
-    activeErrorContext: { provider: "anthropic", model: "mock-1" },
-    provider: "anthropic",
-    providerOwner: undefined,
-    modelId: "mock-1",
-    model: "mock-1",
-    thinkLevel: "off",
-    getThinkLevel: () => "off",
-    attemptedThinking: new Set(["off"]),
-    fallbackConfigured: true,
-    pluginHarnessOwnsTransport: false,
-    authProfileId: "anthropic:p1",
-    authProfileStore: {
-      version: 1,
-      profiles: {
-        "anthropic:p1": createApiKeyCredential("anthropic", "test-key"),
-        "anthropic:p2": createApiKeyCredential("anthropic", "test-key-2"),
-      },
-      usageStats: {
-        "anthropic:p1": { lastUsed: 1 },
-        "anthropic:p2": { lastUsed: 2 },
-      },
+    runInput: {
+      runParams: {
+        sessionId: "session:credential-enoent",
+        runId: "run:credential-enoent",
+        config: undefined,
+      } as AssistantFailureInput["runInput"]["runParams"],
+      fallbackConfigured: true,
+      suspendForFailure: vi.fn(),
+      agentDir: "/tmp/openclaw-assistant-failure-test",
+      isProbeSession: false,
     },
+    normalizedAttempt: {
+      attempt,
+      attemptAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+      activeErrorContext: { provider: "anthropic", model: "mock-1" },
+    },
+    preparedRuntime: {
+      provider: "anthropic",
+      modelId: "mock-1",
+      model: { id: "mock-1" },
+      attemptedThinking: new Set(["off"]),
+      attemptAuthProfileStore: {
+        version: 1,
+        profiles: {
+          "anthropic:p1": createApiKeyCredential("anthropic", "test-key"),
+          "anthropic:p2": createApiKeyCredential("anthropic", "test-key-2"),
+        },
+        usageStats: {
+          "anthropic:p1": { lastUsed: 1 },
+          "anthropic:p2": { lastUsed: 2 },
+        },
+      },
+      maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
+    },
+    runtime: {
+      thinkLevel: "off",
+      lastProfileId: "anthropic:p1",
+      pluginHarnessOwnsTransport: false,
+    },
+    providerOwner: undefined,
+    getThinkLevel: () => "off",
     runtimeAuthRetry: false,
-    maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
     emptyErrorRetries: 3,
     overloadProfileRotations: 0,
     previousRetryFailoverReason: null,
@@ -101,13 +109,9 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
       maybeMarkAuthProfileFailure,
       transientRetryCount: 0,
       advanceAuthProfile,
-      advanceRateLimitAuthProfile: vi.fn(async () => true),
     },
     traceAttempts,
-    suspendForFailure: vi.fn(),
     suspensionSessionId: "session:credential-enoent",
-    agentDir: "/tmp/openclaw-assistant-failure-test",
-    isProbeSession: false,
   };
   return {
     advanceAuthProfile,
@@ -137,13 +141,15 @@ function makeIdleTimeoutFailureInput(options?: { replaySafe?: boolean }) {
     replayMetadata,
     currentAttemptReplayMetadata: replayMetadata,
   });
-  fixture.input.attempt = attempt;
-  fixture.input.attemptAssistant = assistant;
-  fixture.input.currentAttemptAssistant = assistant;
-  fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+  fixture.input.normalizedAttempt.attempt = attempt;
+  fixture.input.normalizedAttempt.attemptAssistant = assistant;
+  fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+  fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+    attempt,
+    assistant,
+  });
   fixture.input.emptyErrorRetries = 0;
-  fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
-  fixture.input.failover.advanceRateLimitAuthProfile = vi.fn(async () => true);
+  fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
   return fixture;
 }
 
@@ -174,17 +180,20 @@ function makeTerminalStreamFailureInput(options?: {
     currentAttemptAssistant: assistant,
     currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
   });
-  fixture.input.attempt = attempt;
-  fixture.input.attemptAssistant = assistant;
-  fixture.input.currentAttemptAssistant = assistant;
-  fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
-  fixture.input.activeErrorContext = { provider, model };
-  fixture.input.provider = provider;
+  fixture.input.normalizedAttempt.attempt = attempt;
+  fixture.input.normalizedAttempt.attemptAssistant = assistant;
+  fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+  fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+    attempt,
+    assistant,
+  });
+  fixture.input.normalizedAttempt.activeErrorContext = { provider, model };
+  fixture.input.preparedRuntime.provider = provider;
   fixture.input.providerOwner = undefined;
-  fixture.input.modelId = model;
-  fixture.input.model = model;
-  fixture.input.fallbackConfigured = options?.fallbackConfigured !== false;
-  fixture.input.authProfileId = undefined;
+  fixture.input.preparedRuntime.modelId = model;
+  fixture.input.preparedRuntime.model.id = model;
+  fixture.input.runInput.fallbackConfigured = options?.fallbackConfigured !== false;
+  fixture.input.runtime.lastProfileId = undefined;
   fixture.input.emptyErrorRetries = 0;
   fixture.input.failover.advanceAuthProfile = vi.fn(
     async () => options?.profileAvailable !== false,
@@ -253,7 +262,7 @@ async function streamIncompleteMistralResponseOverLoopback() {
 describe("handleEmbeddedAssistantFailure", () => {
   it("surfaces storage failure without replaying the run or rotating credentials", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
-    fixture.input.attemptAssistant = buildEmbeddedRunnerAssistant({
+    fixture.input.normalizedAttempt.attemptAssistant = buildEmbeddedRunnerAssistant({
       provider: "mock",
       model: "model",
       stopReason: "error",
@@ -267,9 +276,10 @@ describe("handleEmbeddedAssistantFailure", () => {
       authRetryPending: false,
       lastRetryFailoverReason: null,
     });
-    expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+    expect(
+      fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
+    ).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
   });
@@ -281,24 +291,24 @@ describe("handleEmbeddedAssistantFailure", () => {
     "carries %s profile failures into terminal resolution",
     async (reason) => {
       const fixture = makeExhaustedCredentialFailureInput();
-      if (!fixture.input.attemptAssistant) {
+      if (!fixture.input.normalizedAttempt.attemptAssistant) {
         throw new Error("expected assistant fixture");
       }
-      fixture.input.attemptAssistant.provider = "openai";
-      fixture.input.attemptAssistant.model = "gpt-5.6-luna";
-      fixture.input.attemptAssistant.errorMessage = undefined;
-      Object.assign(fixture.input, {
+      fixture.input.normalizedAttempt.attemptAssistant.provider = "openai";
+      fixture.input.normalizedAttempt.attemptAssistant.model = "gpt-5.6-luna";
+      fixture.input.normalizedAttempt.attemptAssistant.errorMessage = undefined;
+      Object.assign(fixture.input.preparedRuntime, {
         provider: "openai",
         modelId: "gpt-5.6-luna",
-        model: "gpt-5.6-luna",
-        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
-        fallbackConfigured: false,
-        authProfileId: undefined,
-        failover: {
-          ...fixture.input.failover,
-          resolveAuthProfileFailureReason: vi.fn(() => reason),
-        },
       });
+      fixture.input.preparedRuntime.model.id = "gpt-5.6-luna";
+      fixture.input.normalizedAttempt.activeErrorContext = {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      };
+      fixture.input.runInput.fallbackConfigured = false;
+      fixture.input.runtime.lastProfileId = undefined;
+      fixture.input.failover.resolveAuthProfileFailureReason = vi.fn(() => reason);
       const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
       expect(outcome).toMatchObject({
@@ -319,13 +329,13 @@ describe("handleEmbeddedAssistantFailure", () => {
       stopReason: "error",
       errorMessage,
     });
-    fixture.input.attemptAssistant = assistant;
-    fixture.input.currentAttemptAssistant = assistant;
-    fixture.input.provider = provider;
-    fixture.input.modelId = modelId;
-    fixture.input.model = modelId;
-    fixture.input.activeErrorContext = { provider, model: modelId };
-    fixture.input.authProfileId = undefined;
+    fixture.input.normalizedAttempt.attemptAssistant = assistant;
+    fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+    fixture.input.preparedRuntime.provider = provider;
+    fixture.input.preparedRuntime.modelId = modelId;
+    fixture.input.preparedRuntime.model.id = modelId;
+    fixture.input.normalizedAttempt.activeErrorContext = { provider, model: modelId };
+    fixture.input.runtime.lastProfileId = undefined;
     fixture.input.providerOwner = {
       id: "openrouter",
       classifyFailoverReason: ({ errorMessage: classifiedError }) =>
@@ -364,20 +374,26 @@ describe("handleEmbeddedAssistantFailure", () => {
       lastAssistant: assistant,
       currentAttemptAssistant: assistant,
     });
-    fixture.input.attempt = attempt;
-    fixture.input.attemptAssistant = assistant;
-    fixture.input.currentAttemptAssistant = assistant;
-    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
-    fixture.input.provider = "openai";
+    fixture.input.normalizedAttempt.attempt = attempt;
+    fixture.input.normalizedAttempt.attemptAssistant = assistant;
+    fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+    fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant,
+    });
+    fixture.input.preparedRuntime.provider = "openai";
     fixture.input.providerOwner = {
       id: "openai",
       classifyFailoverReason: ({ code }) =>
         code?.toUpperCase() === "SERVER_ERROR" ? "server_error" : undefined,
     };
-    fixture.input.modelId = "gpt-5.6-luna";
-    fixture.input.model = "gpt-5.6-luna";
-    fixture.input.activeErrorContext = { provider: "openai", model: "gpt-5.6-luna" };
-    fixture.input.authProfileId = undefined;
+    fixture.input.preparedRuntime.modelId = "gpt-5.6-luna";
+    fixture.input.preparedRuntime.model.id = "gpt-5.6-luna";
+    fixture.input.normalizedAttempt.activeErrorContext = {
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    };
+    fixture.input.runtime.lastProfileId = undefined;
     fixture.input.failover.advanceAuthProfile = vi.fn(async () => false);
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(undefined);
 
@@ -392,11 +408,11 @@ describe("handleEmbeddedAssistantFailure", () => {
     async (errorCode) => {
       const fixture = makeExhaustedCredentialFailureInput();
       fixture.input.emptyErrorRetries = 0;
-      if (!fixture.input.attemptAssistant) {
+      if (!fixture.input.normalizedAttempt.attemptAssistant) {
         throw new Error("expected assistant fixture");
       }
-      fixture.input.attemptAssistant.errorCode = errorCode;
-      fixture.input.attemptAssistant.errorMessage = "reasoning is required";
+      fixture.input.normalizedAttempt.attemptAssistant.errorCode = errorCode;
+      fixture.input.normalizedAttempt.attemptAssistant.errorMessage = "reasoning is required";
       fixture.input.failover.resolveAuthProfileFailureReason = vi.fn(() => "timeout" as const);
 
       const outcome = await handleEmbeddedAssistantFailure(fixture.input);
@@ -575,7 +591,7 @@ describe("handleEmbeddedAssistantFailure", () => {
 
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-    expect(fixture.input.authProfileStore.usageStats).toEqual({
+    expect(fixture.input.preparedRuntime.attemptAuthProfileStore.usageStats).toEqual({
       "anthropic:p1": { lastUsed: 1 },
       "anthropic:p2": { lastUsed: 2 },
     });
@@ -607,15 +623,16 @@ describe("handleEmbeddedAssistantFailure", () => {
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
     expect(outcome.action).toBe("proceed");
-    expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+    expect(
+      fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
+    ).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
   });
 
   it("keeps replay-safe idle timeout profile rotation available", async () => {
     const fixture = makeIdleTimeoutFailureInput({ replaySafe: true });
-    fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => false);
+    fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => false);
 
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
@@ -646,16 +663,16 @@ describe("handleEmbeddedAssistantFailure", () => {
     "preserves canonical provider-start attribution through $phase idle-timeout fallback",
     async ({ phase, providerStarted, expectedTimeout }) => {
       const fixture = makeIdleTimeoutFailureInput({ replaySafe: true });
-      fixture.input.attempt.terminal = { kind: "timeout", phase, source: "idle" };
-      fixture.input.attempt.promptTimeoutOutcome = { providerStarted };
-      fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({
-        attempt: fixture.input.attempt,
-        assistant: fixture.input.currentAttemptAssistant,
+      fixture.input.normalizedAttempt.attempt.terminal = { kind: "timeout", phase, source: "idle" };
+      fixture.input.normalizedAttempt.attempt.promptTimeoutOutcome = { providerStarted };
+      fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+        attempt: fixture.input.normalizedAttempt.attempt,
+        assistant: fixture.input.normalizedAttempt.currentAttemptAssistant,
       });
-      fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => false);
+      fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => false);
       fixture.input.failover.advanceAuthProfile = vi.fn(async () => false);
 
-      expect(fixture.input.terminalState.outcome).toMatchObject({
+      expect(fixture.input.normalizedAttempt.terminalState.outcome).toMatchObject({
         status: "timeout",
         reason: "hard_timeout",
         ...expectedTimeout,
@@ -692,19 +709,23 @@ describe("handleEmbeddedAssistantFailure", () => {
         currentAttemptAssistant: assistant,
         currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
       });
-      fixture.input.attempt = attempt;
-      fixture.input.attemptAssistant = assistant;
-      fixture.input.currentAttemptAssistant = assistant;
-      fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+      fixture.input.normalizedAttempt.attempt = attempt;
+      fixture.input.normalizedAttempt.attemptAssistant = assistant;
+      fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+      fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+        attempt,
+        assistant,
+      });
       fixture.input.emptyErrorRetries = 0;
-      fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
+      fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
 
       const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
       expect(outcome.action).toBe("proceed");
-      expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+      expect(
+        fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
+      ).not.toHaveBeenCalled();
       expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(fixture.input.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
       expect(fixture.traceAttempts).toEqual([]);
     },
   );
@@ -730,12 +751,15 @@ describe("handleEmbeddedAssistantFailure", () => {
       currentAttemptAssistant: assistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
-    fixture.input.attempt = attempt;
-    fixture.input.attemptAssistant = assistant;
-    fixture.input.currentAttemptAssistant = assistant;
-    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.normalizedAttempt.attempt = attempt;
+    fixture.input.normalizedAttempt.attemptAssistant = assistant;
+    fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+    fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant,
+    });
     fixture.input.emptyErrorRetries = 0;
-    fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
+    fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
 
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
@@ -743,7 +767,9 @@ describe("handleEmbeddedAssistantFailure", () => {
       action: "retry",
       emptyErrorRetries: 1,
     });
-    expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+    expect(
+      fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
+    ).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
   });
@@ -764,10 +790,13 @@ describe("handleEmbeddedAssistantFailure", () => {
       currentAttemptAssistant: assistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
-    fixture.input.attempt = attempt;
-    fixture.input.attemptAssistant = assistant;
-    fixture.input.currentAttemptAssistant = assistant;
-    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.normalizedAttempt.attempt = attempt;
+    fixture.input.normalizedAttempt.attemptAssistant = assistant;
+    fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+    fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant,
+    });
     fixture.input.emptyErrorRetries = 0;
 
     await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({
@@ -803,12 +832,15 @@ describe("handleEmbeddedAssistantFailure", () => {
       currentAttemptAssistant: assistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
-    fixture.input.attempt = attempt;
-    fixture.input.attemptAssistant = assistant;
-    fixture.input.currentAttemptAssistant = assistant;
-    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.normalizedAttempt.attempt = attempt;
+    fixture.input.normalizedAttempt.attemptAssistant = assistant;
+    fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+    fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant,
+    });
     fixture.input.emptyErrorRetries = 0;
-    fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
+    fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
 
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
@@ -816,7 +848,9 @@ describe("handleEmbeddedAssistantFailure", () => {
       action: "retry",
       emptyErrorRetries: 1,
     });
-    expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+    expect(
+      fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
+    ).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
   });
@@ -838,13 +872,16 @@ describe("handleEmbeddedAssistantFailure", () => {
       currentAttemptAssistant: assistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
-    fixture.input.attempt = attempt;
-    fixture.input.attemptAssistant = assistant;
-    fixture.input.currentAttemptAssistant = assistant;
-    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.normalizedAttempt.attempt = attempt;
+    fixture.input.normalizedAttempt.attemptAssistant = assistant;
+    fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+    fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant,
+    });
     fixture.input.emptyErrorRetries = 3;
-    fixture.input.fallbackConfigured = false;
-    fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
+    fixture.input.runInput.fallbackConfigured = false;
+    fixture.input.preparedRuntime.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => true);
 
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
@@ -872,12 +909,15 @@ describe("handleEmbeddedAssistantFailure", () => {
       currentAttemptAssistant: assistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
-    fixture.input.attempt = attempt;
-    fixture.input.attemptAssistant = assistant;
-    fixture.input.currentAttemptAssistant = assistant;
-    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.normalizedAttempt.attempt = attempt;
+    fixture.input.normalizedAttempt.attemptAssistant = assistant;
+    fixture.input.normalizedAttempt.currentAttemptAssistant = assistant;
+    fixture.input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant,
+    });
     fixture.input.emptyErrorRetries = 3;
-    fixture.input.fallbackConfigured = true;
+    fixture.input.runInput.fallbackConfigured = true;
 
     await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
       reason: "unknown",

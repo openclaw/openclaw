@@ -175,6 +175,7 @@ class RosterActivityStore {
           includeLastMessage: true,
           archivedFilter: "all",
           involvingMe: this.involvingMe,
+          excludeDock: true,
           limit: 300,
           pageSize: SESSIONS_LIST_TRANSCRIPT_LIMIT,
         },

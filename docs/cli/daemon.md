@@ -34,7 +34,7 @@ openclaw daemon uninstall
 
 `--json` is accepted before or after every subcommand (for example, `daemon --json status` and `daemon status --json`).
 
-- `status`: shows service install state (launchd/systemd/schtasks) and probes Gateway health.
+- `status`: shows service install state (launchd/systemd/schtasks) and checks Gateway health.
 - `status --port <port>`: selects a local Gateway using the invoking CLI config for auth and TLS. Cannot combine with `--url`. Native service details remain diagnostic-only.
 - `install`: installs and starts the service. `--force` reinstalls an existing install and may restart a running Gateway. Finish offline configuration and runtime repairs before installation.
 - Node is the primary, default, and recommended service runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `install --runtime bun`.
@@ -43,7 +43,7 @@ openclaw daemon uninstall
 
 ## Notes
 
-- `status` resolves configured auth SecretRefs for probe auth when possible. If a required SecretRef is unresolved, `status --json` reports `rpc.authWarning`. Pass `--token`/`--password` explicitly, or resolve the secret source first. Unresolved-auth warnings are suppressed once the probe otherwise succeeds.
+- `status` resolves configured auth SecretRefs for check auth when possible. If a required SecretRef is unresolved, `status --json` reports `rpc.authWarning`. Pass `--token`/`--password` explicitly, or resolve the secret source first. Unresolved-auth warnings are suppressed once the check otherwise succeeds.
 - `status --deep` adds a best-effort system-level scan for other gateway-like services. The scan prints cleanup hints. One Gateway per machine is still the recommendation. `status --deep` also runs config validation in plugin-aware mode. That mode surfaces plugin manifest warnings that the fast default path skips.
 - On Linux systemd installs, token-drift checks inspect both `Environment=` and `EnvironmentFile=` unit sources.
 - Token-drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env). If token auth is not effectively active (`gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or unset with password able to win), config token resolution is skipped.

@@ -1,7 +1,6 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import type { PropertyValues } from "lit";
 import { property, state as reactiveState } from "lit/decorators.js";
-import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { CronStatus } from "../../../api/types.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { t } from "../../../i18n/index.ts";
@@ -10,6 +9,7 @@ import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connectio
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import type {
   CiAutomationOption,
+  CiAutomationOptions,
   CiAutomationTarget,
 } from "../../../lib/session-pr-automation-spec.ts";
 import {
@@ -17,25 +17,19 @@ import {
   setCiAutomationEnabled,
   type CiAutomationJobs,
 } from "../../../lib/session-pr-automation.ts";
-import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { renderChatCiAutomation } from "./chat-ci-automation.ts";
+import { ChatCiDisclosure } from "./chat-ci-disclosure.ts";
 
 /** Cron owns durable settings and execution; this element retains only the visible projection. */
-export class ChatCiAutomationElement extends OpenClawLightDomElement {
-  @property({ attribute: false }) gateway?: ApplicationGateway;
-  @property({ attribute: false }) pullRequest?: ControlUiSessionPullRequest;
-  @property({ attribute: false }) sessionKey = "";
+export class ChatCiAutomationElement extends ChatCiDisclosure {
   @property({ attribute: false }) sessionId = "";
-  @property({ attribute: false }) basePath = "";
-  @property({ type: Boolean }) presented = true;
   @reactiveState() private jobs: CiAutomationJobs = {};
   @reactiveState() private loading = false;
-  @reactiveState() private saving = false;
+  @reactiveState() private pending: Partial<CiAutomationOptions> = {};
   @reactiveState() private loaded = false;
   @reactiveState() private schedulerEnabled: boolean | undefined;
   @reactiveState() private error: string | null = null;
 
-  private disclosure: HTMLDetailsElement | null = null;
   private boundGateway?: ApplicationGateway;
   private stopGateway?: () => void;
   private stopEvents?: () => void;
@@ -52,17 +46,7 @@ export class ChatCiAutomationElement extends OpenClawLightDomElement {
   private readController?: AbortController;
   private refreshPending = true;
 
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.disclosure = this.closest<HTMLDetailsElement>(".chat-pr__checks");
-    this.disclosure?.addEventListener("toggle", this.handleToggle);
-    this.ownerDocument.addEventListener("visibilitychange", this.handleVisibility);
-    this.requestUpdate();
-  }
-
-  override disconnectedCallback(): void {
-    this.disclosure?.removeEventListener("toggle", this.handleToggle);
-    this.ownerDocument.removeEventListener("visibilitychange", this.handleVisibility);
+  protected override disconnect(): void {
     this.stopGateway?.();
     this.stopEvents?.();
     this.stopGateway = undefined;
@@ -70,16 +54,10 @@ export class ChatCiAutomationElement extends OpenClawLightDomElement {
     this.boundGateway = undefined;
     this.connection.transition({ client: null, phase: "stopped" });
     this.reset();
-    super.disconnectedCallback();
   }
 
-  private get visible(): boolean {
-    return (
-      this.isConnected &&
-      this.presented &&
-      this.disclosure?.open === true &&
-      this.ownerDocument.visibilityState !== "hidden"
-    );
+  private get saving(): boolean {
+    return Object.keys(this.pending).length > 0;
   }
 
   private automationTarget(): CiAutomationTarget | null {
@@ -202,7 +180,7 @@ export class ChatCiAutomationElement extends OpenClawLightDomElement {
     this.cancelRead();
     this.jobs = {};
     this.loaded = false;
-    this.saving = false;
+    this.pending = {};
     this.schedulerEnabled = undefined;
     this.error = null;
     this.refreshPending = true;
@@ -214,13 +192,7 @@ export class ChatCiAutomationElement extends OpenClawLightDomElement {
     this.requestUpdate();
   }
 
-  private readonly handleToggle = (event: Event): void => {
-    if (event.target === this.disclosure) {
-      this.handleVisibility();
-    }
-  };
-
-  private readonly handleVisibility = (): void => {
+  protected override readonly handleVisibility = (): void => {
     if (!this.visible) {
       this.cancelRead();
     }
@@ -275,7 +247,6 @@ export class ChatCiAutomationElement extends OpenClawLightDomElement {
     const generation = ++this.readGeneration;
     this.readController = controller;
     this.loading = true;
-    this.error = null;
     const current = () => owner.current() && this.visible && generation === this.readGeneration;
     try {
       const [jobs, status] = await Promise.all([
@@ -305,9 +276,7 @@ export class ChatCiAutomationElement extends OpenClawLightDomElement {
     if (
       !this.visible ||
       !this.loaded ||
-      this.loading ||
-      this.saving ||
-      this.refreshPending ||
+      this.pending[option] !== undefined ||
       !this.canRead() ||
       !this.canManage()
     ) {
@@ -317,7 +286,9 @@ export class ChatCiAutomationElement extends OpenClawLightDomElement {
     if (!owner || !owner.current()) {
       return;
     }
-    this.saving = true;
+    // A pre-click inventory must never overwrite newer intent or its acknowledged revision.
+    this.cancelRead();
+    this.pending = { ...this.pending, [option]: enabled };
     this.error = null;
     try {
       const job = await setCiAutomationEnabled(
@@ -330,10 +301,7 @@ export class ChatCiAutomationElement extends OpenClawLightDomElement {
       if (!owner.current()) {
         return;
       }
-      if (this.visible) {
-        this.jobs = { ...this.jobs, [option]: job };
-      }
-      this.refreshPending = true;
+      this.jobs = { ...this.jobs, [option]: job };
     } catch (error) {
       if (owner.current()) {
         // A rejected acknowledgement may hide an accepted write. Never mutate again
@@ -343,7 +311,9 @@ export class ChatCiAutomationElement extends OpenClawLightDomElement {
       }
     } finally {
       if (owner.current()) {
-        this.saving = false;
+        const pending = { ...this.pending };
+        delete pending[option];
+        this.pending = pending;
         this.requestUpdate();
       }
     }
@@ -356,26 +326,27 @@ export class ChatCiAutomationElement extends OpenClawLightDomElement {
         ? t("chat.pullRequests.automationReadRequired")
         : !this.canManage()
           ? t("chat.pullRequests.automationAdminRequired")
-          : !this.loaded
-            ? t("chat.pullRequests.automationRefreshRequired")
-            : undefined;
+          : undefined;
     return renderChatCiAutomation({
       options: {
-        autoFix: this.jobs.autoFix?.enabled === true,
-        autoMerge: this.jobs.autoMerge?.enabled === true,
-        autoArchive: this.jobs.autoArchive?.enabled === true,
+        autoFix: this.pending.autoFix ?? this.jobs.autoFix?.enabled === true,
+        autoMerge: this.pending.autoMerge ?? this.jobs.autoMerge?.enabled === true,
+        autoArchive: this.pending.autoArchive ?? this.jobs.autoArchive?.enabled === true,
       },
       jobs: this.jobs,
-      basePath: this.basePath,
+      pending: this.pending,
       schedulerEnabled: this.schedulerEnabled,
       loading: this.loading,
       saving: this.saving,
       error: this.error,
-      disabled: Boolean(unavailable) || this.refreshPending,
+      disabled: Boolean(unavailable) || !this.loaded,
       disabledReason: unavailable,
       retryDisabled: !this.automationTarget() || !this.canRead(),
       onChange: (option, enabled) => void this.setEnabled(option, enabled),
-      onRetry: () => this.invalidate(),
+      onRetry: () => {
+        this.error = null;
+        this.invalidate();
+      },
     });
   }
 }

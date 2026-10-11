@@ -384,22 +384,16 @@ export async function readCodexStatusProbes(
   agentDir?: string,
 ) {
   const options = { config, agentDir };
+  const probe = <M extends CodexControlRequestMethod>(
+    method: M,
+    params: CodexAppServerRequestParams<M>,
+  ) => safeCodexControlRequest(pluginConfig, method, params, options);
   const [models, account, limits, mcps, skills] = await Promise.all([
     safeValue(() => listCodexAppServerModels(requestOptions(pluginConfig, 20, config, agentDir))),
-    safeCodexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.account,
-      { refreshToken: false },
-      options,
-    ),
-    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.rateLimits, undefined, options),
-    safeCodexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.listMcpServers,
-      { limit: 100 },
-      options,
-    ),
-    safeCodexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}, options),
+    probe(CODEX_CONTROL_METHODS.account, { refreshToken: false }),
+    probe(CODEX_CONTROL_METHODS.rateLimits, undefined),
+    probe(CODEX_CONTROL_METHODS.listMcpServers, { limit: 100 }),
+    probe(CODEX_CONTROL_METHODS.listSkills, {}),
   ]);
 
   return { models, account, limits, mcps, skills };

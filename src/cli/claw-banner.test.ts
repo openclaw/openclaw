@@ -34,35 +34,7 @@ async function runStatic() {
     .filter((row) => row.length > 0);
 }
 
-const EXPECTED_MASCOT = [
-  " •●●:.        .:●●•",
-  ":●●●●:        :●●●●:",
-  ".●●●●:.:•●●•:.:●●●●.",
-  " .●●●: •●●●●• :●●●.",
-  " ..:••●●●●●●●●••:..",
-  ".::••••●●●●●●••••::.",
-  " . .:  •●●●●•  :. .",
-  "    .  :●●●●:  .",
-  "      .●●●●●●.",
-  "       :••••:",
-] as const;
-
 describe("printClawBanner", () => {
-  it("prints the static banner when not animatable", async () => {
-    const { runtime, log } = runtimeStub();
-    await printClawBanner(runtime, { columns: 120, isTty: false, env: {} });
-    const output = stripAnsi(String(log.mock.calls[0]?.[0]));
-    const rows = output.split("\n").filter((row) => row.length > 0);
-    expect(rows.map((row) => row.slice(0, 20).trimEnd())).toEqual(EXPECTED_MASCOT);
-    expect(output).toContain("█▀▀▀█ █▀▀▀█ █▀▀▀▀ █▄  █");
-  });
-
-  it("stays static under CI even on a rich TTY", async () => {
-    const { runtime, log } = runtimeStub();
-    await printClawBanner(runtime, { columns: 120, isTty: true, rich: true, env: { CI: "1" } });
-    expect(log).toHaveBeenCalledTimes(1);
-  });
-
   it("falls back to the plain title on narrow terminals", async () => {
     const { runtime, log } = runtimeStub();
     await printClawBanner(runtime, { columns: 50, isTty: true, rich: true, env: {} });

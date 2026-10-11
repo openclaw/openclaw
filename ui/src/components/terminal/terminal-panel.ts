@@ -5,6 +5,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { createRef } from "lit/directives/ref.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { terminalFontFamily } from "../../app/terminal-font.ts";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
@@ -26,6 +27,7 @@ import {
   type TerminalPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
+import { updateTerminalFont } from "./terminal-fonts.ts";
 import { renderTerminalPanelViewport } from "./terminal-panel-chrome.ts";
 import { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
@@ -53,17 +55,18 @@ type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
 const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
 
-/** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
 export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHostedTabsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
   constructor() {
     super();
-    new SubscriptionsController(this).watchStore(
-      () => this.context?.config,
-      () => this.terminalPanelUploadController.syncPolicy(),
-    );
+    new SubscriptionsController(this)
+      .watchStore(
+        () => this.context?.config,
+        () => this.terminalPanelUploadController.syncPolicy(),
+      )
+      .watchStore(() => this.context?.theme);
   }
   /** Gateway client used for terminal.* RPCs; null until connected. */
   @property({ attribute: false }) client: TerminalGatewayClient | null = null;
@@ -75,9 +78,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   @property({ type: Boolean }) available = false;
   /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
   @property({ type: Boolean }) suppressed = false;
-  /** Active Control UI color mode, mirrored into the terminal theme. */
   @property({ attribute: false }) themeMode: "dark" | "light" = "dark";
-  /** Configured Control UI mount prefix used by document links. */
   @property({ attribute: false }) basePath = "";
   /**
    * Focused terminal document mode (`/focus/terminal`): fills the
@@ -86,6 +87,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   @property({ type: Boolean }) fullscreen = false;
   /** Hosted by the chat side panel, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
+  /** The embedding pane owns removal of its terminal slot. */
+  @property({ attribute: false }) onClose?: () => void;
   /** The hosting side-panel header presents this panel's tabs and actions. */
   @property({ type: Boolean }) tabsInHeader = false;
   /** Main-route terminal owns its queue and restore state independently of docks. */
@@ -124,6 +127,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
     setError: (message) => this.terminalSessions.setError(message),
     requestUpdate: () => this.requestUpdate(),
   });
+  get terminalFontFamily(): string {
+    return terminalFontFamily(this.context?.theme.settings.terminalFontFamily);
+  }
+
   createTerminalController = createIsolatedGhosttyTerminal;
   catalogReadyTimeoutMs = CATALOG_TERMINAL_READY_TIMEOUT_MS;
   private readonly terminalSessions = new TerminalPanelSessionController(this);
@@ -201,6 +208,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
     if (changed.has("client") || changed.has("available")) {
       this.terminalSessions.scheduleLifecycleSync();
     }
+    for (const tab of this.terminalSessions.tabs) {
+      updateTerminalFont(tab.controller, this.terminalFontFamily);
+    }
     if (changed.has("themeMode")) {
       updateTerminalSessionTheme(this.terminalSessions.tabs, this.themeMode);
     }
@@ -226,6 +236,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
         className,
       ]),
       this.terminalSessions.booting,
+      this.terminalSessions.canHandoffSessions,
       this.sessionPickerOpen,
       this.sessionPickerTask.status,
       this.pickerSessions.map((session) => session.sessionId),
@@ -287,12 +298,17 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
           class="rail-header__action"
           type="button"
           aria-label=${t("terminal.dockBottom")}
+          ?disabled=${!this.terminalSessions.canHandoffSessions}
           @click=${() => this.setDock("bottom")}
         >
           ${icons.panelBottomOpen}
         </button>
       </openclaw-tooltip>
     `;
+  }
+
+  activateTerminalHost(): void {
+    this.terminalSessions.activateHost();
   }
 
   toggle(): void {
@@ -303,6 +319,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
       this.closeTerminalPanel();
     } else {
       this.dockLayout.setOpen(true);
+      this.activateTerminalHost();
       void this.terminalSessions.restoreSessions();
     }
   }
@@ -328,6 +345,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
         return;
       }
       this.dockLayout.setOpen(true);
+      this.activateTerminalHost();
       void (detail.newSession === true
         ? this.terminalSessions.openSession()
         : detail.terminalSessionId
@@ -341,7 +359,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   closeTerminalPanel(): void {
     this.closeSessionPicker(false);
     this.terminalSessions.cancelPendingActions();
-    this.dockLayout.setOpen(false);
+    if (this.embedded) {
+      this.onClose?.();
+    } else {
+      this.dockLayout.setOpen(false);
+    }
   }
 
   get terminalPanelOpen(): boolean {
@@ -430,14 +452,21 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   }
 
   private setDock(dock: TerminalDock): void {
-    // Embedded chrome cannot dock itself: it asks the host to take the panel
-    // out to the bottom slot. Every other target stays with the dock layout,
-    // where "main" toggles instead of pinning.
-    if (this.embedded && dock === "bottom") {
+    // Moving between the global bottom dock and a chat's side panel changes
+    // presentation owners, not just geometry. The active pane owns the return.
+    const returnToSession = this.sessionBottomOnly && dock === "right";
+    if ((this.embedded && dock === "bottom") || returnToSession) {
+      if (!this.terminalSessions.handoffSessions()) {
+        return;
+      }
+      if (returnToSession) {
+        this.dockLayout.setOpen(false);
+      }
       window.dispatchEvent(
-        new CustomEvent<TerminalPanelToggleDetail>(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, {
-          detail: { agentId: this.agentId, dock: "bottom", open: true },
-        }),
+        new CustomEvent<TerminalPanelToggleDetail>(
+          returnToSession ? TERMINAL_PANEL_TOGGLE_EVENT : TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
+          { detail: { agentId: this.agentId, dock, open: true } },
+        ),
       );
       return;
     }
@@ -522,6 +551,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
       fullscreen: this.fullscreen,
       embedded: this.embedded,
       dock: this.dockLayout.dock,
+      dockDisabled:
+        (this.embedded || this.sessionBottomOnly) && !this.terminalSessions.canHandoffSessions,
       upload: this.terminalPanelUploadController,
       sessionPicker,
       onDock: (dock) => this.setDock(dock),

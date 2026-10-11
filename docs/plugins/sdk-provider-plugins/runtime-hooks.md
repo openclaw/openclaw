@@ -322,7 +322,7 @@ when a provider supplies hosted search. Its `ProviderNativeWebSearchPolicyContex
 (from `openclaw/plugin-sdk/provider-model-types`) contains `config`, `provider`,
 optional `modelId`, `api`, and `baseUrl`. Return `true` only when that route
 will inject hosted search; share this policy with payload construction. Keep
-the hook synchronous and free of runtime activation or credential probes.
+the hook synchronous and free of runtime activation or credential checks.
 The host applies tool permissions independently and removes managed
 `web_search` before building Tool Search and Code Mode catalogs. Explicit
 managed-provider selection must remain authoritative.

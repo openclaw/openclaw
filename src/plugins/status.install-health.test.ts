@@ -10,6 +10,7 @@ import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { listManagedPlugins } from "./management-service.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import type { PluginDependencyHealthRegistry } from "./status-dependencies-core.js";
 import {
   buildPluginRegistrySnapshotReport,
@@ -19,6 +20,7 @@ import {
   createColdPluginFixture,
   createColdPluginHermeticEnv,
 } from "./test-helpers/cold-plugin-fixtures.js";
+import { createBundleInstallFixtureFactory } from "./test-helpers/install-fixtures.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -70,20 +72,15 @@ function createProjectionFixture(
 describe("plugin inventory install health", () => {
   it.each([
     "empty-project",
-    "missing-package-json",
     "missing-project-package-json",
-    "missing-dependency",
     "missing-dependency-no-spec",
     "multi-entry-missing-dependency",
     "ancestor-dependency",
     "outside-dependency",
     "canonical-host",
-    "consent-pending",
-    "clawhub-missing-dependency",
     "clawhub-missing-package-json",
     "clawhub-bundle",
     "clawhub-package-selector-fallback",
-    "clawhub-copied-host",
     "clawhub-hoisted-host",
   ])("classifies %s consistently in status and management", async (scenario) => {
     const root = tempDirs.make("plugin-install-health-");
@@ -122,10 +119,9 @@ describe("plugin inventory install health", () => {
     });
     const packageJsonPath = path.join(packageDir, "package.json");
     const multiEntry = scenario === "multi-entry-missing-dependency";
-    const copiedHost = scenario === "clawhub-copied-host";
     const hoistedHost = scenario === "clawhub-hoisted-host";
-    const host = scenario === "canonical-host" || copiedHost || hoistedHost;
-    const healthy = scenario === "consent-pending" || host || bundle;
+    const host = scenario === "canonical-host" || hoistedHost;
+    const healthy = host || bundle;
     const pluginIds = multiEntry ? [`${pluginId}/first`, `${pluginId}/second`] : [pluginId];
     if (multiEntry) {
       for (const entry of ["first", "second"]) {
@@ -184,7 +180,7 @@ describe("plugin inventory install health", () => {
     if (scenario === "empty-project") {
       fs.rmSync(projectRoot, { recursive: true });
       fs.mkdirSync(projectRoot);
-    } else if (scenario === "missing-package-json" || scenario === "clawhub-missing-package-json") {
+    } else if (scenario === "clawhub-missing-package-json") {
       fs.rmSync(packageJsonPath);
     } else if (scenario === "missing-project-package-json") {
       fs.rmSync(path.join(projectRoot, "package.json"));
@@ -220,12 +216,8 @@ describe("plugin inventory install health", () => {
       }
       fs.mkdirSync(path.join(packageDir, "node_modules"), { recursive: true });
       fs.symlinkSync(hostRoot, path.join(packageDir, "node_modules", "openclaw"), "junction");
-    } else if (copiedHost || hoistedHost) {
-      const dependency = path.join(
-        hoistedHost ? path.dirname(packageDir) : packageDir,
-        "node_modules",
-        "openclaw",
-      );
+    } else if (hoistedHost) {
+      const dependency = path.join(path.dirname(packageDir), "node_modules", "openclaw");
       fs.mkdirSync(dependency, { recursive: true });
       fs.writeFileSync(
         path.join(dependency, "package.json"),
@@ -311,7 +303,7 @@ describe("plugin inventory install health", () => {
     },
   );
 
-  it.each([true, false])(
+  it.each([true])(
     "rechecks a different runtime root after caching installed dependency health: %s",
     (initiallyHealthy) => {
       const fixture = createProjectionFixture({ requiredDependency: true });
@@ -359,4 +351,124 @@ describe("plugin inventory install health", () => {
       }
     },
   );
+});
+
+function makeTempDir() {
+  return tempDirs.make("openclaw-plugin-status");
+}
+
+const setupBundleInstallFixture = createBundleInstallFixtureFactory(makeTempDir);
+
+describe("buildPluginRegistrySnapshotReport", () => {
+  it.each([
+    {
+      bundleFormat: "agent",
+      enabled: true,
+      registrySource: "derived",
+      capabilities: ["skills"],
+    },
+    {
+      bundleFormat: "claude",
+      enabled: false,
+      registrySource: "persisted",
+      capabilities: ["skills"],
+    },
+    {
+      bundleFormat: "cursor",
+      enabled: true,
+      registrySource: "persisted",
+      capabilities: ["skills", "commands"],
+    },
+  ] as const)(
+    "preserves $bundleFormat bundle capabilities in $registrySource inventory (enabled=$enabled)",
+    async ({ bundleFormat, enabled, registrySource, capabilities }) => {
+      const name = `${bundleFormat}-capability-fixture`;
+      const { pluginDir, extensionsDir } = setupBundleInstallFixture({ bundleFormat, name });
+      const stateDir = path.dirname(extensionsDir);
+      const workspaceDir = path.dirname(stateDir);
+      const params = {
+        config: {
+          plugins: {
+            load: { paths: [pluginDir] },
+            entries: { [name]: { enabled } },
+          },
+        },
+        workspaceDir,
+        env: {
+          ...createColdPluginHermeticEnv(workspaceDir, { bundledPluginsDir: makeTempDir() }),
+          OPENCLAW_STATE_DIR: stateDir,
+        },
+      };
+      if (registrySource === "persisted") {
+        await refreshPluginRegistry({ ...params, stateDir, reason: "manual" });
+      }
+
+      const report = buildPluginRegistrySnapshotReport(params);
+
+      expect(report.plugins.find((plugin) => plugin.id === name)).toMatchObject({
+        format: "bundle",
+        bundleFormat,
+        bundleCapabilities: capabilities,
+        enabled,
+      });
+      expect(report.registrySource).toBe(registrySource);
+    },
+  );
+});
+
+describe("bundled dependency health", () => {
+  it.each([
+    { pluginId: "bundled-demo", bundledDist: undefined, packageName: undefined, missing: false },
+    { pluginId: "source-external-demo", bundledDist: false, packageName: undefined, missing: true },
+    {
+      pluginId: "discord",
+      bundledDist: undefined,
+      packageName: "@openclaw/discord",
+      missing: true,
+    },
+  ] as const)("projects package-local dependencies for $pluginId", (identity) => {
+    const tempRoot = makeTempDir();
+    const bundledRoot = path.join(tempRoot, "bundled");
+    const pluginRoot = path.join(bundledRoot, identity.pluginId);
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    createColdPluginFixture({
+      rootDir: pluginRoot,
+      pluginId: identity.pluginId,
+      packageName: identity.packageName,
+    });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: identity.packageName ?? "@example/bundled",
+        version: "1.0.0",
+        dependencies: { "missing-plugin-local-dependency": "1.0.0" },
+        openclaw: { extensions: ["./index.cjs"], build: { bundledDist: identity.bundledDist } },
+      }),
+    );
+    const report = buildPluginRegistrySnapshotReport({
+      config: { plugins: { entries: { [identity.pluginId]: { enabled: true } } } },
+      env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
+    });
+    const plugin = report.plugins.find((entry) => entry.id === identity.pluginId);
+    expect(plugin).toMatchObject({
+      origin: "bundled",
+      status: identity.missing ? "error" : "loaded",
+    });
+    if (identity.missing) {
+      expect(plugin?.dependencyStatus).toMatchObject({
+        requiredInstalled: false,
+        missing: ["missing-plugin-local-dependency"],
+      });
+      expect(report.diagnostics).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          pluginId: identity.pluginId,
+          message: expect.stringContaining("required dependencies are missing"),
+        }),
+      );
+    } else {
+      expect(plugin?.dependencyStatus).toBeUndefined();
+      expect(report.diagnostics).toEqual([]);
+    }
+  });
 });

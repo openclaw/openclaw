@@ -13,7 +13,10 @@ import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import { transcriptEventNavigationSql } from "./transcript-payload.js";
+
+export { SessionTranscriptReadFenceError };
 
 const transcriptReadFenceStorage = new AsyncLocalStorage<UserTurnTranscriptAdmissionReceipt>();
 
@@ -86,13 +89,6 @@ export function resolveSessionTranscriptQuestionAnswer(
     (admittedUserId === undefined || original.entryId === admittedUserId)
     ? input
     : undefined;
-}
-
-export class SessionTranscriptReadFenceError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionTranscriptReadFenceError";
-  }
 }
 
 type SessionTranscriptReadFence = Readonly<{

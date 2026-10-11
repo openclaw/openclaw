@@ -27,12 +27,17 @@ function createReadHarness(
   broadcast: GatewayRequestContext["broadcast"] = vi.fn(),
 ) {
   let config: OpenClawConfig = {};
+  let runnerRevision = 0;
   // The dispatch fixture supplies the owners touched by these read-only methods.
   const context = {
     getRuntimeConfig: () => config,
     getCommittedRuntimeConfig: () => config,
     broadcast,
     logGateway: { warn: vi.fn() },
+    workerPlacementRunnerAvailabilityReader: {
+      read: () => undefined,
+      version: () => runnerRevision,
+    },
   } as unknown as GatewayRequestContext;
   const methodRegistry = createGatewayMethodRegistry(
     method.startsWith("workboard.")
@@ -51,6 +56,7 @@ function createReadHarness(
       config = next;
     },
     invalidate: (event?: string) => invalidateSharedReadResponses(context.broadcast, event),
+    runnerChanged: () => runnerRevision++,
     request(id: string, params: Record<string, unknown> = {}, profileId = "alice") {
       const client: GatewayClient = {
         connId: `connection-${id}`,
@@ -212,6 +218,29 @@ describe("shared read response dispatch", () => {
     await current.done;
     expectPayload(original, {});
     expectPayload(current, { port: 18790 });
+    expect(produce).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes runner status before its asynchronous session change event is published", async () => {
+    let available = true;
+    const produce = vi.fn((respond: RespondFn) => respond(true, { available }));
+    const harness = createReadHarness(
+      createPreparedReadHandler(() => ({ run: produce })),
+      "sessions.list",
+    );
+    const first = harness.request("before-disconnect");
+    await first.done;
+    expectPayload(first, { available: true });
+
+    available = false;
+    harness.runnerChanged();
+    const second = harness.request("before-row-event");
+    await second.done;
+    expectPayload(second, { available: false });
+
+    const third = harness.request("same-runner-revision");
+    await third.done;
+    expectPayload(third, { available: false });
     expect(produce).toHaveBeenCalledTimes(2);
   });
 

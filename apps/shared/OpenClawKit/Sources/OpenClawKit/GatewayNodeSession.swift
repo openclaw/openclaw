@@ -137,6 +137,7 @@ public actor GatewayNodeSession {
     private var computerInvokeReceiptOrder: [ComputerInvokeReceiptKey] = []
     #if DEBUG
     private var computerInvokeReceiptJoinCounts: [UUID: Int] = [:]
+    private var computerInvokeReceiptJoinWaiters: [CheckedContinuation<Void, Never>] = []
     var testBeforeChannelShutdown: (@Sendable () async -> Void)?
     #endif
 
@@ -242,27 +243,9 @@ public actor GatewayNodeSession {
 
         let channelGeneration: UInt64
         if shouldReconnect {
-            self.channel?.retireSocketAdmission()
-            let invalidatedAdmissionGeneration = self.admissionGeneration
-            self.channelGeneration &+= 1
-            self.admissionGeneration &+= 1
+            let detached = self.detachChannel(resetConnectionHistory: false)
             channelGeneration = self.channelGeneration
-            self.resetConnectionState()
-            let existing = self.channel
-            let previousOnRouteInvalidated = existing == nil ? nil : self.onRouteInvalidated
-            // Invalidate and detach synchronously. Every later connect/disconnect then waits
-            // on the same serialized teardown before it can install another route.
-            self.channel = nil
-            self.clearActiveRoute()
-            let teardown = if let existing {
-                self.enqueueRouteTeardown(
-                    channel: existing,
-                    admissionGeneration: invalidatedAdmissionGeneration,
-                    onRouteInvalidated: previousOnRouteInvalidated)
-            } else {
-                self.routeTeardownBarrier
-            }
-            await teardown?.value
+            await detached.teardown?.value
             // A newer connect or disconnect can run while teardown suspends. Never let the
             // superseded call install its endpoint or credentials afterward.
             guard self.channelGeneration == channelGeneration else { throw CancellationError() }
@@ -332,16 +315,32 @@ public actor GatewayNodeSession {
     }
 
     public func disconnect() async {
+        let detached = self.detachChannel(resetConnectionHistory: true)
+        if detached.channel != nil || !self.isExecutingLifecycleCallback() {
+            await detached.teardown?.value
+        }
+    }
+
+    private func detachChannel(
+        resetConnectionHistory: Bool) -> (channel: GatewayChannelActor?, teardown: Task<Void, Never>?)
+    {
         self.channel?.retireSocketAdmission()
         let invalidatedAdmissionGeneration = self.admissionGeneration
         self.channelGeneration &+= 1
         self.admissionGeneration &+= 1
+        if !resetConnectionHistory {
+            self.resetConnectionState()
+        }
         let channel = self.channel
         let onRouteInvalidated = channel == nil ? nil : self.onRouteInvalidated
+        // Invalidate and detach synchronously. Every later connect/disconnect then waits
+        // on the same serialized teardown before it can install another route.
         self.channel = nil
         self.clearActiveRoute()
-        self.hasEverConnected = false
-        self.resetConnectionState()
+        if resetConnectionHistory {
+            self.hasEverConnected = false
+            self.resetConnectionState()
+        }
         let teardown = if let channel {
             self.enqueueRouteTeardown(
                 channel: channel,
@@ -350,9 +349,7 @@ public actor GatewayNodeSession {
         } else {
             self.routeTeardownBarrier
         }
-        if channel != nil || !self.isExecutingLifecycleCallback() {
-            await teardown?.value
-        }
+        return (channel, teardown)
     }
 
     private func clearActiveRoute() {
@@ -564,19 +561,15 @@ public actor GatewayNodeSession {
     }
 
     private func awaitPluginSurfaceRefresh(_ task: Task<String?, Never>, timeoutMs: Double) async -> String? {
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: max(0, timeoutMs) / 1000,
-                onTimeout: {
-                    NSError(
-                        domain: "Gateway",
-                        code: 8,
-                        userInfo: [NSLocalizedDescriptionKey: "plugin surface refresh timed out"])
-                },
-                operation: { await task.value })
-        } catch {
-            return nil
-        }
+        try? await AsyncTimeout.withTimeout(
+            seconds: max(0, timeoutMs) / 1000,
+            onTimeout: {
+                NSError(
+                    domain: "Gateway",
+                    code: 8,
+                    userInfo: [NSLocalizedDescriptionKey: "plugin surface refresh timed out"])
+            },
+            operation: { await task.value })
     }
 
     private func releasePluginSurfaceRefreshWaiter(surface: String, refreshID: UUID, waiterID: UUID) {
@@ -1361,6 +1354,11 @@ extension GatewayNodeSession {
             }
             #if DEBUG
             self.computerInvokeReceiptJoinCounts[receipt.id, default: 0] += 1
+            let waiters = self.computerInvokeReceiptJoinWaiters
+            self.computerInvokeReceiptJoinWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
             #endif
             let response = switch receipt.state {
             case let .inFlight(task): await task.value
@@ -1457,6 +1455,22 @@ extension GatewayNodeSession {
             timeoutMs: timeoutMs,
             receiptScope: receiptScope,
             onInvoke: onInvoke)
+    }
+
+    // Waits for recorded receipt joins without a test-side deadline.
+    // periphery:ignore - package tests await receipt joining without exposing the receipt store.
+    func waitForComputerReceiptJoinsForTesting(
+        idempotencyKey: String,
+        receiptScope: String,
+        count: Int) async
+    {
+        while self
+            .computerReceiptJoinCountForTesting(idempotencyKey: idempotencyKey, receiptScope: receiptScope) < count
+        {
+            await withCheckedContinuation { continuation in
+                self.computerInvokeReceiptJoinWaiters.append(continuation)
+            }
+        }
     }
 
     // periphery:ignore - package tests assert receipt joining without exposing the receipt store.

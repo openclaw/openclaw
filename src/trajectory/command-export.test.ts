@@ -88,7 +88,7 @@ describe("trajectory command export inventory", () => {
       ];
       await replaceTranscriptEvents(sessionTarget, entries);
       const transcriptBefore = await loadTranscriptEvents(sessionTarget);
-      const recorder = createTrajectoryRuntimeRecorder({
+      const recorder = await createTrajectoryRuntimeRecorder({
         sessionId,
         sessionKey,
         sessionTarget,

@@ -1,5 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../types.js";
 import {
@@ -8,10 +10,13 @@ import {
 } from "./binding-store.js";
 import { discussionSessionKey } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
-import { createDiscussionMemoryStore } from "./service-test-support.js";
-import { enforceClickClackDiscussionToolTarget } from "./tool-policy.js";
+import { asyncDiscussionTestStore, createDiscussionMemoryStore } from "./service-test-support.js";
+import {
+  enforceClickClackDiscussionToolTarget,
+  isClickClackDiscussionSessionTarget,
+} from "./tool-policy.js";
 
-function setup() {
+function setup(options: { persistedBeforeOpening?: boolean } = {}) {
   const store = createDiscussionMemoryStore<unknown>();
   const config: CoreConfig = {
     channels: {
@@ -34,12 +39,18 @@ function setup() {
     agent: {
       session: {
         getSessionEntry: vi.fn(() => ({ sessionId: "session-id", updatedAt: 1 })),
+        getSessionEntryAsync: vi.fn(async () => ({ sessionId: "session-id", updatedAt: 1 })),
       },
     },
   });
+  const asyncStore = asyncDiscussionTestStore<unknown>(runtime.state.openSyncKeyedStore, {
+    namespace: "discussion-bindings",
+    maxEntries: 10_000,
+    overflowPolicy: "reject-new",
+  });
+  runtime.state.openKeyedStore = <T>() => asyncStore as PluginStateKeyedStore<T>;
   const mainSessionKey = "agent:research:main";
-  const bindingStore = getClickClackDiscussionBindingStore(runtime);
-  bindingStore.set(mainSessionKey, {
+  const initialBinding = {
     accountId: "default",
     agentId: "research",
     sessionId: "session-id",
@@ -54,7 +65,14 @@ function setup() {
     section: "Sessions",
     archived: false,
     label: "Research",
-  });
+  };
+  if (options.persistedBeforeOpening) {
+    store.register(mainSessionKey, initialBinding);
+  }
+  const bindingStore = getClickClackDiscussionBindingStore(runtime);
+  if (!options.persistedBeforeOpening) {
+    bindingStore.set(mainSessionKey, initialBinding);
+  }
   const sideSessionKey = discussionSessionKey({
     runtime,
     agentId: "research",
@@ -74,10 +92,25 @@ function setup() {
       event: { toolName, params: toolParams },
       context: { toolName, sessionKey: sideSessionKey },
     });
-  return { bindingStore, config, mainSessionKey, runtime, run, sideSessionKey, store };
+  return { asyncStore, bindingStore, config, mainSessionKey, runtime, run, sideSessionKey, store };
 }
 
 describe("ClickClack discussion session tool policy", () => {
+  it("authorizes a persisted binding synchronously before index preparation after restart", () => {
+    const { runtime, mainSessionKey, sideSessionKey, run } = setup({
+      persistedBeforeOpening: true,
+    });
+
+    expect(
+      isClickClackDiscussionSessionTarget({
+        runtime,
+        requesterSessionKey: sideSessionKey,
+        targetSessionKey: mainSessionKey,
+      })?.binding.sessionId,
+    ).toBe("session-id");
+    expect(run("sessions_history", { sessionKey: mainSessionKey })).toBeUndefined();
+  });
+
   it("allows the three observer tools only against the attached main session", () => {
     const { mainSessionKey, run } = setup();
 
@@ -96,6 +129,8 @@ describe("ClickClack discussion session tool policy", () => {
       run("sessions_history", { sessionKey: mainSessionKey, sessionId: "old-session" })?.block,
     ).toBe(true);
     expect(run("sessions_list", {})?.block).toBe(true);
+    expect(run("session_status", {})?.block).toBe(true);
+    expect(run("sessions_history", { sessionKey: "" })?.block).toBe(true);
     expect(
       run("sessions_send", { sessionKey: mainSessionKey, label: "other", message: "x" })?.block,
     ).toBe(true);
@@ -111,6 +146,14 @@ describe("ClickClack discussion session tool policy", () => {
 
     expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
     expect(run("web_search", { query: "still unrelated" })).toBeUndefined();
+  });
+
+  it("fails closed when the explicit target cannot be read as a binding key", () => {
+    const { run, store } = setup();
+    store.lookup = () => {
+      throw new Error("Invalid plugin-state key");
+    };
+    expect(run("sessions_history", { sessionKey: "invalid-target" })?.block).toBe(true);
   });
 
   it("revokes the target capability after a discussion workspace retarget", () => {
@@ -197,6 +240,55 @@ describe("ClickClack discussion session tool policy", () => {
     expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
     expect(run("sessions_list", {})?.block).toBe(true);
   });
+
+  it.each([{ channelId: "chn_replacement" }, { externalRef: "openclaw:replacement:research" }])(
+    "rejects old side-session authority after an external binding replacement: %j",
+    (replacement) => {
+      const { bindingStore, mainSessionKey, run, sideSessionKey, store, runtime } = setup();
+      const previous = bindingStore.get(mainSessionKey)!;
+      // Bypass the index owner, as a foreign process or released native writer can.
+      store.register(mainSessionKey, { ...previous, ...replacement });
+
+      expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
+      expect(
+        isClickClackDiscussionSessionTarget({
+          runtime,
+          requesterSessionKey: sideSessionKey,
+          targetSessionKey: mainSessionKey,
+        }),
+      ).toBeUndefined();
+      if ("channelId" in replacement) {
+        expect(
+          bindingStore.getByChannel(previous.serverBaseUrl, previous.channelId),
+        ).toBeUndefined();
+      }
+    },
+  );
+
+  it.each(["replace", "delete"] as const)(
+    "preserves a committed %s while the initial worker index snapshot is pending",
+    async (operation) => {
+      const { asyncStore, bindingStore, mainSessionKey, run, store } = setup();
+      const previous = bindingStore.get(mainSessionKey)!;
+      const snapshot = store.entries();
+      const pending = createDeferred<typeof snapshot>();
+      vi.spyOn(asyncStore, "entries").mockReturnValueOnce(pending.promise);
+      const preparing = bindingStore.prepare();
+      if (operation === "replace") {
+        bindingStore.set(mainSessionKey, { ...previous, channelId: "chn_replacement" });
+      } else {
+        bindingStore.delete(mainSessionKey);
+      }
+      pending.resolve(snapshot);
+      await preparing;
+
+      expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
+      expect(bindingStore.getByChannel(previous.serverBaseUrl, previous.channelId)).toBeUndefined();
+      expect(bindingStore.getByChannel(previous.serverBaseUrl, "chn_replacement")?.sessionKey).toBe(
+        operation === "replace" ? mainSessionKey : undefined,
+      );
+    },
+  );
 
   it("preserves routing indexes when persistent binding mutations fail", () => {
     const { bindingStore, mainSessionKey, run, store } = setup();

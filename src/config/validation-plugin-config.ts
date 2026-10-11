@@ -64,7 +64,7 @@ export function resolveDeferredChannelConfigWarning(params: {
 
 function formatRemovedPluginConfigWarning(pluginId: string): string {
   if (pluginId === "skill-workshop") {
-    return "plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Use skills.workshop settings and openclaw skills workshop commands, then remove this plugins config entry)";
+    return 'plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Set skills.workshop.autonomous.mode to "auto" or "off" and use openclaw skills workshop commands, then remove this plugins config entry)';
   }
   return `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`;
 }
@@ -175,14 +175,7 @@ export function validateExplicitPluginConfig(params: {
     ) {
       return true;
     }
-    const loadPaths = config.plugins?.load?.paths;
-    if (!Array.isArray(loadPaths)) {
-      return false;
-    }
-    for (const loadPath of loadPaths) {
-      if (typeof loadPath !== "string") {
-        continue;
-      }
+    for (const loadPath of config.plugins?.load?.paths ?? []) {
       const resolvedLoadPath = normalizeBlockedDiagnosticPath(loadPath);
       if (
         resolvedLoadPath &&
@@ -284,20 +277,18 @@ export function validateExplicitPluginConfig(params: {
   // Normalized entries gain optional keys, so inspect the original disable marker shape.
   const hasIntentionalDisableMarker = (pluginId: string) =>
     isExplicitPluginDisableMarker(entries?.[pluginId]) && !isRetiredPluginId(pluginId);
-  if (entries && isRecord(entries)) {
-    for (const pluginId of Object.keys(entries)) {
-      if (
-        !hasKnownPlugin(pluginId) &&
-        !hasIntentionalDisableMarker(pluginId) &&
-        !isNativeSessionCatalogOptOutOnly(pluginId, entries[pluginId])
-      ) {
-        // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
-        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
-      }
+  for (const [pluginId, entry] of Object.entries(entries ?? {})) {
+    if (
+      !hasKnownPlugin(pluginId) &&
+      !hasIntentionalDisableMarker(pluginId) &&
+      !isNativeSessionCatalogOptOutOnly(pluginId, entry)
+    ) {
+      // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
+      pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
     }
   }
   for (const pluginId of pluginsConfig?.allow ?? []) {
-    if (typeof pluginId !== "string" || !pluginId.trim() || hasKnownPlugin(pluginId)) {
+    if (!pluginId.trim() || hasKnownPlugin(pluginId)) {
       continue;
     }
     const commandAlias = resolveManifestCommandAliasOwnerInRegistry({
@@ -316,7 +307,7 @@ export function validateExplicitPluginConfig(params: {
     }
   }
   for (const pluginId of pluginsConfig?.deny ?? []) {
-    if (typeof pluginId === "string" && pluginId.trim() && !hasKnownPlugin(pluginId)) {
+    if (pluginId.trim() && !hasKnownPlugin(pluginId)) {
       pushMissingPluginIssue("plugins.deny", pluginId, {
         warnOnly: true,
         officialInstallHint: false,

@@ -19,7 +19,10 @@ export async function selectDevicePlacementCandidates(params: {
   executionMode: "worker-turn" | "remote-exec";
   config: OpenClawConfig;
   getPendingDispatchCount?: (deviceId: string) => number;
-  getAdmittedSessionCounts?: () => ReadonlyMap<string, number> | undefined;
+  getAdmittedSessionCounts?: () =>
+    | ReadonlyMap<string, number>
+    | undefined
+    | Promise<ReadonlyMap<string, number> | undefined>;
 }): Promise<DevicePlacementSelection> {
   const { requirement } = params;
   if (!requirement) {
@@ -93,7 +96,7 @@ export async function selectDevicePlacementCandidates(params: {
       }),
   );
   const admittedSessions = requirement.consumesWorkerSlot
-    ? params.getAdmittedSessionCounts?.()
+    ? await params.getAdmittedSessionCounts?.()
     : undefined;
   const candidates = attempts
     .filter(

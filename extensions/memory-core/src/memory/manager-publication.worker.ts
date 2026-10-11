@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { loadSqliteVecExtensionFromPath } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import {
+  ensureMemoryIndexSchema,
+  loadSqliteVecExtensionFromPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   assertTransactionUsable,
   openNodeSqliteDatabase,
@@ -32,6 +35,10 @@ import {
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
+import {
+  loadMemorySourceFileState,
+  refreshMemorySessionSourceState,
+} from "./manager-source-state.js";
 
 function failure(error: unknown): MemoryShadowFailure {
   return {
@@ -145,6 +152,13 @@ function createPublicationBackend(
     ): MemoryPublicationResult<T> => {
       let entered = false;
       let committed = false;
+      let restoredBusyTimeout = false;
+      const restoreBusyTimeout = () => {
+        if (!restoredBusyTimeout) {
+          db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+          restoredBusyTimeout = true;
+        }
+      };
       try {
         assertPath();
         // Failed BEGIN is returned to the preparing host without sleeping here.
@@ -153,7 +167,7 @@ function createPublicationBackend(
         const value = run({
           onBegin: () => {
             entered = true;
-            db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+            restoreBusyTimeout();
             assertPath();
             admit("transaction");
           },
@@ -169,7 +183,7 @@ function createPublicationBackend(
         return { ok: false, error: failure(error), entered, committed };
       } finally {
         if (db.isOpen) {
-          db.exec(`PRAGMA busy_timeout = ${input.pragmas.busy_timeout}`);
+          restoreBusyTimeout();
         }
       }
     };
@@ -193,8 +207,30 @@ function createPublicationBackend(
       },
       execute(command) {
         assertPath();
+        if (command.type === "schema.admit") {
+          // Storage/STRICT migration must disable foreign keys before BEGIN.
+          db.exec("PRAGMA foreign_keys = OFF");
+          try {
+            return write(() => ensureMemoryIndexSchema({ ...command.input, db }));
+          } finally {
+            if (db.isOpen) {
+              db.exec(`PRAGMA foreign_keys = ${input.pragmas.foreign_keys}`);
+            }
+          }
+        }
         if (command.type === "source.hash") {
           return readMemorySourceHash(db, command.input.source, command.input.path);
+        }
+        if (command.type === "source.state") {
+          return loadMemorySourceFileState({ db, ...command.input });
+        }
+        if (command.type === "source.refresh") {
+          return write(() => refreshMemorySessionSourceState(db, command.input));
+        }
+        if (command.type === "session.current") {
+          return hasMemorySessionTombstone(db, command.input.agentId, command.input.sessionId)
+            ? "forgotten"
+            : "current";
         }
         if (command.type === "cache.read") {
           return loadMemoryEmbeddingCache({ ...command.input, db });
@@ -273,9 +309,7 @@ function createPublicationBackend(
               }
               const eligible = new Map<string, boolean>();
               function* entries() {
-                for (const json of readStagedJson(db)) {
-                  // SAFETY: The paired cache producer owns these sealed records.
-                  const entry = JSON.parse(json) as MemoryEmbeddingCacheEntry;
+                for (const entry of readStagedRows<MemoryEmbeddingCacheEntry>(db)) {
                   if (entry.sessionId) {
                     let current = eligible.get(entry.sessionId);
                     if (current === undefined) {
@@ -342,7 +376,7 @@ function createPublicationBackend(
           const beforeRevision = readMemoryDatabaseRevision(db);
           new MemorySourceIndexKernel(db, command.input.state).replaceRows(
             header,
-            readStagedRows(db),
+            readStagedRows<MemorySourceIndexRow>(db),
           );
           return { beforeRevision, databaseRevision: readMemoryDatabaseRevision(db) };
         });
@@ -364,27 +398,24 @@ function createPublicationBackend(
   }
 }
 
-function* readStagedRows(db: DatabaseSync): Generator<MemorySourceIndexRow> {
-  for (const json of readStagedJson(db)) {
-    // SAFETY: Only the paired source producer writes these sealed JSON records.
-    yield JSON.parse(json) as MemorySourceIndexRow;
-  }
-}
-
-function* readStagedJson(db: DatabaseSync): Generator<string> {
+function* readStagedRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(
+  db: DatabaseSync,
+): Generator<Row> {
+  // SAFETY: Only the paired source/cache producer writes these sealed records.
+  const parse = (parts: string[]) => JSON.parse(parts.join("")) as Row;
   let parts: string[] = [];
   let row = 0;
   for (const fragment of db
     .prepare("SELECT row, json FROM temp.memory_publication_input ORDER BY row, part")
     .iterate()) {
     if (fragment.row !== row) {
-      yield parts.join("");
+      yield parse(parts);
       parts = [];
       row = Number(fragment.row);
     }
     parts.push(String(fragment.json));
   }
   if (parts.length) {
-    yield parts.join("");
+    yield parse(parts);
   }
 }

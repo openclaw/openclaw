@@ -22,6 +22,13 @@ const { readRuntime, readCommand, isAbsent } = vi.hoisted(() => ({
   readRuntime: vi.fn<GatewayService["readRuntime"]>(),
   isAbsent: vi.fn<NonNullable<GatewayService["isAbsent"]>>(),
 }));
+const { isDefaultInstallIdentity } = vi.hoisted(() => ({
+  isDefaultInstallIdentity: vi.fn(() => true),
+}));
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
+  isDefaultInstallIdentity,
+}));
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readRuntime, readCommand, isAbsent }),
 }));
@@ -80,6 +87,7 @@ describe("diagnostic Gateway readiness", () => {
     readCommand.mockReset();
     readCommand.mockResolvedValue({ programArguments: ["gateway", "--port", "18789"] });
     isAbsent.mockReset().mockResolvedValue(false);
+    isDefaultInstallIdentity.mockReset().mockReturnValue(true);
     vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
   });
@@ -381,9 +389,14 @@ describe("diagnostic Gateway readiness", () => {
     },
   );
 
-  it.each(["absent", "starting"])(
-    "avoids native manager inspection for an externally managed %s Gateway",
-    async (state) => {
+  it.each(
+    ["external", "isolated"].flatMap((context) =>
+      ["absent", "starting"].map((state) => ({ context, state })),
+    ),
+  )(
+    "avoids unrelated native inspection for a $context $state Gateway",
+    async ({ context, state }) => {
+      isDefaultInstallIdentity.mockReturnValue(context !== "isolated");
       isAbsent.mockRejectedValue(new Error("service manager unavailable"));
       if (state === "starting") {
         readGatewayOwnerLease.mockReturnValue({
@@ -392,8 +405,8 @@ describe("diagnostic Gateway readiness", () => {
           host: "fixture-host",
           startedAt: 1,
           port: 18789,
-          mode: "supervised",
-          supervisor: { kind: "systemd", name: "custom-gateway" },
+          mode: context === "isolated" ? "foreground" : "supervised",
+          supervisor: context === "isolated" ? null : { kind: "systemd", name: "custom-gateway" },
           state: "live",
           expired: false,
         });
@@ -401,7 +414,7 @@ describe("diagnostic Gateway readiness", () => {
 
       const result = await waitForGatewayDiagnosticReadiness({
         config: { gateway: { auth: { mode: "none" } } },
-        serviceMode: "external",
+        serviceMode: context === "external" ? "external" : undefined,
         timeoutMs: 1_250,
       });
 

@@ -328,7 +328,7 @@ export async function resolveCronDeliveryRouteSessionKey(params: {
 // and gateway server-methods/send.ts.
 export async function commitDirectCronOutboundRoute(params: {
   cfg: OpenClawConfig;
-  runSessionKey: string;
+  runSessionKey?: string;
   delivery: SuccessfulCronDeliveryTarget;
   route: OutboundSessionRoute | null;
 }): Promise<void> {

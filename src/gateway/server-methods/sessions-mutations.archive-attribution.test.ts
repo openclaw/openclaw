@@ -80,7 +80,7 @@ async function invokePatchSession(
 
 describe("sessions.patch archive attribution", () => {
   it.each([undefined, 20])(
-    "settles restart residue and preserves receipts and the first archiver (endedAt=%s)",
+    "preserves the interruption outcome, receipts, and first archiver (endedAt=%s)",
     async (endedAt) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const sessionKey = "agent:main:archive-attribution";
@@ -103,10 +103,9 @@ describe("sessions.patch archive attribution", () => {
             sessionId,
             updatedAt: 1,
             pinnedAt: 2,
-            status: "running",
+            status: "interrupted",
             startedAt: 10,
             abortedLastRun: true,
-            lifecycleRunId: "interrupted-run",
             ...retained,
           },
         );
@@ -117,13 +116,13 @@ describe("sessions.patch archive attribution", () => {
         );
         expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
           ...retained,
-          status: "killed",
+          status: "interrupted",
           abortedLastRun: true,
-          endedAt: endedAt ?? expect.any(Number),
           archivedAt: expect.any(Number),
           archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
         });
         expect(loadSessionEntry({ agentId: "main", sessionKey })?.lifecycleRunId).toBeUndefined();
+        expect(loadSessionEntry({ agentId: "main", sessionKey })?.endedAt).toBe(endedAt);
         expect(loadSessionEntry({ agentId: "main", sessionKey })?.runtimeMs).toBe(
           endedAt === undefined ? undefined : 10,
         );
@@ -145,7 +144,7 @@ describe("sessions.patch archive attribution", () => {
         const restored = loadSessionEntry({ agentId: "main", sessionKey });
         expect(restored?.archivedAt).toBeUndefined();
         expect(restored?.archivedBy).toBeUndefined();
-        expect(restored).toMatchObject({ ...retained, status: "killed" });
+        expect(restored).toMatchObject({ ...retained, status: "interrupted" });
 
         expect(await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey })).toEqual([]);
       });

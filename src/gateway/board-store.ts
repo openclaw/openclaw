@@ -2,6 +2,7 @@ import { BoardValidationError } from "../boards/board-layout.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
@@ -41,9 +42,17 @@ function resolveGatewaySessionDatabase(
 export const boardStore = new SqliteBoardStore({
   resolveSession: ({ sessionKey, agentId }) => {
     const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
-    const database = resolveGatewaySessionDatabase(sessionKey, agentId);
+    const incognito = captureIncognitoSessionOperation(scope);
+    const database = incognito
+      ? {
+          agentId: incognito.actor.agentId,
+          path: incognito.actor.path,
+          sessionKey: scope.sessionKey,
+        }
+      : resolveGatewaySessionDatabase(sessionKey, agentId);
     return {
       ...database,
+      incognito,
       assertCurrent() {
         const current = captureGatewaySessionStoreScope(sessionKey, agentId);
         if (

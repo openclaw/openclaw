@@ -11,6 +11,12 @@ import type {
   SystemdServiceReadTarget,
 } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  isSystemdManagerUid,
+  readSystemdBusCall,
+  readSystemdUnitObjectPath,
+  systemdUnitCallArgs,
+} from "./systemd-bus-query.js";
 import { openSystemdBroker, openSystemdMachineBroker } from "./systemd-peer-native.js";
 import { SYSTEMD_DEFAULT_STOP_TIMEOUT_MS } from "./systemd-time-span.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
@@ -29,7 +35,6 @@ export function assertSystemdServiceAccount(user: string) {
 
 const MANAGER = "org.freedesktop.systemd1";
 const MANAGER_PATH = "/org/freedesktop/systemd1";
-const BUS = "org.freedesktop.DBus";
 const unavailable = () =>
   new Error("The systemd service activation identity could not be inspected.");
 
@@ -49,19 +54,14 @@ async function inspectIdentity(
   expected?: SystemdServiceIdentity,
   rootServiceAccount?: string,
 ): Promise<SystemdServiceIdentity> {
-  const call = async (method: string, args: string[], signature: string) => {
-    const reply = await broker.query(
-      ["call", BUS, "/org/freedesktop/DBus", BUS, method, ...args],
-      [signature],
-      deadline,
+  const call = (method: string, args: string[], signature: string) =>
+    readSystemdBusCall(
+      (queryArgs, signatures) => broker.query(queryArgs, signatures, deadline),
+      method,
+      args,
+      signature,
+      unavailable,
     );
-    const value = reply?.[0];
-    if (!Array.isArray(value) || value.length !== 1) {
-      throw unavailable();
-    }
-    const result: unknown = value[0];
-    return result;
-  };
   const busId = await call("GetId", [], "s");
   const managerOwner = await call("GetNameOwner", ["s", MANAGER], "s");
   if (
@@ -73,12 +73,7 @@ async function inspectIdentity(
     throw unavailable();
   }
   const managerUid = await call("GetConnectionUnixUser", ["s", managerOwner], "u");
-  if (
-    typeof managerUid !== "number" ||
-    !Number.isInteger(managerUid) ||
-    managerUid < 0 ||
-    managerUid >= 0xffffffff
-  ) {
+  if (!isSystemdManagerUid(managerUid)) {
     throw unavailable();
   }
   if (
@@ -91,29 +86,13 @@ async function inspectIdentity(
     throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   const unit = await broker.query(
-    [
-      "call",
-      managerOwner,
-      MANAGER_PATH,
-      `${MANAGER}.Manager`,
-      expected ? "LoadUnit" : "GetUnit",
-      "s",
-      target.unitName,
-    ],
+    systemdUnitCallArgs(managerOwner, target.unitName, expected ? "LoadUnit" : "GetUnit"),
     ["o"],
     deadline,
   );
-  const unitPath = unit?.[0];
-  if (
-    !Array.isArray(unitPath) ||
-    unitPath.length !== 1 ||
-    typeof unitPath[0] !== "string" ||
-    !/^\/org\/freedesktop\/systemd1\/unit\/[A-Za-z0-9_]+$/.test(unitPath[0])
-  ) {
-    throw unavailable();
-  }
+  const unitPath = readSystemdUnitObjectPath(unit?.[0], unavailable);
   const definition = await broker.query(
-    ["get-property", managerOwner, unitPath[0], `${MANAGER}.Unit`, "Id", "FragmentPath"],
+    ["get-property", managerOwner, unitPath, `${MANAGER}.Unit`, "Id", "FragmentPath"],
     ["s", "s"],
     deadline,
   );
@@ -124,7 +103,7 @@ async function inspectIdentity(
     throw new ServiceOwnershipRefusalError("systemd-unit-changed");
   }
   const service = await broker.query(
-    ["get-property", managerOwner, unitPath[0], `${MANAGER}.Service`, "User"],
+    ["get-property", managerOwner, unitPath, `${MANAGER}.Service`, "User"],
     ["s"],
     deadline,
   );

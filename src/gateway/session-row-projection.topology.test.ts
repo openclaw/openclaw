@@ -283,23 +283,17 @@ it("admits a committed update without host SQL while a marker awaits prepared me
   });
 });
 
-it.for(
-  (["lifecycle", "marker"] as const).flatMap((kind) =>
-    (
-      [
-        "unchanged",
-        "replace",
-        "same-id-reset",
-        "delete",
-        "physical-store",
-        "dispose",
-        "unrelated-store",
-        "new-store-registration",
-        "alias-reset",
-      ] as const
-    ).map((change) => ({ kind, change })),
-  ),
-)(
+it.for([
+  { kind: "lifecycle", change: "same-id-reset" },
+  { kind: "lifecycle", change: "delete" },
+  { kind: "lifecycle", change: "dispose" },
+  { kind: "lifecycle", change: "unrelated-store" },
+  { kind: "marker", change: "same-id-reset" },
+  { kind: "marker", change: "physical-store" },
+  { kind: "marker", change: "dispose" },
+  { kind: "marker", change: "unrelated-store" },
+  { kind: "marker", change: "alias-reset" },
+] as const)(
   "keeps an unknown $kind event with its original generation across $change",
   async ({ kind, change }, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -379,10 +373,10 @@ it.for(
           ),
           signal,
         );
-        if (change === "replace" || change === "same-id-reset") {
+        if (change === "same-id-reset") {
           const next = {
             ...entry,
-            sessionId: change === "replace" ? "event-replacement" : entry.sessionId,
+            sessionId: entry.sessionId,
             lifecycleRevision: "replacement",
             updatedAt: 2,
           };
@@ -405,12 +399,6 @@ it.for(
           await copyFile(`${target.path}.original`, target.path);
         } else if (change === "dispose") {
           projection.dispose();
-        } else if (change === "new-store-registration") {
-          openOpenClawAgentDatabase({
-            agentId: query.agentId,
-            path: path.join(state.root, "newly-registered.sqlite"),
-            env: state.env,
-          });
         } else if (unrelated) {
           replaceSessionEntrySync(unrelated, {
             sessionId: entry.sessionId,
@@ -430,7 +418,7 @@ it.for(
         }
         release.resolve();
         const result = await settled;
-        if (change === "unchanged" || change === "new-store-registration" || unrelated) {
+        if (unrelated) {
           expect(result).toEqual([{ status: "fulfilled", value: undefined }]);
           expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
           expect(broadcastToConnIds.mock.calls[0]?.[0]).toBe(

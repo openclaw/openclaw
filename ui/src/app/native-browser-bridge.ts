@@ -21,6 +21,7 @@
  * Download saves the current tab through its native host, preserving its browser session;
  * its reply adds cancelled (true when the save panel was dismissed).
  */
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserInspectedNode } from "../components/browser/browser-client.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
@@ -92,18 +93,7 @@ function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 function browserUrl(value: unknown): value is string {
-  if (value === "about:blank") {
-    return true;
-  }
-  if (typeof value !== "string") {
-    return false;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
+  return typeof value === "string" && (value === "about:blank" || isHttpUrl(value));
 }
 function isRect(value: unknown): value is NativeBrowserRect {
   return (

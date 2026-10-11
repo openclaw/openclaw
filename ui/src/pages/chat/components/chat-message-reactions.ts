@@ -36,13 +36,10 @@ export function ownReactionEmoji(
 }
 
 function reactorsLabel(reaction: MessageReactionSummary, userId: string | null | undefined) {
+  const you = t("chat.reactions.you");
   const names = reaction.identities
-    .map((identity) =>
-      identity.id === userId ? t("chat.reactions.you") : (identity.label ?? identity.id),
-    )
-    .toSorted(
-      (a, b) => Number(b === t("chat.reactions.you")) - Number(a === t("chat.reactions.you")),
-    );
+    .map((identity) => (identity.id === userId ? you : (identity.label ?? identity.id)))
+    .toSorted((a, b) => Number(b === you) - Number(a === you));
   const shown = names.slice(0, TOOLTIP_NAME_LIMIT).join(", ");
   const hidden = names.length - Math.min(names.length, TOOLTIP_NAME_LIMIT);
   return t("chat.reactions.reactedWith", {
@@ -230,15 +227,19 @@ class MessageReactionPicker extends OpenClawLitElement {
       margin: 0 3px;
       background: var(--border);
     }
-    .more {
-      width: 30px;
-      height: 30px;
+    .more,
+    .back {
       border-radius: var(--radius-full);
       color: var(--muted);
     }
-    .more:hover {
+    .more:hover,
+    .back:hover {
       color: var(--text);
       background: var(--bg-hover);
+    }
+    .more {
+      width: 30px;
+      height: 30px;
     }
     .more svg {
       width: 16px;
@@ -257,12 +258,6 @@ class MessageReactionPicker extends OpenClawLitElement {
       flex: 0 0 auto;
       width: 28px;
       height: 28px;
-      border-radius: var(--radius-full);
-      color: var(--muted);
-    }
-    .back:hover {
-      color: var(--text);
-      background: var(--bg-hover);
     }
     .back svg {
       width: 14px;

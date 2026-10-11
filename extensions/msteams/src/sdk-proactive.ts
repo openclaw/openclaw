@@ -36,17 +36,7 @@ type MSTeamsSdkReferenceSource = {
   aadObjectId?: string;
 };
 
-type MSTeamsSdkConversationReference = {
-  activityId?: string;
-  channelId: "msteams";
-  serviceUrl: string;
-  bot: MSTeamsAccountRef & { id: string; role: "bot" };
-  conversation: { id: string; conversationType?: string; tenantId?: string };
-  locale?: string;
-  user?: MSTeamsAccountRef;
-  tenantId?: string;
-  aadObjectId?: string;
-};
+type MSTeamsSdkConversationReference = ReturnType<typeof buildSdkConversationReference>;
 
 type MSTeamsActivitiesClient = {
   create(activity: unknown): Promise<{ id?: string }>;
@@ -102,7 +92,7 @@ function normalizeRequiredServiceUrl(ref: MSTeamsSdkReferenceSource): string {
 function buildSdkConversationReference(
   source: MSTeamsSdkReferenceSource,
   options?: MSTeamsProactiveOptions,
-): MSTeamsSdkConversationReference {
+) {
   const bot = source.agent ?? source.bot ?? undefined;
   if (!bot?.id) {
     throw new Error("Invalid stored reference: missing agent.id");
@@ -132,7 +122,7 @@ function buildSdkConversationReference(
 
   return {
     activityId: source.activityId,
-    channelId: "msteams",
+    channelId: "msteams" as const,
     serviceUrl,
     bot: botRef,
     conversation: {

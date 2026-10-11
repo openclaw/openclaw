@@ -1395,10 +1395,18 @@ const enSettings = {
       fonts: {
         ui: "Interface",
         chat: "Chat prose",
+        terminal: "Terminal font",
+        terminalDefault: "JetBrains Mono + Nerd Font symbols",
+        terminalHint:
+          "Bundled JetBrains Mono + Nerd Font symbols by default. To override, enter a monospace font installed on this computer. Missing fonts use the default; saved in this browser.",
+        terminalLigatures:
+          "The terminal currently renders characters individually; programming ligatures are not supported.",
+        terminalInvalid: "Enter one font family name, without quotes, commas, or CSS declarations.",
+        terminalReset: "Use default",
         themeDefault: "Theme default",
         themeFace: "{theme} · {face}",
         system: "System",
-        previewCaption: "OpenClaw · A little clarity goes a long way",
+        brandedPreviewCaption: "{brand} · A little clarity goes a long way",
         previewProse:
           "Good typography makes room for the conversation. Choose a face that feels comfortable to read.",
         previewCode: 'const greeting = "Hello, world!";',
@@ -1448,6 +1456,23 @@ const enSettings = {
       inlineHintBefore: "Click",
       inlineHintAfter:
         "to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
+      tabIcon: {
+        title: "Browser tab icon",
+        source: "Source",
+        sourceLabel: "Browser tab icon source",
+        default: "Default",
+        agent: "Agent avatar",
+        shape: "Shape",
+        shapeLabel: "Agent avatar shape",
+        square: "Square",
+        rounded: "Rounded corners",
+        circle: "Circle",
+        lobsterdex: "Lobsterdex",
+        lobster: "Lobster",
+        empty: "No lobsters unlocked in this browser yet.",
+        localCollection: "Unlocked in this browser. Your collection is not synced.",
+        unavailable: "This lobster is not unlocked in this browser. Using Default until it is.",
+      },
       textSize: "Text size",
     },
     chatPrefs: {

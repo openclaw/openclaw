@@ -47,7 +47,9 @@ import {
   sealUpdateCandidatePluginCodeLinks,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
+import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import {
+  createUpdateStateIoReporter,
   createUpdateStateSnapshotReporter,
   type UpdateStateInspectionProgress,
 } from "./update-candidate-state.diagnostics.js";
@@ -80,6 +82,7 @@ type StateInput = {
   stateDir: string;
   config: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
+  sourceBundledPlugins?: UpdateCandidateBundledSource;
 };
 type CandidateStateDatabase = Pick<
   DB,
@@ -231,12 +234,10 @@ export async function collectStateDatabasePaths(
     queueStateDatabaseSpelling(files, stateRoot, file, owner);
   };
   queue(shared, { role: "global" });
-  let directories: string[] = [];
-  if (options.includeUnconfiguredAgents !== false) {
-    directories = (await listDefaultAgentDatabasePaths(input.stateDir)).map(
-      (entry) => entry.agentId,
-    );
-  }
+  const directories =
+    options.includeUnconfiguredAgents !== false
+      ? (await listDefaultAgentDatabasePaths(input.stateDir)).map((entry) => entry.agentId)
+      : [];
   const configured = Object.entries(input.config.agents?.entries ?? {});
   for (const directory of [input.env?.OPENCLAW_AGENT_DIR, input.env?.PI_CODING_AGENT_DIR]) {
     if (directory?.trim()) {
@@ -296,7 +297,13 @@ export async function readUpdateCandidateStateInventoryInProcess(
   const planPath = path.join(input.targetStateDir, UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME);
   await fs.writeFile(planPath, "", { mode: 0o600, flag: "wx" });
   let progressAt = Date.now();
+  const reportInventoryIo = createUpdateStateIoReporter(
+    input.stateDir,
+    "plugin inventory",
+    input.onProgress,
+  );
   const onProgress = async () => {
+    reportInventoryIo();
     const now = Date.now();
     if (now - progressAt < 1000) {
       return;
@@ -728,9 +735,8 @@ export async function snapshotUpdateCandidateState(
   input.onProgress?.({ phase: "plugin snapshot", path: sourceRoot });
   const pluginPaths = await copyUpdateCandidatePlugins(plugins, {
     ...input,
-    onCodeLink: (fact) => {
-      pluginCodeLinks.push(fact);
-    },
+    onProgress: createUpdateStateIoReporter(sourceRoot, "plugin snapshot", input.onProgress),
+    onCodeLink: (fact) => pluginCodeLinks.push(fact),
   });
   return {
     versions,

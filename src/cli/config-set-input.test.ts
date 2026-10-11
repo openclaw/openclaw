@@ -25,6 +25,31 @@ function withBatchFile<T>(prefix: string, contents: string, run: (batchPath: str
 }
 
 describe("config set input parsing", () => {
+  it.each(["--file", "--batch-file"] as const)(
+    "rejects malformed UTF-8 in %s before parsing a mutation",
+    (sourceLabel) => {
+      const root = tempDirs.make("openclaw-config-invalid-utf8-");
+      const file = path.join(root, "mutation.json5");
+      fs.writeFileSync(file, Buffer.from([0x22, 0xff, 0x22]));
+
+      expect(() => readConfigMutationFileSync(file, sourceLabel)).toThrow(
+        `${sourceLabel} must be valid UTF-8`,
+      );
+    },
+  );
+
+  it("preserves valid Unicode, a literal replacement character and a BOM", () => {
+    const root = tempDirs.make("openclaw-config-valid-utf8-");
+    const file = path.join(root, "mutation.json5");
+    const contents = '\uFEFF[{path:"agents.entries.main.name",value:"中文 😀 \uFFFD"}]';
+    fs.writeFileSync(file, contents, "utf8");
+
+    expect(readConfigMutationFileSync(file, "--batch-file")).toBe(contents);
+    expect(parseBatchSource({ batchFile: file })).toEqual([
+      { path: "agents.entries.main.name", value: "中文 😀 \uFFFD" },
+    ]);
+  });
+
   it("parses absent and strict JSON current-value expectations", () => {
     expect(parseConfigSetCurrentExpectation({ expectCurrentAbsent: true })).toEqual({
       kind: "absent",

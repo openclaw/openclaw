@@ -62,7 +62,6 @@ vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: (sessionKey: string) =>
     sessionKey.split(":subagent:").length - 1,
 }));
-vi.mock("./subagent-announce.js", () => ({ hasUsableSessionEntry: () => true }));
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: (...args: unknown[]) => deliver(...args),
   loadRequesterSessionEntry: () => ({

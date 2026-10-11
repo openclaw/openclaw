@@ -49,7 +49,7 @@ const mocks = vi.hoisted(() => ({
   ),
   stopCandidate: vi.fn(),
   revalidateService: vi.fn<
-    typeof import("./update-command-service-maintenance.js").revalidateManagedGatewayServiceAfterUpdate
+    typeof import("./update-command-service-revalidation.js").revalidateManagedGatewayServiceAfterUpdate
   >(async ({ root }) => ({
     kind: "owned",
     root,
@@ -98,8 +98,8 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
     command: { programArguments: ["node", "/repo/dist/entry.js", "gateway"] },
   }),
 }));
-vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-service-maintenance.js")>()),
+vi.mock("./update-command-service-revalidation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-revalidation.js")>()),
   revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
@@ -108,7 +108,6 @@ vi.mock("./update-command-service.js", async (importOriginal) => ({
   maybeRestartService: mocks.restartCandidate,
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stopCandidate,
   resolveUpdatedGatewayRestartPort: async () => 19101,
-  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),

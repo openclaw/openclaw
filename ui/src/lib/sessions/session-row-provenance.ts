@@ -275,7 +275,6 @@ export function createSessionRowProvenance() {
     const offeredValues: Record<string, unknown> = offered;
     let next = base.key === current.key ? base : { ...base, key: current.key };
     let values: Record<string, unknown> = next;
-    let copied = next !== base;
     // Older donors often leave every receipt intact; copy only changed field metadata.
     let fields: Map<string, FieldObservation> | undefined;
     const keys = new Set([
@@ -308,10 +307,9 @@ export function createSessionRowProvenance() {
       ) {
         continue;
       }
-      if (!copied) {
+      if (next === base) {
         next = { ...base };
         values = next;
-        copied = true;
       }
       if (Object.hasOwn(source, field)) {
         values[field] = source[field];
@@ -321,8 +319,7 @@ export function createSessionRowProvenance() {
     }
     const nextMetadata = fields ? { ...baseMetadata, fields } : baseMetadata;
     if (next === current || isShallowEqualSessionRow(next, current)) {
-      observationsByRow.set(current, nextMetadata);
-      return current;
+      next = current;
     }
     observationsByRow.set(next, nextMetadata);
     return next;

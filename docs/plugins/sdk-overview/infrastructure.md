@@ -33,7 +33,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
-| `api.registerAutoEnableProbe(probe)`              | Config probe that can auto-enable this plugin                          |
+| `api.registerAutoEnableProbe(probe)`              | Config check that can auto-enable this plugin                          |
 | `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
@@ -190,6 +190,18 @@ operation retains its own lifetime. Internal `openclaw.worker.task` diagnostics
 include `hostWaitMs` alongside the existing timing fields; host wait is included
 in `runMs`, not added to it. This field is diagnostic data, not a public config
 option.
+
+The task's `timeoutMs` includes host callbacks. Expiry aborts the callback's
+`signal` and retires the worker; a host response can shorten the remaining
+deadline but cannot renew it. An owner that already enforces a separate,
+approval-aware host deadline can set `hostTimeout: "owner"` to suspend the pool
+clock during host callbacks and supply its remaining budget in the response.
+Accepted host effects still need their owner's settlement and cleanup receipts.
+Forward the callback signal into queued reads, writes, locks, and network requests;
+checking it only after an `await` leaves canceled work in the queue. A host-wait
+timeout emits `WORKER_HOST_CALLBACK_TIMEOUT` with the callback's operation name
+(a string request or its `kind`/`type` field), without logging its payload.
+Requests without a label identify their worker entrypoint instead.
 
 Pass static Node.js Worker settings in `workerOptions`. For per-worker settings,
 `prepareWorker()` runs once per Worker creation attempt and returns
@@ -373,12 +385,12 @@ verification and bounded body read.
 
 For bundled callback setup and Doctor guidance, `classifyGatewayProbePath(pathname)`
 from the private `openclaw/plugin-sdk/gateway-config-runtime` facade identifies
-Gateway probe paths without loading webhook execution code. This facade is not
+Gateway check paths without loading webhook execution code. This facade is not
 part of the third-party SDK. Normalize callback input
 through `new URL(rawPath, "http://localhost").pathname` first. Results `live`,
-`ready`, and `startup` identify exact paths owned by probes on the Gateway port;
+`ready`, and `startup` identify exact paths owned by checks on the Gateway port;
 choose a different webhook path. Results `namespace` and `outside` do not identify
-an exact probe route. The same private facade exports `resolvePluginRoutePathContext`
+an exact check route. The same private facade exports `resolvePluginRoutePathContext`
 and `isProtectedPluginRoutePathFromContext` for canonical protected-path checks.
 If the callback falls under a protected namespace, choose the channel's safe default
 path before moving the external callback or reverse proxy to the Gateway port.
@@ -403,7 +415,7 @@ need an unambiguous account path or authentication identity.
 The optional registration metadata `health: { path, contentType? }` preserves a
 shipped exact raw health target: `200 ok` for ordinary HTTP methods, with Node's
 HEAD behavior and only the optional Content-Type. It applies only on the legacy
-port, including during route handoff, and does not expose Gateway probe details.
+port, including during route handoff, and does not expose Gateway check details.
 Legacy ports retain native Node expectation handling, Upgrade fallback, header
 limits and timeout defaults. A shipped timeout profile can be preserved with
 `timeouts: { headers, request, socket }` in milliseconds. These are plugin

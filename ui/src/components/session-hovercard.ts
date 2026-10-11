@@ -94,16 +94,16 @@ function renderDiffStats(item: { additions?: number; deletions?: number }) {
 function sessionAgeBucket(diffMs: number): { value: number; unit: SessionAgeUnit } {
   const days = Math.abs(diffMs) / (24 * 60 * 60_000);
   if (days >= 365) {
-    return { value: Math.max(1, Math.round(days / 365)), unit: "year" };
+    return { value: Math.round(days / 365), unit: "year" };
   }
   if (days >= 28) {
-    return { value: Math.max(1, Math.round(days / 30)), unit: "month" };
+    return { value: Math.round(days / 30), unit: "month" };
   }
   if (days >= 7) {
-    return { value: Math.max(1, Math.round(days / 7)), unit: "week" };
+    return { value: Math.round(days / 7), unit: "week" };
   }
   if (days >= 1) {
-    return { value: Math.max(1, Math.round(days)), unit: "day" };
+    return { value: Math.round(days), unit: "day" };
   }
   return bucketRelativeTimeMs(Math.abs(diffMs));
 }

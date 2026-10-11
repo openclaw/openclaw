@@ -381,7 +381,6 @@ export async function resolveSessionToolAccess(params: {
   return initial.allowed ? finish(false) : deny(initial);
 }
 
-/** Resolves the requester context used to filter sandboxed session-tool access. */
 export function resolveSandboxedSessionToolContext(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;

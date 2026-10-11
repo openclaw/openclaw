@@ -18,7 +18,6 @@ vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstal
 const runTui = vi.hoisted(() => vi.fn<(options: unknown) => Promise<void>>(async () => {}));
 const setupCleanupExitTimer = vi.hoisted(() => ({ unref: vi.fn() }));
 const scheduleProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn(() => setupCleanupExitTimer));
-const cancelProcessExitAfterTuiReturn = vi.hoisted(() => vi.fn());
 const resolveTuiShutdownHardExitMs = vi.hoisted(() => vi.fn(() => 122_000));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const probeGatewayReachable = vi.hoisted(() =>
@@ -256,8 +255,8 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState,
 }));
 
+// mock-isolation: Onboarding handoff fixtures isolate the interactive terminal graph and process-exit timers.
 vi.mock("../tui/tui.js", () => ({
-  cancelProcessExitAfterTuiReturn,
   resolveTuiShutdownHardExitMs,
   runTui,
   scheduleProcessExitAfterTuiReturn,
@@ -357,7 +356,6 @@ describe("finalizeSetupWizard", () => {
     setupCleanupExitTimer.unref.mockClear();
     scheduleProcessExitAfterTuiReturn.mockReset();
     scheduleProcessExitAfterTuiReturn.mockReturnValue(setupCleanupExitTimer);
-    cancelProcessExitAfterTuiReturn.mockClear();
     resolveTuiShutdownHardExitMs.mockClear();
     restoreTerminalState.mockClear();
     probeGatewayReachable.mockReset();

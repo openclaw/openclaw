@@ -435,7 +435,7 @@ export function aggregateDays(options: {
         members.set(login, member);
       }
       sumGithub(member.github, source.github);
-      member.github.items.push(...source.github.items.map(evidenceItem));
+      member.github.items.push(...source.github.items);
       member.discord.total += source.discord.total;
       sumMap(member.discord.channels, source.discord.channels);
       member.discord.excerpts.push(...structuredClone(source.discord.excerpts));

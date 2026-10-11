@@ -5,6 +5,7 @@ import type {
   SessionPendingInputRow,
   readSessionInputCompletion,
 } from "./session-accessor.sqlite-pending-inputs.js";
+import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 
 type PendingInputIdentity = {
   sessionKey: string;
@@ -40,6 +41,7 @@ export type PendingInputSnapshot = {
 };
 
 type PendingInputSettlementIdentity = PendingInputIdentity & {
+  authorityAgentId?: string;
   runId: string;
   requestHash: string;
   lifecycleGeneration: string;
@@ -70,12 +72,14 @@ export type PendingInputMutationReceipt = PendingInputIdentity & {
   requestHash: string;
   lifecycleGeneration: string;
   outcome?: AgentRunTerminalOutcome;
+  withdrawnInputId?: string;
 };
 
 export type PendingInputCustodyGrant = {
   kind: "pending-input-settlement-custody";
   candidate?: SessionPendingInputRow;
   receipt: PendingInputMutationReceipt;
+  authority?: SessionPendingInputAuthorityFacts;
 };
 
 /** Only the paired kernel's receipt for this exact accepted input may settle its custody. */

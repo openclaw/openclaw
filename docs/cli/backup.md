@@ -512,7 +512,7 @@ attempt and success per backup kind, target, and offsite namespace from the whol
 configured backup schedules with their next run, and the configured storage
 locations. Local archives and SQLite snapshots without a named target use one
 status group per kind, displaying the newest attempt's archive path.
-Listing configuration does not probe storage. The Control UI's
+Listing configuration does not check storage. The Control UI's
 Backups section on the Systems landing and Gateway host views uses this status and provides a **Check** action per location
 through `storage.locations.probe`.
 Doctor uses the same retained history, so per-target health survives more than

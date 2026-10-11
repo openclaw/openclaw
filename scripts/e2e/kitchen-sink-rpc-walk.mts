@@ -195,28 +195,15 @@ const commandParentSignals: NodeJS.Signals[] =
 let commandShutdownPromise: Promise<void[]> | undefined;
 let commandSignalHandlersInstalled = false;
 
-function installCommandSignalHandlers() {
-  if (commandSignalHandlersInstalled) {
+function setCommandSignalHandlersInstalled(installed: boolean) {
+  if (commandSignalHandlersInstalled === installed) {
     return;
   }
-  commandSignalHandlersInstalled = true;
+  commandSignalHandlersInstalled = installed;
   for (const signal of commandParentSignals) {
     const handler = commandSignalHandlers.get(signal);
     if (handler) {
-      process.on(signal, handler);
-    }
-  }
-}
-
-function removeCommandSignalHandlers() {
-  if (!commandSignalHandlersInstalled) {
-    return;
-  }
-  commandSignalHandlersInstalled = false;
-  for (const signal of commandParentSignals) {
-    const handler = commandSignalHandlers.get(signal);
-    if (handler) {
-      process.off(signal, handler);
+      process[installed ? "on" : "off"](signal, handler);
     }
   }
 }
@@ -309,62 +296,42 @@ export function readPositiveTimerMs(raw: string | undefined, fallback: number, l
 }
 
 export function resolveKitchenSinkRpcConfig(env: ProcessEnv = process.env) {
-  const commandTimeoutMs = readPositiveTimerMs(
-    env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS,
-    DEFAULT_COMMAND_TIMEOUT_MS,
+  const integer = (key: string, fallback: number) => readPositiveInt(env[key], fallback, key);
+  const timer = (key: string, fallback: number) => readPositiveTimerMs(env[key], fallback, key);
+  const commandTimeoutMs = timer(
     "OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS",
+    DEFAULT_COMMAND_TIMEOUT_MS,
   );
   return {
-    commandMaxRssMiB: readPositiveInt(
-      env.OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB,
-      DEFAULT_MAX_COMMAND_RSS_MIB,
+    commandMaxRssMiB: integer(
       "OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB",
+      DEFAULT_MAX_COMMAND_RSS_MIB,
     ),
     commandTimeoutMs,
-    fetchBodyMaxBytes: readPositiveInt(
-      env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES,
-      DEFAULT_FETCH_BODY_MAX_BYTES,
+    fetchBodyMaxBytes: integer(
       "OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES",
+      DEFAULT_FETCH_BODY_MAX_BYTES,
     ),
-    fetchTimeoutMs: readPositiveTimerMs(
-      env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS,
-      DEFAULT_FETCH_TIMEOUT_MS,
-      "OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS",
-    ),
-    installTimeoutMs: readPositiveTimerMs(
-      env.OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS,
-      Math.max(commandTimeoutMs, DEFAULT_INSTALL_TIMEOUT_MS),
+    fetchTimeoutMs: timer("OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS", DEFAULT_FETCH_TIMEOUT_MS),
+    installTimeoutMs: timer(
       "OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS",
+      Math.max(commandTimeoutMs, DEFAULT_INSTALL_TIMEOUT_MS),
     ),
-    maxRssMiB: readPositiveInt(
-      env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB,
-      DEFAULT_MAX_RSS_MIB,
-      "OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB",
-    ),
-    outputCaptureChars: readPositiveInt(
-      env.OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS,
-      DEFAULT_OUTPUT_CAPTURE_CHARS,
+    maxRssMiB: integer("OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB", DEFAULT_MAX_RSS_MIB),
+    outputCaptureChars: integer(
       "OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS",
+      DEFAULT_OUTPUT_CAPTURE_CHARS,
     ),
-    readyTimeoutMs: readPositiveTimerMs(
-      env.OPENCLAW_KITCHEN_SINK_RPC_READY_MS,
-      DEFAULT_READY_TIMEOUT_MS,
-      "OPENCLAW_KITCHEN_SINK_RPC_READY_MS",
-    ),
-    rpcTimeoutMs: readPositiveTimerMs(
-      env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS,
-      DEFAULT_RPC_TIMEOUT_MS,
-      "OPENCLAW_KITCHEN_SINK_RPC_CALL_MS",
-    ),
+    readyTimeoutMs: timer("OPENCLAW_KITCHEN_SINK_RPC_READY_MS", DEFAULT_READY_TIMEOUT_MS),
+    rpcTimeoutMs: timer("OPENCLAW_KITCHEN_SINK_RPC_CALL_MS", DEFAULT_RPC_TIMEOUT_MS),
   };
 }
 
-async function findAvailableLoopbackPort(options: { createServer?: typeof net.createServer } = {}) {
-  const createServer = options.createServer ?? (() => net.createServer());
-  const server = createServer();
+async function findAvailableLoopbackPort() {
+  const server = net.createServer();
   return await new Promise<number>((resolve, reject) => {
     const fail = (error: unknown) => {
-      server.close?.(() => {});
+      server.close(() => {});
       const reservationError: Error = coerceKitchenSinkError(
         error,
         "Unable to reserve Kitchen Sink RPC loopback port",
@@ -373,7 +340,7 @@ async function findAvailableLoopbackPort(options: { createServer?: typeof net.cr
     };
     server.once("error", fail);
     server.listen(0, "127.0.0.1", () => {
-      server.off?.("error", fail);
+      server.off("error", fail);
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
       server.close((error) => {
@@ -530,7 +497,7 @@ export function runCommand(
       detached: spawnOptions.detached ?? process.platform !== "win32",
     });
     activeCommandChildren.add(child);
-    installCommandSignalHandlers();
+    setCommandSignalHandlersInstalled(true);
     const startedAt = Date.now();
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
@@ -693,7 +660,7 @@ async function finishTimedOutCommandProcessTree(
 function releaseCommandChild(child: CommandChild) {
   activeCommandChildren.delete(child);
   if (activeCommandChildren.size === 0 && !commandShutdownPromise) {
-    removeCommandSignalHandlers();
+    setCommandSignalHandlersInstalled(false);
   }
 }
 
@@ -717,7 +684,7 @@ async function shutdownActiveCommands(signal: NodeJS.Signals) {
       }),
     ),
   ).finally(() => {
-    removeCommandSignalHandlers();
+    setCommandSignalHandlersInstalled(false);
     process.kill(process.pid, signal);
   });
   return commandShutdownPromise;
@@ -794,16 +761,11 @@ export function signalProcessGroup(
     useProcessGroup?: boolean;
   } = {},
 ) {
-  const {
-    platform = process.platform,
-    runTaskkill = childProcess.spawnSync,
-    useProcessGroup = platform !== "win32",
-  } = options;
   signalChildProcessTree(child, signal, {
-    killProcess: (pid, childSignal) => process.kill(pid, childSignal),
-    platform,
-    runTaskkill,
-    useProcessGroup,
+    platform: options.platform,
+    runTaskkill: options.runTaskkill,
+    useProcessGroup: options.useProcessGroup,
+    killProcess: defaultKillProcess,
   });
 }
 
@@ -828,12 +790,8 @@ async function runOpenClaw(
   return runCommand(command.command, command.args, {
     ...command.options,
     env,
-    resourceLabel: options.resourceLabel,
-    resourceSampleIntervalMs: options.resourceSampleIntervalMs,
-    resourceSampleOptions: options.resourceSampleOptions,
-    resourceSamples: options.resourceSamples,
+    ...options,
     outputCaptureChars: config.outputCaptureChars,
-    requireResourceSample: options.requireResourceSample,
     timeoutMs: options.timeoutMs ?? config.commandTimeoutMs,
   });
 }
@@ -896,7 +854,7 @@ export function parseGatewayCliRequestFailure(error: unknown): GatewayRequestErr
   } catch {
     return null;
   }
-  return payload?.ok === false ? createGatewayClientRequestError(payload.error) : null;
+  return payload.ok === false ? createGatewayClientRequestError(payload.error) : null;
 }
 
 function createGatewayClientRequestError(requestError: unknown): GatewayRequestError | null {
@@ -1175,7 +1133,7 @@ export function usesBuiltOpenClawEntry(
   cwd = process.cwd(),
   env: ProcessEnv = process.env,
 ) {
-  if (runner?.pnpm || !runner?.baseArgs?.[0]) {
+  if (runner.pnpm || !runner.baseArgs[0]) {
     return false;
   }
   const entry = runner.baseArgs[0];
@@ -1320,7 +1278,7 @@ export async function fetchJson(url: string | URL, options: FetchJsonOptions = {
 }
 
 function getExternalAbortReason(signal: AbortSignal) {
-  return signal?.reason instanceof Error ? signal.reason : new Error("fetch aborted");
+  return signal.reason instanceof Error ? signal.reason : new Error("fetch aborted");
 }
 
 function createExternalAbortError(signal: AbortSignal) {
@@ -1536,17 +1494,12 @@ export function signalGateway(
     useProcessGroup?: boolean;
   } = {},
 ) {
-  const {
-    platform = process.platform,
-    runTaskkill = childProcess.spawnSync,
-    useProcessGroup = platform !== "win32",
-  } = options;
   return signalChildProcessTree(child, signal, {
+    platform: options.platform,
+    runTaskkill: options.runTaskkill,
+    useProcessGroup: options.useProcessGroup,
     groupEsrchMeansExited: true,
     killProcess,
-    platform,
-    runTaskkill,
-    useProcessGroup,
   });
 }
 
@@ -1556,17 +1509,17 @@ function signalChildProcessTree(
   options: {
     groupEsrchMeansExited?: boolean;
     killProcess: KillProcess;
-    platform: NodeJS.Platform;
-    runTaskkill: TaskkillRunner;
-    useProcessGroup: boolean;
+    platform?: NodeJS.Platform;
+    runTaskkill?: TaskkillRunner;
+    useProcessGroup?: boolean;
   },
 ) {
   const {
     groupEsrchMeansExited = false,
     killProcess,
-    platform,
-    runTaskkill,
-    useProcessGroup,
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
   } = options;
   if (useProcessGroup && typeof child.pid === "number") {
     try {
@@ -1838,12 +1791,16 @@ export function assertTtsProviderCoverage(payload: unknown, surface: "providers"
   }
 }
 
-export function assertKitchenSinkSearchInvokeResult(payload: unknown) {
+function kitchenSinkToolOutput(payload: unknown, kind: "search" | "text" | "image job") {
   const candidate = asRecord(payload);
   if (candidate.ok !== true || candidate.source !== "plugin") {
-    throw new Error(`Kitchen Sink search tool invoke failed: ${boundedJsonPreview(payload)}`);
+    throw new Error(`Kitchen Sink ${kind} tool invoke failed: ${boundedJsonPreview(payload)}`);
   }
-  const output = assertObjectPayload(candidate.output, "Kitchen Sink search tool output");
+  return assertObjectPayload(candidate.output, `Kitchen Sink ${kind} tool output`);
+}
+
+export function assertKitchenSinkSearchInvokeResult(payload: unknown) {
+  const output = kitchenSinkToolOutput(payload, "search");
   const results = Array.isArray(output.results) ? output.results : [];
   const hasFixture = results.some(
     (entry) => asRecord(entry).title === "Kitchen Sink image fixture",
@@ -1856,11 +1813,7 @@ export function assertKitchenSinkSearchInvokeResult(payload: unknown) {
 }
 
 export function assertKitchenSinkTextInvokeResult(payload: unknown) {
-  const candidate = asRecord(payload);
-  if (candidate.ok !== true || candidate.source !== "plugin") {
-    throw new Error(`Kitchen Sink text tool invoke failed: ${boundedJsonPreview(payload)}`);
-  }
-  const output = assertObjectPayload(candidate.output, "Kitchen Sink text tool output");
+  const output = kitchenSinkToolOutput(payload, "text");
   if (
     output.route !== "tool:kitchen_sink_text" ||
     typeof output.text !== "string" ||
@@ -1873,11 +1826,7 @@ export function assertKitchenSinkTextInvokeResult(payload: unknown) {
 }
 
 export function assertKitchenSinkImageJobInvokeResult(payload: unknown) {
-  const candidate = asRecord(payload);
-  if (candidate.ok !== true || candidate.source !== "plugin") {
-    throw new Error(`Kitchen Sink image job tool invoke failed: ${boundedJsonPreview(payload)}`);
-  }
-  const output = assertObjectPayload(candidate.output, "Kitchen Sink image job tool output");
+  const output = kitchenSinkToolOutput(payload, "image job");
   const image = assertObjectPayload(output.image, "Kitchen Sink image job image");
   const imageMetadata = assertObjectPayload(
     image.metadata,
@@ -2048,13 +1997,11 @@ export function assertDiagnosticStabilityClean(payload: unknown) {
     problems.push(`dropped=${candidate.dropped}`);
   }
   const payloadLarge = asRecord(asRecord(candidate.summary).payloadLarge);
-  if (payloadLarge) {
-    if (typeof payloadLarge.rejected === "number" && payloadLarge.rejected > 0) {
-      problems.push(`payload.large rejected=${payloadLarge.rejected}`);
-    }
-    if (typeof payloadLarge.truncated === "number" && payloadLarge.truncated > 0) {
-      problems.push(`payload.large truncated=${payloadLarge.truncated}`);
-    }
+  if (typeof payloadLarge.rejected === "number" && payloadLarge.rejected > 0) {
+    problems.push(`payload.large rejected=${payloadLarge.rejected}`);
+  }
+  if (typeof payloadLarge.truncated === "number" && payloadLarge.truncated > 0) {
+    problems.push(`payload.large truncated=${payloadLarge.truncated}`);
   }
   const asyncDropCount = countDiagnosticEvents(payload, "diagnostic.async_queue.dropped");
   if (asyncDropCount > 0) {
@@ -2192,33 +2139,17 @@ async function samplePosixProcess(
   const needles = commandLineNeedles
     .map((needle) => needle.trim())
     .filter((needle) => needle.length > 0);
-  if (needles.length > 0) {
-    return samplePosixProcessTree(pid, run, needles);
-  }
-  return samplePosixProcessWithDescendants(pid, run);
-}
-
-async function samplePosixProcessWithDescendants(pid: number, run: CommandRunner) {
-  const snapshot = await readPosixProcessTreeSnapshot(pid, run);
-  if (!snapshot) {
-    return null;
-  }
-  return formatPosixProcessTreeSample(snapshot.rootRow, snapshot.rootTreeRows);
-}
-
-async function samplePosixProcessTree(
-  pid: number,
-  run: CommandRunner,
-  commandLineNeedles: string[],
-) {
   const snapshot = await readPosixProcessTreeSnapshot(pid, run);
   if (!snapshot) {
     return null;
   }
   const { rootRow, rootTreeRows, rows } = snapshot;
+  if (needles.length === 0) {
+    return formatPosixProcessTreeSample(rootRow, rootTreeRows);
+  }
   const descendants = rootTreeRows.filter((row) => row.processId !== rootRow.processId);
   const matchesCommandNeedles = (row: PosixProcessRow) =>
-    commandLineNeedles.every((needle) => row.command.toLowerCase().includes(needle.toLowerCase()));
+    needles.every((needle) => row.command.toLowerCase().includes(needle.toLowerCase()));
   const commandMatches = descendants.filter(matchesCommandNeedles);
   const rootCommandMatches = matchesCommandNeedles(rootRow) ? [rootRow] : [];
   const gatewayTitleMatches = descendants.filter((row) =>
@@ -2248,9 +2179,6 @@ async function readPosixProcessTreeSnapshot(pid: number, run: CommandRunner) {
       timeoutMs: 5000,
     });
     const snapshot = parsePosixProcessRows(stdout);
-    if (!snapshot) {
-      return null;
-    }
     const { malformedRows, rows } = snapshot;
     const rootTreeRows = collectPosixProcessTree(rows, safePid);
     const rootRow = rootTreeRows.find((row) => row.processId === safePid);
@@ -2285,13 +2213,7 @@ function parsePosixProcessRows(stdout: string) {
     const parentProcessId = parseStrictUnsignedInteger(ppidRaw);
     const rssKb = parsePositivePosixProcessToken(rssKbRaw);
     const cpuPercent = parseStrictNonNegativeDecimal(cpuRaw);
-    if (
-      !Number.isInteger(processId) ||
-      !Number.isInteger(parentProcessId) ||
-      processId === null ||
-      parentProcessId === null ||
-      rssKb === null
-    ) {
+    if (processId === null || parentProcessId === null || rssKb === null) {
       malformedRows.push({
         pidRaw,
         ppidRaw,
@@ -2406,23 +2328,16 @@ function selectPeakRssProcess(rows: PosixProcessRow[]) {
   );
 }
 
-function formatPosixProcessSample(row: PosixProcessRow): ProcessSample {
-  return {
-    rssMiB: Math.round((row.rssKb / 1024) * 10) / 10,
-    aggregateRssMiB: Math.round((row.rssKb / 1024) * 10) / 10,
-    cpuPercent: row.cpuPercent,
-    processId: row.processId,
-  };
-}
-
 function formatPosixProcessTreeSample(
   selected: PosixProcessRow,
   rows: PosixProcessRow[],
 ): ProcessSample {
   const aggregateRssKb = rows.reduce((sum, row) => sum + row.rssKb, 0);
   return {
-    ...formatPosixProcessSample(selected),
+    rssMiB: Math.round((selected.rssKb / 1024) * 10) / 10,
     aggregateRssMiB: Math.round((aggregateRssKb / 1024) * 10) / 10,
+    cpuPercent: selected.cpuPercent,
+    processId: selected.processId,
   };
 }
 
@@ -2601,14 +2516,11 @@ async function sampleWindowsProcess(
 
 function assertProcessResourceCeiling(
   sample: ProcessSample | null,
-  options: { label: string; maxRssMiB: number; requireSample?: boolean },
+  options: { label: string; maxRssMiB: number },
 ) {
-  const { label, maxRssMiB, requireSample = true } = options;
+  const { label, maxRssMiB } = options;
   if (!sample) {
-    if (requireSample) {
-      throw new Error(`${label} RSS sample was not captured`);
-    }
-    return;
+    throw new Error(`${label} RSS sample was not captured`);
   }
   if (!Number.isFinite(sample.rssMiB) || sample.rssMiB <= 0) {
     throw new Error(`${label} RSS sample was invalid: ${String(sample.rssMiB)} MiB`);
@@ -2741,8 +2653,8 @@ function assertNoErrorLogs(logPath: string) {
   }
 }
 
-function tailFile(file: string, maxBytes = LOG_TAIL_BYTES) {
-  return tailText(readTextFileTail(file, Math.max(1, maxBytes)));
+function tailFile(file: string) {
+  return tailText(readTextFileTail(file, LOG_TAIL_BYTES));
 }
 
 function tailText(text: string) {
@@ -3401,7 +3313,7 @@ async function main(resourceReport?: string) {
     });
     const stability = await retryRpcCall("diagnostics.stability", {}, rpcOptions);
     assertDiagnosticStabilityClean(stability);
-    await settlePendingSample(sampleInFlight);
+    await Promise.resolve(sampleInFlight).catch(() => {});
     const finalSample = await sampleGateway();
     assertResourceCeiling(finalSample);
     const peakSample = summarizeProcessSamples(processSamples);
@@ -3443,7 +3355,7 @@ async function main(resourceReport?: string) {
     }
     if (!failed && !keepTmp) {
       await cleanupKitchenSinkEnv(root, { throwOnFailure: true });
-    } else if (failed || keepTmp) {
+    } else {
       console.error(`Kitchen Sink RPC temp root preserved: ${root}`);
     }
   }
@@ -3477,8 +3389,4 @@ function isCallGatewayModule(
 
 function isGatewayChild(value: unknown): value is GatewayChild {
   return typeof asRecord(value).kill === "function";
-}
-
-async function settlePendingSample(pending: Promise<unknown> | null) {
-  await pending?.catch(() => {});
 }

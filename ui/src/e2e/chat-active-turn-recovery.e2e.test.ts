@@ -276,6 +276,7 @@ async function assertSteeredRecoveryOrder(
     const steer = bubbleWithText(expected.steer);
     const tool = element.querySelector<HTMLElement>(".chat-tool-row--running");
     const afterSteer = bubbleWithText(expected.afterSteer);
+    const latest = bubbleWithText(expected.latest);
     const precedes = (upper: Element | undefined | null, lower: Element | undefined | null) =>
       Boolean(
         upper && lower && upper.compareDocumentPosition(lower) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -283,15 +284,19 @@ async function assertSteeredRecoveryOrder(
     return {
       originalBeforeCommentary: precedes(original, beforeSteer),
       commentaryBeforeSteer: precedes(beforeSteer, steer),
-      steerBeforeTool: precedes(steer, tool),
+      toolBeforeSteer: precedes(tool, steer),
       toolBeforeLaterCommentary: precedes(tool, afterSteer),
+      laterCommentaryBeforeLatest: precedes(afterSteer, latest),
+      latestBeforeSteer: precedes(latest, steer),
     };
   }, texts);
   expect(order).toEqual({
     originalBeforeCommentary: true,
     commentaryBeforeSteer: true,
-    steerBeforeTool: true,
+    toolBeforeSteer: true,
     toolBeforeLaterCommentary: true,
+    laterCommentaryBeforeLatest: true,
+    latestBeforeSteer: true,
   });
 }
 
@@ -601,7 +606,7 @@ suite.define(() => {
     }
   });
 
-  it("preserves pre-steer commentary order through a full reload", async () => {
+  it("keeps all run commentary and tools before its steer through a full reload", async () => {
     const runId = "run-steer-refresh";
     const texts = {
       original: "Review the fixture.",
@@ -629,6 +634,7 @@ suite.define(() => {
             id: "fixture-steering-user",
             idempotencyKey: "fixture-steer:user",
             seq: 2,
+            steerTargetRunId: runId,
           },
           content: [{ text: texts.steer, type: "text" }],
           role: "user",

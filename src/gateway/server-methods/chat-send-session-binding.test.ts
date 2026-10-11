@@ -212,12 +212,12 @@ it.each(admissionScenarios)(
         owned = observeDispatch.mock.calls.at(-1)?.[0];
         const prepared = options.replyOptions?.onSessionPrepared;
         const runStarted = options.replyOptions?.onAgentRunStart;
-        if (!owned || !prepared || !runStarted || !owned.skillLibraryAuthoring) {
+        const capability = options.replyOptions?.skillLibraryAuthoring;
+        if (!owned || !prepared || !runStarted || !capability) {
           throw new Error("chat.send did not hand off its prepared-session callback");
         }
         // Initial resolution needs detached entries; later admission must not clone unrelated rows.
         expect.soft(unrelatedCloneCount()).toBeLessThanOrEqual(1);
-        const capability = owned.skillLibraryAuthoring;
         const admittedContext = await namespaceRun.admit("embedded");
         capability.bind(admittedContext);
         const caller = createAdmittedGatewayToolCallerIdentity({

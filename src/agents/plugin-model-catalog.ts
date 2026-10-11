@@ -144,27 +144,21 @@ function readPersistedPluginModelCatalogMigrationPayloads(
 }
 
 /** Doctor keeps its synchronous sidecar-claim and migration transaction. */
-function replacePersistedPluginModelCatalogEntries(params: {
-  agentDir: string;
-  planned: ReadonlyMap<string, string>;
-  migrationPayloads?: ReadonlyMap<string, string>;
-  deleteMissing?: boolean;
-}): boolean {
-  if (
-    params.planned.size === 0 &&
-    (params.deleteMissing === false ||
-      readPersistedPluginModelCatalogs(params.agentDir).length === 0)
-  ) {
-    return false;
-  }
+function replacePersistedPluginModelCatalogEntries(
+  agentDir: string,
+  catalog: PersistedPluginModelCatalog,
+): boolean {
+  const migrationPayloads = new Map([[catalog.pluginId, catalog.contents]]);
   return runOpenClawAgentWriteTransaction(
     ({ db }) =>
       replacePluginModelCatalogEntriesInDatabase({
-        ...params,
         database: db,
+        planned: migrationPayloads,
+        migrationPayloads,
+        deleteMissing: false,
         updatedAt: Date.now(),
       }),
-    pluginModelCatalogDatabaseOptions(params.agentDir),
+    pluginModelCatalogDatabaseOptions(agentDir),
     { operationLabel: "plugin-model-catalog.migrate" },
   );
 }
@@ -489,15 +483,9 @@ export function migrateLegacyPluginModelCatalogs(params: {
       } else {
         try {
           if (readLegacyPluginModelCatalog(catalog.pathname) === catalog.contents) {
-            const migrationPayloads = new Map([[catalog.pluginId, catalog.contents]]);
             // A directory can permit reads while forbidding rename. Publish the
             // verified credential, retain its source, and retry cleanup later.
-            replacePersistedPluginModelCatalogEntries({
-              agentDir,
-              planned: migrationPayloads,
-              migrationPayloads,
-              deleteMissing: false,
-            });
+            replacePersistedPluginModelCatalogEntries(agentDir, catalog);
           }
         } catch {
           // Preserve the original source and surface its migration warning.
@@ -511,15 +499,9 @@ export function migrateLegacyPluginModelCatalogs(params: {
       if (readLegacyPluginModelCatalog(claimPath) !== catalog.contents) {
         throw new Error("legacy provider catalog changed before migration could claim it");
       }
-      const migrationPayloads = new Map([[catalog.pluginId, catalog.contents]]);
       // Never publish scanned bytes until the exact source inode is claimed.
       // Catalog and temporary credential recovery commit in one transaction.
-      replacePersistedPluginModelCatalogEntries({
-        agentDir,
-        planned: migrationPayloads,
-        migrationPayloads,
-        deleteMissing: false,
-      });
+      replacePersistedPluginModelCatalogEntries(agentDir, catalog);
       if (!hasCommittedMigratedPluginModelCatalog(agentDir, catalog.pluginId, catalog.contents)) {
         throw new Error("committed provider catalog changed before migration could remove it");
       }

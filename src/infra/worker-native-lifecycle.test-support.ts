@@ -628,6 +628,7 @@ assert.ok(
     ending === "resource-auto-close-failure" ||
     ending === "resource-auto-close-refusal" ||
     ending === "resource-cold-supervisor-loss" ||
+    ending === "resource-cold-skewed-clock" ||
     ending === "resource-close-supervisor-loss" ||
     ending === "resource-late-attachment" ||
     ending === "resource-owner-reply-loss" ||
@@ -646,8 +647,8 @@ if (ending === "generation") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil);
 } else if (ending === "resource-idle-broker") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil, false, false, "idle-broker");
-} else if (ending === "resource-cold-supervisor-loss") {
-  await runNativeColdRecovery(directory, serviceNativeUntil);
+} else if (ending === "resource-cold-supervisor-loss" || ending === "resource-cold-skewed-clock") {
+  await runNativeColdRecovery(directory, serviceNativeUntil, ending);
 } else if (ending === "resource-supervisor-loss") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil, true);
 } else if (ending === "resource-auto-close-success") {

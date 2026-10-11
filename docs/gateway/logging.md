@@ -328,6 +328,24 @@ its result and elapsed diagnostics are preserved. Existing activation and the
 one-second warning threshold are unchanged, so missing slow records do not account
 for CPU consumed by faster requests.
 
+`chat.send` records `slow chat send <N>ms stage=request` when authorization,
+input admission, and acknowledgement take at least one second. Phase durations
+appear in the message text, including authority, run admission, attachments,
+persistence, and response. A separate `stage=startup ack=<N>ms` record attributes
+post-acknowledgement preparation to workspace setup, reply initialization,
+skill preparation, and authoring. `worktree` covers pending workspace creation;
+ordinary sandbox readiness remains inside inclusive `preparation`.
+`replyInitialization` includes routing, admission-ticket waits, workspace bootstrap,
+media processing, and session initialization until the prepared-session callback.
+Initial session row-reader waits are included in that interval, rather than timed
+separately. `snapshot` measures the agent-run transcript-start reader preparation,
+nested inside `preparation`.
+Startup measurement ends when the agent run starts, or when dispatch exits before starting one.
+These records do not contain message text or session identifiers. Nested phases
+can overlap; their sum is not the request duration. The
+[Prometheus exporter](/gateway/prometheus) records the same fixed phases for fast
+and slow sends when diagnostics are enabled.
+
 Catalog lists additionally expose fixed request-stage observations through the
 existing diagnostic event stream and [Prometheus exporter](/gateway/prometheus#catalog-list-stages).
 These include initial/final projection readiness, provider or coalesced waits,

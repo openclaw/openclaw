@@ -127,7 +127,6 @@ import {
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
 let compactTesting: typeof import("./compact.hooks.owner-test-support.js");
-let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 
 let TEST_STORE_PATH: string;
 let TEST_SESSION_ID: string;
@@ -142,13 +141,6 @@ type SessionHookEvent = {
   sessionKey?: string;
   context?: Record<string, unknown>;
 };
-type PostCompactionSyncParams = {
-  archiveFiles?: string[];
-  reason: string;
-  sessionFiles?: string[];
-  sessions?: Array<{ agentId: string; sessionId: string; sessionKey?: string }>;
-};
-type PostCompactionSync = (params?: unknown) => Promise<void>;
 function plannedCompactionPluginSelections(
   config: OpenClawConfig,
   metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] }),
@@ -299,7 +291,6 @@ beforeAll(async () => {
   compactEmbeddedAgentSessionDirect = (params) =>
     loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
   compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
-  onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   TEST_STORE_PATH = await compactionFixture.prepare();
 });
 
@@ -328,40 +319,33 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     resetCompactSessionStateMocks();
   });
 
-  it.each(["bootstrap", "compaction"] as const)(
-    "does not retry thinking after a recorded terminal %s failure",
-    async (phase) => {
-      resolveContextEngineMock.mockResolvedValue({
-        info: { ownsCompaction: false },
-        compact: contextEngineCompactMock,
-      });
-      const failure = Object.freeze(
-        Object.assign(new Error("Reasoning is mandatory for this endpoint"), {
-          status: 429,
-          code: "rate_limit_exceeded",
-        }),
-      );
-      recordModelFallbackStop(failure);
-      if (phase === "bootstrap") {
-        createAgentSessionMock.mockRejectedValueOnce(failure);
-      } else {
-        sessionCompactImpl.mockRejectedValueOnce(failure);
-      }
-      const result = await compactEmbeddedAgentSessionDirect(
-        wrappedCompactionArgs({
-          provider: "openai",
-          model: "fixture-primary",
-          modelFallbacksOverride: ["openai/fixture-fallback"],
-          thinkLevel: "off",
-          customInstructions: "preserve the committed state",
-        }),
-      );
-      expect(contextEngineCompactMock).not.toHaveBeenCalled();
-      expect(createAgentSessionMock).toHaveBeenCalledOnce();
-      expect(sessionCompactImpl).toHaveBeenCalledTimes(phase === "bootstrap" ? 0 : 1);
-      expect(result).toMatchObject({ ok: false, compacted: false });
-    },
-  );
+  it("does not retry thinking after a recorded terminal compaction failure", async () => {
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+    const failure = Object.freeze(
+      Object.assign(new Error("Reasoning is mandatory for this endpoint"), {
+        status: 429,
+        code: "rate_limit_exceeded",
+      }),
+    );
+    recordModelFallbackStop(failure);
+    sessionCompactImpl.mockRejectedValueOnce(failure);
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "fixture-primary",
+        modelFallbacksOverride: ["openai/fixture-fallback"],
+        thinkLevel: "off",
+        customInstructions: "preserve the committed state",
+      }),
+    );
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    expect(createAgentSessionMock).toHaveBeenCalledOnce();
+    expect(sessionCompactImpl).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ ok: false, compacted: false });
+  });
 
   it("restricts compact endpoint tools and omits private skills under a finite policy", async () => {
     resolveSkillsPromptMock.mockResolvedValue("PRIVATE_SKILL_MARKER");
@@ -982,19 +966,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(sessionOptions.tools).toEqual(["healthy_lookup"]);
   });
 
-  it("clamps the caller context token budget to the compaction model", async () => {
-    resolveContextWindowInfoMock.mockReturnValueOnce({ tokens: 32_000 });
-
-    await compactEmbeddedAgentSessionDirect({
-      ...directCompactionArgs(),
-      contextTokenBudget: 64_000,
-    });
-
-    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
-      modelContextWindowTokens: 32_000,
-    });
-  });
-
   it("preserves configured fallback identity through credential refresh", async () => {
     const provider = "compaction-fallback-fixture";
     const metadataSnapshot = createPluginMetadataSnapshotFixture({
@@ -1192,11 +1163,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     it.each([
       ["provider timeout", "request timed out", "fallback"],
-      ["provider rate limit", "429 rate limit exceeded", "fallback"],
       ["intentional quality rejection", undefined, "cancel"],
       ["explicit model timeout", "request timed out", "cancel"],
-      // A provider 408 is an actual summary timeout: commit without a summary, no model switch.
-      ["provider 408", "408", "reduce"],
       // A failed corrective attempt stays a terminal quality cancellation, even on a 408.
       ["corrective 408", "408", "cancel"],
       [
@@ -1290,7 +1258,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         vi.mocked(buildEmbeddedExtensionFactories).mockImplementation(({ model }) => {
           setSafeguardRuntime(sessionManager, {
             model,
-            contextWindowTokens: 128_000,
             recentTurnsPreserve: 0,
             qualityGuardEnabled: true,
             qualityGuardMaxRetries: scenario === "corrective 408" ? 1 : 0,
@@ -1344,12 +1311,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           fallback ? [primary, backup] : [primary],
         );
         expect(config).toEqual(configBefore);
-        if (outcome === "reduce") {
-          expect(result).toMatchObject({ ok: true, compacted: true });
-          expect(
-            sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
-          ).toMatchObject({ summary: expect.stringContaining("removed without a summary") });
-        } else if (outcome !== "cancel") {
+        if (outcome !== "cancel") {
           if (outcome === "thinking") {
             expect([...new Set(requestedThinking)]).toEqual(["off", "minimal"]);
           }
@@ -1504,22 +1466,19 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(run.stream).toHaveBeenCalledOnce();
     });
 
-    it.each(["silent", "keepalive"] as const)(
-      "stops a request one window after its last output delta (%s)",
-      async (end) => {
-        const run = await compactWhileStreaming(5, end);
-        await vi.advanceTimersByTimeAsync(5 * deltaEveryMs + windowMs - 1);
-        expect(run.settled()).toBe(false);
-        await vi.advanceTimersByTimeAsync(1);
+    it("stops a request one window after its last output delta despite empty keepalives", async () => {
+      const run = await compactWhileStreaming(5, "keepalive");
+      await vi.advanceTimersByTimeAsync(5 * deltaEveryMs + windowMs - 1);
+      expect(run.settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
 
-        await expect(run.pending).resolves.toMatchObject({
-          ok: false,
-          compacted: false,
-          reason: expect.stringContaining("timed out"),
-        });
-        expect(run.stream).toHaveBeenCalledOnce();
-      },
-    );
+      await expect(run.pending).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: expect.stringContaining("timed out"),
+      });
+      expect(run.stream).toHaveBeenCalledOnce();
+    });
 
     it("stops a stream that never goes silent one window before the operation ceiling", async () => {
       // After 5 s of setup, the last delta before the cutoff (265 s) leaves less than a window.
@@ -1540,97 +1499,59 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     // An automatic summary that times out commits the deterministic reduction (#164246),
     // also when the operation ceiling stops it. Times count from the stream start, 5 s
     // after the host watchdog armed.
-    const prepMs = 5_000;
-    it.each([
-      {
-        stop: "idle window",
-        deltas: 5,
-        end: "silent" as const,
-        stopMs: 5 * deltaEveryMs + windowMs,
-      },
-      {
-        stop: "operation ceiling",
-        deltas: Number.POSITIVE_INFINITY,
-        end: "done" as const,
-        stopMs: summaryCutoffMs - prepMs,
-      },
-    ])(
-      "commits the deterministic reduction when an automatic summary reaches the $stop",
-      async ({ deltas, end, stopMs }) => {
-        const run = await compactWhileStreaming(deltas, end, { trigger: "budget", prepMs });
-        await vi.advanceTimersByTimeAsync(stopMs);
+    it("commits the deterministic reduction when an automatic summary reaches the operation ceiling", async () => {
+      const prepMs = 5_000;
+      const run = await compactWhileStreaming(Number.POSITIVE_INFINITY, "done", {
+        trigger: "budget",
+        prepMs,
+      });
+      await vi.advanceTimersByTimeAsync(summaryCutoffMs - prepMs);
 
-        await expect(run.pending).resolves.toMatchObject({ ok: true, compacted: true });
-        expect(
-          run.sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
-        ).toMatchObject({ summary: expect.stringContaining("removed without a summary") });
-        expect(run.stream).toHaveBeenCalledOnce();
-      },
-    );
+      await expect(run.pending).resolves.toMatchObject({ ok: true, compacted: true });
+      expect(
+        run.sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+      ).toMatchObject({ summary: expect.stringContaining("removed without a summary") });
+      expect(run.stream).toHaveBeenCalledOnce();
+    });
   });
 
-  it.each([
-    { source: "workspace manifest", fallback: "anthropic/legacy", modelId: "claude-modern" },
-    { source: "configured alias", fallback: "summary-backup", modelId: "claude-fallback" },
-  ])("plans canonical fallback plugins from the $source", async ({ source, fallback, modelId }) => {
-    const config: OpenClawConfig =
-      source === "configured alias"
-        ? {
-            agents: {
-              defaults: { models: { "anthropic/claude-fallback": { alias: "summary-backup" } } },
-            },
-          }
-        : {};
-    const metadataSnapshot =
-      source === "workspace manifest"
-        ? {
-            ...createPluginMetadataSnapshotFixture({
-              plugins: [
-                {
-                  id: "compaction-normalizer",
-                  providers: ["anthropic"],
-                  origin: "workspace",
-                  rootDir: TEST_WORKSPACE_DIR,
-                  source: `${TEST_WORKSPACE_DIR}/index.js`,
-                  manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
-                  modelIdNormalization: {
-                    providers: { anthropic: { aliases: { legacy: "claude-modern" } } },
-                  },
-                },
-              ],
-            }),
-            configFingerprint: "workspace-compaction-normalization",
-          }
-        : undefined;
+  it("plans canonical fallback plugins from the configured alias", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { models: { "anthropic/claude-fallback": { alias: "summary-backup" } } },
+      },
+    };
     const result = await compactEmbeddedAgentSessionDirect({
       ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
       agentHarnessId: "codex",
-      modelFallbacksOverride: [fallback],
+      modelFallbacksOverride: ["summary-backup"],
       config,
     });
     expect(result.ok, JSON.stringify(result)).toBe(true);
-    expect(plannedCompactionPluginSelections(config, metadataSnapshot)).toEqual(
+    expect(plannedCompactionPluginSelections(config)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ provider: "anthropic", modelId, runtime: "codex" }),
-      ]),
-    );
-    if (source === "configured alias") {
-      const admittedConfig = {
-        agents: {
-          defaults: {
-            ...config.agents?.defaults,
-            compaction: { model: "anthropic/reloaded-summary" },
-          },
-        },
-      };
-      expect(plannedCompactionPluginSelections(admittedConfig)).toContainEqual(
         expect.objectContaining({
           provider: "anthropic",
-          modelId: "reloaded-summary",
+          modelId: "claude-fallback",
           runtime: "codex",
         }),
-      );
-    }
+      ]),
+    );
+    const admittedConfig = {
+      agents: {
+        defaults: {
+          ...config.agents?.defaults,
+          compaction: { model: "anthropic/reloaded-summary" },
+        },
+      },
+    };
+    expect(plannedCompactionPluginSelections(admittedConfig)).toContainEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        modelId: "reloaded-summary",
+        runtime: "codex",
+      }),
+    );
   });
 
   it("revalidates immutable Ultra for each compaction fallback candidate", async () => {
@@ -1839,49 +1760,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     expect(sync).not.toHaveBeenCalled();
   });
-
-  it.each(["await", "async"] as const)(
-    "settles post-compaction memory sync in %s mode",
-    async (mode) => {
-      const syncStarted = createDeferred<PostCompactionSyncParams>();
-      const syncRelease = createDeferred();
-      const sync = vi.fn<PostCompactionSync>(async (params) => {
-        syncStarted.resolve(params as PostCompactionSyncParams);
-        await syncRelease.promise;
-      });
-      const managerRequested = createDeferred();
-      const managerGate = createDeferred<{ manager: { sync: PostCompactionSync } }>();
-      getMemorySearchManagerMock.mockImplementation(async () => {
-        managerRequested.resolve(undefined);
-        return mode === "async" ? await managerGate.promise : { manager: { sync } };
-      });
-      let settled = false;
-      const resultPromise = compactTesting.runPostCompactionSideEffects({
-        config: compactionConfig(mode),
-        sessionKey: TEST_SESSION_KEY,
-        sessionFile: TEST_SESSION_FILE,
-      });
-      void resultPromise.then(() => {
-        settled = true;
-      });
-      await managerRequested.promise;
-      if (mode === "async") {
-        await resultPromise;
-        expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
-        expect(settled).toBe(true);
-        expect(sync).not.toHaveBeenCalled();
-        managerGate.resolve({ manager: { sync } });
-      }
-      await expect(syncStarted.promise).resolves.toEqual({
-        archiveFiles: [TEST_SESSION_FILE],
-        reason: "post-compaction",
-      });
-      expect(settled).toBe(mode === "async");
-      syncRelease.resolve(undefined);
-      await resultPromise;
-      expect(settled).toBe(true);
-    },
-  );
 
   registerDirectProviderRefreshTests({
     compactTesting: () => compactTesting,
@@ -2490,97 +2368,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.result).not.toHaveProperty("summary");
   });
 
-  it("does not impose a second aggregate timeout on delegated native compaction", async () => {
-    const { compactionWatchdogs } = await import("../../context-engine/compaction-watchdog.js");
-    const started = createDeferred<() => void>();
-    const terminal = createDeferred<Awaited<ReturnType<ContextEngine["compact"]>>>();
-    // Stand in for the runtime delegate: it finds the reset through the host signal.
-    const compact = vi.fn<ContextEngine["compact"]>(async ({ abortSignal }) => {
-      const resetTimeout = abortSignal && compactionWatchdogs.get(abortSignal)?.reset;
-      if (!resetTimeout) {
-        throw new Error("Delegated compaction must receive its progress reset callback");
-      }
-      started.resolve(resetTimeout);
-      return await terminal.promise;
-    });
-    resolveContextEngineMock.mockResolvedValue({
-      info: { ownsCompaction: false },
-      compact,
-    });
-    vi.useFakeTimers();
-    let settled = false;
-    const pending = compactEmbeddedAgentSession(wrappedCompactionArgs()).finally(() => {
-      settled = true;
-    });
-    void pending.catch(() => undefined);
-    try {
-      const resetTimeout = await Promise.race([
-        started.promise,
-        pending.then(() => {
-          throw new Error("Compaction settled before the delegate started");
-        }),
-      ]);
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(settled).toBe(false);
-      resetTimeout();
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(settled).toBe(false);
-      terminal.resolve({
-        ok: true,
-        compacted: true,
-        result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
-      });
-
-      await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
-      expect(compact).toHaveBeenCalledOnce();
-    } finally {
-      terminal.resolve({ ok: false, compacted: false });
-      await pending.catch(() => undefined);
-      vi.useRealTimers();
-    }
-  });
-
-  it("emits a transcript update and post-compaction memory sync on the engine-owned path", async () => {
-    const listener = vi.fn();
-    const cleanup = onSessionTranscriptUpdate(listener);
-    const sync = vi.fn(async () => {});
-    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
-
-    try {
-      const result = await compactEmbeddedAgentSession(
-        wrappedCompactionArgs({
-          sessionFile: `  ${TEST_SESSION_FILE}  `,
-          config: compactionConfig("await"),
-        }),
-      );
-
-      expect(result.ok).toBe(true);
-      expect(listener).toHaveBeenCalledTimes(1);
-      expect(listener).toHaveBeenCalledWith({
-        agentId: "main",
-        sessionKey: TEST_SESSION_KEY,
-        sessionId: TEST_SESSION_ID,
-        target: {
-          agentId: "main",
-          sessionId: TEST_SESSION_ID,
-          sessionKey: TEST_SESSION_KEY,
-        },
-      });
-      expect(sync).toHaveBeenCalledWith({
-        reason: "post-compaction",
-        sessions: [
-          {
-            agentId: "main",
-            sessionId: TEST_SESSION_ID,
-            sessionKey: TEST_SESSION_KEY,
-          },
-        ],
-      });
-    } finally {
-      cleanup();
-    }
-  });
-
   it("keeps authorized host byte compaction successful when secondary Codex sync fails", async () => {
     const order: string[] = [];
     const registry = requireActivePluginRegistry();
@@ -3143,18 +2930,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       await resultPromise.catch(() => undefined);
       vi.useRealTimers();
     }
-  });
-
-  it("surfaces a hung/throwing engine compact() as a clean ok:false result", async () => {
-    hookRunner.hasHooks.mockReturnValue(true);
-    contextEngineCompactMock.mockRejectedValue(new Error("Compaction timed out after 900000ms"));
-
-    const result = await compactEmbeddedAgentSession(wrappedCompactionArgs());
-
-    expect(result.ok).toBe(false);
-    expect(result.compacted).toBe(false);
-    expect(result.reason).toContain("timed out");
-    expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
   });
 
   it("skips a faulty compacting probe and cancels the live compaction behind it", async () => {

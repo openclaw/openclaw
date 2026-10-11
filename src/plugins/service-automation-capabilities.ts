@@ -4,7 +4,6 @@ import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import type { OpenClawPluginServiceContext } from "./plugin-registration.types.js";
 import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
 
-/** Assemble the capabilities of one service lifetime without executing plugin work. */
 export function createPluginServiceAutomationCapabilities(params: {
   pluginId: string;
   lease: PluginRuntimeCapabilityLease;

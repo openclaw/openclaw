@@ -173,7 +173,7 @@ describe("Node runtime diagnostics command surfaces", () => {
         mocks.resolveNodeRuntimeInfo.mockResolvedValue({
           status: "supported",
           version: "24.15.0",
-          note: "Node 24.15.0: unsupported version, capability probe passed.",
+          note: "Node 24.15.0: unsupported version, capability check passed.",
         });
       }
       await statusCommand({ json: true }, runtime);

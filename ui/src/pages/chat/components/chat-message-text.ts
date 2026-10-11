@@ -253,15 +253,21 @@ export function renderMessageMarkdown(
   const recoverFullMessage =
     isAssistant || (opts.role === "user" && disclosure?.onRetryFullMessage);
   const recovered = recoverFullMessage && disclosure?.expanded;
-  const { content: text, parts } = renderMarkdownText(
-    recovered ? (disclosure.markdown ?? markdown) : markdown,
-    messageKey,
-    opts.isStreaming,
-    recovered ? { ...markdownRenderOptions, mode: "document" } : markdownRenderOptions,
-    duplicateSuffix,
-    isAssistant && opts.isStreaming ? messageKey : undefined,
-    media,
-  );
+  const source = recovered ? (disclosure.markdown ?? markdown) : markdown;
+  const options: MarkdownRenderOptions = recovered
+    ? { ...markdownRenderOptions, mode: "document" }
+    : markdownRenderOptions;
+  const parts: [string, string] = opts.isStreaming
+    ? toStreamingMarkdownParts(source, options, isAssistant ? messageKey : undefined)
+    : [toSanitizedMarkdownHtml(source, options), ""];
+  if (duplicateSuffix) {
+    const terminalPart = parts[1].trim() ? 1 : 0;
+    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
+  }
+  const content = markdownParts(messageKey, source, parts, media);
+  const text = html`
+    <div class="chat-text" dir="${detectTextDirection(media?.text ?? source)}">${content}</div>
+  `;
   // Exhausted recovery keeps the preview visible and offers manual re-entry.
   if (recoverFullMessage && disclosure?.onRetryFullMessage) {
     return html`
@@ -448,31 +454,6 @@ class MarkdownPartsDirective extends AsyncDirective {
 }
 
 const markdownParts = directive(MarkdownPartsDirective);
-
-function renderMarkdownText(
-  markdown: string,
-  messageKey: string,
-  isStreaming: boolean,
-  markdownRenderOptions?: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
-  streamKey?: string,
-  media?: MarkdownMedia,
-) {
-  const parts: [string, string] = isStreaming
-    ? toStreamingMarkdownParts(markdown, markdownRenderOptions, streamKey)
-    : [toSanitizedMarkdownHtml(markdown, markdownRenderOptions), ""];
-  if (duplicateSuffix) {
-    const terminalPart = parts[1].trim() ? 1 : 0;
-    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
-  }
-  const content = markdownParts(messageKey, markdown, parts, media);
-  return {
-    parts,
-    content: html`
-      <div class="chat-text" dir="${detectTextDirection(media?.text ?? markdown)}">${content}</div>
-    `,
-  };
-}
 
 function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
   const template = document.createElement("template");

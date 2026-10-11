@@ -24,11 +24,14 @@ describe("agent model catalog recovery", () => {
     render(
       renderAgents(
         createProps({
-          modelCatalogStatus: {
-            error: "model catalog unavailable",
-            hasLoaded: true,
-            stale: true,
-            awaitingGateway: false,
+          overview: {
+            ...createProps().overview,
+            modelCatalogStatus: {
+              error: "model catalog unavailable",
+              hasLoaded: true,
+              stale: true,
+              awaitingGateway: false,
+            },
           },
         }),
       ),

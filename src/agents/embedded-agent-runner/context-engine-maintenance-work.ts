@@ -61,18 +61,17 @@ export async function disposeDeferredMaintenanceContextEngine(
   maintenance: Pick<ReturnType<typeof createSessionMaintenanceOwner>, "run" | "signal">,
 ): Promise<void> {
   const failures: unknown[] = [];
+  const settle = async (work: Promise<unknown>[]) => {
+    for (const outcome of await Promise.allSettled(work)) {
+      if (outcome.status === "rejected") {
+        failures.push(outcome.reason);
+      }
+    }
+  };
   const resources = [...(params.factoryResourceOwners ?? [])];
   let releasing: Promise<void> | undefined;
   const releaseResources = () =>
-    (releasing ??= Promise.allSettled(resources.map(async (owner) => await owner.release())).then(
-      (outcomes) => {
-        for (const outcome of outcomes) {
-          if (outcome.status === "rejected") {
-            failures.push(outcome.reason);
-          }
-        }
-      },
-    ));
+    (releasing ??= settle(resources.map(async (owner) => await owner.release())));
   try {
     await params.runInContext(() =>
       maintenance.run(() =>
@@ -84,12 +83,7 @@ export async function disposeDeferredMaintenanceContextEngine(
             const factoryWork = resources.map(({ closeFactoryWork }) =>
               trackAsyncWork(closeFactoryWork),
             );
-            const outcomes = await Promise.allSettled([disposal, ...factoryWork]);
-            for (const outcome of outcomes) {
-              if (outcome.status === "rejected") {
-                failures.push(outcome.reason);
-              }
-            }
+            await settle([disposal, ...factoryWork]);
           },
           maintenance.signal,
           releaseResources,

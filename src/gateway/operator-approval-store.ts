@@ -381,3 +381,14 @@ export function consumeCronStandingGrant(
       }),
   );
 }
+
+export function readPlacementStandingGrant(
+  input: import("./operator-approval-placement-grants.read.js").PlacementGrantReadInput,
+  options: Options,
+) {
+  return readApprovalStore(
+    { type: "operatorApprovals.placementGrant", input },
+    options,
+    (result) => (result.type === "operatorApprovals.placementGrant" ? result.rows : undefined),
+  );
+}

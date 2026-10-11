@@ -1,4 +1,3 @@
-// Gateway Bench Probes script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
 import { request } from "node:http";
 import { createServer } from "node:net";

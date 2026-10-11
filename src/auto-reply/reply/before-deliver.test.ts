@@ -57,7 +57,6 @@ async function makePendingFinalFixture() {
     { sessionKey, storePath },
     {
       sessionId: "session-1",
-      status: "running",
       updatedAt: Date.now(),
       pendingFinalDelivery: {
         kind: "replayable",
@@ -621,6 +620,8 @@ describe("beforeDeliver in reply dispatcher", () => {
         ).toEqual([{ id: "delivery-1", state: suppressed ? "suppressed" : "delivered" }]);
       } finally {
         release.resolve();
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         await fs.rm(fixture.tmpDir, { recursive: true, force: true });
       }
     },
@@ -734,6 +735,8 @@ describe("beforeDeliver in reply dispatcher", () => {
           (loadSessionEntry(fixture) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
         ).toEqual([{ id: "delivery-1", state: expected }]);
       } finally {
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         await fs.rm(fixture.tmpDir, { recursive: true, force: true });
       }
     },
@@ -779,6 +782,8 @@ describe("beforeDeliver in reply dispatcher", () => {
         expect(deliver).toHaveBeenCalledTimes(replaced ? 0 : 1);
         expect(receipt?.counts.final.cancelled).toBe(1);
       } finally {
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         await fs.rm(fixture.tmpDir, { recursive: true, force: true });
       }
     },

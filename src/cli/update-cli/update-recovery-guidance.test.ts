@@ -482,4 +482,17 @@ describe("update recovery reporting", () => {
     expect(action).toContain("automatic rollback was refused to preserve them");
     expect(action).not.toContain(redeploy);
   });
+
+  it("describes successful-update cleanup as permanent migration-original retirement", () => {
+    const action = resolveUpdateResultNextAction({
+      result: { status: "ok", mode: "git", steps: [], durationMs: 0 },
+      env: { OPENCLAW_PROFILE: "work", OPENCLAW_STATE_DIR: "/fixture/state" },
+    });
+
+    expect(action).toContain("After confirming the update and your conversations are healthy");
+    expect(action).toContain("retained migration originals eligible for permanent cleanup");
+    expect(action).toContain("`openclaw --profile work update cleanup --dry-run`");
+    expect(action).toContain("state `/fixture/state`");
+    expect(action).toContain("Use the same profile, state, and config settings.");
+  });
 });

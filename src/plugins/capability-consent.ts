@@ -231,7 +231,7 @@ export async function resolvePluginCapabilityConsent(params: {
         ...records,
         [installOwner]: acceptManagedPluginDeclaredSurface(persistedRecord, currentDeclared),
       },
-      { env, config: params.config, lease },
+      { env, config: params.config, lease, assertCurrent: params.beforePersistentApply },
     );
     pendingPluginCapabilityReviews.delete(pluginId);
   });

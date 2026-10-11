@@ -265,6 +265,13 @@ then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted
 turns do not advance context-engine state.
 
+The logical-turn owner removes unaccepted admissions when the run ends, including
+when it exits before reporting a terminal transcript boundary. Recovery after a
+Gateway interruption also removes admissions without host acceptance and logs
+the skipped advancement; it never infers success from later transcript entries.
+Accepted work remains queued until the engine acknowledges it. No migration or
+configuration change is required for existing outbox rows.
+
 After accepted-turn finalization acknowledges `committed` or `duplicate`, the host
 also offers `maintain()` through the same maintenance scheduler. Engines declaring
 `turnMaintenanceMode: "background"` run deferred maintenance. Background work

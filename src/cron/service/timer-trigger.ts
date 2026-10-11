@@ -1,4 +1,5 @@
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
 import { createCronSourceIdentity } from "../source-schedule.js";
 import {
@@ -8,6 +9,7 @@ import {
 import type {
   CronJob,
   CronDeliveryTrace,
+  CronFailureNotificationDetail,
   CronResolvedDeliveryState,
   CronRunErrorClassification,
   CronRunStatus,
@@ -120,6 +122,26 @@ export function resolveCronNextRunWithLowerBound(params: {
     candidate: Math.max(params.naturalNext, params.lowerBoundMs),
     deferredNotifications: params.deferredNotifications,
   });
+}
+
+/**
+ * True when a scheduled quick re-run targets a provider outage, so the failure alert and
+ * owner repair wait for it. Provider transport failures (DNS, refused connections, request
+ * timeouts) classify as `timeout`. Failures the job owns are not held: its scripts, command
+ * payloads, and cron's own execution watchdog usually need the owner repair promptly.
+ */
+export function holdsFailureNotificationForRetry(
+  job: CronJob,
+  result: { error?: string; failureNotificationDetail?: CronFailureNotificationDetail },
+  category: CronRetryOn | undefined,
+): boolean {
+  if (category === undefined || result.failureNotificationDetail?.kind === "script-failure") {
+    return false;
+  }
+  return (
+    category !== "timeout" ||
+    (job.payload.kind !== "command" && !isCronTimeoutErrorText(result.error))
+  );
 }
 
 export function resolveTransientCronRetryDecision(params: {

@@ -6,10 +6,13 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { resolveStoredSessionPermissionPolicy } from "../agents/tool-fs-policy.js";
 import {
   AUTOMATIONS_TOOL_NAME,
   isAutomationsToolName,
@@ -360,11 +363,23 @@ async function invokeGatewayToolWithSignal(
   ) {
     return failure(400, "invalid_request", AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
   }
+  const sessionWorkspace =
+    resolveIngressWorkspaceOverrideForSessionRun({
+      spawnedBy: sessionEntry?.spawnedBy,
+      workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+      cwd: sessionEntry?.spawnedCwd,
+    }) ?? resolveAgentWorkspaceDir(params.cfg, selectedAgentId);
+  const sessionPermissionPolicy = resolveStoredSessionPermissionPolicy(
+    sessionEntry,
+    sessionWorkspace,
+  );
   const resolveTools = (disablePluginTools: boolean) =>
     resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey,
       sessionId: sessionEntry?.sessionId,
+      sessionPermissionPolicy,
+      preparedSessionWorkspaceDir: sessionWorkspace,
       agentId: selectedAgentId,
       messageProvider: params.messageChannel,
       accountId: params.accountId,

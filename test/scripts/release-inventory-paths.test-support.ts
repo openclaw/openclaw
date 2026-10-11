@@ -31,6 +31,8 @@ export const INVENTORY_PRODUCER_PATHS = [
 ];
 
 export const SOURCE_ADMISSION_PATHS = [
+  "tsconfig.json",
+  "packages/normalization-core/src/error-coercion.ts",
   "scripts/lib/frozen-target-workflow-request.mjs",
   "scripts/lib/release-qualification-coverage.json",
   "scripts/lib/publication-source-paths.mjs",
@@ -83,6 +85,7 @@ export const SOURCE_ADMISSION_PATHS = [
   "scripts/full-release-candidate-contract.mjs",
   "scripts/full-release-validation-state.mjs",
   "scripts/full-release-validation-policy.mjs",
+  "scripts/pr-lib/gh-api-preflight.mjs",
   "scripts/release-ci-summary.mjs",
   "scripts/lib/full-release-candidate-reuse.mjs",
   "scripts/lib/full-release-child-request.mjs",
@@ -107,6 +110,7 @@ export const SOURCE_ADMISSION_PATHS = [
   "scripts/lib/local-check-runtime.mts",
   "scripts/full-release-publication-observations.mts",
   "scripts/lib/plugin-clawhub-release.ts",
+  "scripts/lib/clawhub-package-family.mjs",
   "scripts/lib/clawhub-publication-state.mjs",
   "scripts/clawhub-prepared-artifact.mjs",
   "scripts/clawhub-parent-authorization.mjs",
@@ -116,6 +120,7 @@ export const SOURCE_ADMISSION_PATHS = [
   "packages/normalization-core/src/number-coercion.ts",
   "packages/normalization-core/src/utf16-slice.ts",
   "packages/ai/src/internal/retry-after.ts",
+  "packages/ai/src/utils/retryable-network-errors.ts",
   "packages/retry/src/index.ts",
   "src/infra/clawhub-retry.ts",
   "src/infra/map-size.ts",
@@ -138,6 +143,7 @@ export const SOURCE_ADMISSION_PATHS = [
 ];
 
 export const PUBLICATION_TRANSPORT_PATHS = [
+  "scripts/lib/clawhub-package-family.mjs",
   "scripts/lib/clawhub-publication-state.mjs",
   "scripts/full-release-publication-contract.mjs",
   "scripts/clawhub-prepared-artifact.mjs",
