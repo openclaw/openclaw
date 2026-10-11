@@ -1,43 +1,26 @@
 import crypto from "node:crypto";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
-import {
-  isRestartRecoveryTombstone,
-  isSessionWorkStartInvalidatedError,
-} from "../../config/sessions/lifecycle.js";
-import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
-import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
-import {
-  composeSessionSourceAssertion,
-  sessionEntryCommitGuardOptions,
-  type SessionSourceAssertion,
-} from "../../config/sessions/session-source-authority.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import { captureSessionEntrySourceAssertion } from "../../config/sessions/session-entry-source-authority.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  prepareSessionWorkerPlacementMutationCheckAsync,
-  readSessionWorkerPlacementAsync,
-  resolveWorkerPlacementArchiveRestoreError,
-  type SessionWorkerPlacementContext,
-} from "../../gateway/worker-environments/session-placement-lifecycle.js";
+import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import {
-  runExclusiveSessionLifecycleMutation,
-  type SessionWorkAdmissionLease,
-} from "../../sessions/session-lifecycle-admission.js";
-import { classifySessionStateActor } from "../../sessions/session-state-events.js";
-import { isNativeCommandTurn } from "../command-turn-context.js";
+  isNativeCommandTurn,
+  resolveCommandTurnTargetSessionKey,
+} from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
   createAbortAwareDispatcher,
   DispatchReplyOperationAbortedError,
 } from "./dispatch-from-config.abort.js";
+import { restoreArchivedDispatchSession } from "./dispatch-from-config.archive-recovery.js";
 import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import {
   resolveDispatchResetAdmission,
@@ -63,142 +46,9 @@ type DispatchReplyOperationAcquisition =
   | { status: "busy" }
   | { status: "aborted" };
 
-async function restoreArchivedDispatchSession(params: {
-  ctx: FinalizedMsgContext;
-  entry?: SessionEntry;
-  hasPluginOwnedBinding: boolean;
-  placementContext?: SessionWorkerPlacementContext;
-  sessionKey?: string;
-  storePath?: string;
-}): Promise<SessionEntry | undefined> {
-  const { ctx, entry, hasPluginOwnedBinding, sessionKey, storePath } = params;
-  if (
-    !entry ||
-    !sessionKey ||
-    !storePath ||
-    entry.archivedAt === undefined ||
-    isRestartRecoveryTombstone(entry) ||
-    hasPluginOwnedBinding ||
-    ctx.InboundAccessAuthorized !== true ||
-    ctx.InboundEventKind === "room_event" ||
-    isNativeCommandTurn(ctx.CommandTurn) ||
-    classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType !== "human"
-  ) {
-    return entry;
-  }
-  const scope = { sessionKey, storePath };
-  const actor = captureIncognitoSessionSource(scope);
-  const metadata = actor ? captureSessionEntryMetadataRead(scope) : undefined;
-  let placementContext = params.placementContext;
-  if (!placementContext) {
-    try {
-      placementContext = (
-        await import("../../gateway/session-worker-placement-context.js")
-      ).resolveSessionWorkerPlacementContext();
-    } catch {
-      return entry;
-    }
-  }
-  const snapshotSessionId = entry.sessionId;
-  const snapshotArchivedAt = entry.archivedAt;
-  const canRestore = (
-    currentEntry: SessionEntry,
-    prepared?: { placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>> },
-  ) => {
-    if (
-      currentEntry.sessionId !== snapshotSessionId ||
-      currentEntry.archivedAt !== snapshotArchivedAt ||
-      (actor && currentEntry.lifecycleRevision !== entry.lifecycleRevision) ||
-      isRestartRecoveryTombstone(currentEntry)
-    ) {
-      return false;
-    }
-    try {
-      const placement = prepared
-        ? prepared.placement
-        : currentEntry.sessionId
-          ? placementContext.workerSessionPlacementService
-              ?.getMany([currentEntry.sessionId])
-              .get(currentEntry.sessionId)
-          : undefined;
-      return !resolveWorkerPlacementArchiveRestoreError({
-        context: placementContext,
-        key: sessionKey,
-        placement,
-      });
-    } catch {
-      return false;
-    }
-  };
-  return await runExclusiveSessionLifecycleMutation("restore", {
-    scope: storePath,
-    identities: [sessionKey, snapshotSessionId],
-    run: async () => {
-      const currentEntry = actor
-        ? "kind" in actor
-          ? undefined
-          : (
-              await actor.actor.sessions.read(
-                { assertCurrent: () => metadata!.assertCurrent() },
-                { sessionKey },
-                actor.admissionSignal,
-              )
-            ).entry
-        : loadSessionEntryReadOnly(scope);
-      metadata?.assertCurrent();
-      if (
-        !currentEntry ||
-        !canRestore(currentEntry, {
-          placement: await readSessionWorkerPlacementAsync({
-            context: placementContext,
-            sessionId: currentEntry.sessionId,
-          }),
-        })
-      ) {
-        return currentEntry;
-      }
-      let assertCommitAllowed: SessionSourceAssertion | undefined = metadata
-        ? () => {
-            const current = metadata.readCurrent();
-            if (!current || !canRestore(current)) {
-              throw new DispatchSessionRefreshRequiredError(
-                new Error("Session changed while restoring archived work. Retry the request."),
-              );
-            }
-          }
-        : undefined;
-      if (currentEntry.worktree) {
-        const { restoreSessionWorktree } =
-          await import("../../sessions/session-worktree-lifecycle.js");
-        // Keep the target fenced through Git/allocation waits without retaining the agent writer.
-        assertCommitAllowed = await restoreSessionWorktree({
-          entry: currentEntry,
-          scope,
-          commitGuard: composeSessionSourceAssertion([
-            assertCommitAllowed,
-            await prepareSessionWorkerPlacementMutationCheckAsync({
-              context: placementContext,
-              sessionId: currentEntry.sessionId,
-            }),
-          ]),
-        });
-      }
-      const updatedEntry = await patchSessionEntryCore(
-        scope,
-        (current) =>
-          canRestore(current)
-            ? { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined }
-            : null,
-        // The writer may have waited; revalidate the prepared binding at the actual commit edge.
-        sessionEntryCommitGuardOptions(assertCommitAllowed),
-      );
-      return updatedEntry ?? undefined;
-    },
-  });
-}
-
 export function createDispatchReplyOperationCoordinator(params: {
   allowActiveQueueResolution?: boolean;
+  assertCurrent?: () => void;
   agentId: string;
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
@@ -208,6 +58,12 @@ export function createDispatchReplyOperationCoordinator(params: {
   messageAuditTerminal?: InboundMessageAuditTerminalRecorder;
   operationSessionStoreEntry: {
     entry?: SessionEntry;
+    storePath?: string;
+  };
+  targetSessionStoreEntry?: {
+    agentId?: string;
+    entry?: SessionEntry;
+    sessionKey?: string;
     storePath?: string;
   };
   replyOptions?: DispatchFromConfigParams["replyOptions"];
@@ -225,6 +81,12 @@ export function createDispatchReplyOperationCoordinator(params: {
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
   let dispatchResetTriggered = false;
+  let restoreNativeResetTarget: (() => Promise<void>) | undefined;
+  const restorePendingNativeResetTarget = async () => {
+    const restore = restoreNativeResetTarget;
+    restoreNativeResetTarget = undefined;
+    await restore?.();
+  };
   let allowRestartTombstoneParentFork = false;
   let allowRestartTombstoneReset = false;
   const dispatchLifecycleWork = {
@@ -327,14 +189,113 @@ export function createDispatchReplyOperationCoordinator(params: {
   ): Promise<DispatchReplyOperationAcquisition> => {
     // Archive restoration belongs to pre-dispatch ownership resolution. Later calls only upgrade admission.
     if (phase === "pre_dispatch") {
+      const target = params.targetSessionStoreEntry;
+      const nativeTarget = resolveCommandTurnTargetSessionKey(params.ctx);
+      const effectiveNativeTarget =
+        nativeTarget ??
+        (target &&
+        target.sessionKey === params.dispatchOperationSessionKey &&
+        target.sessionKey === params.ctx.SessionKey
+          ? target.sessionKey
+          : undefined);
+      const authorizedNativeCommand =
+        isNativeCommandTurn(params.ctx.CommandTurn) &&
+        params.ctx.CommandTurn?.authorized === true &&
+        params.ctx.CommandAuthorized;
+      const nativeReset =
+        authorizedNativeCommand &&
+        target !== undefined &&
+        effectiveNativeTarget === target.sessionKey &&
+        (params.ctx.CommandTurn?.commandName?.toLowerCase() === "new" ||
+          params.ctx.CommandTurn?.commandName?.toLowerCase() === "reset") &&
+        (
+          await resolveDispatchResetAdmission({
+            agentId: target.agentId ?? params.agentId,
+            cfg: params.cfg,
+            ctx: params.ctx,
+            entry: target.entry,
+            hasPluginOwnedBinding,
+            sessionKey: target.sessionKey,
+            storePath: target.storePath,
+          })
+        ).resetTriggered;
+      const detachedNativeSource =
+        authorizedNativeCommand &&
+        nativeTarget !== undefined &&
+        nativeTarget !== params.dispatchOperationSessionKey &&
+        params.dispatchOperationSessionKey === params.ctx.SessionKey &&
+        nativeTarget === target?.sessionKey &&
+        target.entry?.pluginOwnerId === undefined &&
+        (target.entry?.archivedAt === undefined || nativeReset);
+      const restoringDetachedNativeSource =
+        detachedNativeSource && params.operationSessionStoreEntry.entry?.archivedAt !== undefined;
+      const assertCommandOwnerCurrent = captureCommandOwnerAssertion(params.ctx);
+      const assertRestoreCurrent = () => {
+        params.assertCurrent?.();
+        params.replyOptions?.assertChannelAuthority?.();
+        assertCommandOwnerCurrent?.();
+        params.replyOptions?.operatorAuthority?.assertCurrent();
+        params.replyOptions?.abortSignal?.throwIfAborted();
+      };
+      const targetGuard =
+        restoringDetachedNativeSource && target?.sessionKey && target.storePath
+          ? captureSessionEntrySourceAssertion({
+              scope: {
+                agentId: target.agentId ?? params.agentId,
+                sessionKey: target.sessionKey,
+                storePath: target.storePath,
+              },
+              expected: target.entry,
+              fields: ["sessionId", "archivedAt", "pluginOwnerId", "lifecycleRevision"],
+              assertCurrent: assertRestoreCurrent,
+              refuse: () => {
+                throw new DispatchSessionRefreshRequiredError(
+                  new Error(
+                    "Command target changed while restoring archived work. Retry the request.",
+                  ),
+                );
+              },
+            })
+          : undefined;
       params.operationSessionStoreEntry.entry = await restoreArchivedDispatchSession({
         ctx: params.ctx,
         entry: params.operationSessionStoreEntry.entry,
         hasPluginOwnedBinding,
+        allowNativeCommandRestore: detachedNativeSource,
+        additionalCommitGuard: targetGuard,
+        targetMutationScope:
+          restoringDetachedNativeSource && target?.sessionKey && target.storePath
+            ? { sessionKey: target.sessionKey, storePath: target.storePath, expected: target.entry }
+            : undefined,
+        assertCurrent: isNativeCommandTurn(params.ctx.CommandTurn)
+          ? assertRestoreCurrent
+          : undefined,
+        requireSnapshotMatch: detachedNativeSource,
         placementContext: params.sessionWorkerPlacementContext,
         sessionKey: params.dispatchOperationSessionKey,
         storePath: params.operationSessionStoreEntry.storePath,
       });
+      if (nativeReset && target) {
+        const restoreTarget = async () => {
+          target.entry = await restoreArchivedDispatchSession({
+            ctx: params.ctx,
+            entry: target.entry,
+            hasPluginOwnedBinding,
+            allowNativeCommandRestore: true,
+            assertCurrent: assertRestoreCurrent,
+            requireSnapshotMatch: true,
+            placementContext: params.sessionWorkerPlacementContext,
+            sessionKey: target.sessionKey,
+            storePath: target.storePath,
+          });
+        };
+        if (target.sessionKey === params.dispatchOperationSessionKey) {
+          await restoreTarget();
+          params.operationSessionStoreEntry.entry = target.entry;
+        } else {
+          restoreNativeResetTarget = restoreTarget;
+        }
+      }
       ({
         resetTriggered: dispatchResetTriggered,
         allowRestartTombstoneParentFork,
@@ -532,6 +493,7 @@ export function createDispatchReplyOperationCoordinator(params: {
             `dispatch-from-config: allowing Slack routed thread ${params.routeThreadId} while ${dispatchOperationSessionKey} has an active reply operation in another Slack thread`,
           );
         }
+        await restorePendingNativeResetTarget();
         return { status: "ready" };
       }
       admission.lifecycleAdmission?.release();
@@ -554,6 +516,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     dispatchReplyOperation.retainFailureUntilComplete();
     dispatchAbortOperation = admission.operation;
     params.replyOptions?.onReplyOperationOwned?.(admission.operation);
+    await restorePendingNativeResetTarget();
     return { status: "ready" };
   };
 

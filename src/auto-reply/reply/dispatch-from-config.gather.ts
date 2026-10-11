@@ -473,6 +473,8 @@ export async function gatherDispatchRequest(
     initialDispatchReplyOperation,
     messageAuditTerminal,
     operationSessionStoreEntry,
+    targetSessionStoreEntry: sessionStoreEntry,
+    assertCurrent: assertProgressCurrent,
     replyOptions: normalizedParams.replyOptions,
     resolveOperationExpectedSessionId,
     routeThreadId,

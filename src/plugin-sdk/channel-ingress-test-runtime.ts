@@ -13,3 +13,8 @@ export {
 export { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 export { observeChannelIngressQueueWrite } from "../channels/message/ingress-drain.test-helpers.js";
 export { withRegisteredChannelIngress } from "./test-helpers/registered-channel-ingress.js";
+
+/** Load the restore owner for held-effect channel ingress probes without eager runtime imports. */
+export async function loadSessionWorktreeLifecycleForTest() {
+  return import("../sessions/session-worktree-lifecycle.js");
+}

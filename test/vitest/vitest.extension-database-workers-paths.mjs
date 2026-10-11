@@ -17,6 +17,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/clickclack/src/inbound.mention-gating.test.ts",
   "extensions/clickclack/src/inbound.test.ts",
   "extensions/discord/src/monitor/message-handler.context-history.test.ts",
+  "extensions/discord/src/monitor/native-command.interaction-boundary.test.ts",
   "extensions/irc/src/inbound.behavior.test.ts",
   "extensions/line/src/bot-mention-context.test.ts",
   "extensions/line/src/bot-message-context.test.ts",

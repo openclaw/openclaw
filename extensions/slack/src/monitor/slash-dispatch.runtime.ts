@@ -7,3 +7,4 @@ export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 export { finalizeInboundContext, resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 export { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 export { deliverSlackSlashReplies, sanitizeSlackMonitorReplyPayload } from "./replies.js";
+export { buildSlackSlashCommandContext } from "./slash-context.js";

@@ -41,6 +41,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   log: ReturnType<typeof createSubsystemLogger>;
   pluginCommandDispatch: PluginCommandCatalogDecision;
+  assertAuthority?: () => void;
 }) {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig);
 
@@ -56,6 +57,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
       sessionKey: params.ctxPayload.SessionKey ?? params.effectiveRoute.sessionKey,
     },
     ctxPayload: params.ctxPayload,
+    assertAuthority: params.assertAuthority,
     dispatchReplyFromConfig: params.dispatchReplyFromConfig,
     delivery: {
       deliver: async (payload) => {
@@ -131,6 +133,20 @@ export async function dispatchDiscordNativeAgentReply(params: {
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
     },
+  }).catch(async (error: unknown) => {
+    try {
+      // The response queue preserves accepted output, including partial follow-ups.
+      await safeDiscordInteractionCall("interaction command failure", () =>
+        params.interaction.editDeferredPlaceholderIfUnanswered({
+          content:
+            "Command failed. Please retry. If this conversation is archived, use /new or /reset to start again. If it still fails, ask an operator to check the Gateway logs.",
+          allowed_mentions: { parse: [] },
+        }),
+      );
+    } catch {
+      // Keep the original dispatch failure for logging and the transport fallback.
+    }
+    throw error;
   });
   const shouldSettleWithoutVisibleReply =
     params.suppressReplies ||

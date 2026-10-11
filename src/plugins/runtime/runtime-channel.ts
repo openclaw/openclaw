@@ -86,6 +86,7 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import {
+  createPublicChannelReplyDispatch,
   publicChannelTurn,
   publicChannelTurnParams,
   type PublicChannelTurnParams,
@@ -130,6 +131,9 @@ const runChannelTurn = createLazyRuntimeMethod(
 export function createRuntimeChannel(options?: {
   dispatchReplyFromConfig?: typeof dispatchLowLevelChannelReplyFromConfig;
 }): PluginRuntime["channel"] {
+  const coreReplyDispatch =
+    options?.dispatchReplyFromConfig ?? dispatchLowLevelChannelReplyFromConfig;
+  const publicReplyDispatch = createPublicChannelReplyDispatch(coreReplyDispatch);
   const runInbound = <TRaw, TResult>(
     params: PublicChannelTurnParams<TRaw, TResult, ChannelTurnDeliveryAdapter>,
   ): Promise<ChannelTurnResult<TResult>> => {
@@ -190,10 +194,7 @@ export function createRuntimeChannel(options?: {
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
-      dispatchReplyFromConfig: (params) =>
-        (options?.dispatchReplyFromConfig ?? dispatchLowLevelChannelReplyFromConfig)(
-          publicChannelTurn(params),
-        ),
+      dispatchReplyFromConfig: publicReplyDispatch,
       withReplyDispatcher,
       settleReplyDispatcher,
       finalizeInboundContext,

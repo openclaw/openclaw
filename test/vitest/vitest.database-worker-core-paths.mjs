@@ -67,6 +67,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/hooks/bundled/session-memory/handler-auto-reset.test.ts",
   "src/hooks/bundled/session-memory/handler-admission.test.ts",
   "src/auto-reply/reply/session-hooks-context.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.archive-recovery.worker.test.ts",
   "src/gateway/agent-turn/agent-request-routing.session-id.test.ts",
   "src/gateway/control-ui-public-session-read.test.ts",
   "src/gateway/control-ui-session-path-resolve.test.ts",

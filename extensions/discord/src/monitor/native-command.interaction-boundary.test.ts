@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import {
   ApplicationCommandOptionType,
   ChannelType,
@@ -6,17 +7,28 @@ import {
   InteractionType,
 } from "discord-api-types/v10";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import {
+  loadSessionWorktreeLifecycleForTest,
+  withRegisteredChannelIngress,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as runtimeConfig from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { discordPlugin } from "../channel.js";
 import {
   attachRestMock,
   createInternalInteractionPayload,
   createInternalComponentInteractionPayload,
   createInternalTestClient,
 } from "../internal/test-builders.test-support.js";
+import { setDiscordRuntime } from "../runtime.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
 import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
@@ -34,9 +46,18 @@ const CHANNEL = "100000000000000002";
 const THREAD = "100000000000000003";
 const USER = "100000000000000004";
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const root of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(root);
+    }
+    cleanup();
+  }),
+);
+
 function createConfig(): OpenClawConfig {
   return {
-    commands: { allowFrom: { discord: [`user:${USER}`] } },
+    commands: { allowFrom: { discord: [USER] } },
     agents: { defaults: { model: { primary: "test-provider/test-model" } } },
     channels: {
       discord: {
@@ -47,9 +68,9 @@ function createConfig(): OpenClawConfig {
   };
 }
 
-function createHarness() {
-  const cfg = createConfig();
+function createHarness(cfg = createConfig()) {
   let currentConfig = cfg;
+  vi.spyOn(runtimeConfig, "getRuntimeConfigSnapshot").mockImplementation(() => currentConfig);
   const readPolicy = createDiscordLivePolicyReader({
     cfg,
     accountId: "default",
@@ -67,6 +88,18 @@ function createHarness() {
     threadBindings: createNoopThreadBindingManager("default"),
   };
   const client = createInternalTestClient([
+    createDiscordNativeCommand({
+      ...commandContext,
+      ephemeralDefault: true,
+      command: { name: "compact", description: "Compact", acceptsArgs: false },
+    }),
+    ...["new", "reset"].map((name) =>
+      createDiscordNativeCommand({
+        ...commandContext,
+        ephemeralDefault: true,
+        command: { name, description: "Start a fresh session", acceptsArgs: false },
+      }),
+    ),
     createDiscordNativeCommand({
       ...commandContext,
       ephemeralDefault: true,
@@ -92,7 +125,10 @@ function createHarness() {
     }),
   ]);
   client.componentHandler.register(createDiscordModelPickerFallbackButton(commandContext));
-  const post = vi.fn(async () => undefined);
+  const post = vi.fn(
+    async (_path: string, _params: { body?: Record<string, unknown> }, _auth?: unknown) =>
+      undefined,
+  );
   const get = vi.fn(async (path: string) => {
     if (path === `/channels/${THREAD}`) {
       return { id: THREAD, type: ChannelType.PublicThread, parent_id: CHANNEL, name: "topic" };
@@ -102,7 +138,10 @@ function createHarness() {
     }
     throw new Error(`Unexpected Discord GET ${path}`);
   });
-  const patch = vi.fn(async () => undefined);
+  const patch = vi.fn(
+    async (_path: string, _params: { body?: Record<string, unknown> }, _auth?: unknown) =>
+      undefined,
+  );
   attachRestMock(client, { post, get, patch });
   const session = vi.spyOn(sessionStore, "getSessionEntry").mockReturnValue(undefined);
   vi.spyOn(pickerState, "loadDiscordModelPickerData").mockResolvedValue(
@@ -221,11 +260,338 @@ function expectVisibleStatus(harness: ReturnType<typeof createHarness>, channelI
   expectFollowUp(harness, `Status for ${sessionKey}`);
 }
 
+function archivedCommandScopes(prefix: string, userId = USER) {
+  const storePath = join(tempDirs.make(prefix), "sessions.json");
+  const cfg: OpenClawConfig = { ...createConfig(), session: { store: storePath } };
+  return {
+    cfg,
+    source: { storePath, sessionKey: `agent:main:discord:slash:${userId}` },
+    target: { storePath, sessionKey: `agent:main:discord:channel:${CHANNEL}` },
+  };
+}
+
+function persistedCommandHarness(cfg: OpenClawConfig) {
+  const harness = createHarness(cfg);
+  harness.dispatch.mockRestore();
+  harness.session.mockRestore();
+  return harness;
+}
+
+function runPersistedCommand(params: {
+  cfg: OpenClawConfig;
+  harness: ReturnType<typeof createHarness>;
+  id: string;
+  command: "compact" | "new" | "reset";
+  userId?: string;
+}) {
+  return withRegisteredChannelIngress(
+    { plugin: discordPlugin, config: params.cfg, setRuntime: setDiscordRuntime },
+    () =>
+      params.harness.client.handleInteraction(
+        createInternalInteractionPayload({
+          ...payload(CHANNEL, false, params.userId),
+          id: params.id,
+          type: InteractionType.ApplicationCommand,
+          data: { id: `${params.command}-command`, name: params.command, type: 1 },
+        }),
+      ),
+  );
+}
+
+function commandReplies(harness: ReturnType<typeof createHarness>) {
+  return [...harness.post.mock.calls, ...harness.patch.mock.calls]
+    .map((call) => call[1]?.body)
+    .filter((body) => body && "content" in body);
+}
+
 // Isolated boundary proof: REST is controlled; interaction construction, dispatch,
 // access policy, conversation routing and response serialization are production code.
 describe("Client.handleInteraction native command channel identity", () => {
   beforeEach(() => clearDiscordChannelInfoCacheForTest());
   afterEach(() => vi.restoreAllMocks());
+
+  it("restores an archived slash source and runs compact without replacing its history", async () => {
+    const { cfg, source, target } = archivedCommandScopes("openclaw-discord-archived-");
+    const sessionId = "archived-command-session";
+    await sessionStore.upsertSessionEntry({
+      ...source,
+      entry: { sessionId, updatedAt: 1 },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      ...source,
+      sessionId,
+      message: { role: "user", content: "Synthetic archived history", timestamp: 1 },
+    });
+    await sessionStore.patchSessionEntry({
+      ...source,
+      update: () => ({ archivedAt: 2, archivedBy: { type: "human", id: "test-operator" } }),
+    });
+    await sessionStore.upsertSessionEntry({
+      ...target,
+      entry: { sessionId: "active-channel-session", updatedAt: Date.now() },
+    });
+    const activeTarget = sessionStore.getSessionEntry(target);
+    expect(activeTarget).toMatchObject({ sessionId: "active-channel-session" });
+    expect(activeTarget?.archivedAt).toBeUndefined();
+    const archived = sessionStore.getSessionEntry(source);
+    if (!archived) {
+      throw new Error("Expected the archived command session fixture to exist");
+    }
+    expect(archived).toMatchObject({ sessionId, archivedAt: 2 });
+    const transcript = sessionStore.loadTranscriptEventsSync({ ...source, sessionId });
+    expect(JSON.stringify(transcript)).toContain("Synthetic archived history");
+    const harness = persistedCommandHarness(cfg);
+    await runPersistedCommand({ cfg, harness, id: "archived-compact", command: "compact" });
+    expect(harness.post).toHaveBeenCalledWith(
+      "/interactions/archived-compact/test-token/callback",
+      {
+        body: {
+          type: InteractionResponseType.DeferredChannelMessageWithSource,
+          data: { flags: 64 },
+        },
+      },
+    );
+    const replies = commandReplies(harness);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({ content: expect.stringContaining("Compaction") });
+    const after = sessionStore.getSessionEntry(source);
+    expect(after).toMatchObject({
+      sessionId: archived.sessionId,
+    });
+    expect(after?.archivedAt).toBeUndefined();
+    expect(after?.archivedBy).toBeUndefined();
+    expect(after?.archiveReason).toBeUndefined();
+    expect(sessionStore.loadTranscriptEventsSync({ ...source, sessionId })).toEqual(transcript);
+    expect(sessionStore.getSessionEntry(target)?.sessionId).toBe(activeTarget?.sessionId);
+    expect(sessionStore.getSessionEntry(target)?.archivedAt).toBeUndefined();
+  });
+
+  it.each([
+    { command: "new", sourceState: "archived" },
+    { command: "reset", sourceState: "active" },
+    { command: "new", sourceState: "missing" },
+  ] as const)(
+    "runs /$command for an archived conversation with a $sourceState command source",
+    async ({ command, sourceState }) => {
+      const { cfg, source, target } = archivedCommandScopes("openclaw-discord-archived-reset-");
+      if (sourceState !== "missing") {
+        await sessionStore.upsertSessionEntry({
+          ...source,
+          entry: { sessionId: "command-source", updatedAt: Date.now() },
+        });
+        if (sourceState === "archived") {
+          await sessionStore.patchSessionEntry({ ...source, update: () => ({ archivedAt: 2 }) });
+        }
+      }
+      await sessionStore.upsertSessionEntry({
+        ...target,
+        entry: {
+          sessionId: "previous-conversation",
+          lifecycleRevision: "previous-generation",
+          updatedAt: Date.now(),
+          totalTokens: 100,
+          compactionCount: 3,
+        },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        ...target,
+        sessionId: "previous-conversation",
+        message: { role: "user", content: "Retain this conversation history", timestamp: 1 },
+      });
+      const previousHistory = sessionStore.loadTranscriptEventsSync({
+        ...target,
+        sessionId: "previous-conversation",
+      });
+      await sessionStore.patchSessionEntry({
+        ...target,
+        update: () => ({ archivedAt: 2, archivedBy: { type: "human", id: "test-operator" } }),
+      });
+      const harness = persistedCommandHarness(cfg);
+      await runPersistedCommand({
+        cfg,
+        harness,
+        id: `archived-${command}-${sourceState}`,
+        command,
+      });
+      const replies = commandReplies(harness);
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toMatchObject({
+        content: command === "new" ? "✅ New session started." : "✅ Session reset.",
+      });
+      const after = sessionStore.getSessionEntry(target);
+      expect(after?.archivedAt).toBeUndefined();
+      expect(after?.sessionId).toBe("previous-conversation");
+      expect(after?.lifecycleRevision).toBeTruthy();
+      expect(after?.lifecycleRevision).not.toBe("previous-generation");
+      expect(after).toMatchObject({ totalTokens: 0, compactionCount: 0 });
+      const afterHistory = sessionStore.loadTranscriptEventsSync({
+        ...target,
+        sessionId: "previous-conversation",
+      });
+      expect(afterHistory.slice(0, previousHistory.length)).toEqual(previousHistory);
+      expect(afterHistory.slice(previousHistory.length)).toEqual([
+        expect.objectContaining({ type: "reset", reason: command }),
+      ]);
+      if (sourceState !== "missing") {
+        expect(sessionStore.getSessionEntry(source)).toMatchObject({ sessionId: "command-source" });
+        expect(sessionStore.getSessionEntry(source)?.archivedAt).toBeUndefined();
+      }
+    },
+  );
+
+  it.each(["source", "reset target"] as const)(
+    "refuses archived %s recovery after live command policy revocation",
+    async (held) => {
+      const { cfg, source, target } = archivedCommandScopes("openclaw-discord-revoked-archive-");
+      const root = dirname(source.storePath);
+      const sourceId = "retained-hidden-history";
+      const targetId = "retained-conversation-history";
+      await sessionStore.upsertSessionEntry({
+        ...source,
+        entry: {
+          sessionId: sourceId,
+          updatedAt: 1,
+          ...(held === "source"
+            ? {
+                archivedAt: 2,
+                worktree: { id: "held-source", branch: "test", repoRoot: root },
+              }
+            : {}),
+        },
+      });
+      await sessionStore.upsertSessionEntry({
+        ...target,
+        entry: {
+          sessionId: targetId,
+          updatedAt: 1,
+          ...(held === "reset target"
+            ? {
+                archivedAt: 2,
+                worktree: { id: "held-target", branch: "test", repoRoot: root },
+              }
+            : {}),
+        },
+      });
+      for (const [scope, sessionId] of [
+        [source, sourceId],
+        [target, targetId],
+      ] as const) {
+        await appendSessionTranscriptMessageByIdentity({
+          ...scope,
+          sessionId,
+          message: { role: "user", content: `Keep ${sessionId}`, timestamp: 1 },
+        });
+      }
+      const beforeSource = sessionStore.getSessionEntry(source);
+      const beforeTarget = sessionStore.getSessionEntry(target);
+      const sourceHistory = sessionStore.loadTranscriptEventsSync({
+        ...source,
+        sessionId: sourceId,
+      });
+      const targetHistory = sessionStore.loadTranscriptEventsSync({
+        ...target,
+        sessionId: targetId,
+      });
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const worktreeLifecycle = await loadSessionWorktreeLifecycleForTest();
+      vi.spyOn(worktreeLifecycle, "restoreSessionWorktree").mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        return () => {};
+      });
+      const harness = persistedCommandHarness(cfg);
+      const pending = runPersistedCommand({
+        cfg,
+        harness,
+        id: `revoked-archive-${held}`,
+        command: held === "source" ? "compact" : "reset",
+      });
+      try {
+        await entered.promise;
+        harness.replacePolicy();
+      } finally {
+        release.resolve();
+      }
+      await expect(pending).rejects.toThrow("Discord command authority changed");
+      expect(sessionStore.getSessionEntry(source)).toMatchObject({
+        sessionId: beforeSource?.sessionId,
+      });
+      expect(sessionStore.getSessionEntry(target)).toMatchObject({
+        sessionId: beforeTarget?.sessionId,
+      });
+      expect(sessionStore.getSessionEntry(source)?.archivedAt).toBe(beforeSource?.archivedAt);
+      expect(sessionStore.getSessionEntry(target)?.archivedAt).toBe(beforeTarget?.archivedAt);
+      expect(sessionStore.loadTranscriptEventsSync({ ...source, sessionId: sourceId })).toEqual(
+        sourceHistory,
+      );
+      expect(sessionStore.loadTranscriptEventsSync({ ...target, sessionId: targetId })).toEqual(
+        targetHistory,
+      );
+    },
+  );
+
+  it.each(["non-reset command", "unauthorized reset"] as const)(
+    "does not restore archived sessions for a %s",
+    async (scenario) => {
+      const userId = scenario === "unauthorized reset" ? "100000000000000099" : USER;
+      const { cfg, source, target } = archivedCommandScopes(
+        "openclaw-discord-archive-denied-",
+        userId,
+      );
+      for (const [scope, sessionId] of [
+        [source, "source"],
+        [target, "target"],
+      ] as const) {
+        await sessionStore.upsertSessionEntry({
+          ...scope,
+          entry: { sessionId, updatedAt: 1, archivedAt: 2 },
+        });
+      }
+      const beforeSource = sessionStore.getSessionEntry(source);
+      const beforeTarget = sessionStore.getSessionEntry(target);
+      const harness = persistedCommandHarness(cfg);
+      const run = () =>
+        runPersistedCommand({
+          cfg,
+          harness,
+          id: `archive-denied-${scenario}`,
+          command: scenario === "unauthorized reset" ? "new" : "compact",
+          userId,
+        });
+      if (scenario === "unauthorized reset") {
+        await run();
+        expectFollowUp(harness, "You are not authorized to use this command.");
+      } else {
+        await expect(run()).rejects.toThrow("is archived");
+        const replies = commandReplies(harness);
+        expect(replies).toHaveLength(1);
+        expect(replies[0]).toMatchObject({
+          content:
+            "Command failed. Please retry. If this conversation is archived, use /new or /reset to start again. If it still fails, ask an operator to check the Gateway logs.",
+        });
+      }
+      if (scenario === "unauthorized reset") {
+        expect(sessionStore.getSessionEntry(source)).toEqual(beforeSource);
+        expect(sessionStore.getSessionEntry(target)).toEqual(beforeTarget);
+      } else {
+        // Authorized ingress may stamp routing metadata; it must not reopen either session.
+        for (const [scope, before] of [
+          [source, beforeSource],
+          [target, beforeTarget],
+        ] as const) {
+          const after = sessionStore.getSessionEntry(scope);
+          expect(after).toMatchObject({
+            sessionId: before?.sessionId,
+            archivedAt: before?.archivedAt,
+          });
+          expect(after?.lifecycleRevision).toBe(before?.lifecycleRevision);
+          expect(after?.archivedBy).toEqual(before?.archivedBy);
+          expect(after?.archiveReason).toBe(before?.archiveReason);
+        }
+      }
+    },
+  );
 
   it.each([THREAD])("delivers status for raw channel %s without hydration", async (channelId) => {
     const harness = createHarness();

@@ -1,0 +1,337 @@
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
+import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
+import {
+  createDispatcher,
+  emptyConfig,
+  placementContextMocks,
+  sessionStoreMocks,
+} from "./dispatch-from-config.shared.test-harness.js";
+import {
+  describe0BeforeEach0,
+  globalBeforeAll0,
+  setNoAbort,
+} from "./dispatch-from-config.test-support.js";
+import { buildTestCtx } from "./test-ctx.js";
+
+const sourceKey = "agent:main:discord:slash:user-1";
+const targetKey = "agent:main:discord:channel:room-1";
+const storePath = "/tmp/mock-sessions.json";
+
+beforeAll(globalBeforeAll0);
+
+describe("native command archive recovery ownership", () => {
+  beforeEach(() => {
+    describe0BeforeEach0();
+    setNoAbort();
+  });
+
+  function prepareEntries(
+    source: SessionEntry | undefined,
+    target: SessionEntry | undefined,
+    commandTargetKey: string,
+  ) {
+    const entries = new Map<string, SessionEntry & Record<string, unknown>>();
+    if (source) {
+      entries.set(sourceKey, { ...source });
+    }
+    if (target) {
+      entries.set(commandTargetKey, { ...target });
+    }
+    sessionStoreMocks.loadSessionEntry.mockImplementation((scope) =>
+      entries.get((scope as { sessionKey: string }).sessionKey),
+    );
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation((scope) =>
+      entries.get((scope as { sessionKey: string }).sessionKey),
+    );
+    sessionStoreMocks.updateSessionEntry.mockImplementation(async (scope, update) => {
+      const key = (scope as { sessionKey: string }).sessionKey;
+      const current = entries.get(key);
+      if (!current) {
+        return null;
+      }
+      const patch = await update(current);
+      if (patch) {
+        entries.set(key, { ...current, ...patch });
+      }
+      return entries.get(key) ?? null;
+    });
+    return entries;
+  }
+
+  async function admitNativeCommand(params: {
+    command: "compact" | "new" | "reset" | "status";
+    authorized?: boolean;
+    sameKey?: boolean;
+    noTargetOverride?: boolean;
+    hasPluginOwnedBinding?: boolean;
+    human?: boolean;
+    assertCurrent?: () => void;
+    assertChannelAuthority?: () => void;
+    afterEntriesPrepared?: (entries: Map<string, SessionEntry>) => void;
+    configureContext?: (ctx: ReturnType<typeof buildTestCtx>) => void;
+    source?: SessionEntry;
+    target?: SessionEntry;
+  }) {
+    const commandTargetKey = params.sameKey ? sourceKey : targetKey;
+    const entries = prepareEntries(params.source, params.target, commandTargetKey);
+    params.afterEntriesPrepared?.(entries);
+    const body = `/${params.command}`;
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      From: "discord:user:1",
+      To: "discord:channel:room-1",
+      ChatType: "channel",
+      SessionKey: sourceKey,
+      CommandTargetSessionKey: params.noTargetOverride ? undefined : commandTargetKey,
+      Body: body,
+      CommandBody: body,
+      RawBody: body,
+      CommandSource: "native",
+      CommandAuthorized: params.authorized ?? true,
+      CommandTurn: {
+        kind: "native",
+        source: "native",
+        authorized: params.authorized ?? true,
+        commandName: params.command,
+        body,
+      },
+      InboundAccessAuthorized: true,
+      InboundEventKind: "user_request",
+      InputProvenance:
+        params.human === false
+          ? { kind: "internal_system", sourceTool: "heartbeat" }
+          : { kind: "external_user", sourceChannel: "discord" },
+    });
+    params.configureContext?.(ctx);
+    const operationSessionStoreEntry = { entry: params.source, storePath };
+    const targetSessionStoreEntry = {
+      entry: params.target,
+      sessionKey: commandTargetKey,
+      storePath,
+    };
+    const { createDispatchReplyOperationCoordinator } =
+      await import("./dispatch-from-config.lifecycle.js");
+    const coordinator = createDispatchReplyOperationCoordinator({
+      agentId: "main",
+      cfg: emptyConfig,
+      ctx,
+      assertCurrent: params.assertCurrent,
+      replyOptions: { assertChannelAuthority: params.assertChannelAuthority },
+      dispatcher: createDispatcher(),
+      dispatchOperationSessionKey: sourceKey,
+      operationSessionStoreEntry,
+      targetSessionStoreEntry,
+      resolveOperationExpectedSessionId: () => params.source?.sessionId,
+    });
+    let outcome: unknown;
+    try {
+      outcome = await coordinator.ensureDispatchReplyOperation(
+        "pre_dispatch",
+        params.hasPluginOwnedBinding,
+      );
+    } catch (error) {
+      outcome = error;
+    } finally {
+      await coordinator.releasePreDispatchLifecycleAdmission();
+      coordinator.completeDispatchReplyOperation();
+    }
+    return { entries, outcome, operationSessionStoreEntry, targetSessionStoreEntry };
+  }
+
+  it("restores the detached source with its session identity while leaving the active target alone", async () => {
+    const source = { sessionId: "source-history", updatedAt: 1, archivedAt: 2 };
+    const target = { sessionId: "busy-target", updatedAt: 1 };
+    const { createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js");
+    const targetOperation = createReplyOperation({
+      sessionKey: targetKey,
+      sessionId: target.sessionId,
+      resetTriggered: false,
+    });
+    try {
+      const result = await admitNativeCommand({ command: "compact", source, target });
+      expect(result.outcome).toEqual({ status: "ready" });
+      expect(result.entries.get(sourceKey)).toMatchObject({ sessionId: "source-history" });
+      expect(result.entries.get(sourceKey)?.archivedAt).toBeUndefined();
+      expect(result.entries.get(targetKey)).toEqual(target);
+      expect(replyRunRegistry.get(targetKey)).toBe(targetOperation);
+      expect(targetOperation.abortSignal.aborted).toBe(false);
+    } finally {
+      targetOperation.complete();
+    }
+  });
+
+  it.each([
+    { command: "new", noTargetOverride: false, restored: true },
+    { command: "reset", noTargetOverride: false, restored: true },
+    { command: "new", noTargetOverride: true, restored: true },
+    { command: "reset", noTargetOverride: true, restored: true },
+    { command: "status", noTargetOverride: false, restored: false },
+    { command: "status", noTargetOverride: true, restored: false },
+  ] as const)(
+    "handles same-key native /$command without provenance and with noTargetOverride=$noTargetOverride",
+    async ({ command, noTargetOverride, restored }) => {
+      const entry = { sessionId: "same-key-history", updatedAt: 1, archivedAt: 2 };
+      const result = await admitNativeCommand({
+        command,
+        sameKey: true,
+        noTargetOverride,
+        source: entry,
+        target: entry,
+        configureContext: (ctx) => {
+          ctx.InputProvenance = undefined;
+        },
+      });
+      expect(result.entries.get(sourceKey)?.sessionId).toBe("same-key-history");
+      expect(result.entries.get(sourceKey)?.archivedAt).toBe(restored ? undefined : 2);
+      if (restored) {
+        expect(result.outcome).toEqual({ status: "ready" });
+      }
+    },
+  );
+
+  it.each([
+    { name: "non-reset archived target", command: "status" as const, authorized: true },
+    { name: "unauthorized reset", command: "new" as const, authorized: false },
+  ])("keeps $name archived", async ({ command, authorized }) => {
+    const result = await admitNativeCommand({
+      command,
+      authorized,
+      source: { sessionId: "source-history", updatedAt: 1, archivedAt: 2 },
+      target: { sessionId: "target-history", updatedAt: 1, archivedAt: 3 },
+    });
+    expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
+    expect(result.entries.get(targetKey)?.archivedAt).toBe(3);
+  });
+
+  it.each([
+    {
+      name: "plugin-owned source",
+      source: { sessionId: "source-history", updatedAt: 1, archivedAt: 2, pluginOwnerId: "p" },
+      target: { sessionId: "target-history", updatedAt: 1 },
+    },
+    {
+      name: "plugin-owned target",
+      source: { sessionId: "source-history", updatedAt: 1, archivedAt: 2 },
+      target: { sessionId: "target-history", updatedAt: 1, pluginOwnerId: "p" },
+    },
+    {
+      name: "restart tombstone",
+      source: {
+        sessionId: "source-history",
+        updatedAt: 1,
+        archivedAt: 2,
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+      },
+      target: { sessionId: "target-history", updatedAt: 1 },
+    },
+  ])("does not restore a $name", async ({ source, target }) => {
+    const result = await admitNativeCommand({ command: "status", source, target });
+    expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
+    expect(result.entries.get(targetKey)).toEqual(target);
+  });
+
+  it("does not restore with an unsafe worker placement", async () => {
+    placementContextMocks.getMany.mockReturnValue(
+      new Map([["source-history", { state: "active" } as WorkerSessionPlacementRecord]]),
+    );
+    const result = await admitNativeCommand({
+      command: "status",
+      source: { sessionId: "source-history", updatedAt: 1, archivedAt: 2 },
+      target: { sessionId: "target-history", updatedAt: 1 },
+    });
+    expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
+  });
+
+  it.each([
+    { name: "plugin binding", hasPluginOwnedBinding: true, human: true },
+    { name: "nonhuman invocation", hasPluginOwnedBinding: false, human: false },
+  ])("does not restore a $name", async ({ hasPluginOwnedBinding, human }) => {
+    const result = await admitNativeCommand({
+      command: "status",
+      hasPluginOwnedBinding,
+      human,
+      source: { sessionId: "source-history", updatedAt: 1, archivedAt: 2 },
+      target: { sessionId: "target-history", updatedAt: 1 },
+    });
+    expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
+  });
+
+  it.each(["command owner", "channel policy", "dispatch generation"] as const)(
+    "rechecks %s after placement preparation",
+    async (authority) => {
+      let current = true;
+      placementContextMocks.getMany.mockImplementation(() => {
+        current = false;
+        return new Map();
+      });
+      const result = await admitNativeCommand({
+        command: "status",
+        source: { sessionId: "source-history", updatedAt: 1, archivedAt: 2 },
+        target: { sessionId: "target-history", updatedAt: 1 },
+        ...(authority === "command owner"
+          ? {
+              configureContext: (ctx: ReturnType<typeof buildTestCtx>) =>
+                bindCommandOwnerAuthority(ctx, { isCurrent: () => current }),
+            }
+          : authority === "channel policy"
+            ? {
+                assertChannelAuthority: () => {
+                  if (!current) {
+                    throw new Error("channel policy changed");
+                  }
+                },
+              }
+            : {
+                assertCurrent: () => {
+                  if (!current) {
+                    throw new Error("generation changed");
+                  }
+                },
+              }),
+      });
+      expect(result.outcome).toMatchObject({
+        message:
+          authority === "command owner"
+            ? "Channel operator authority changed; send a new request."
+            : authority === "channel policy"
+              ? "channel policy changed"
+              : "generation changed",
+      });
+      expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
+    },
+  );
+
+  it("rejects a source generation changed during placement preparation", async () => {
+    let entries: Map<string, SessionEntry>;
+    placementContextMocks.getMany.mockImplementation(() => {
+      entries.set(sourceKey, {
+        ...entries.get(sourceKey)!,
+        lifecycleRevision: "replacement-generation",
+      });
+      return new Map();
+    });
+    const result = await admitNativeCommand({
+      command: "status",
+      source: {
+        sessionId: "source-history",
+        lifecycleRevision: "captured-generation",
+        updatedAt: 1,
+        archivedAt: 2,
+      },
+      target: { sessionId: "target-history", updatedAt: 1 },
+      afterEntriesPrepared: (prepared) => {
+        entries = prepared;
+      },
+    });
+    expect(result.outcome).toBeInstanceOf(Error);
+    expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
+  });
+});
