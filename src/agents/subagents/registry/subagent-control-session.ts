@@ -115,7 +115,7 @@ export async function prepareSubagentKillSession(
       },
     );
   } catch (error) {
-    await release();
+    release();
     throw error;
   }
 }

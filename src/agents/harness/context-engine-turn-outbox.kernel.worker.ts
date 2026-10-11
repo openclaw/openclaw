@@ -96,6 +96,7 @@ function writeContextEngineTurnOutboxPayload(
   );
   if (existing) {
     assertMatchingOutboxOwner(existing, params, advancementKey);
+    // SAFETY: This module's typed writers own the persisted outbox payload union.
     const existingPayload = JSON.parse(existing.payload_json) as ContextEngineTurnOutboxPayload;
     const transitionMatches =
       (params.payload.state === "accepted" &&
@@ -287,6 +288,7 @@ export function recoverContextEngineTurnOutbox(params: {
   ).rows;
   let pending = false;
   for (const row of rows) {
+    // SAFETY: This module's typed writers own the persisted outbox payload union.
     const payload = JSON.parse(row.payload_json) as ContextEngineTurnOutboxPayload;
     if (payload.state === "ready") {
       pending = true;
