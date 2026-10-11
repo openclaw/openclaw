@@ -35,7 +35,8 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
-import { ensureAuthProfileStore } from "./store-runtime.js";
+import { ensureAuthProfileStoreAsync } from "./store-runtime.js";
+import type { AuthProfileStore } from "./types.js";
 
 // Read-only auth resolution must not import session persistence.
 const sessionAccessorLoader = createLazyImportLoader(
@@ -50,12 +51,12 @@ type SessionAuthProfileOverrideSnapshot = SessionAuthProfileOverrideState &
   Pick<SessionEntry, "sessionId">;
 type SessionAuthProfileOverrideResult = {
   profileId: string | undefined;
-  store: ReturnType<typeof ensureAuthProfileStore> | undefined;
+  store: AuthProfileStore | undefined;
 };
 
 function profileAuthRequirement(params: {
   cfg: OpenClawConfig;
-  store: ReturnType<typeof ensureAuthProfileStore> | undefined;
+  store: AuthProfileStore | undefined;
   profileId: string;
 }): ProviderModelRouteAuthRequirement | undefined {
   const credential = params.store?.profiles[params.profileId];
@@ -187,7 +188,7 @@ function isProfileForProvider(params: {
   cfg: OpenClawConfig;
   providers: readonly string[];
   profileId: string;
-  store: ReturnType<typeof ensureAuthProfileStore>;
+  store: AuthProfileStore;
 }): boolean {
   const entry = params.store.profiles[params.profileId];
   if (entry && !entry.provider) {
@@ -215,14 +216,14 @@ function uniqueProviders(provider: string, acceptedProviderIds?: readonly string
 }
 
 /** Resolve a person's new-session default through the canonical credential store. */
-export function resolveUserLinkedAuthProfile(params: {
+export async function resolveUserLinkedAuthProfile(params: {
   cfg: OpenClawConfig;
   agentDir: string;
   provider: string;
   requesterProfileId: string;
   acceptedProviderIds?: readonly string[];
-  store?: ReturnType<typeof ensureAuthProfileStore>;
-}): { profileId: string; store: ReturnType<typeof ensureAuthProfileStore> } | undefined {
+  store?: AuthProfileStore;
+}): Promise<{ profileId: string; store: AuthProfileStore } | undefined> {
   const providers = uniqueProviders(params.provider, params.acceptedProviderIds);
   const profileId = resolveUserProfileAuthLink({
     profileId: params.requesterProfileId,
@@ -233,17 +234,17 @@ export function resolveUserLinkedAuthProfile(params: {
   }
   const store =
     !params.store || isUserModelAuthProfileId(profileId)
-      ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false, profileId })
+      ? await ensureAuthProfileStoreAsync(params.agentDir, {
+          allowKeychainPrompt: false,
+          profileId,
+        })
       : params.store;
   return isProfileForProvider({ cfg: params.cfg, providers, profileId, store })
     ? { profileId, store }
     : undefined;
 }
 
-function isProfileGloballyInCooldown(
-  store: ReturnType<typeof ensureAuthProfileStore>,
-  profileId: string,
-): boolean {
+function isProfileGloballyInCooldown(store: AuthProfileStore, profileId: string): boolean {
   if (!isProfileInCooldown(store, profileId)) {
     return false;
   }
@@ -324,7 +325,7 @@ async function resolveSessionAuthProfileOverride(params: {
     return { profileId: undefined, store: undefined };
   }
 
-  const store = ensureAuthProfileStore(agentDir, {
+  const store = await ensureAuthProfileStoreAsync(agentDir, {
     allowKeychainPrompt: false,
     profileId: sessionEntry.authProfileOverride,
   });
@@ -410,7 +411,7 @@ async function resolveSessionAuthProfileOverride(params: {
   // New-session defaults must not repin an existing unpinned/shared session.
   // Person-linked pins stay sticky across participants and unlinking.
   if (params.requesterProfileId && isNewSession) {
-    const linked = resolveUserLinkedAuthProfile({
+    const linked = await resolveUserLinkedAuthProfile({
       cfg,
       agentDir,
       provider,
@@ -643,7 +644,7 @@ export async function resolveSessionAuthSelection(params: {
   // does not belong in this operation's private auth view or its validation.
   const authStore =
     !store || (isUserModelAuthProfileId(profileId) && !store.profiles[profileId])
-      ? ensureAuthProfileStore(params.agentDir, {
+      ? await ensureAuthProfileStoreAsync(params.agentDir, {
           allowKeychainPrompt: false,
           profileId,
         })

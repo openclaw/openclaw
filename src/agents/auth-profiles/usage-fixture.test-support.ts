@@ -7,8 +7,8 @@ import {
 } from "./usage-reduction.js";
 
 export const storeMocks = {
-  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
-    (params: { agentDir?: string }) => params.agentDir,
+  resolvePersistedAuthProfileOwnerAgentDirAsync: vi.fn(
+    async (params: { agentDir?: string }) => params.agentDir,
   ),
   saveAuthProfileStore: vi.fn(),
   loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(),

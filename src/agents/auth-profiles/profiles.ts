@@ -33,6 +33,7 @@ import {
   ensureAuthProfileStoreForLocalUpdateAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
   saveAuthProfileStore,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
@@ -40,7 +41,6 @@ import {
 import {
   captureAuthProfileStorePersistenceSnapshot,
   isSharedMainAuthProfileAgentDir,
-  resolvePersistedAuthProfileOwnerAgentDir,
   resolveRuntimeAuthProfileAgentDir,
   restoreAuthProfileStorePersistenceSnapshot,
   applyScopedAuthReadThrough,
@@ -582,7 +582,7 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       ]),
     );
     for (const profileId of profileIds) {
-      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+      const ownerAgentDir = await resolvePersistedAuthProfileOwnerAgentDirAsync({
         agentDir: params.agentDir,
         profileId,
       });

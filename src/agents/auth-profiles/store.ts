@@ -292,11 +292,16 @@ export function isSharedMainAuthProfileAgentDir(agentDir?: string): boolean {
   return resolveAgentAuthPath(effectiveAgentDir) === mainPath;
 }
 
-/** Find a persisted credential in the scoped store, falling back to the main store. */
+/** @deprecated Use findPersistedAuthProfileCredentialAsync. Removed at the next Plugin SDK major. */
 export function findPersistedAuthProfileCredential(params: {
   agentDir?: string;
   profileId: string;
 }): AuthProfileStore["profiles"][string] | undefined {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "findPersistedAuthProfileCredential",
+    replacement: "findPersistedAuthProfileCredentialAsync",
+  });
   if (isEnvOnlyAuthProfileRuntime()) {
     return undefined;
   }
