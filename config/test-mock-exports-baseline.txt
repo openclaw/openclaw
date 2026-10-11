@@ -4752,7 +4752,6 @@
 ["src/cli/plugins-search-command.test.ts","../infra/clawhub-packages.js","32b49588430ec0e0a2593eeb959d94020b74dd9f8193b99f0decd298369c8a9b",1]
 ["src/cli/plugins-search-command.test.ts","../runtime.js","e17253205c613248cbec5674c67dca715c50118db4e146f009ac7af9a39018d8",1]
 ["src/cli/plugins-update-command.authority.integration.test.ts","./plugins-lifecycle-client.js","edd94f03ddce1a33f0d95eece4161fab96b5a39d27062e9281c1bddb761d7524",1]
-["src/cli/plugins-update-command.migrations.integration.test.ts","./plugins-lifecycle-client.js","414badc2e045f5e05ce023ba1c5862d3282b0f9b865e4371e8318f1281f2d5d4",1]
 ["src/cli/precomputed-help.test-helpers.ts","./root-help-live-config.js","24871292ecf0fad9d6d62d23a95046fdc69484d3c59a8bb7a68475805b6b72e9",1]
 ["src/cli/precomputed-help.test-helpers.ts","./root-help-metadata.js","a14295f98413942fe15bcc63b0224a299282c4baf4419db82f18b494748694e6",1]
 ["src/cli/program.force.test.ts","../infra/ports-probe.js","449db94342de7ed2c247fc6e0d74ac7f0e1258ebde962dc1ba8a2f452bccf86b",1]
