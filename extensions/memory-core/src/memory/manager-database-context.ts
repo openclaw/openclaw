@@ -28,7 +28,7 @@ import {
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
-import { runMemorySourceState } from "./manager-cpu-worker-runtime.js";
+import { runMemoryDatabaseFacts, runMemorySourceState } from "./manager-cpu-worker-runtime.js";
 import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
 import {
   closeMemoryDatabase,
@@ -49,7 +49,7 @@ import {
   publishMemorySource,
   retryMemoryPublication,
 } from "./manager-publication.js";
-import { readMemoryDatabaseFacts, type MemoryDatabaseFacts } from "./manager-retrieval-read.js";
+import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -129,7 +129,12 @@ export class MemoryIndexDatabase {
           database.fts.enabled &&
           memoryDatabaseTableExists(database.db, "main", MEMORY_INDEX_FTS_TABLE);
         if (database.hasIndex) {
-          database.installFacts(readMemoryDatabaseFacts(database.db));
+          database.installFacts(
+            await runMemoryDatabaseFacts({
+              agentId: params.agentId,
+              databasePath: params.writeOptions.path,
+            }),
+          );
         }
       } else {
         await database.admitSchema(params.schema);

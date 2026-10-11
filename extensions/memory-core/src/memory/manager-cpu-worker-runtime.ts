@@ -124,6 +124,11 @@ export async function runMemoryIndexState(target: MemoryReadTarget, signal?: Abo
   return result.state;
 }
 
+export async function runMemoryDatabaseFacts(target: MemoryReadTarget) {
+  const result = await runRetrieval({ ...target, kind: "index-facts" }, {}, "index facts");
+  return result.facts;
+}
+
 export async function runMemoryRecallMetadata(
   target: MemoryReadTarget,
   query: Omit<

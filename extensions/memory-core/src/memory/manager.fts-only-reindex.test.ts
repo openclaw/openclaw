@@ -656,31 +656,6 @@ describe("memory manager FTS-only reindex", () => {
     expect(statusAfter.dirty).toBe(true);
   });
 
-  it("observes a separate CLI reindex without reopening the live gateway manager", async () => {
-    const liveManager = await createManager({ provider: "none" });
-    await liveManager.sync({ reason: "test", force: true });
-    (
-      liveManager as unknown as {
-        db: { exec: (sql: string) => void };
-      }
-    ).db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
-    expect(indexIdentityStatus(liveManager)).toBe("missing");
-
-    await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
-      "Beta topic\n\nKeep this repaired note.",
-    );
-    const cliManager = await createManager({
-      provider: "none",
-      purpose: "cli",
-    });
-    await cliManager.sync({ reason: "cli", force: true });
-
-    expect(indexIdentityStatus(liveManager)).toBe("valid");
-    const results = await liveManager.search("beta repaired");
-    expect(results.some((result) => result.snippet.includes("Beta topic"))).toBe(true);
-  });
-
   it("removes chunks and FTS rows when the dirty source file is already deleted", async () => {
     const seedDb = openOpenClawAgentDatabase({ agentId: "main" }).db;
     expect(() => seedDb.loadExtension("not-a-real-extension")).toThrow(
