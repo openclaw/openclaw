@@ -33,6 +33,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
+import { waitForAgentDatabasePreparation } from "./agent-database-preparation-context.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
@@ -217,6 +218,14 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
   };
   const ownedAuthority = "authority" in publicationSource ? publicationSource.authority : undefined;
   ownedAuthority?.assertCurrent();
+  if (ownedAuthority) {
+    // Background consumers must join startup before capturing their execution owner.
+    const preparation = waitForAgentDatabasePreparation(options.agentId, { env });
+    if (preparation) {
+      await preparation;
+      ownedAuthority.assertCurrent();
+    }
+  }
   const expectedDatabase =
     "execution" in publicationSource || "authority" in publicationSource
       ? undefined

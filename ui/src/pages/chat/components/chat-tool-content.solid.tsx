@@ -2,7 +2,6 @@ import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createEffect, createMemo } from "solid-js";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
-import "../../../components/panel-elements.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
@@ -147,7 +146,7 @@ function WorkspaceFilePath(props: {
   );
 }
 
-export function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number }) {
+function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number }) {
   const label = () =>
     props.outcome === "failed" && props.exitCode !== undefined
       ? t("chat.toolCards.exitCode", { code: String(props.exitCode) })
@@ -532,7 +531,7 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
 }
 
 const defaults: ToolRenderOptions = { messageKey: "" };
-export const ToolContentHost = defineSolidBridge<{
+defineSolidBridge<{
   card: ToolCard | null;
   options: ToolRenderOptions;
 }>(
@@ -549,12 +548,12 @@ export const ToolContentHost = defineSolidBridge<{
     },
   },
 );
-export const RawOutputHost = defineSolidBridge<{ text: string }>(
+defineSolidBridge<{ text: string }>(
   "openclaw-chat-tool-raw",
   (props) => <RawOutputToggle text={props.text} />,
   { properties: { text: { default: "", attribute: false } } },
 );
-export const ToolOutcomeHost = defineSolidBridge<{ outcome: ToolCardOutcome; exitCode?: number }>(
+defineSolidBridge<{ outcome: ToolCardOutcome; exitCode?: number }>(
   "openclaw-chat-tool-outcome",
   (props) => <ToolOutcome outcome={props.outcome} exitCode={props.exitCode} />,
   {
