@@ -127,7 +127,7 @@ suite.define(() => {
       )
       .toBe(true);
     if (options.evictTranscript) {
-      await expect.poll(() => page.evaluate(countSnapshotStore, "snapshots")).toBeGreaterThan(0);
+      await expect.poll(() => countSnapshotStore(page, "snapshots")).toBeGreaterThan(0);
       await page.evaluate(async () => {
         await new Promise<void>((resolve, reject) => {
           const open = indexedDB.open("openclaw-chat-snapshots");
@@ -158,8 +158,8 @@ suite.define(() => {
           });
         });
       });
-      expect(await page.evaluate(countSnapshotStore, "snapshots")).toBe(0);
-      expect(await page.evaluate(countSnapshotStore, "sidebarSnapshots")).toBeGreaterThan(0);
+      expect(await countSnapshotStore(page, "snapshots")).toBe(0);
+      expect(await countSnapshotStore(page, "sidebarSnapshots")).toBeGreaterThan(0);
     }
     await page.addInitScript(() => {
       const frames: Array<{
@@ -280,28 +280,38 @@ suite.define(() => {
   });
 });
 
-function countSnapshotStore(storeName: "snapshots" | "sidebarSnapshots"): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const open = indexedDB.open("openclaw-chat-snapshots");
-    open.addEventListener("error", () =>
-      reject(open.error ?? new Error("Boot snapshot open failed")),
-    );
-    open.addEventListener("success", () => {
-      const db = open.result;
-      if (!db.objectStoreNames.contains(storeName)) {
-        db.close();
-        resolve(0);
-        return;
-      }
-      const transaction = db.transaction(storeName, "readonly");
-      const request = transaction.objectStore(storeName).count();
-      transaction.addEventListener("complete", () => {
-        db.close();
-        resolve(request.result);
-      });
-      transaction.addEventListener("error", () =>
-        reject(transaction.error ?? new Error("Boot snapshot count failed")),
-      );
-    });
-  });
+function countSnapshotStore(
+  page: Page,
+  storeName: "snapshots" | "sidebarSnapshots",
+): Promise<number> {
+  // The callback parameter stays unannotated so Playwright infers Arg from
+  // storeName. A declared literal-union parameter misses the Arg overload and
+  // is checked against PageFunction<void, number>.
+  return page.evaluate(
+    (name) =>
+      new Promise<number>((resolve, reject) => {
+        const open = indexedDB.open("openclaw-chat-snapshots");
+        open.addEventListener("error", () =>
+          reject(open.error ?? new Error("Boot snapshot open failed")),
+        );
+        open.addEventListener("success", () => {
+          const db = open.result;
+          if (!db.objectStoreNames.contains(name)) {
+            db.close();
+            resolve(0);
+            return;
+          }
+          const transaction = db.transaction(name, "readonly");
+          const request = transaction.objectStore(name).count();
+          transaction.addEventListener("complete", () => {
+            db.close();
+            resolve(request.result);
+          });
+          transaction.addEventListener("error", () =>
+            reject(transaction.error ?? new Error("Boot snapshot count failed")),
+          );
+        });
+      }),
+    storeName,
+  );
 }
