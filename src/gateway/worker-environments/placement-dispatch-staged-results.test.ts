@@ -30,6 +30,7 @@ import { createWorkerTunnelManager } from "./tunnel.js";
 import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
+  hasWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
@@ -128,6 +129,7 @@ describe("worker placement result recovery", () => {
     base?: string;
     current: string;
     record?: boolean;
+    stagedResultRef?: string;
   }): Promise<{ baseManifestRef: string; currentManifestRef: string; stagedResultRef: string }> {
     await fs.mkdir(params.workspacePath, { recursive: true });
     const initialized = await runCommandWithTimeout(
@@ -164,7 +166,8 @@ describe("worker placement result recovery", () => {
     const current = encode(params.current);
     await params.store.updateWorkspaceBaseManifest({ claim: params.claim, manifestRef: base.ref });
     await params.store.markWorkspaceResultPending(params.claim);
-    const stagedResultRef = workerWorkspaceResultRef(params.claim.claimId);
+    const stagedResultRef =
+      params.stagedResultRef ?? workerWorkspaceResultRef(params.claim.claimId);
     await stageWorkerWorkspaceResult({
       root: params.workspacePath,
       stagingRoot: payload,
@@ -251,6 +254,94 @@ describe("worker placement result recovery", () => {
       ).code,
     ).not.toBe(0);
   });
+
+  it.each([false, true])(
+    "recovers an accepted unstaged result without its node (reclaim=%s)",
+    async (reclaim) => {
+      const workspacePath = path.join(root, "accepted-unchanged-result");
+      const priorConflictRef = workerWorkspaceResultRef("prior-conflict");
+      const priorConflict = { paths: ["result.txt"], stagedResultRef: priorConflictRef };
+      const original = createHarness(database, placementStore, { workspacePath });
+      const active = await original.placements.seedActive(2);
+      if (active.state !== "active") {
+        throw new Error("expected an active placement");
+      }
+      if (reclaim) {
+        await placementStore.startDrain({
+          sessionId: active.sessionId,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+          expectedGeneration: active.generation,
+        });
+      }
+      const claimInput = {
+        ...REQUEST,
+        claimId: reclaim ? "reclaim-unchanged" : "unchanged-turn",
+        runId: reclaim ? "reclaim-unchanged" : "unchanged-turn",
+        owner: placementTurnOwner(active),
+      };
+      const claim = reclaim
+        ? await placementStore.claimReclaimWorkspaceResult(claimInput)
+        : await placementStore.claimTurn(claimInput);
+      await placementStore.markWorkspaceResultPending(claim);
+      const prior = await stagePendingResult({
+        store: placementStore,
+        claim,
+        workspacePath,
+        base: "base\n",
+        current: "prior worker conflict\n",
+        record: false,
+        stagedResultRef: priorConflictRef,
+      });
+      // Crash after unchanged acceptance, before conflict settlement or source teardown.
+      await placementStore.updateWorkspaceBaseManifest({
+        claim,
+        manifestRef: prior.baseManifestRef,
+      });
+      await placementStore.acceptWorkspaceResult(claim);
+      expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
+        { stagedResultRef: null, workspaceAcceptedAtMs: 1_000 },
+      ]);
+      await fs.writeFile(path.join(workspacePath, "result.txt"), "later local edit\n");
+      await closeStateDatabaseForTest();
+      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+      const recovered = createHarness(database, restartedStore, {
+        workspacePath,
+        priorWorkspaceResultConflict: priorConflict,
+      });
+      recovered.markEnvironmentDestroyed();
+      vi.mocked(recovered.environments.startTunnel).mockRejectedValue(
+        new Error("node unavailable"),
+      );
+
+      await recovered.service.reconcile("startup");
+
+      expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(recovered.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
+      expect(recovered.environments.startTunnel).not.toHaveBeenCalled();
+      expect(recovered.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).toBe(
+        "later local edit\n",
+      );
+      expect(
+        await hasWorkerWorkspaceResultRef({
+          root: workspacePath,
+          stagedResultRef: priorConflictRef,
+        }),
+      ).toBe(reclaim);
+      if (reclaim) {
+        expect(recovered.reportWorkspaceResultConflict).not.toHaveBeenCalled();
+      } else {
+        expect(recovered.reportWorkspaceResultConflict).toHaveBeenCalledWith({
+          sessionId: REQUEST.sessionId,
+          sessionKey: REQUEST.sessionKey,
+          agentId: REQUEST.agentId,
+          cleared: true,
+        });
+      }
+    },
+  );
 
   it.each(["retained", "removed-before-restart"] as const)(
     "keeps an accepted result fenced until provider deletion succeeds (%s ref)",
