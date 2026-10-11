@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   createSqliteQueryCache,
