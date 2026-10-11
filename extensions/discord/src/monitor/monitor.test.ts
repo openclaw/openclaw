@@ -2,7 +2,7 @@ import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtim
 
 installDiscordIngressTestRuntime();
 // Discord tests cover monitor plugin behavior.
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, MessageFlags } from "discord-api-types/v10";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -18,6 +18,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
 import type { DiscordInteractiveHandlerContext } from "../interactive-dispatch.js";
 import type { ButtonInteraction, ComponentData, ModalInteraction } from "../internal/discord.js";
+import { ButtonInteraction as NativeButtonInteraction } from "../internal/interactions.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import {
   createButtonEntry,
@@ -1040,19 +1041,54 @@ describe("discord component interactions", () => {
       entries: [createButtonEntry({ callbackData: "codex:approve" })],
       modals: [],
     });
-    dispatchPluginInteractiveHandlerMock.mockResolvedValue({
-      matched: true,
-      handled: false,
-      duplicate: false,
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as { onMatched: () => Promise<void> };
+      await typedParams.onMatched();
+      return { matched: true, handled: false, duplicate: false };
     });
 
     const button = createDiscordComponentButton(createComponentContext());
-    const { interaction, reply } = createComponentButtonInteraction();
+    const post = vi.fn().mockResolvedValue(undefined);
+    const patch = vi.fn().mockResolvedValue(undefined);
+    // Preserve native pre-ack state and REST serialization across the declined-plugin fallback.
+    const interaction = new NativeButtonInteraction(
+      {
+        options: { clientId: "app1" },
+        rest: { post, patch },
+      } as unknown as ConstructorParameters<typeof NativeButtonInteraction>[0],
+      {
+        id: "interaction1",
+        token: "token1",
+        type: 3,
+        version: 1,
+        application_id: "app1",
+        channel_id: "dm-channel",
+        user: { id: "123456789", username: "test-user", discriminator: "0000", avatar: null },
+        data: { component_type: 2, custom_id: "button1" },
+        message: {
+          id: "msg-1",
+          channel_id: "dm-channel",
+          flags: MessageFlags.IsComponentsV2,
+          content: "",
+          components: [],
+        },
+      } as ConstructorParameters<typeof NativeButtonInteraction>[1],
+    );
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post).toHaveBeenNthCalledWith(1, "/interactions/interaction1/token1/callback", {
+      body: { type: 6 },
+    });
+    expect(post).toHaveBeenNthCalledWith(
+      2,
+      "/webhooks/app1/token1",
+      { body: { content: "✓", flags: MessageFlags.Ephemeral } },
+      undefined,
+    );
+    expect(patch).not.toHaveBeenCalled();
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 
