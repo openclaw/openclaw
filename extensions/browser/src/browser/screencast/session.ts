@@ -9,7 +9,13 @@ const FRAME_INTERVAL_MS = 50;
 const sessions = new Map<string, BrowserScreencastSession>();
 
 type ScreencastFrame = Parameters<typeof encodeBrowserScreencastFrame>[1] & { sessionId: number };
-type ViewerRequester = { signal?: AbortSignal; isCurrent?: () => boolean; release?: () => void };
+type ViewerRequester = {
+  signal?: AbortSignal;
+  isCurrent?: () => boolean;
+  release?: () => void;
+  trackWork?: <T>(work: Promise<T>) => Promise<T>;
+};
+type ViewerIngress = Pick<ViewerRequester, "signal" | "isCurrent" | "trackWork">;
 
 class BrowserScreencastSession {
   readonly viewers = new Map<WebSocket, ViewerRequester>();
@@ -23,6 +29,7 @@ class BrowserScreencastSession {
   private checkedUrl?: string;
   private metadata?: { url: string; title: string };
   private stopPromise?: Promise<void>;
+  private readonly pending = new Set<Promise<void>>();
 
   constructor(
     readonly key: string,
@@ -34,13 +41,17 @@ class BrowserScreencastSession {
   addViewer(ws: WebSocket, requester: ViewerRequester): void {
     const onRequesterGone = () => ws.close(4006, "authority_revoked");
     this.viewers.set(ws, requester);
+    for (const work of this.pending) {
+      void requester.trackWork?.(work);
+    }
     ws.once("close", () => {
       requester.signal?.removeEventListener("abort", onRequesterGone);
       requester.release?.();
       this.viewers.delete(ws);
       this.readyViewers.delete(ws);
       if (this.viewers.size === 0) {
-        void this.close();
+        const cleanup = this.close();
+        void requester.trackWork?.(cleanup);
       }
     });
     requester.signal?.addEventListener("abort", onRequesterGone, { once: true });
@@ -48,6 +59,18 @@ class BrowserScreencastSession {
       return;
     }
     this.sendReady();
+  }
+
+  trackWork(work: Promise<void>): Promise<void> {
+    this.pending.add(work);
+    void work.then(
+      () => this.pending.delete(work),
+      () => this.pending.delete(work),
+    );
+    for (const requester of this.viewers.values()) {
+      void requester.trackWork?.(work);
+    }
+    return work;
   }
 
   private isViewerCurrent(ws: WebSocket): boolean {
@@ -69,6 +92,10 @@ class BrowserScreencastSession {
     try {
       this.params.lifecycleSignal.throwIfAborted();
       this.params.assertCurrent();
+      if (![...this.viewers.keys()].some((ws) => this.isViewerCurrent(ws))) {
+        this.onTargetClosed();
+        return false;
+      }
       return true;
     } catch {
       this.onTargetClosed();
@@ -120,12 +147,12 @@ class BrowserScreencastSession {
 
   private readonly onNavigation = (frame: Frame): void => {
     if (frame === this.page?.mainFrame()) {
-      void this.checkNavigation(this.page.url());
+      void this.trackWork(this.checkNavigation(this.page.url()));
     }
   };
 
   private readonly onLoad = (): void => {
-    void this.updateMetadata(this.navigationEpoch);
+    void this.trackWork(this.updateMetadata(this.navigationEpoch));
   };
 
   private async checkNavigation(url: string): Promise<void> {
@@ -244,7 +271,7 @@ class BrowserScreencastSession {
     const url = this.checkedUrl;
     const pageUrl = page.url();
     if (pageUrl !== url) {
-      void this.checkNavigation(pageUrl);
+      void this.trackWork(this.checkNavigation(pageUrl));
       return;
     }
     if (url === undefined) {
@@ -256,11 +283,16 @@ class BrowserScreencastSession {
       if (this.capture?.cdp !== cdp || !this.isCurrent()) {
         return;
       }
-      void cdp.send("Page.screencastFrameAck", { sessionId: frame.sessionId }).catch(() => {
-        if (this.capture?.cdp === cdp) {
-          this.onTargetClosed();
-        }
-      });
+      void this.trackWork(
+        cdp
+          .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+          .then(() => undefined)
+          .catch(() => {
+            if (this.capture?.cdp === cdp) {
+              this.onTargetClosed();
+            }
+          }),
+      );
     }, FRAME_INTERVAL_MS);
     timer.unref();
     this.acknowledgements.add(timer);
@@ -280,6 +312,7 @@ class BrowserScreencastSession {
     this.page?.off("framenavigated", this.onNavigation);
     this.page?.off("load", this.onLoad);
     const viewers = [...this.viewers.keys()];
+    const requesters = [...this.viewers.values()];
     this.viewers.clear();
     this.readyViewers.clear();
     // Publish the drain before closing sockets; their close callbacks may reenter.
@@ -288,6 +321,9 @@ class BrowserScreencastSession {
         sessions.delete(this.key);
       }
     });
+    for (const requester of requesters) {
+      void requester.trackWork?.(this.stopPromise);
+    }
     for (const ws of viewers) {
       ws.close(code, reason);
     }
@@ -319,8 +355,14 @@ class BrowserScreencastSession {
 export function attachBrowserScreencastViewer(
   params: BrowserScreencastTokenParams,
   ws: WebSocket,
+  ingress?: ViewerIngress,
 ): void {
-  if (params.requesterSignal?.aborted || params.isRequesterCurrent?.() === false) {
+  if (
+    params.requesterSignal?.aborted ||
+    params.isRequesterCurrent?.() === false ||
+    ingress?.signal?.aborted ||
+    ingress?.isCurrent?.() === false
+  ) {
     params.releaseRequester?.();
     ws.close(4006, "authority_revoked");
     return;
@@ -335,9 +377,14 @@ export function attachBrowserScreencastViewer(
   }
   const key = `${params.profileName}:${params.targetId}`;
   const requester = {
-    signal: params.requesterSignal,
-    isCurrent: params.isRequesterCurrent,
+    signal: ingress?.signal
+      ? params.requesterSignal
+        ? AbortSignal.any([params.requesterSignal, ingress.signal])
+        : ingress.signal
+      : params.requesterSignal,
+    isCurrent: () => params.isRequesterCurrent?.() !== false && ingress?.isCurrent?.() !== false,
     release: params.releaseRequester,
+    trackWork: ingress?.trackWork,
   };
   let session = sessions.get(key);
   let previousDrain: Promise<void> | undefined;
@@ -357,7 +404,7 @@ export function attachBrowserScreencastViewer(
   session.addViewer(ws, requester);
   const next = session;
   // Finish retiring the predecessor before attaching a replacement to the same page.
-  void Promise.resolve(previousDrain).then(() => next.start());
+  void next.trackWork(Promise.resolve(previousDrain).then(() => next.start()));
 }
 
 export function stopBrowserScreencasts(): Promise<void> {

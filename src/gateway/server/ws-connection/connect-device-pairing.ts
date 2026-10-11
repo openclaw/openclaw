@@ -32,6 +32,10 @@ import { retireDeviceTokenClients } from "../../device-token-client-lifecycle.js
 import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
 import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
+import {
+  assertRemoteControlUiIngressCurrent,
+  getRemoteControlUiIngressContext,
+} from "../../remote-control-ui-context.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {
@@ -62,6 +66,11 @@ export async function authorizeGatewayConnectDevice(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): Promise<DeviceAuthorizedGatewayConnect | undefined> {
+  const assertIngressCurrent = () =>
+    assertRemoteControlUiIngressCurrent(
+      getRemoteControlUiIngressContext(context.handler.upgradeReq),
+    );
+  assertIngressCurrent();
   const {
     connId,
     buildRequestContext,
@@ -187,6 +196,7 @@ export async function authorizeGatewayConnectDevice(
           applyConnectionScopeCap({ scopes: capped, upgradeReq: context.handler.upgradeReq }),
       };
       const plan = await resolvePairingApprovalPlan(pairingPlanParams);
+      assertIngressCurrent();
       // Same-key reconnects reuse paired grants without pairing or false upgrade audits.
       if (
         reason === "scope-upgrade" &&
@@ -250,7 +260,9 @@ export async function authorizeGatewayConnectDevice(
               }
             }
           : undefined,
+        assertIngressCurrent,
       );
+      assertIngressCurrent();
       const trustedProxyApprovalScopes =
         pairing.request.isRepair !== true || plan.isTrustedProxySameKeyUpgrade
           ? plan.trustedProxyAutoApproveScopes
@@ -514,6 +526,7 @@ export async function authorizeGatewayConnectDevice(
     };
 
     const paired = await getPairedDevice(device.id);
+    assertIngressCurrent();
     const isPaired = paired?.publicKey === devicePublicKey;
     if (
       state.startupPending &&
@@ -557,6 +570,7 @@ export async function authorizeGatewayConnectDevice(
         clientAccessMetadata,
         requirePairing,
       });
+      assertIngressCurrent();
       if (!existingDevice.ok) {
         return undefined;
       }
@@ -588,6 +602,7 @@ export async function authorizeGatewayConnectDevice(
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
           isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
+  assertIngressCurrent();
 
   return {
     ...state,

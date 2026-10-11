@@ -6,6 +6,10 @@ import { BoardGatewayUnavailableError, BOARD_HTTP_PATH_PREFIX } from "./board-vi
 import { withAuthorizedBoardWidgetView } from "./board-widget-view.js";
 import { isReadHttpMethod, respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./remote-control-ui-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { sessionObserverScopeKey } from "./session-observer-model.js";
 
@@ -66,6 +70,7 @@ export async function handleBoardHttpRequest(
       opts.store ?? boardStore,
       ticket,
       (authorized) => {
+        assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
         // Ticket claims address stored rows; owned frame routes carry observer identity.
         const routeSessionKey = authorized.agentId
           ? sessionObserverScopeKey(authorized.sessionKey, authorized.agentId)

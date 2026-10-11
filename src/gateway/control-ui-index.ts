@@ -17,6 +17,10 @@ import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui
 import { selectControlUiRoutePreloads } from "./control-ui-route-preloads.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sendControlUiHtmlBody } from "./control-ui-static.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./remote-control-ui-context.js";
 
 /** Anchors bundled assets before deep-linked documents begin preloading. */
 function rewriteControlUiIndexHtmlAssetHrefs(
@@ -103,6 +107,10 @@ export async function serveControlUiIndexHtml(
       )
     : prepared;
   const hashes = computeInlineScriptHashes(document);
+  const ingress = getRemoteControlUiIngressContext(req);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+  }
   // Always set the document CSP here (the index carries inline scripts) so the
   // terminal's WASM relaxation is applied to the page that loads ghostty-web.
   res.setHeader(
@@ -111,6 +119,7 @@ export async function serveControlUiIndexHtml(
       inlineScriptHashes: hashes,
       allowWasm,
       portalHost: req.headers.host,
+      frameAncestors: ingress?.frameAncestors,
     }),
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");

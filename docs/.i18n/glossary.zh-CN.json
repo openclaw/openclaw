@@ -5034,5 +5034,9 @@
   {
     "source": "Recommended models",
     "target": "推荐模型"
+  },
+  {
+    "source": "Remote Control UI ingress",
+    "target": "远程 Control UI 入口"
   }
 ]

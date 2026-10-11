@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ProcessSupervisor, SpawnInput } from "../../process/supervisor/types.js";
+import { markGatewayIngressTransport } from "../ingress-attribution.js";
+import type { RemoteControlUiIngressContext } from "../remote-control-ui-context.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { createManagedLinuxAudio, type DesktopAudioSource } from "./managed-linux-audio.js";
 
 const peers = vi.hoisted(() => ({ next: undefined as unknown }));
@@ -55,6 +58,7 @@ const flush = async () => {
 function fixture(
   requester?: { isCurrent(): boolean; signal?: AbortSignal },
   source?: DesktopAudioSource,
+  ingress?: RemoteControlUiIngressContext,
 ) {
   const captures: Array<{
     stream: PassThrough;
@@ -76,7 +80,11 @@ function fixture(
   const attach = (path = observation.descriptor.wsPath) => {
     peers.next = peer;
     const transport = new PassThrough();
-    handleDesktopAudioUpgrade({ url: path } as IncomingMessage, transport, Buffer.alloc(0));
+    const req = { url: path } as IncomingMessage;
+    if (ingress) {
+      markGatewayIngressTransport(req, { kind: "remote-forwarded", context: ingress });
+    }
+    handleDesktopAudioUpgrade(req, transport, Buffer.alloc(0));
     return transport;
   };
   const firstCapture = () => {
@@ -90,6 +98,54 @@ function fixture(
 }
 
 describe("screen-owned desktop audio", () => {
+  it("keeps remote ingress work pending until recorder teardown settles", async () => {
+    const started = createDeferred();
+    const stopping = createDeferred();
+    const stopped = createDeferred();
+    const grant = new AbortController();
+    const tracked: Promise<unknown>[] = [];
+    const ingress = createRemoteControlUiIngressTestContext({
+      signal: grant.signal,
+      trackWork(work) {
+        tracked.push(work);
+        return work;
+      },
+    });
+    const f = fixture(
+      undefined,
+      {
+        async start() {
+          started.resolve();
+          return {
+            stream: new PassThrough(),
+            async stop() {
+              stopping.resolve();
+              await stopped.promise;
+            },
+          };
+        },
+      },
+      ingress,
+    );
+    f.attach();
+    f.observation.activate();
+    f.peer.command("start");
+    await started.promise;
+    let settled = false;
+    const drain = Promise.all(tracked).then(() => {
+      settled = true;
+    });
+    grant.abort();
+    await stopping.promise;
+    try {
+      expect(settled).toBe(false);
+    } finally {
+      stopped.resolve();
+    }
+    await drain;
+    expect(settled).toBe(true);
+  });
+
   it("does not capture on attach or before screen authentication, then delivers remote PCM", async () => {
     const f = fixture();
     f.attach();
@@ -194,9 +250,13 @@ describe("screen-owned desktop audio", () => {
     },
   );
 
-  it.each([true, false])(
-    "carries live requester authority into pending capture admission (%s)",
-    async (allowed) => {
+  it.each([
+    [true, "requester"],
+    [false, "requester"],
+    [false, "ingress"],
+  ] as const)(
+    "carries live authority into pending capture admission (%s, %s)",
+    async (allowed, authority) => {
       const admission = createDeferred();
       const attempted = createDeferred();
       const settled = createDeferred();
@@ -244,7 +304,21 @@ describe("screen-owned desktop audio", () => {
       });
       const audio = await owner.ready;
       const requesterAbort = new AbortController();
-      const f = fixture({ isCurrent: () => current, signal: requesterAbort.signal }, audio.source);
+      const ingress =
+        authority === "ingress"
+          ? createRemoteControlUiIngressTestContext({
+              assertCurrent() {
+                if (!current) {
+                  throw new Error("ingress revoked");
+                }
+              },
+            })
+          : undefined;
+      const f = fixture(
+        { isCurrent: () => authority === "ingress" || current, signal: requesterAbort.signal },
+        audio.source,
+        ingress,
+      );
       f.attach();
       f.observation.activate();
       f.peer.command("start");

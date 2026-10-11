@@ -228,11 +228,11 @@ export function buildSandboxHostPath(csp?: SandboxHostCsp): string {
 }
 
 /** Version the public shell and its security headers together, never widget content. */
-export function buildSandboxHostDocument(csp?: SandboxHostCsp) {
+export function buildSandboxHostDocument(csp?: SandboxHostCsp, frameAncestors?: readonly string[]) {
   const html = buildSandboxHostProxyHtml(csp);
   const headers = {
     "Content-Type": "text/html; charset=utf-8",
-    "Content-Security-Policy": buildSandboxHostContentSecurityPolicy(csp),
+    "Content-Security-Policy": buildSandboxHostContentSecurityPolicy(csp, frameAncestors),
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-write=()",
     "Cross-Origin-Resource-Policy": "cross-origin",
     "Origin-Agent-Cluster": "?1",
@@ -405,7 +405,10 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
 }
 
 /** HTTP response policy for the isolated proxy and its inner about:blank content. */
-function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): string {
+function buildSandboxHostContentSecurityPolicy(
+  csp?: SandboxHostCsp,
+  frameAncestors?: readonly string[],
+): string {
   const resources = csp?.resourceDomains ?? [];
   const media = csp?.mediaDomains ?? resources;
   const connections = csp?.connectDomains ?? [];
@@ -426,7 +429,7 @@ function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): string {
     `base-uri ${bases.length > 0 ? bases.join(" ") : "'self'"}`,
     "object-src 'none'",
     "form-action 'none'",
-    "frame-ancestors http: https:",
+    `frame-ancestors ${frameAncestors ? (frameAncestors.length ? frameAncestors.join(" ") : "'none'") : "http: https:"}`,
   ];
   if (csp) {
     directives.splice(5, 0, `font-src 'self' ${resources.join(" ")}`.trim());

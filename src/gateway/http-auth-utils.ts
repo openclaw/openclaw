@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -63,6 +64,11 @@ import {
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+  assertRemoteControlUiGatewayAuth,
+} from "./remote-control-ui-context.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
@@ -140,8 +146,11 @@ async function verifyHttpOperatorDeviceToken(
   token: string,
   requiredSharedGatewaySessionGeneration: string | undefined,
   requiredScopes: readonly string[] = [],
+  assertCurrent?: () => void,
 ): Promise<string[] | null> {
+  assertCurrent?.();
   const pairing = await listDevicePairing();
+  assertCurrent?.();
   for (const device of pairing.paired) {
     const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
     if (
@@ -159,7 +168,9 @@ async function verifyHttpOperatorDeviceToken(
       // leave the HTTP request with authority from the earlier pairing snapshot.
       scopes: [CONTROL_UI_OPERATOR_READ_SCOPE, ...operatorToken.scopes, ...requiredScopes],
       requiredSharedGatewaySessionGeneration,
+      assertCurrent,
     });
+    assertCurrent?.();
     return verified.ok ? [...operatorToken.scopes] : null;
   }
   return null;
@@ -197,6 +208,10 @@ async function checkHttpOperatorCredentials(
   authorizeConnect: typeof authorizeHttpGatewayConnect,
 ): Promise<HttpOperatorCredentialResult> {
   const { auth, token } = params;
+  const remoteIngress = getRemoteControlUiIngressContext(params.req);
+  if (remoteIngress) {
+    assertRemoteControlUiGatewayAuth(remoteIngress, auth, params.cfg ?? getRuntimeConfig());
+  }
   const ingressAttribution = prepareGatewayIngressAttribution({
     req: params.req,
     trustedProxies: params.trustedProxies,
@@ -221,6 +236,9 @@ async function checkHttpOperatorCredentials(
       rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
       deferRateLimitFailure: canUseDeviceTokenFallback,
     });
+    if (remoteIngress) {
+      assertRemoteControlUiIngressCurrent(remoteIngress);
+    }
     const authGeneration = resolveSharedGatewaySessionGeneration(auth, params.trustedProxies);
     let resolvedAuthResult = authResult;
     let deviceScopes: string[] | undefined;
@@ -255,9 +273,17 @@ async function checkHttpOperatorCredentials(
           token,
           authGeneration,
           params.requiredDeviceScopes,
+          remoteIngress ? () => assertRemoteControlUiIngressCurrent(remoteIngress) : undefined,
         );
+        if (remoteIngress) {
+          assertRemoteControlUiIngressCurrent(remoteIngress);
+        }
         if (verifiedScopes) {
-          deviceScopes = verifiedScopes;
+          deviceScopes = remoteIngress
+            ? remoteIngress.operatorScopeCeiling.filter((scope) =>
+                operatorScopeSatisfied(scope, verifiedScopes),
+              )
+            : verifiedScopes;
           params.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
           resolvedAuthResult = { ok: true, method: "device-token" };
         } else {
@@ -299,6 +325,10 @@ export async function authorizeControlUiReadRequestOrReply(
     auth: auth ?? { mode: "none", allowTailscale: false },
   });
   if (!auth) {
+    if (getRemoteControlUiIngressContext(params.req)) {
+      sendUnauthorized(params.res);
+      return null;
+    }
     params.onPluginFrameGrants?.([]);
     return bindHttpResponseAuthority(
       { authMethod: "none" as const, operatorScopes: [...CLI_DEFAULT_OPERATOR_SCOPES] },
@@ -369,8 +399,14 @@ export async function authorizeControlUiReadRequestOrReply(
     hasCurrentClientAuthority,
   );
   if (authMethod === "device-token" && token) {
+    const remoteIngress = getRemoteControlUiIngressContext(params.req);
     const verifyCurrentDeviceToken = () =>
-      verifyHttpOperatorDeviceToken(token, authGeneration, deviceOperatorScopes);
+      verifyHttpOperatorDeviceToken(
+        token,
+        authGeneration,
+        deviceOperatorScopes,
+        remoteIngress ? () => assertRemoteControlUiIngressCurrent(remoteIngress) : undefined,
+      );
     // Profile attribution can yield after the original credential verification.
     if (!(await verifyCurrentDeviceToken()) || !requestAuth.hasCurrentClientAuthority()) {
       if (params.replyOnFailure !== false) {

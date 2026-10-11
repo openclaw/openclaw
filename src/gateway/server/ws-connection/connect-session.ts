@@ -16,7 +16,6 @@ import { resolveLocalNodeId } from "../../../node-host/local-id.js";
 import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
-import { adoptTailscaleProfileAvatar } from "../../../state/user-profiles.js";
 import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
@@ -43,6 +42,10 @@ import {
   setClientPluginNodeCapability,
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
+import {
+  assertRemoteControlUiIngressCurrent,
+  getRemoteControlUiIngressContext,
+} from "../../remote-control-ui-context.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -63,6 +66,7 @@ import {
 import {
   createGatewayConnectProfileLifecycle,
   resolveGatewayConnectProfileAdmission,
+  scheduleGatewayConnectProfileSync,
 } from "./connect-user-profile.js";
 import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
 import type {
@@ -80,6 +84,11 @@ export async function attachAuthenticatedGatewayConnect(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
 ): Promise<void> {
+  const assertIngressCurrent = () =>
+    assertRemoteControlUiIngressCurrent(
+      getRemoteControlUiIngressContext(context.handler.upgradeReq),
+    );
+  assertIngressCurrent();
   const {
     socket,
     connId,
@@ -129,6 +138,7 @@ export async function attachAuthenticatedGatewayConnect(
   if (!(await prepareGatewayNodeConnect(context, state))) {
     return;
   }
+  assertIngressCurrent();
 
   const rejectNodePairing = async (message: string, metadata: { deviceId?: string } = {}) => {
     markHandshakeFailure("node-pairing-generation-changed", metadata);
@@ -206,6 +216,7 @@ export async function attachAuthenticatedGatewayConnect(
     resolveAuthenticatedGitHubIdentity,
     assertCurrent: profileLifecycle.assertCurrent,
   });
+  assertIngressCurrent();
   if (!profileAdmission.ok) {
     return;
   }
@@ -369,6 +380,7 @@ export async function attachAuthenticatedGatewayConnect(
   };
   if (authenticatedOperator) {
     const source = await prepareGatewayConnectOperatorDeviceSource(context, state, deviceScopes);
+    assertIngressCurrent();
     if (source === undefined) {
       return;
     }
@@ -396,6 +408,7 @@ export async function attachAuthenticatedGatewayConnect(
     );
   }
   const nextClient: GatewayWsClient = {
+    remoteControlUiIngress: getRemoteControlUiIngressContext(context.handler.upgradeReq),
     socket,
     connect: connectParams,
     connId,
@@ -524,6 +537,7 @@ export async function attachAuthenticatedGatewayConnect(
     });
     return;
   }
+  assertRemoteControlUiIngressCurrent(nextClient.remoteControlUiIngress);
   profileLifecycle.bind(nextClient);
   if (!bindGatewayConnectOperatorAccess(context, nextClient)) {
     return;
@@ -683,47 +697,13 @@ export async function attachAuthenticatedGatewayConnect(
   }
 
   await sendGatewayHello(context, state, pluginSurfaceUrls, authenticatedUserProfile?.profileId);
+  assertIngressCurrent();
 
-  const adoptProfileAvatar = async (profileId: string, profilePic: string) => {
-    const updated = await adoptTailscaleProfileAvatar(profileId, profilePic);
-    if (updated.avatarMime) {
-      await profileLifecycle.attach(updated.id, updated.updatedAt, prepareLocalUserIngress);
-    }
-  };
-  if (nextClient.authenticatedGitHubIdentitySync) {
-    runDetachedConnectWork(
-      async () => {
-        const result = await nextClient.authenticatedGitHubIdentitySync!();
-        const profile = nextClient.authenticatedUserProfile;
-        const profilePic = authResult.tailscaleIdentity?.profilePic;
-        if (!profile?.hasAvatar && profilePic) {
-          try {
-            await adoptProfileAvatar(result.profileId, profilePic);
-          } catch (error) {
-            logGateway.warn(
-              `Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`,
-            );
-          }
-        }
-      },
-      (error) => {
-        logGateway.warn(`GitHub identity sync failed conn=${connId}: ${formatForLog(error)}`);
-      },
-    );
-  }
-
-  const tailscaleProfilePic = authResult.tailscaleIdentity?.profilePic;
-  const tailscaleProfileId = nextClient.authenticatedUserProfile?.profileId;
-  if (
-    !nextClient.authenticatedGitHubIdentitySync &&
-    tailscaleProfileId &&
-    !nextClient.authenticatedUserProfile?.hasAvatar &&
-    tailscaleProfilePic
-  ) {
-    runDetachedConnectWork(
-      () => adoptProfileAvatar(tailscaleProfileId, tailscaleProfilePic),
-      (error) =>
-        logGateway.warn(`Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`),
-    );
-  }
+  scheduleGatewayConnectProfileSync({
+    context,
+    state,
+    client: nextClient,
+    lifecycle: profileLifecycle,
+    prepareIngress: prepareLocalUserIngress,
+  });
 }

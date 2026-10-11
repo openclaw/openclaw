@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { readFileWindowFully, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { isWithinDir } from "@openclaw/fs-safe/path";
-import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
+import { kindFromMime } from "@openclaw/media-core/mime";
 import { isControlUiFocusPath } from "@openclaw/session-url-contract";
-import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/svg-image.js";
 import {
   type AgentAvatarResolution,
   resolvePublicAgentAvatarSource,
@@ -15,17 +13,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
-import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
-import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
 import {
   replacePlaybackFileExtension,
-  resolvePlaybackMetadataForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import {
   gatewayAssistantAvatarUrl,
@@ -38,16 +32,15 @@ import {
   resolveAssistantMediaFilename,
 } from "./assistant-media-content-disposition.js";
 import {
-  classifyAssistantMediaError,
-  type AssistantMediaAvailability,
-} from "./assistant-media-errors.js";
-import {
   resolveAssistantMediaPolicy,
   assertAssistantMediaPolicyCurrent,
-  createAssistantMediaTicket,
   verifyAssistantMediaTicket,
-  type AssistantMediaTicketPayload,
 } from "./assistant-media-policy.js";
+import {
+  normalizeAssistantMediaSource,
+  openAssistantMedia,
+  resolveAssistantMediaAvailability,
+} from "./control-ui-assistant-media-read.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -90,6 +83,10 @@ import {
 } from "./http-image-response.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./remote-control-ui-context.js";
 import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -159,139 +156,6 @@ function isValidAgentPathSegment(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
 
-function normalizeAssistantMediaSource(source: string): string | null {
-  const trimmed = source.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (/^file:/iu.test(trimmed)) {
-    try {
-      return safeFileURLToPath(trimmed);
-    } catch {
-      return null;
-    }
-  }
-  if (trimmed.startsWith("~")) {
-    return resolveUserPath(trimmed);
-  }
-  return trimmed;
-}
-
-type AssistantMediaPolicy = NonNullable<ReturnType<typeof resolveAssistantMediaPolicy>>;
-type AssistantMediaFile = NonNullable<AssistantMediaTicketPayload["file"]>;
-
-function sameAssistantMediaFile(actual: AssistantMediaFile, expected: AssistantMediaFile) {
-  return (
-    actual.realPath === expected.realPath &&
-    actual.dev === expected.dev &&
-    actual.ino === expected.ino
-  );
-}
-
-async function openAssistantMedia(
-  source: string,
-  policy: AssistantMediaPolicy,
-  allowance: true | AssistantMediaFile | undefined,
-) {
-  const reference = await resolveMediaReferenceLocalPathInfo(source);
-  if (policy.remote && reference.kind === "local") {
-    throw new LocalMediaAccessError("invalid-path", "File is on another computer");
-  }
-  let outsideRoots = false;
-  try {
-    await assertLocalMediaAllowed(reference.path, policy.localRoots);
-  } catch (error) {
-    if (!(error instanceof LocalMediaAccessError) || error.code !== "path-not-allowed") {
-      throw error;
-    }
-    outsideRoots = true;
-    if (policy.workspaceOnly && !allowance) {
-      throw error;
-    }
-  }
-  const opened = await openLocalFileSafely({ filePath: reference.path });
-  try {
-    let file: AssistantMediaFile | undefined;
-    if (outsideRoots && allowance) {
-      const identity = await opened.handle.stat({ bigint: true });
-      const candidate = {
-        realPath: opened.realPath,
-        dev: identity.dev.toString(),
-        ino: identity.ino.toString(),
-      };
-      if (allowance === true || sameAssistantMediaFile(candidate, allowance)) {
-        file = candidate;
-      } else if (policy.workspaceOnly) {
-        // Replacing an allowed image loses the grant; offer the same explicit choice again.
-        throw new LocalMediaAccessError("path-not-allowed", "Outside allowed folders");
-      }
-    }
-    // Validate the descriptor target too: a symlink may change between containment and open.
-    if (!outsideRoots) {
-      await assertLocalMediaAllowed(opened.realPath, policy.localRoots);
-    }
-    const sniffBuffer = Buffer.alloc(Math.min(opened.stat.size, 8192));
-    const bytesRead = sniffBuffer.length
-      ? await readFileWindowFully(opened.handle, sniffBuffer, 0)
-      : 0;
-    const buffer = sniffBuffer.subarray(0, bytesRead);
-    const mimeType = startsWithSvgRootElement(buffer.toString("utf8"))
-      ? "image/svg+xml"
-      : await detectMime({ buffer, ...(outsideRoots ? {} : { filePath: reference.path }) });
-    // Host-wide reads authorize actual image bytes, never a filename's extension.
-    if (outsideRoots && kindFromMime(mimeType) !== "image") {
-      throw new LocalMediaAccessError("unsupported-media-type", "Not an image");
-    }
-    return { opened, reference, mimeType, outsideRoots, file };
-  } catch (error) {
-    await opened.handle.close().catch(() => {});
-    throw error;
-  }
-}
-
-async function resolveAssistantMediaAvailability(
-  source: string,
-  policy: AssistantMediaPolicy,
-  allowance: true | AssistantMediaFile | undefined,
-  agentId: string | undefined,
-  signal: AbortSignal,
-  assertCurrent: () => void,
-): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
-  try {
-    assertCurrent();
-    const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
-    // The inspection owner reopens and verifies this identity after queue admission.
-    await opened[Symbol.asyncDispose]();
-    const mediaKind = kindFromMime(mimeType);
-    const playbackMetadata =
-      mimeType && (mediaKind === "audio" || mediaKind === "video")
-        ? await resolvePlaybackMetadataForSource({
-            sourcePath: opened.realPath,
-            sourceStat: opened.stat,
-            mimeType,
-            kind: mediaKind,
-            signal,
-            assertCurrent,
-          })
-        : undefined;
-    return {
-      available: true,
-      ...(mimeType ? { mimeType } : {}),
-      sizeBytes: opened.stat.size,
-      ...playbackMetadata,
-      ...createAssistantMediaTicket({
-        source,
-        agentId,
-        session: policy.session,
-        reader: policy.reader,
-        ...(file ? { file } : {}),
-      }),
-    };
-  } catch (error) {
-    return classifyAssistantMediaError(error);
-  }
-}
-
 export async function handleControlUiAssistantMediaRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -315,7 +179,7 @@ export async function handleControlUiAssistantMediaRequest(
   if (!isReadHttpMethod(req.method) && !explicitAllow) {
     return false;
   }
-  applyControlUiSecurityHeaders(res);
+  applyControlUiSecurityHeaders(res, getRemoteControlUiIngressContext(req));
   let source = normalizeAssistantMediaSource(url.searchParams.get("source") ?? "");
   if (!source) {
     respondControlUiNotFound(res);
@@ -400,13 +264,15 @@ export async function handleControlUiAssistantMediaRequest(
     : ticket?.file && sameSession && policy.canAllow
       ? ticket.file
       : undefined;
-  const assertCurrentPolicy = () =>
-    assertAssistantMediaPolicyCurrent(
+  const assertCurrentPolicy = () => {
+    assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
+    return assertAssistantMediaPolicyCurrent(
       policyParams,
       policy,
       Boolean(allowance),
       requestAuth ?? undefined,
     );
+  };
   if (isMetaRequest) {
     const requestAbort = createHttpRequestAbortSignal(res.req, res);
     using _ = { [Symbol.dispose]: requestAbort.cleanup };
@@ -536,7 +402,7 @@ export async function handleControlUiAvatarRequest(
     return false;
   }
 
-  applyControlUiSecurityHeaders(res);
+  applyControlUiSecurityHeaders(res, getRemoteControlUiIngressContext(req));
   const agentId = parsed.value;
   if (!agentId || !isValidAgentPathSegment(agentId)) {
     respondControlUiNotFound(res);
@@ -764,19 +630,19 @@ export async function handleControlUiHttpRequest(
     return false;
   }
   if (route.kind === "not-found") {
-    applyControlUiSecurityHeaders(res);
+    applyControlUiSecurityHeaders(res, getRemoteControlUiIngressContext(req));
     respondControlUiNotFound(res);
     return true;
   }
   if (route.kind === "redirect") {
-    applyControlUiSecurityHeaders(res);
+    applyControlUiSecurityHeaders(res, getRemoteControlUiIngressContext(req));
     res.statusCode = 302;
     res.setHeader("Location", route.location);
     res.end();
     return true;
   }
 
-  applyControlUiSecurityHeaders(res);
+  applyControlUiSecurityHeaders(res, getRemoteControlUiIngressContext(req));
 
   if (isControlUiSharePath(pathname, basePath) && pathname !== `${basePath}/share/card.png`) {
     serveControlUiShareDocument(req, res, url, basePath, resolveGatewayPublicOrigin(opts?.config));

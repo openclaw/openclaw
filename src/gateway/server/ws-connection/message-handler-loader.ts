@@ -1,4 +1,5 @@
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
+import { getRemoteControlUiIngressContext } from "../../remote-control-ui-context.js";
 import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../../server-constants.js";
 import {
   classifyGatewayStaleInstall,
@@ -18,7 +19,7 @@ export function attachGatewayWsMessageHandlerOnDemand(params: GatewayWsMessageHa
     queued.push(data);
   };
   params.socket.on("message", queueMessage);
-  void params.connectionWork
+  const work = params.connectionWork
     .track(async () => {
       const { attachGatewayWsMessageHandler } = await import("./message-handler.js");
       params.socket.off("message", queueMessage);
@@ -52,4 +53,5 @@ export function attachGatewayWsMessageHandlerOnDemand(params: GatewayWsMessageHa
       );
       params.close(1011, "gateway message handler unavailable");
     });
+  void getRemoteControlUiIngressContext(params.upgradeReq)?.trackWork(work);
 }

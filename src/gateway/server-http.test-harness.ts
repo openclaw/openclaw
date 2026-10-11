@@ -72,7 +72,7 @@ export function createHookRequest(params?: {
 }
 
 /** Build a ServerResponse-like mock and body reader for handler tests. */
-export function createResponse(): {
+export function createResponse(req = new IncomingMessage(new Socket())): {
   res: ServerResponse;
   setHeader: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
@@ -98,7 +98,7 @@ export function createResponse(): {
     resolveEnd();
   });
   const res = Object.assign(new EventEmitter(), {
-    req: new IncomingMessage(new Socket()),
+    req,
     writableFinished: false,
     headersSent: false,
     statusCode: 200,

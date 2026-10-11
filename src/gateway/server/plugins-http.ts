@@ -20,6 +20,7 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
+import { listControlUiPluginTabAuthGrants } from "../control-ui-plugin-tabs.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import {
@@ -29,6 +30,11 @@ import {
 } from "../http-request-authority.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+  hasCurrentRemoteControlUiIngress,
+} from "../remote-control-ui-context.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import {
   runWithGatewayHttpWorkAdmission,
@@ -154,6 +160,8 @@ function createPluginRouteRuntimeScope(params: {
   gatewayRequestOperatorScopes?: readonly string[];
   gatewayRequestClientIp?: string;
 }): PluginRouteRuntimeScope {
+  const ingress = getRemoteControlUiIngressContext(params.req);
+  assertRemoteControlUiIngressCurrent(ingress);
   const requestAuth = params.route.auth === "gateway" ? params.gatewayRequestAuth : undefined;
   const runtimeScopes =
     params.route.auth !== "gateway"
@@ -170,6 +178,7 @@ function createPluginRouteRuntimeScope(params: {
   );
   const operatorAccessAuthority = runtimeClient?.internal?.operatorAccessAuthority;
   const hasCurrentClientAuthority = () =>
+    hasCurrentRemoteControlUiIngress(ingress) &&
     requestAuth?.hasCurrentClientAuthority?.() !== false &&
     hasCurrentGatewayOperatorAccess(operatorAccessAuthority);
   if (params.res) {
@@ -184,13 +193,29 @@ function createPluginRouteRuntimeScope(params: {
   }
   return {
     pluginRegistry: params.registry,
-    ...(requestAuth?.revalidate ? { revalidate: requestAuth.revalidate } : {}),
-    ...(requestAuth?.hasCurrentClientAuthority || operatorAccessAuthority
+    ...(ingress ? { trackWork: ingress.trackWork } : {}),
+    ...(requestAuth?.revalidate || ingress
+      ? {
+          revalidate: async () => {
+            assertRemoteControlUiIngressCurrent(ingress);
+            await requestAuth?.revalidate?.();
+            assertRemoteControlUiIngressCurrent(ingress);
+          },
+        }
+      : {}),
+    ...(requestAuth?.hasCurrentClientAuthority || operatorAccessAuthority || ingress
       ? { hasCurrentClientAuthority }
       : {}),
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
-    ...(operatorAccessAuthority ? { signal: operatorAccessAuthority.signal } : {}),
+    ...(operatorAccessAuthority || ingress
+      ? {
+          signal: AbortSignal.any([
+            ...(operatorAccessAuthority ? [operatorAccessAuthority.signal] : []),
+            ...(ingress ? [ingress.signal] : []),
+          ]),
+        }
+      : {}),
     isWebchatConnect: () => false,
     ...(params.route.pluginId ? { pluginId: params.route.pluginId } : {}),
     ...(params.route.source ? { pluginSource: params.route.source } : {}),
@@ -243,8 +268,21 @@ export function createGatewayPluginRequestHandler(params: {
           URL.parse(req.url ?? "/", "http://localhost")?.pathname ?? "/",
         )
       : resolvePluginRoutePathContextForRequest(req, providedPathContext);
-    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext).filter((route) =>
-      permitsLegacyPluginRoute(req, route),
+    const ingress = getRemoteControlUiIngressContext(req);
+    const remoteGrants = ingress
+      ? listControlUiPluginTabAuthGrants(ingress.operatorScopeCeiling)
+      : undefined;
+    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext).filter(
+      (route) =>
+        permitsLegacyPluginRoute(req, route) &&
+        (!remoteGrants ||
+          remoteGrants.some(
+            (grant) =>
+              route.auth === "gateway" &&
+              grant.pluginId === route.pluginId &&
+              grant.path === route.path &&
+              grant.match === route.match,
+          )),
     );
     if (legacyRequest) {
       // The original listener's handler owns unmatched paths too (including auth/parser errors).

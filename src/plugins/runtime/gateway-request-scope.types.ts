@@ -11,6 +11,8 @@ import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
 export type PluginRuntimeGatewayRequestScope = {
   /** Recheck the admitted HTTP device or cookie grant before effects/disclosure; rejection sends HTTP 401 and throws. */
   revalidate?: () => Promise<void>;
+  /** Contextual ingress owns asynchronous stream work through its actual settlement. */
+  trackWork?: <T>(work: Promise<T>) => Promise<T>;
   /** Exact placement owner captured before the local harness begins. */
   assertNodeExecutionCurrent?: (request: {
     runId: string;

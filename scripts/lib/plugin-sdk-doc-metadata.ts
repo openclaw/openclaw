@@ -12,6 +12,9 @@ type PluginSdkDocMetadata = {
 };
 
 export const pluginSdkDocMetadata = {
+  "gateway-ingress": {
+    category: "core",
+  },
   "control-ui-link-reader": {
     category: "core",
   },

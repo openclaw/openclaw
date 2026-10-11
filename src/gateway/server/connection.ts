@@ -21,6 +21,10 @@ import {
   reconcileClientPluginNodeCapabilities,
   type PluginNodeCapabilitySurface,
 } from "../plugin-node-capability.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+} from "../remote-control-ui-context.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
@@ -118,6 +122,7 @@ type AttachGatewayConnectionParams = GatewayConnectionOptions & {
 };
 
 export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
+  const remoteIngress = getRemoteControlUiIngressContext(params.request);
   const {
     socket,
     connectionKind,
@@ -137,7 +142,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     logWsControl,
     buildRequestContext,
   } = params;
-  if (connectionWork.isClosing) {
+  if (connectionWork.isClosing || !hasCurrentRemoteControlUiIngress(remoteIngress)) {
     socket.terminate();
     return;
   }
@@ -254,12 +259,21 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     closeGatewayTransportWithGrace(socket, code, reason ?? "");
   };
   const close = closeWithGrace;
+  const closeRemoteIngress = () => closeWithGrace(1008, "remote Control UI ingress closed");
+  remoteIngress?.signal.addEventListener("abort", closeRemoteIngress, { once: true });
+  socket.once("close", () =>
+    remoteIngress?.signal.removeEventListener("abort", closeRemoteIngress),
+  );
 
   const releaseConnection = connectionWork.registerConnection(() => {
     closeWithGrace(1012, connectionKind === "worker" ? "gateway-shutdown" : "service restart");
   });
 
   const send = (obj: unknown) => {
+    if (!hasCurrentRemoteControlUiIngress(remoteIngress)) {
+      closeRemoteIngress();
+      return { kind: "unavailable" } as const;
+    }
     if (closed) {
       return { kind: "unavailable" } as const;
     }
@@ -483,18 +497,19 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     connectionController.abort();
     // ws removes its client synchronously; the Gateway retains this connection
     // until asynchronous node history and other close cleanup have settled.
-    void connectionWork
+    const cleanup = connectionWork
       .trackCleanup(() => handleSocketClose(code, reason))
       .catch((error: unknown) => {
         logGateway.error(`websocket close cleanup failed conn=${connId}: ${formatError(error)}`);
         retireConnection();
       })
       .finally(releaseConnection);
+    void remoteIngress?.trackWork(cleanup);
   });
 
   const setClient = (next: GatewayWsClient) => {
     // Keep one socket owner when concurrent connect frames finish out of order.
-    if (closed || client) {
+    if (closed || client || !hasCurrentRemoteControlUiIngress(remoteIngress)) {
       return false;
     }
     if (
@@ -551,7 +566,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     isStartupPending,
     send,
     close,
-    isClosed: () => closed,
+    isClosed: () => closed || !hasCurrentRemoteControlUiIngress(remoteIngress),
     clearHandshakeTimer: () => clearTimeout(handshakeTimer),
     getClient: () => client,
     setClient,

@@ -25,13 +25,14 @@ export async function verifyDeviceToken(params: {
   role: string;
   scopes: string[];
   requiredSharedGatewaySessionGeneration?: string;
+  assertCurrent?: () => void;
   baseDir?: string;
 }): Promise<{ ok: boolean; reason?: string; issuer?: DeviceAuthToken["issuer"] }> {
-  const { baseDir, ...input } = params;
+  const { baseDir, assertCurrent, ...input } = params;
   return await withDevicePairingLock(() =>
     executeDevicePairingMutation(
       { type: "devicePairing.verifyToken", input: { ...input, nowMs: Date.now() } },
-      { baseDir },
+      { baseDir, assertCurrent },
     ),
   );
 }
