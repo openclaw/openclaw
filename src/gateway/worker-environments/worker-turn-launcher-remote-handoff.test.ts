@@ -2,7 +2,7 @@ import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import {
@@ -17,6 +17,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   buildWorkerConnectParams,
   parseWorkerLaunchDescriptor,
@@ -51,9 +52,11 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn launcher remote handoff", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
   afterEach(() => setActiveNodeContexts([]));
 
   it("round-trips the stored bootstrap receipt while reporting keep-local conflicts", async () => {
