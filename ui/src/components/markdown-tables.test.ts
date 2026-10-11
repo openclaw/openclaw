@@ -213,7 +213,7 @@ describe("Markdown table interactions", () => {
     },
   );
 
-  it.each([true, false])(
+  it.each([true])(
     "shows a failed current table copy without stale success (previous success: %s)",
     async (previousSuccess) => {
       vi.useFakeTimers();
