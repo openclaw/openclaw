@@ -247,6 +247,17 @@ describe("Lit to Solid conversion contracts", () => {
     expect(run.stdout).toContain("compiled runtime:");
   });
 
+  it("reports array element deletions as manual child work", () => {
+    const result = convertLitToSolid(
+      'import {html} from "lit"; const items=["a","b"]; delete items[0]; const fixture=html`${items.map(item=>item)}`;',
+      "deleted.ts",
+      parser,
+    );
+    expect(
+      result.diagnostics.some((entry) => entry.reason.includes("explicit text or JSX decision")),
+    ).toBe(true);
+  });
+
   it("keeps retained Lit type imports type-only", () => {
     const result = expectConversion(
       'import {html} from "lit"; import type {TemplateResult,CSSResult} from "lit"; declare const styles:CSSResult; function view():TemplateResult{return fixture;} const fixture=html`<p>ok</p>`;',

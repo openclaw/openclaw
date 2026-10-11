@@ -490,8 +490,11 @@ export function convertLitToSolid(
       ) {
         mutableCollections.push(node.expression.expression);
       }
-      if (ts.isDeleteExpression(node) && ts.isElementAccessExpression(node.expression)) {
-        mutableCollections.push(node.expression.expression.expression);
+      if (ts.isDeleteExpression(node)) {
+        const target = node.expression;
+        if (ts.isElementAccessExpression(target)) {
+          mutableCollections.push(target.expression);
+        }
       }
       if (
         (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
@@ -998,15 +1001,16 @@ export function convertLitToSolid(
         }
       }
       if (ts.isShorthandPropertyAssignment(node) && ts.isIdentifier(node.name)) {
+        const name = node.name;
         const shorthandNarrowing = context.narrowed?.find(
-          (entry) => node.name.text === entry.text && resolve(node.name) === entry.binding,
+          (entry) => name.text === entry.text && resolve(name) === entry.binding,
         );
         if (shorthandNarrowing) {
-          return `${node.name.text}: ${shorthandNarrowing.accessor}()`;
+          return `${name.text}: ${shorthandNarrowing.accessor}()`;
         }
-        const binding = resolve(node.name);
+        const binding = resolve(name);
         if (binding && context.reads.has(binding)) {
-          return `${node.name.text}: ${context.reads.get(binding)}()`;
+          return `${name.text}: ${context.reads.get(binding)}()`;
         }
       }
       if (ts.isCallExpression(node)) {
