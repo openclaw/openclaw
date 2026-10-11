@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -21,7 +23,7 @@ import {
   type EmbeddingProvider,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
+import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import {
   resolveMemoryPrimaryProviderRequest,
@@ -87,7 +89,68 @@ const FULL_REINDEX_RETRY_INITIAL_DELAY_MS = 30_000;
 const FULL_REINDEX_RETRY_MAX_DELAY_MS = 30 * 60_000;
 const log = createSubsystemLogger("memory");
 
-export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext {
+// One process-lifetime container; stores belong only to their awaited rebuild.
+const reindexDatabase = new AsyncLocalStorage<{
+  manager: MemoryManagerSyncBase;
+  database: MemoryIndexDatabase;
+}>();
+
+export abstract class MemoryManagerSyncBase {
+  protected abstract publishedDatabase: MemoryIndexDatabase;
+  protected closed = false;
+
+  protected assertDatabaseMutationCurrent(database: MemoryIndexDatabase): void {
+    if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
+      throw new Error("Memory database owner closed or changed before write admission");
+    }
+    if (database.readOnly) {
+      throw new Error("Memory status managers are read-only");
+    }
+  }
+
+  protected get database(): MemoryIndexDatabase {
+    const context = reindexDatabase.getStore();
+    const shadow = context?.manager === this ? context.database : undefined;
+    if (shadow?.closed) {
+      throw new Error("Memory reindex database context is closed");
+    }
+    return shadow ?? this.publishedDatabase;
+  }
+
+  protected get db(): DatabaseSync {
+    return this.database.db;
+  }
+
+  protected get vector() {
+    return this.database.vector;
+  }
+
+  protected get fts() {
+    return this.database.fts;
+  }
+
+  protected withPublishedDatabase<T>(run: () => T): T {
+    // Public calls can originate in reindex progress/provider callbacks. They
+    // must never inherit the temporary writer or outlive its connection.
+    return reindexDatabase.exit(run);
+  }
+
+  protected async withReindexDatabase<T>(
+    database: MemoryIndexDatabase,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      const result = await reindexDatabase.run({ manager: this, database }, run);
+      // Publication attaches the finished file only after its writer closes.
+      await database.closeShadow();
+      return result;
+    } finally {
+      try {
+        await database.closeShadow();
+      } catch {}
+    }
+  }
+
   protected readonly memoryFiles?: MemoryWorkspaceFiles;
   protected memoryWatchSubscription?: AbortController;
   protected memoryWatchUnavailable = false;

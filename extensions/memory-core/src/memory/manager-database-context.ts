@@ -1,5 +1,4 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import {
   createSubsystemLogger,
@@ -36,6 +35,7 @@ import type {
 } from "./manager-publication-task.js";
 import { memoryEmbeddingCacheFitsInline } from "./manager-publication-transfer.js";
 import {
+  initializePublishedMemory,
   publishMemoryEmbeddingCache,
   publishMemorySource,
   retryMemoryPublication,
@@ -58,34 +58,6 @@ type PublicationWorker = {
   >;
   busyTimeoutMs: number;
 };
-
-async function initializePublishedMemory(
-  options: Parameters<typeof openOpenClawAgentSqliteWorkerStoreV2>[0],
-  schema: MemoryPublicationOperations["schema.admit"]["input"] | undefined,
-  assertCurrent: () => void,
-) {
-  const worker = await openOpenClawAgentSqliteWorkerStoreV2<MemoryPublicationOperations>(
-    options,
-    { version: 2, assertCurrent },
-    {
-      moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
-      input: { kind: "agent" },
-    },
-  );
-  try {
-    await worker.prepare();
-    if (!schema) {
-      return undefined;
-    }
-    return await retryMemoryPublication({
-      run: () => worker.execute({ type: "schema.admit", input: schema }, assertCurrent),
-      busyTimeoutMs: 5_000,
-      prepare: async () => true,
-    });
-  } finally {
-    await worker.close();
-  }
-}
 
 export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
@@ -753,68 +725,5 @@ export class MemoryIndexDatabase {
       throw error;
     });
     return this.shadowClose;
-  }
-}
-
-// One process-lifetime container; stores belong only to their awaited rebuild.
-const reindexDatabase = new AsyncLocalStorage<{
-  manager: MemoryManagerDatabaseContext;
-  database: MemoryIndexDatabase;
-}>();
-
-export abstract class MemoryManagerDatabaseContext {
-  protected abstract publishedDatabase: MemoryIndexDatabase;
-  protected closed = false;
-
-  protected assertDatabaseMutationCurrent(database: MemoryIndexDatabase): void {
-    if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
-      throw new Error("Memory database owner closed or changed before write admission");
-    }
-    if (database.readOnly) {
-      throw new Error("Memory status managers are read-only");
-    }
-  }
-
-  protected get database(): MemoryIndexDatabase {
-    const context = reindexDatabase.getStore();
-    const shadow = context?.manager === this ? context.database : undefined;
-    if (shadow?.closed) {
-      throw new Error("Memory reindex database context is closed");
-    }
-    return shadow ?? this.publishedDatabase;
-  }
-
-  protected get db(): DatabaseSync {
-    return this.database.db;
-  }
-
-  protected get vector() {
-    return this.database.vector;
-  }
-
-  protected get fts() {
-    return this.database.fts;
-  }
-
-  protected withPublishedDatabase<T>(run: () => T): T {
-    // Public calls can originate in reindex progress/provider callbacks. They
-    // must never inherit the temporary writer or outlive its connection.
-    return reindexDatabase.exit(run);
-  }
-
-  protected async withReindexDatabase<T>(
-    database: MemoryIndexDatabase,
-    run: () => Promise<T>,
-  ): Promise<T> {
-    try {
-      const result = await reindexDatabase.run({ manager: this, database }, run);
-      // Publication attaches the finished file only after its writer closes.
-      await database.closeShadow();
-      return result;
-    } finally {
-      try {
-        await database.closeShadow();
-      } catch {}
-    }
   }
 }
