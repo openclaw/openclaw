@@ -670,6 +670,8 @@ describe("exec-policy CLI", () => {
   }>([
     { initial: { security: "deny", ask: "always" }, ask: "off", expected: { mode: "deny" } },
     { initial: { mode: "full" }, ask: "always", expected: { security: "full", ask: "always" } },
+    { initial: { mode: "auto" }, ask: "on-miss", expected: { mode: "auto" } },
+    { initial: { mode: "auto" }, ask: "off", expected: { mode: "allowlist" } },
   ])("retains untouched policy when setting ask=$ask", async ({ initial, ask, expected }) => {
     mocks.setConfig({ tools: { exec: initial } });
     await runExecPolicyCommand(["exec-policy", "set", "--ask", ask, "--json"]);
