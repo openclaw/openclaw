@@ -4,6 +4,7 @@ import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createComposerProps } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
@@ -119,11 +120,11 @@ describe("composer run status", () => {
       hasActiveRun: true,
       startedAt: 5_000,
     };
-    const { pane, state } = createRefreshChatPane();
+    const { pane, state, context } = createRefreshChatPane();
     state.sessionKey = parent.key;
     state.sessionsResult = sessionsResult([parent]);
     pane.render();
-    const container = document.body.appendChild(document.createElement("div"));
+    const container = document.body.appendChild(createApplicationContextProvider(context));
     const onOpenSubagents = vi.fn();
     onTestFinished(() => {
       render(nothing, container);

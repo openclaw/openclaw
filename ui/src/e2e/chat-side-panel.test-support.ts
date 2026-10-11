@@ -30,6 +30,7 @@ export async function openChatSidePanelType(page: Page | Locator, label: string)
     Desktop: { slot: "desktop", action: /^(Toggle desktop panel|Desktop)$/ },
     Files: { slot: "workspace", action: /^(Show session files|Collapse session workspace)$/ },
     "Side chat": { slot: "companion", action: /^(Show side chat|Collapse side chat)$/ },
+    Subagents: { slot: "subagents", action: "Subagents" },
     Terminal: { slot: "terminal", action: "Toggle terminal" },
   };
   const panel = panelActions[label];
