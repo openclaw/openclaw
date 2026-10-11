@@ -151,14 +151,20 @@ export function runGatewayStateOwnerHeartbeat(
     if (!failure && renewedAt !== undefined) {
       // A slow syscall must not publish authority newer than the mtime supplied to it.
       Atomics.store(lastBeat, 0, renewedAt);
+      Atomics.notify(lastBeat, 0);
     }
     backoff = failure ? Math.min(backoff ? backoff * 2 : 1_000, data.intervalMs, remainingMs()) : 0;
     timer = setTimeout(beat, backoff || data.intervalMs);
     timer.unref();
   };
-  parent?.on("message", (message: "stop" | [string, string]) => {
+  parent?.on("message", (message: "stop" | "beat" | [string, string]) => {
     if (message === "stop") {
       stop();
+    } else if (message === "beat") {
+      // The parent observed an overdue deadline (OS suspension); renew now
+      // instead of waiting for the next interval tick.
+      clearTimeout(timer);
+      beat();
     } else {
       // Raw bytes include fs-safe's acquisition token; new projection custody may reuse a path.
       if (data.locks[message[0]] !== message[1]) {

@@ -596,6 +596,52 @@ it("fences state admission with a visible reason when renewal still fails after 
   }
 });
 
+it("re-baselines renewal after a suspension gap instead of forfeiting custody", async () => {
+  const rootPath = path.join(tempDirs.make("openclaw-owner-heartbeat-sleep-"), "root.lock");
+  fs.writeFileSync(rootPath, "root-owner");
+  const runtime = await startRuntime({ [rootPath]: "root-owner" });
+  try {
+    // An OS suspension freezes the worker and advances only the wall clock.
+    vi.setSystemTime(Date.now() + 7 * 60 * 60 * 1000);
+    vi.advanceTimersByTime(7 * 60 * 60 * 1000);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(Date.now() - fs.statSync(rootPath).mtimeMs).toBeLessThan(15_000);
+    expect(Number(Atomics.load(runtime.lastBeat, 0))).toBeGreaterThan(Date.now() - 60_000);
+    expect(runtime.readEvents().every((event) => event === null)).toBe(true);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+it("recovers overdue custody through a bounded beat when the worker is live", async () => {
+  const { workers, ready, beats } = observeHeartbeatWorkers();
+  const root = tempDirs.make("openclaw-owner-heartbeat-resume-");
+  const gateway = await acquireGatewayLock({
+    allowInTests: true,
+    env: { OPENCLAW_STATE_DIR: root },
+    timeoutMs: 0,
+  });
+  if (!gateway) {
+    throw new Error("Expected Gateway custody");
+  }
+  try {
+    await Promise.all(ready);
+    const lastBeat = beats[0];
+    if (!lastBeat) {
+      throw new Error("Expected one heartbeat worker and its shared observation");
+    }
+    const stamp = fs.statSync(gateway.lockPath).mtimeMs;
+    Atomics.store(lastBeat, 0, BigInt(Date.now() - 60_001));
+    expect(() => gateway.assertCurrent()).not.toThrow();
+    expect(Number(Atomics.load(lastBeat, 0))).toBeGreaterThan(Date.now() - 60_000);
+    expect(fs.statSync(gateway.lockPath).mtimeMs).toBeGreaterThan(stamp);
+    expect(workers).toHaveLength(1);
+  } finally {
+    await gateway.release();
+    await Promise.all(workers.map((worker) => worker.terminate()));
+  }
+});
+
 it("renews retained custody during synchronous work and never touches a successor", async () => {
   const { workers, ready } = observeHeartbeatWorkers();
   const root = tempDirs.make("openclaw-owner-worker-");
