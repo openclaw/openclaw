@@ -29,7 +29,6 @@ import type {
 } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { isRecord } from "../../utils.js";
 import {
   getCronManagementAuthority,
