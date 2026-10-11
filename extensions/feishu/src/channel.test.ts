@@ -214,18 +214,6 @@ describe("Feishu plugin adapters", () => {
       }),
     ).toEqual(expected);
   });
-  it("keeps native chat identity separate from delivery routing", () => {
-    expect(
-      feishuPlugin.threading?.buildToolContext?.({
-        cfg,
-        context: { To: "user:ou_sender", NativeChannelId: "oc_direct_chat", ChatType: "direct" },
-      }),
-    ).toMatchObject({
-      currentChannelId: "oc_direct_chat",
-      currentChatType: "direct",
-      currentMessagingTarget: "user:ou_sender",
-    });
-  });
   it("recognizes provider-prefixed targets", () => {
     expect(looksLikeFeishuId("feishu:user:ou_123")).toBe(true);
   });
