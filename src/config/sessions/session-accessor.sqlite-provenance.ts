@@ -5,7 +5,6 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasStoredTranscriptEvents } from "./session-accessor.sqlite-transcript-presence.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
-import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionEntry } from "./types.js";
 
 const sessionEntryWindowColumns = [
@@ -94,6 +93,7 @@ export function prepareSessionEntryWindowRow<
   previousEntry?: SessionEntry;
   retainOwner: boolean;
   prepared?: SessionEntryWindowFacts;
+  stagedTranscriptUpdatedAt?: number;
 }): {
   row: T & { transcript_observed_at: number };
   postimage: SessionEntryWindowRow;
@@ -104,7 +104,7 @@ export function prepareSessionEntryWindowRow<
     sessionId: params.entry.sessionId,
   });
   const prepared = params.prepared;
-  let existingRoot = actor
+  const existingRoot = actor
     ? actor.window
     : prepared?.sessionId === params.entry.sessionId
       ? prepared.row
@@ -115,32 +115,15 @@ export function prepareSessionEntryWindowRow<
             .select(sessionEntryWindowColumns)
             .where("session_id", "=", params.entry.sessionId),
         );
-  // Prepared appends publish their exact watermark in the same transaction.
-  // Consume that owner fact instead of rereading the retained window.
-  if (existingRoot && !actor) {
-    for (const receipt of readStagedSessionTranscriptAuthority(params.database) ?? []) {
-      for (const fact of receipt.facts.values()) {
-        if (
-          fact.kind === "postimage" &&
-          fact.value.sessionId === params.entry.sessionId &&
-          fact.value.updatedAt !== null
-        ) {
-          existingRoot = {
-            ...existingRoot,
-            transcript_updated_at: Math.max(
-              existingRoot.transcript_updated_at ?? 0,
-              fact.value.updatedAt,
-            ),
-          };
-        }
-      }
-    }
-  }
+  const transcriptUpdatedAt =
+    existingRoot && !actor && params.stagedTranscriptUpdatedAt !== undefined
+      ? Math.max(existingRoot.transcript_updated_at ?? 0, params.stagedTranscriptUpdatedAt)
+      : (existingRoot?.transcript_updated_at ?? null);
   // Registry writes snapshot the current transcript watermark so recovery can
   // distinguish same-millisecond transcript writes before and after this row.
   let row = {
     ...params.boundSessionRow,
-    transcript_observed_at: existingRoot?.transcript_updated_at ?? params.entry.updatedAt,
+    transcript_observed_at: transcriptUpdatedAt ?? params.entry.updatedAt,
   };
   // Updates cannot prove provenance for a migrated transcript. Known exclusion metadata is monotonic.
   if (
@@ -171,7 +154,7 @@ export function prepareSessionEntryWindowRow<
       ...row,
       created_at: existingRoot?.created_at ?? row.created_at,
       session_key: params.retainOwner && existingRoot ? existingRoot.session_key : row.session_key,
-      transcript_updated_at: existingRoot?.transcript_updated_at ?? null,
+      transcript_updated_at: transcriptUpdatedAt,
     },
     changed:
       !existingRoot ||

@@ -129,7 +129,7 @@ function maintenanceFixture() {
   const now = Date.now();
   replaceSessionEntrySync(
     { ...f.scope, sessionKey: siblingKey },
-    { sessionId: siblingId, updatedAt: now - 86_400_000 },
+    { sessionId: siblingId, updatedAt: now - 86_400_000, createdAt: 17 },
   );
   return {
     ...f,

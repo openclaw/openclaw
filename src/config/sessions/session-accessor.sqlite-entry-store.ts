@@ -77,6 +77,7 @@ import type {
   SessionEntryWritePostimages,
 } from "./session-entry-write-postimage.js";
 import { resolveSessionPublicShare } from "./session-public-share.js";
+import { readStagedSessionTranscriptUpdatedAt } from "./session-transcript-authority.js";
 import {
   projectCanonicalSessionEntryShape,
   stripRuntimeOnlySessionSkillsFields,
@@ -631,6 +632,9 @@ export function writeSessionEntry(
         previousEntry,
         retainOwner: retainWindowOwner,
         prepared: options.canonicalPreviousWindow ?? canonicalFacts?.window,
+        stagedTranscriptUpdatedAt: actor
+          ? undefined
+          : readStagedSessionTranscriptUpdatedAt(database, normalizedEntry.sessionId),
       });
       const queries = getSessionEntryWriteQueries(database.db);
       const writeGeneration =
@@ -674,7 +678,12 @@ export function writeSessionEntry(
       return { writeGeneration, window, conversationWritten: conversation !== null };
     },
   );
-  if (written.writeGeneration || written.window.changed) {
+  const changed =
+    nodeChanged ||
+    persisted.snapshotsChanged ||
+    written.window.changed ||
+    written.conversationWritten;
+  if (changed) {
     publishSessionEntryCacheInvalidation(
       database,
       {
@@ -751,10 +760,7 @@ export function writeSessionEntry(
   }
   if (options.postimages && persistedEntry && canonicalPreviousSideTables) {
     options.postimages.set(sessionKey, {
-      changed:
-        written.writeGeneration !== undefined ||
-        written.window.changed ||
-        written.conversationWritten,
+      changed,
       entry: persistedEntry,
       window: written.window.postimage,
       sideTables: {
