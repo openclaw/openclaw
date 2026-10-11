@@ -21,7 +21,7 @@ import {
   createModalDialogTestFixture,
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
-import { mountSolid } from "../../test-helpers/solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { DevicesPage, type DevicesRouteData } from "./devices-page.tsx";
 
 const ROTATED_TOKEN = "rotated-operator-token";
@@ -148,15 +148,16 @@ function mountPage(
         <DevicesPage routeData={routeData} />
       </ApplicationProvider>
     ),
-    container,
+    { container },
   );
+  flush();
   let disposed = false;
   const dispose = () => {
     if (disposed) {
       return;
     }
     disposed = true;
-    mounted.dispose();
+    mounted.unmount();
     container.remove();
     flush();
   };

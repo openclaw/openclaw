@@ -19,23 +19,21 @@ import {
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
-  patchSessionEntryCore as patchAccessorSessionEntry,
-  replaceSessionEntry,
   type SessionAccessScope,
-  updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
-import {
-  captureExternalSessionCommitGuard,
-  sessionEntryCommitGuardOptions,
-} from "../../config/sessions/session-source-authority.js";
-import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   getSessionEntryAsync,
   getSessionEntryByIdAsync,
 } from "../../plugin-sdk/session-store-runtime-internal.js";
+import {
+  patchSessionEntry,
+  prepareSessionEntryPatch,
+  updateSessionStoreEntry,
+  upsertSessionEntry,
+} from "../../plugin-sdk/session-store-runtime.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
@@ -96,44 +94,6 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
   });
 };
 
-const patchSessionEntry: RuntimeSession["patchSessionEntry"] = async (params) => {
-  return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
-    ...sessionEntryCommitGuardOptions(
-      captureExternalSessionCommitGuard(params.assertCommitAllowed),
-    ),
-    fallbackEntry: params.fallbackEntry,
-    maintenanceConfig:
-      params.maintenanceConfig !== undefined
-        ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
-        : undefined,
-    preserveActivity: params.preserveActivity,
-    replaceEntry: params.replaceEntry,
-  });
-};
-
-const updateSessionStoreEntry: RuntimeSession["updateSessionStoreEntry"] = async (params) => {
-  // Maintainer note: keep the legacy object-parameter API here, but route
-  // mutations through the session accessor boundary.
-  return await updateSessionEntry(
-    {
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    params.update,
-    {
-      skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership,
-      requireWriteSuccess: params.requireWriteSuccess,
-    },
-  );
-};
-
-const upsertSessionEntry: RuntimeSession["upsertSessionEntry"] = async (params) => {
-  // Maintainer note: this compatibility helper has full-entry replacement
-  // semantics, so removed fields must not survive as merge leftovers.
-  await replaceSessionEntry(toSessionAccessScope(params), params.entry);
-};
-
 async function runWithSessionWorkAdmission<T>(
   input: { storePath: string; sessionKey: string; signal?: AbortSignal },
   run: (signal: AbortSignal) => Promise<T>,
@@ -146,11 +106,18 @@ async function runWithSessionWorkAdmission<T>(
   return runAdmittedWork();
 
   async function runAdmittedWork(): Promise<T> {
-    const initialEntry = await readSessionEntryReadOnlyInWorker({
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-      readConsistency: "latest",
-    });
+    // Capture native identity before yielding so queued work cannot adopt a replacement.
+    const initialEntry = source
+      ? await readSessionEntryReadOnlyInWorker({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          readConsistency: "latest",
+        })
+      : getSessionEntry({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          readConsistency: "latest",
+        });
     const lifecycleAbortController = new AbortController();
     const admission = await beginSessionWorkAdmission({
       scope: params.storePath,
@@ -277,6 +244,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
         await import("../../config/sessions/session-entry-read-runtime.js")
       ).createSessionEntryListReader(params),
     patchSessionEntry,
+    prepareSessionEntryPatch,
     upsertSessionEntry,
     runWithWorkAdmission: runWithSessionWorkAdmission,
     updateSessionStoreEntry,

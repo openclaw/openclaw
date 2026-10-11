@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, latest, onCleanup } from "@solidjs/signals";
+import { createSignal, onCleanup } from "@solidjs/signals";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
@@ -27,11 +27,6 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../components/native-chrome-setup.ts";
-import {
-  pendingCookieSyncEdits,
-  retainCookieSyncEdits,
-  settleCookieSyncEdit,
-} from "./pending-cookie-sync-edits.ts";
 import "./device.css";
 
 declare module "@solidjs/web" {
@@ -44,32 +39,61 @@ declare module "@solidjs/web" {
 
 registerEnglishCatalog(registerAppsEnglish);
 registerEnglishCatalog(registerSettingsEnglish);
+type CookieSyncEdits = {
+  domains: string[] | null;
+  targetProfile: { value: string; sent: boolean } | null;
+};
+
+const pendingCookieSyncEdits = new WeakMap<NativeDeviceSettingsCapability, CookieSyncEdits>();
+
+function retainCookieSyncEdits(capability: NativeDeviceSettingsCapability): CookieSyncEdits {
+  let edits = pendingCookieSyncEdits.get(capability);
+  if (!edits) {
+    edits = { domains: null, targetProfile: null };
+    pendingCookieSyncEdits.set(capability, edits);
+  }
+  return edits;
+}
+
+function settleCookieSyncEdit(
+  capability: NativeDeviceSettingsCapability,
+  key: keyof CookieSyncEdits,
+  edit: CookieSyncEdits[keyof CookieSyncEdits],
+) {
+  const edits = pendingCookieSyncEdits.get(capability);
+  if (!edits || edits[key] !== edit) {
+    return;
+  }
+  // Completion belongs to this exact edit, including Cancel and native normalization.
+  // A newer edit can have the same value and must survive the older reply.
+  edits[key] = null;
+  if (edits.domains === null && edits.targetProfile === null) {
+    pendingCookieSyncEdits.delete(capability);
+  }
+}
+
 function DevicePageContent() {
-  const context = useApplication();
-  const projection = createMemo(() =>
-    context.nativeDeviceSettings ? projectNativeDeviceSettings(context.nativeDeviceSettings) : null,
-  );
-  const snapshot = () => projection()?.read();
+  const capability = useApplication().nativeDeviceSettings;
+  const projection = capability ? projectNativeDeviceSettings(capability) : null;
+  const snapshot = () => projection?.read();
   const [newDomain, setNewDomain] = createSignal("");
   const [editRevision, setEditRevision] = createSignal(0);
   const [gatewayHostingEdit, setGatewayHostingEdit] = createSignal<{
-    capability: NativeDeviceSettingsCapability;
     pending: boolean;
     error?: Error;
   } | null>(null);
-  let targetProfileTimer: {
-    capability: NativeDeviceSettingsCapability;
-    timer: ReturnType<typeof setTimeout>;
-  } | null = null;
+  let gatewayHostingRequest = 0;
+  let targetProfileTimer: ReturnType<typeof setTimeout> | null = null;
 
   const pendingEdits = () => {
+    projection?.revision();
     editRevision();
-    const capability = context.nativeDeviceSettings;
     return capability ? pendingCookieSyncEdits.get(capability) : undefined;
   };
   let disposed = false;
   onCleanup(() => {
     disposed = true;
+    flushTargetProfile();
   });
   const invalidateEdits = () => {
     if (!disposed) {
@@ -78,39 +102,32 @@ function DevicePageContent() {
   };
   function flushTargetProfile() {
     const pending = targetProfileTimer;
-    if (!pending) {
+    if (pending === null || !capability) {
       return;
     }
-    clearTimeout(pending.timer);
+    clearTimeout(pending);
     targetProfileTimer = null;
-    const profile = pendingCookieSyncEdits.get(pending.capability)?.targetProfile;
+    const profile = pendingCookieSyncEdits.get(capability)?.targetProfile;
     if (profile && !profile.sent) {
       profile.sent = true;
-      pending.capability.set("browser.cookieSync.targetProfile", profile.value, () => {
-        settleCookieSyncEdit(pending.capability, "targetProfile", profile);
+      capability.set("browser.cookieSync.targetProfile", profile.value, () => {
+        settleCookieSyncEdit(capability, "targetProfile", profile);
         invalidateEdits();
       });
     }
   }
-  // Flush against the original capability before its view scope is replaced or disposed.
-  createEffect(
-    () => context.nativeDeviceSettings,
-    () => () => flushTargetProfile(),
-  );
   function editTargetProfile(value: string) {
-    const capability = context.nativeDeviceSettings;
     if (!capability) {
       return;
     }
     if (targetProfileTimer) {
-      clearTimeout(targetProfileTimer.timer);
+      clearTimeout(targetProfileTimer);
     }
     retainCookieSyncEdits(capability).targetProfile = { value, sent: false };
-    targetProfileTimer = { capability, timer: setTimeout(flushTargetProfile, 400) };
+    targetProfileTimer = setTimeout(flushTargetProfile, 400);
     invalidateEdits();
   }
   function updateDomains(update: (domains: string[]) => string[]) {
-    const capability = context.nativeDeviceSettings;
     if (!capability) {
       return;
     }
@@ -149,7 +166,7 @@ function DevicePageContent() {
           description={props.description}
           checked={props.checked ?? false}
           disabled={props.disabled}
-          onChange={(value) => context.nativeDeviceSettings?.set(props.setting, value)}
+          onChange={(value) => capability?.set(props.setting, value)}
         />
       </Show>
     );
@@ -173,9 +190,7 @@ function DevicePageContent() {
             aria-label={title()}
             ref={liveValue(() => props.value)}
             disabled={props.disabled}
-            onChange={(event) =>
-              context.nativeDeviceSettings?.set(props.setting, event.currentTarget.value)
-            }
+            onChange={(event) => capability?.set(props.setting, event.currentTarget.value)}
           >
             <For each={props.options} keyed={(option) => option.id}>
               {(_option, index) => (
@@ -194,12 +209,9 @@ function DevicePageContent() {
     );
   }
   function GatewayHosting(props: { app: NonNullable<NativeDeviceSettingsSnapshot["app"]> }) {
-    const edit = () =>
-      gatewayHostingEdit()?.capability === context.nativeDeviceSettings
-        ? gatewayHostingEdit()
-        : null;
+    const edit = gatewayHostingEdit;
     return (
-      <Show when={props.app.keepGatewayRunning !== undefined && context.nativeDeviceSettings}>
+      <Show when={props.app.keepGatewayRunning !== undefined && capability}>
         <SettingsToggleRow
           title={t("configPage.deviceSettings.keepGatewayRunning")}
           description={
@@ -220,18 +232,14 @@ function DevicePageContent() {
           checked={props.app.keepGatewayRunning ?? false}
           disabled={props.app.keepGatewayRunningAvailable !== true || edit()?.pending === true}
           onChange={(value) => {
-            const capability = context.nativeDeviceSettings;
             if (!capability) {
               return;
             }
-            const request = { capability, pending: true };
-            setGatewayHostingEdit(request);
+            const request = ++gatewayHostingRequest;
+            setGatewayHostingEdit({ pending: true });
             capability.set("app.keepGatewayRunning", value, (error) => {
-              if (
-                latest(gatewayHostingEdit) === request &&
-                context.nativeDeviceSettings === capability
-              ) {
-                setGatewayHostingEdit({ capability, pending: false, error });
+              if (!disposed && gatewayHostingRequest === request) {
+                setGatewayHostingEdit({ pending: false, error });
               }
             });
           }}
@@ -277,7 +285,7 @@ function DevicePageContent() {
                   <button
                     type="button"
                     class="btn"
-                    onClick={() => context.nativeDeviceSettings?.openPanel("browser-import")}
+                    onClick={() => capability?.openPanel("browser-import")}
                   >
                     {t("configPage.deviceSettings.importBrowserLogins")}
                   </button>
@@ -399,7 +407,6 @@ function DevicePageContent() {
     return (
       <>
         <Show when={Boolean(props.snapshot.app)}>
-          {" "}
           <SettingsSection title={t("configPage.deviceSettings.app")}>
             <Toggle
               setting="app.nativeExperienceEnabled"
@@ -430,7 +437,6 @@ function DevicePageContent() {
               description={t("configPage.deviceSettings.showDockIconHint")}
             />
             <Show when={Boolean(props.snapshot.app!.iconStyle)}>
-              {" "}
               <Select
                 setting="app.iconStyle"
                 value={props.snapshot.app!.iconStyle!.selectedId}
@@ -477,7 +483,7 @@ function DevicePageContent() {
                     <button
                       type="button"
                       class="btn"
-                      onClick={() => context.nativeDeviceSettings?.openPanel("quick-chat-shortcut")}
+                      onClick={() => capability?.openPanel("quick-chat-shortcut")}
                     >
                       {t("configPage.deviceSettings.changeShortcut")}
                     </button>
@@ -488,7 +494,6 @@ function DevicePageContent() {
           </SettingsSection>
         </Show>
         <Show when={Boolean(props.snapshot.capabilities)}>
-          {" "}
           <SettingsSection title={t("configPage.deviceSettings.capabilities")}>
             <Toggle
               setting="capabilities.canvasEnabled"
@@ -537,7 +542,6 @@ function DevicePageContent() {
               )}
             />
             <Show when={Boolean(props.snapshot.desktopSharing)}>
-              {" "}
               <SettingsRow
                 title={t("configPage.deviceSettings.desktopSharingStatus")}
                 description={props.snapshot.desktopSharing!.detail}
@@ -564,7 +568,6 @@ function DevicePageContent() {
               description={t("configPage.deviceSettings.unattendedDesktopHint")}
             />
             <Show when={Boolean(props.snapshot.desktopAvailability)}>
-              {" "}
               <SettingsRow
                 title={t("configPage.deviceSettings.desktopAvailability")}
                 control={
@@ -623,11 +626,7 @@ function DevicePageContent() {
               <SettingsRow
                 title={t("configPage.deviceSettings.debugWindow")}
                 control={
-                  <button
-                    type="button"
-                    class="btn"
-                    onClick={() => context.nativeDeviceSettings?.openPanel("debug")}
-                  >
+                  <button type="button" class="btn" onClick={() => capability?.openPanel("debug")}>
                     {t("configPage.deviceSettings.openDebug")}
                   </button>
                 }
@@ -648,7 +647,7 @@ function DevicePageContent() {
                     <button
                       type="button"
                       class="btn"
-                      onClick={() => context.nativeDeviceSettings?.openPanel(panel())}
+                      onClick={() => capability?.openPanel(panel())}
                     >
                       {t("configPage.deviceSettings.openPanel")}
                     </button>
@@ -681,7 +680,7 @@ function DevicePageContent() {
       <SettingsWorkspace>
         <SettingsPage>
           <Show
-            when={context.nativeDeviceSettings}
+            when={capability}
             fallback={<SettingsEmpty message={t("configPage.deviceSettings.appOnly")} />}
           >
             <Show

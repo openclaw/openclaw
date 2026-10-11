@@ -1,14 +1,8 @@
+import { flush } from "solid-js";
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it } from "vitest";
-import { mountSolid } from "../../test-helpers/solid.ts";
+import { describe, expect, it } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { deviceIcon } from "./view-shared.tsx";
-
-const disposers: Array<() => void> = [];
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-});
 
 describe("deviceIcon", () => {
   it.each([
@@ -27,7 +21,8 @@ describe("deviceIcon", () => {
     ["unknown", { modelIdentifier: "Mac99,99" }, 'height="14"'],
   ] as const)("renders %s with its form-factor glyph", (_label, source, expectedIcon) => {
     const container = document.createElement("div");
-    disposers.push(mountSolid(() => deviceIcon(source), container).dispose);
+    mountSolid(() => deviceIcon(source), { container });
+    flush();
     expect(container.innerHTML).toContain(expectedIcon);
     const svg = container.querySelector("svg");
     expect(svg?.getAttribute("stroke")).toBe("currentColor");

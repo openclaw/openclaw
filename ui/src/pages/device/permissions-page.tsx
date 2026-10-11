@@ -1,4 +1,3 @@
-import { createMemo } from "@solidjs/signals";
 import { For, Show } from "solid-js";
 import { titleForRoute } from "../../app-navigation.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
@@ -24,11 +23,9 @@ import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 registerEnglishCatalog(registerSettingsEnglish);
 
 function DevicePermissionsPageContent() {
-  const context = useApplication();
-  const projection = createMemo(() =>
-    context.nativeDeviceSettings ? projectNativeDeviceSettings(context.nativeDeviceSettings) : null,
-  );
-  const snapshot = () => projection()?.read();
+  const capability = useApplication().nativeDeviceSettings;
+  const projection = capability ? projectNativeDeviceSettings(capability) : null;
+  const snapshot = () => projection?.read();
 
   function Permissions(props: { snapshot: NativeDeviceSettingsSnapshot }) {
     const location = () => props.snapshot.permissions.location;
@@ -78,9 +75,7 @@ function DevicePermissionsPageContent() {
                                 type="button"
                                 class="btn"
                                 aria-label={`${t("configPage.deviceSettings.openSystemSettings")}: ${permissionTitle()}`}
-                                onClick={() =>
-                                  context.nativeDeviceSettings?.openSystemSettings(permission().id)
-                                }
+                                onClick={() => capability?.openSystemSettings(permission().id)}
                               >
                                 {t("configPage.deviceSettings.openSystemSettings")}
                               </button>
@@ -91,9 +86,7 @@ function DevicePermissionsPageContent() {
                             type="button"
                             class="btn"
                             aria-label={`${t("configPage.deviceSettings.grant")}: ${permissionTitle()}`}
-                            onClick={() =>
-                              context.nativeDeviceSettings?.requestPermission(permission().id)
-                            }
+                            onClick={() => capability?.requestPermission(permission().id)}
                           >
                             {t("configPage.deviceSettings.grant")}
                           </button>
@@ -103,9 +96,7 @@ function DevicePermissionsPageContent() {
                             type="button"
                             class="btn settings-permission-recovery"
                             aria-label={`${t("configPage.deviceSettings.openSystemSettings")}: ${permissionTitle()}`}
-                            onClick={() =>
-                              context.nativeDeviceSettings?.openSystemSettings(permission().id)
-                            }
+                            onClick={() => capability?.openSystemSettings(permission().id)}
                           >
                             {t("configPage.deviceSettings.openSystemSettings")}
                           </button>
@@ -119,7 +110,6 @@ function DevicePermissionsPageContent() {
           </SettingsSection>
         </Show>
         <Show when={Boolean(location())}>
-          {" "}
           <SettingsSection title={t("configPage.deviceSettings.location")}>
             <SettingsRow
               title={t("configPage.deviceSettings.locationAccess")}
@@ -133,9 +123,7 @@ function DevicePermissionsPageContent() {
                     value,
                     label: t(`configPage.deviceSettings.locationModes.${value}`),
                   }))}
-                  onChange={(value) =>
-                    context.nativeDeviceSettings?.set("permissions.location.mode", value)
-                  }
+                  onChange={(value) => capability?.set("permissions.location.mode", value)}
                 />
               }
             />
@@ -161,7 +149,7 @@ function DevicePermissionsPageContent() {
                         type="button"
                         class="btn"
                         aria-label={`${t("configPage.deviceSettings.openSettings")}: ${t("configPage.deviceSettings.preciseLocation")}`}
-                        onClick={() => context.nativeDeviceSettings?.openSystemSettings("location")}
+                        onClick={() => capability?.openSystemSettings("location")}
                       >
                         {t("configPage.deviceSettings.openSettings")}
                       </button>
@@ -175,9 +163,7 @@ function DevicePermissionsPageContent() {
                 description={t("configPage.deviceSettings.preciseLocationHint")}
                 checked={location()!.precise}
                 disabled={location()!.mode === "off"}
-                onChange={(value) =>
-                  context.nativeDeviceSettings?.set("permissions.location.precise", value)
-                }
+                onChange={(value) => capability?.set("permissions.location.precise", value)}
               />
             </Show>
           </SettingsSection>
@@ -189,10 +175,7 @@ function DevicePermissionsPageContent() {
               description={t("configPage.deviceSettings.activePresenceHint")}
               checked={props.snapshot.capabilities?.activeComputerPresenceEnabled ?? false}
               onChange={(value) =>
-                context.nativeDeviceSettings?.set(
-                  "capabilities.activeComputerPresenceEnabled",
-                  value,
-                )
+                capability?.set("capabilities.activeComputerPresenceEnabled", value)
               }
             />
           </SettingsSection>
@@ -220,7 +203,7 @@ function DevicePermissionsPageContent() {
       <SettingsWorkspace>
         <SettingsPage>
           <Show
-            when={context.nativeDeviceSettings}
+            when={capability}
             fallback={<SettingsEmpty message={t("configPage.deviceSettings.appOnly")} />}
           >
             <Show

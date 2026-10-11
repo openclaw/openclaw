@@ -71,7 +71,7 @@ const mocks = vi.hoisted(() => ({
   cancelRestartRecoveryTerminalDelivery: vi.fn(async () => "cleared" as const),
   completeRestartRecoveryTerminalDelivery: vi.fn(async () => "recorded" as const),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
-  resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(() => ({ ok: true, to: "resolved" })),
+  resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(async () => ({ ok: true, to: "resolved" })),
   resolveOutboundSessionRoute: vi.fn(),
   ensureOutboundSessionEntry: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
@@ -316,7 +316,7 @@ describe("gateway send mirroring", () => {
       canonicalKey: sessionKey,
       entry: undefined,
     }));
-    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
+    mocks.resolveOutboundTarget.mockResolvedValue({ ok: true, to: "resolved" });
     mocks.resolveOutboundSessionRoute.mockImplementation(
       async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
         sessionKey:
@@ -1322,7 +1322,7 @@ describe("gateway send mirroring", () => {
   });
 
   it("returns invalid request when outbound target resolution fails", async () => {
-    mocks.resolveOutboundTarget.mockReturnValue({
+    mocks.resolveOutboundTarget.mockResolvedValue({
       ok: false,
       error: new Error("target not found"),
     });
@@ -1835,9 +1835,9 @@ describe("gateway send mirroring", () => {
         `send-test-canonical-${registrySeq}`,
       );
       mocks.resolveMessageChannelSelection.mockResolvedValue({ channel: "twitch", plugin });
-      mocks.resolveOutboundTarget.mockImplementation((target) =>
+      mocks.resolveOutboundTarget.mockImplementation(async (target) =>
         expectDefined(
-          resolveOutboundTargetWithPlugin({ plugin, target }),
+          await resolveOutboundTargetWithPlugin({ plugin, target }),
           "registered plugin resolves outbound targets",
         ),
       );

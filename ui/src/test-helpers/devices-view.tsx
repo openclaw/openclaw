@@ -3,36 +3,27 @@ import { afterEach, expect } from "vitest";
 import { DevicesView } from "../pages/devices/view.tsx";
 import type { DevicesProps } from "../pages/devices/view.types.ts";
 import { createDevicesViewProps } from "./devices-fixtures.ts";
-import { mountSolid } from "./solid.ts";
+import { mountSolid } from "./mount-solid.ts";
 
-const fixtures = new Map<
-  HTMLElement,
-  { update: (props: DevicesProps) => void; dispose: () => void }
->();
-afterEach(() => {
-  for (const fixture of fixtures.values()) {
-    fixture.dispose();
-  }
-  fixtures.clear();
-});
+const fixtures = new Map<HTMLElement, (props: DevicesProps) => void>();
+afterEach(() => fixtures.clear());
 
 export function renderDevicesInto(container: HTMLElement, overrides: Partial<DevicesProps>) {
   const props = createDevicesViewProps(overrides);
-  const mounted = fixtures.get(container);
-  if (mounted) {
-    mounted.update(props);
-    flush();
-    return;
+  const update = fixtures.get(container);
+  if (update) {
+    update(props);
+  } else {
+    mountSolid(
+      () => {
+        const [current, setCurrent] = createSignal(props);
+        fixtures.set(container, (next) => setCurrent(next));
+        return <DevicesView {...current()} />;
+      },
+      { container },
+    );
   }
-  const view = mountSolid(() => {
-    const [current, setCurrent] = createSignal(props);
-    fixtures.set(container, { update: (next) => setCurrent(next), dispose: () => {} });
-    return <DevicesView {...current()} />;
-  }, container);
-  const fixture = fixtures.get(container);
-  if (fixture) {
-    fixture.dispose = view.dispose;
-  }
+  flush();
 }
 
 export function renderDevicesContainer(overrides: Partial<DevicesProps>): HTMLDivElement {

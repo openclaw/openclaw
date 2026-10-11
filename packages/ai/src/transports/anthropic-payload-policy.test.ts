@@ -73,6 +73,75 @@ describe("Anthropic compaction authentication eligibility", () => {
   });
 });
 
+describe("Anthropic server compaction default", () => {
+  const direct = {
+    id: "claude-sonnet-4-6",
+    provider: "anthropic",
+    api: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com/v1",
+    contextWindow: 200_000,
+  };
+
+  it("enables documented models on direct API-key routes", () => {
+    expect(resolveAnthropicServerCompactionPlan(direct, {}, "test-api-key")).toEqual({
+      enabled: true,
+      threshold: 140_000,
+    });
+  });
+
+  it.each([
+    {
+      name: "the explicit opt-out",
+      model: direct,
+      extraParams: { anthropicServerCompaction: false },
+    },
+    { name: "an undocumented model", model: { ...direct, id: "claude-opus-4-5" } },
+    { name: "OAuth credentials", model: direct, apiKey: "test-sk-ant-oat-fixture" },
+    {
+      name: "Bedrock",
+      model: {
+        ...direct,
+        provider: "amazon-bedrock",
+        api: "bedrock-converse-stream",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      },
+    },
+    {
+      name: "Vertex",
+      model: {
+        ...direct,
+        provider: "anthropic-vertex",
+        baseUrl: "https://us-east5-aiplatform.googleapis.com",
+      },
+    },
+    { name: "a proxy host", model: { ...direct, baseUrl: "https://proxy.example.test/v1" } },
+  ])("stays off for $name", ({ model, extraParams = {}, apiKey = "test-api-key" }) => {
+    expect(resolveAnthropicServerCompactionPlan(model, extraParams, apiKey)).toEqual({
+      enabled: false,
+    });
+  });
+
+  it("keeps the explicit opt-in for other direct Claude models", () => {
+    expect(
+      resolveAnthropicServerCompactionPlan(
+        { ...direct, id: "claude-opus-4-5" },
+        { anthropicServerCompaction: true },
+        "test-api-key",
+      ),
+    ).toEqual({ enabled: true, threshold: 140_000 });
+  });
+
+  it("triggers inside a configured input cap", () => {
+    expect(
+      resolveAnthropicServerCompactionPlan(
+        { ...direct, contextWindow: 1_000_000, contextTokens: 200_000 },
+        {},
+        "test-api-key",
+      ),
+    ).toEqual({ enabled: true, threshold: 140_000 });
+  });
+});
+
 describe("Anthropic tool-clearing policy", () => {
   const model = { provider: "anthropic", api: "anthropic-messages", contextWindow: 200_000 };
 

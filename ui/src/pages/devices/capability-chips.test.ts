@@ -1,18 +1,13 @@
+import { flush } from "solid-js";
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it } from "vitest";
-import { mountSolid } from "../../test-helpers/solid.ts";
+import { describe, expect, it } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { CapabilityChips } from "./capability-chips.tsx";
-
-const disposers: Array<() => void> = [];
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-});
 
 function renderChips(caps: string[]) {
   const container = document.createElement("div");
-  disposers.push(mountSolid(() => CapabilityChips({ caps }), container).dispose);
+  mountSolid(() => CapabilityChips({ caps }), { container });
+  flush();
   return container;
 }
 

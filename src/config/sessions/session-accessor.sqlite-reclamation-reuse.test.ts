@@ -80,7 +80,7 @@ import { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-w
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import type { SqliteReclamationWorkerMessage } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
-import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const validation = vi.hoisted<{
   checks: SharedArrayBuffer;

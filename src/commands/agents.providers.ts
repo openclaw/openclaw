@@ -1,5 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveChannelAccount } from "../channels/account-resolution.js";
+import { describeChannelAccount, resolveChannelAccount } from "../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -142,7 +142,7 @@ export async function buildProviderStatusIndex(
       if (!account) {
         continue;
       }
-      const snapshot = plugin.config.describeAccount?.(account, cfg);
+      const snapshot = await describeChannelAccount({ plugin, account, cfg });
       const enabled = plugin.config.isEnabled
         ? plugin.config.isEnabled(account, cfg)
         : typeof snapshot?.enabled === "boolean"

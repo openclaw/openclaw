@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import type { GatewayPageChange } from "../../lit/gateway-page-controller.ts";
 import { isGatewayAvailable } from "../gateway-availability.ts";
@@ -16,7 +16,7 @@ export function useGatewayPage(options: {
   onPageActivation?: () => void;
 }) {
   const lifecycle = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
-  const [revision, setRevision] = createSignal(0);
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let source: ApplicationGateway | null = null;
   let snapshot: ApplicationGatewaySnapshot | null = null;
   let client: ApplicationGatewaySnapshot["client"] = null;
@@ -65,10 +65,10 @@ export function useGatewayPage(options: {
     const sourceChanged = bound && source !== gateway;
     source = gateway;
     bound = true;
-    apply(gateway.snapshot, initial, sourceChanged);
+    untrack(() => apply(gateway.snapshot, initial, sourceChanged));
     unsubscribe = gateway.subscribe((next) => {
       if (!disposed && source === gateway && options.getGateway() === gateway) {
-        apply(next, false, false);
+        untrack(() => apply(next, false, false));
       }
     });
     return () => {
@@ -99,16 +99,18 @@ export function useGatewayPage(options: {
     if (previous) {
       const stopped = { ...previous, client: null, phase: "stopped" } as const;
       if (lifecycle.transition(stopped)) {
-        options.invalidateRequests?.({
-          snapshot: stopped,
-          initial: false,
-          sourceChanged: false,
-          clientChanged,
-          connectionChanged,
-          identityChanged: false,
-          becameConnected: false,
-          becameAvailable: false,
-        });
+        untrack(() =>
+          options.invalidateRequests?.({
+            snapshot: stopped,
+            initial: false,
+            sourceChanged: false,
+            clientChanged,
+            connectionChanged,
+            identityChanged: false,
+            becameConnected: false,
+            becameAvailable: false,
+          }),
+        );
       }
     }
     lifecycle.dispose();

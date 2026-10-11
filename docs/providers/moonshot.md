@@ -338,6 +338,18 @@ at $0.30 per million tokens. See
     effort, medium/high/adaptive maps to high effort, and xhigh/max maps to max
     effort. This applies to both `kimi/k3` and `kimi/k3-256k`. Legacy
     `kimi/k3[1m]` normalizes to `kimi/k3`.
+
+    Self-hosted K3 registrations under `kimi` with model ID `kimi-k3` or
+    `Kimi-K3` and `api: "openai-completions"` expose the same thinking choices.
+    They stay off by default, including existing configurations without an
+    explicit thinking preference. Enabled levels use the mapping above and
+    send top-level `reasoning_effort`; off sends `thinking: { type: "disabled" }`
+    without an effort. Explicit model mappings and `params.extra_body` overrides
+    remain effective. A configured `params.chat_template_kwargs.reasoning_effort`
+    is not shadowed by a generated top-level effort. Whether a self-hosted
+    endpoint honors disabling depends on its serving configuration; this does
+    not change the hosted Moonshot API's always-on policy.
+
     Moonshot API K3 supports `auto`, `none`, `required`, and pinned tool choices,
     so OpenClaw preserves the requested `tool_choice`. For multi-turn tool use,
     OpenClaw preserves the assistant reasoning content required by Moonshot's

@@ -365,7 +365,7 @@ class ConnectionDraft {
 
 function ConnectionContent(_props: object, host: HTMLElement) {
   const context = useApplication();
-  const [revision, setRevision] = createSignal(0);
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const changed = () => setRevision((value) => value + 1);
   const draft = new ConnectionDraft(context, host, changed);
   draft.polling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, () => draft.refreshDiagnostics());

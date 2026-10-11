@@ -20,7 +20,7 @@ import "../debug/debug-overlay-content.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import "./connection-page.tsx";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
-import { mountSolid } from "../../test-helpers/solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { DebugOverlay } from "../debug/debug-overlay.ts";
 type ConnectionPage = SolidBridgeElement<object>;
 const mounts: Array<() => void> = [];
@@ -71,7 +71,7 @@ async function mount(gateway: ApplicationGateway) {
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
   document.body.append(provider);
-  mounts.push(mountSolid(() => page, provider).dispose);
+  mounts.push(mountSolid(() => page, { container: provider }).unmount);
   await settleLitElement(page);
   return { page, context, provider };
 }
@@ -284,6 +284,8 @@ describe("ConnectionPage ping", () => {
     expect(page.querySelector(".connection-ping")?.textContent).not.toContain("Last ping failed.");
     await vi.advanceTimersByTimeAsync(10_000);
     provider.remove();
+    // The bridge preserves its root across same-turn DOM moves.
+    await Promise.resolve();
     expect(pingRequest.mock.calls[4]?.[2].signal.aborted).toBe(true);
     responses[4]!.resolve(null);
     await vi.advanceTimersByTimeAsync(10_000);
@@ -466,7 +468,7 @@ describe("ConnectionPage ping", () => {
 function editInput(page: ConnectionPage, label: string, value: string) {
   const input = control(page, `input[aria-label="${label}"]`);
   input.value = value;
-  input.dispatchEvent(new Event("input"));
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 describe("ConnectionPage credentials", () => {

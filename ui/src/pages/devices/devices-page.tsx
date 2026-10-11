@@ -3,7 +3,7 @@ import type {
   EnvironmentsListResult,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
@@ -59,13 +59,11 @@ export type DevicesRouteData = {
 const DEVICES_ACTIVE_POLL_INTERVAL_MS = 30_000;
 const SYSTEM_INFO_POLL_INTERVAL_MS = 60_000;
 
-export class DevicesPageController {
+class DevicesPageController {
   constructor(
     public context: ApplicationContext,
     private readonly publish: () => void,
   ) {}
-
-  routeData?: DevicesRouteData;
 
   presence: PresenceEntry[] = [];
   private gatewaySystemInfo: SystemInfoResult | null = null;
@@ -237,8 +235,7 @@ export class DevicesPageController {
   }
 
   setRouteData(data: DevicesRouteData | undefined) {
-    this.routeData = data;
-    this.applyRouteData();
+    this.applyRouteData(data);
     this.ensureInitialData();
     this.publish();
   }
@@ -284,8 +281,7 @@ export class DevicesPageController {
     this.publish();
   }
 
-  private applyRouteData() {
-    const data = this.routeData;
+  private applyRouteData(data: DevicesRouteData | undefined) {
     if (!data) {
       return;
     }
@@ -295,7 +291,6 @@ export class DevicesPageController {
       this.resetServerState(snapshot);
       this.presence = readPresenceEntries(snapshot.hello?.snapshot) ?? [];
       void this.loadPresence();
-      this.ensureInitialData();
       return;
     }
     this.pageState = {
@@ -613,49 +608,45 @@ export class DevicesPageController {
   }
 }
 
-export function DevicesPageView(props: { controller: DevicesPageController; revision: number }) {
-  const controller = untrack(() => props.controller);
-  const config = projectRuntimeConfig(controller.context.runtimeConfig);
-  controller.bindPolling();
-  controller.bindGateway();
-  controller.bindEvents();
-  onCleanup(() => controller.dispose());
-  const view = createMemo(() => {
-    void props.revision;
-    config.read();
-    void controller.gateway.snapshot;
-    return controller.viewProps();
-  });
-  return (
-    <>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <div class="page-title">{titleForRoute("devices", t)}</div>
-            <div class="page-subtitle">
-              {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
-            </div>
-          </div>
-        </section>
-      </ShellLayoutBoundary>
-      <SettingsWorkspace>
-        <DevicesView {...view()} />
-      </SettingsWorkspace>
-    </>
-  );
-}
-
 export const DevicesPage = defineSolidBridge<{ routeData?: DevicesRouteData }>(
   "openclaw-devices-page",
   (props) => {
     const context = useApplication();
-    const [revision, setRevision] = createSignal(0);
+    // This signal publishes changes from the synchronous page owner, including lifecycle effects.
+    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
     const controller = new DevicesPageController(context, () => setRevision((value) => value + 1));
+    controller.bindPolling();
+    controller.bindGateway();
+    controller.bindEvents();
+    const config = projectRuntimeConfig(context.runtimeConfig);
     createEffect(
       () => props.routeData,
       (data) => controller.setRouteData(data),
     );
-    return <DevicesPageView controller={controller} revision={revision()} />;
+    onCleanup(() => controller.dispose());
+    const view = createMemo(() => {
+      revision();
+      config.read();
+      void controller.gateway.snapshot;
+      return controller.viewProps();
+    });
+    return (
+      <>
+        <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
+          <section class="content-header">
+            <div>
+              <div class="page-title">{titleForRoute("devices", t)}</div>
+              <div class="page-subtitle">
+                {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
+              </div>
+            </div>
+          </section>
+        </ShellLayoutBoundary>
+        <SettingsWorkspace>
+          <DevicesView {...view()} />
+        </SettingsWorkspace>
+      </>
+    );
   },
   { properties: { routeData: { default: undefined, attribute: false } } },
 );

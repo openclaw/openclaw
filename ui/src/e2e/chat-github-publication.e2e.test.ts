@@ -357,6 +357,11 @@ suite.define(() => {
         await takeControlUiViewportScreenshot(page, page.locator(".shell"), [retry]),
       );
     }
+    // Navigate the authorized ownerless fixtures through All without changing retry identity.
+    await page
+      .locator(".sidebar-navigation-scope")
+      .getByRole("button", { name: "All", exact: true })
+      .click();
     const sessionLink = (key: string) =>
       page.locator(
         `.sidebar-recent-session[data-session-key="${key}"] a.sidebar-recent-session__link`,

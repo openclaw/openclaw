@@ -4,32 +4,27 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
-import { mountSolid } from "../../test-helpers/solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { ConnectionView, type ConnectionProps } from "./view.tsx";
 
-const mountedConnections = new Map<
-  HTMLElement,
-  { update: (props: ConnectionProps) => void; dispose: () => void }
->();
-
-afterEach(() => {
-  for (const [container, mounted] of mountedConnections) {
-    mounted.dispose();
-    container.remove();
-  }
-  mountedConnections.clear();
-});
+const mountedConnections = new Map<HTMLElement, (props: ConnectionProps) => void>();
+afterEach(() => mountedConnections.clear());
 
 function mountConnection(props: ConnectionProps, container: HTMLElement) {
-  const mounted = mountedConnections.get(container);
-  if (mounted) {
-    mounted.update(props);
-    flush();
-    return;
+  const update = mountedConnections.get(container);
+  if (update) {
+    update(props);
+  } else {
+    mountSolid(
+      () => {
+        const [current, setCurrent] = createSignal(props);
+        mountedConnections.set(container, (next) => setCurrent(next));
+        return <ConnectionView {...current()} />;
+      },
+      { container },
+    );
   }
-  const [current, setCurrent] = createSignal(props);
-  const view = mountSolid(() => <ConnectionView {...current()} />, container);
-  mountedConnections.set(container, { update: (next) => setCurrent(next), dispose: view.dispose });
+  flush();
 }
 
 function createConnectionProps(overrides: Partial<ConnectionProps> = {}): ConnectionProps {
@@ -49,6 +44,7 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
       navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
+      navigationScope: "mine",
       locale: "en",
     },
     secret: "tok",

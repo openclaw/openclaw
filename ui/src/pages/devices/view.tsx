@@ -30,8 +30,8 @@ export function DevicesView(props: DevicesProps) {
             )}
           </div>
         ) : undefined}
-        <DeviceInventory {...props} /> <ExecApprovals state={approvalsState()} />
-        <Bindings state={bindingState()} />
+        <DeviceInventory {...props} /> <ExecApprovals {...approvalsState()} />
+        <Bindings {...bindingState()} />
       </>
     </SettingsPage>
   );
@@ -55,35 +55,29 @@ function resolveBindingsState(input: DevicesProps) {
   };
 }
 
-function Bindings(props: { state: BindingState }) {
-  const supportsBinding = createMemo(() => props.state.nodes.length > 0);
+function Bindings(props: BindingState) {
+  const supportsBinding = createMemo(() => props.nodes.length > 0);
   const saveButton = (
     <button
       class="btn"
-      disabled={props.state.disabled || !props.state.configDirty}
-      onClick={() => props.state.onSaveBindings()}
+      disabled={props.disabled || !props.configDirty}
+      onClick={() => props.onSaveBindings()}
     >
-      {props.state.configSaving ? t("common.saving") : t("common.save")}
+      {props.configSaving ? t("common.saving") : t("common.save")}
     </button>
   );
   const rows = (
     <>
-      {!props.state.canAdmin ? (
-        <SettingsRow title={t("devices.readOnly.adminRequired")} />
-      ) : undefined}
-      {props.state.configFormMode === "raw" ? (
+      {!props.canAdmin ? <SettingsRow title={t("devices.readOnly.adminRequired")} /> : undefined}
+      {props.configFormMode === "raw" ? (
         <SettingsRow title={t("devices.binding.formModeHint")} />
       ) : undefined}
-      {!props.state.ready ? (
+      {!props.ready ? (
         <SettingsRow
           title={t("devices.binding.loadConfigHint")}
           control={
-            <button
-              class="btn"
-              disabled={props.state.configLoading}
-              onClick={props.state.onLoadConfig}
-            >
-              {props.state.configLoading ? t("common.loading") : t("common.loadConfig")}
+            <button class="btn" disabled={props.configLoading} onClick={props.onLoadConfig}>
+              {props.configLoading ? t("common.loading") : t("common.loadConfig")}
             </button>
           }
         />
@@ -100,10 +94,10 @@ function Bindings(props: { state: BindingState }) {
                 </>
               )
             }
-            control={<BindingSelect agent={null} state={props.state} />}
+            control={<BindingSelect {...props} agent={null} />}
           />
-          <For each={props.state.agents} keyed={(agent) => agent.id}>
-            {(agent) => <AgentBinding agent={agent()} state={props.state} />}
+          <For each={props.agents} keyed={(agent) => agent.id}>
+            {(agent) => <AgentBinding {...props} agent={agent()} />}
           </For>
         </>
       )}
@@ -120,7 +114,7 @@ function Bindings(props: { state: BindingState }) {
   );
 }
 
-function AgentBinding(props: { agent: BindingAgent; state: BindingState }) {
+function AgentBinding(props: BindingState & { agent: BindingAgent }) {
   const bindingValue = createMemo(() => props.agent.binding ?? "__default__");
   const label = createMemo(() =>
     props.agent.name?.trim() ? `${props.agent.name} (${props.agent.id})` : props.agent.id,
@@ -133,33 +127,33 @@ function AgentBinding(props: { agent: BindingAgent; state: BindingState }) {
           {props.agent.isDefault ? t("devices.binding.defaultAgent") : t("devices.binding.agent")} ·
           {bindingValue() === "__default__"
             ? t("devices.binding.usesDefault", {
-                node: props.state.defaultBinding ?? t("devices.binding.any"),
+                node: props.defaultBinding ?? t("devices.binding.any"),
               })
             : t("devices.binding.override", { node: props.agent.binding ?? "" })}
         </>
       }
-      control={<BindingSelect agent={props.agent} state={props.state} />}
+      control={<BindingSelect {...props} agent={props.agent} />}
     />
   );
 }
 
-function BindingSelect(props: { agent: BindingAgent | null; state: BindingState }) {
+function BindingSelect(props: BindingState & { agent: BindingAgent | null }) {
   const isDefault = () => props.agent === null;
   const sentinel = () => (isDefault() ? "" : "__default__");
   const selected = () =>
-    isDefault() ? (props.state.defaultBinding ?? "") : (props.agent?.binding ?? "__default__");
+    isDefault() ? (props.defaultBinding ?? "") : (props.agent?.binding ?? "__default__");
   const options = createMemo(() => {
     const value = selected();
     let resolvedId: string | undefined;
     if (value !== sentinel()) {
       try {
         // Resolve the complete inventory before capability filtering, just like exec.
-        resolvedId = resolveNodeIdFromCandidates(props.state.inventory, value);
+        resolvedId = resolveNodeIdFromCandidates(props.inventory, value);
       } catch {
         // Unknown and ambiguous references stay visible without changing configuration.
       }
     }
-    const result = props.state.nodes.map((node) => ({
+    const result = props.nodes.map((node) => ({
       ...node,
       id: node.id === resolvedId ? value : node.id,
       disabled: false,
@@ -176,9 +170,9 @@ function BindingSelect(props: { agent: BindingAgent | null; state: BindingState 
   const onChange = (event: Event) => {
     const value = (event.target as HTMLSelectElement).value.trim();
     if (props.agent === null) {
-      props.state.onBindDefault(value || null);
+      props.onBindDefault(value || null);
     } else {
-      props.state.onBindAgent(props.agent.id, value === "__default__" ? null : value);
+      props.onBindAgent(props.agent.id, value === "__default__" ? null : value);
     }
   };
   return (
@@ -186,9 +180,7 @@ function BindingSelect(props: { agent: BindingAgent | null; state: BindingState 
       class="settings-select"
       aria-label={t(isDefault() ? "devices.binding.node" : "devices.binding.binding")}
       value={selected()}
-      disabled={
-        props.state.disabled || (props.state.nodes.length === 0 && selected() === sentinel())
-      }
+      disabled={props.disabled || (props.nodes.length === 0 && selected() === sentinel())}
       onChange={onChange}
     >
       <option value={sentinel()} selected={selected() === sentinel()}>
