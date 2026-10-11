@@ -167,28 +167,39 @@ describe("explicit full-message reads", () => {
     expect(await load()(owned)).toEqual(result);
   });
 
-  it.each(["principal", "session key", "physical session", "lifecycle", "policy"] as const)(
-    "invalidates cached content when the %s changes",
-    async (change) => {
-      const { state, context, session, load, request } = fixture();
-      await load()(messageRequest);
-      if (change === "principal") {
-        context.gateway.snapshot.selfUser = { id: "bob", name: "Bob" };
-      } else if (change === "session key") {
-        state.sessionKey = "agent:main:replacement";
-      } else if (change === "physical session") {
-        state.currentSessionId = "replacement";
-      } else if (change === "lifecycle") {
-        session.lifecycleRevision = "revision-2";
-      } else {
-        state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
-      }
-      const replacement = { ...result, message: { role: "assistant", content: "New answer" } };
-      request.mockResolvedValue(replacement);
-      expect(await load()(messageRequest)).toEqual(replacement);
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
+  it.each([
+    "principal",
+    "session key",
+    "physical session",
+    "successor row",
+    "lifecycle",
+    "policy",
+  ] as const)("invalidates cached content when the %s changes", async (change) => {
+    const { state, context, session, load, request } = fixture();
+    await load()(messageRequest);
+    if (change === "principal") {
+      context.gateway.snapshot.selfUser = { id: "bob", name: "Bob" };
+    } else if (change === "session key") {
+      state.sessionKey = "agent:main:replacement";
+    } else if (change === "physical session") {
+      state.currentSessionId = "replacement";
+    } else if (change === "successor row") {
+      session.sessionId = "next-physical-session";
+    } else if (change === "lifecycle") {
+      session.lifecycleRevision = "revision-2";
+    } else {
+      state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
+    }
+    const replacement = { ...result, message: { role: "assistant", content: "New answer" } };
+    request.mockResolvedValue(replacement);
+    expect(await load()(messageRequest)).toEqual(replacement);
+    expect(request).toHaveBeenCalledTimes(2);
+    if (change === "successor row") {
+      request.mockResolvedValue({ ok: false, unavailableReason: "not_found" });
+      expect(await load()(messageRequest)).toMatchObject({ ok: false });
+      expect(request).toHaveBeenCalledTimes(3);
+    }
+  });
 
   it.each(["connection", "lifecycle", "authorization"] as const)(
     "does not publish or cache a read superseded by a %s change",

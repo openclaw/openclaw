@@ -232,6 +232,49 @@ describe("remote-exec skill resources", () => {
     }
   });
 
+  it("rejects a valid-shaped init reply advertising a different allocation", async () => {
+    const { snapshot } = await createSource();
+    const carrier = await createNodeCarrier(temps.make("skill-resource-node-"));
+    const outside = await fs.realpath(temps.make("skill-resource-wrong-mount-"));
+    let allocated: string | undefined;
+    let writes = 0;
+    try {
+      const request = {
+        snapshot,
+        remoteWorkspaceDir: carrier.workspace,
+        assertCurrent: () => {},
+        tunnel: {
+          runWorkspaceCommand: async (
+            command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
+          ) => {
+            const operation = JSON.parse(command.input!);
+            writes += Number(operation.op === "write");
+            const result = await carrier.runWorkspaceCommand(command);
+            if (operation.op === "init") {
+              allocated = path.join(carrier.workspace, operation.directory);
+              return {
+                ...result,
+                stdout: JSON.stringify({
+                  id: randomUUID().replaceAll("-", ""),
+                  identity: result.stdout,
+                  root: outside,
+                }),
+              };
+            }
+            return result;
+          },
+        },
+      };
+      await expect(transferSkillResources(request)).rejects.toThrow("Invalid skill resource");
+      expect(writes).toBe(0);
+      expect(await fs.readdir(outside)).toEqual([]);
+    } finally {
+      if (allocated) {
+        await fs.rm(allocated, { recursive: true, force: true });
+      }
+    }
+  });
+
   it.each(["malformed", "retired"])(
     "reclaims uncertain init on the next turn or generation retirement (%s)",
     async (failure) => {

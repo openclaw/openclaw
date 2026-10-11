@@ -379,10 +379,21 @@ export async function sendMessage(rest, channelId, data) {
 
 describe("scanSkillContent", () => {
   it.each([
+    `sk-proj-${"a".repeat(32)}`,
+    `ghp_${"a".repeat(32)}`,
+    `github_pat_${"a".repeat(32)}`,
+    `xoxb-${"1".repeat(12)}-${"a".repeat(26)}`,
+    `AIza${"a".repeat(35)}`,
+    `AIza${"a".repeat(34)}-`,
     [
       ["-----BEGIN", "PRIVATE KEY-----"].join(" "),
       "a".repeat(64),
       ["-----END", "PRIVATE KEY-----"].join(" "),
+    ].join("\n"),
+    [
+      ["-----BEGIN OPENSSH", "PRIVATE KEY-----"].join(" "),
+      "a".repeat(70),
+      ["-----END OPENSSH", "PRIVATE KEY-----"].join(" "),
     ].join("\n"),
   ])("detects recognized literal credentials without echoing them in messages: %s", (sample) => {
     const findings = scanSkillContent(`# Unsafe\n\ncredential: ${sample}\n`, "PROPOSAL.md");

@@ -141,6 +141,31 @@ describe("pane-owned canonical session projection", () => {
     },
   );
 
+  it.each(["messagePersisted", "snapshotLoaded"] as const)(
+    "sender provenance does not survive authoritative omission in %s",
+    (type) => {
+      const { owner, initial: handoff } = createInitialHandoffFixture();
+      expect(handoff.message["__openclaw"]).toHaveProperty("senderIdentity", {
+        type: "profile",
+        id: "local",
+      });
+      admitChatSubmission(owner, undefined);
+      const authoritative = createAuthoritativeInitialMessage();
+      reduceChatSessionProjection(
+        owner,
+        type === "messagePersisted"
+          ? { type, message: authoritative }
+          : { type, messages: [authoritative] },
+      );
+      const metadata = (owner.chatMessages[0] as { __openclaw: Record<string, unknown> })[
+        "__openclaw"
+      ];
+      expect(metadata).not.toHaveProperty("senderIdentity");
+      expect(metadata).not.toHaveProperty("senderId");
+      expect(metadata).not.toHaveProperty("senderProfileAvatarUrl");
+    },
+  );
+
   it("uses one canonical identity for an explicitly unbranched pane", () => {
     const owner = {
       sessionKey: "agent:main:shared",

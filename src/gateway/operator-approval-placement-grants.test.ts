@@ -497,6 +497,7 @@ describe("placement standing grants", () => {
   });
 
   it.each([
+    ["placement generation bump", { transition_generation: 5 }],
     ["gateway owner-epoch rotation", { active_owner_epoch: 8 }],
     ["placement drain", { state: "draining" }],
   ] as const)("fails closed after %s", async (_name, update) => {

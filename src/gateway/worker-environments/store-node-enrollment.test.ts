@@ -146,6 +146,25 @@ describe("worker environment node enrollment store", () => {
     });
   }
 
+  it("refuses first-device redemption from a closed enrollment invocation", async () => {
+    await startProvisioning();
+    const { manager, enrollment, token, verification } = await beginConnect();
+    await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
+
+    manager.close(enrollment);
+
+    await expect(
+      consumeDeviceBootstrapTokenWithSetupCompletion({
+        baseDir: root,
+        token,
+        deviceId: verification.deviceId,
+        completedAtMs: Date.now(),
+        admitsCloudWorkerSetup: manager.admitsNodeSetupCompletion,
+      }),
+    ).resolves.toBeNull();
+    expect(store.get("worker-enrollment")?.nodeDeviceId).toBeNull();
+  });
+
   it("does not revoke a replacement bearer when a superseded ensure returns late", async () => {
     await startProvisioning();
     const manager = createManager();

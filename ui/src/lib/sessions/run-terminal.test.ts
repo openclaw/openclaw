@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { reconcileSessionRunTerminal } from "./index.ts";
 import {
@@ -51,6 +51,39 @@ describe("reconcileSessionRunTerminal yielded parent", () => {
           endedAt: 160,
           runtimeMs: 60,
           abortedLastRun: false,
+        },
+      ],
+    });
+  });
+
+  it("preserves overlapping active runs when one model turn yields", () => {
+    const result = sessionsResult([
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: true,
+        activeRunIds: ["run-1", "run-2"],
+        status: "running",
+        startedAt: 100,
+      },
+    ]);
+
+    expect(
+      reconcileSessionRunTerminal(result, {
+        sessionKeys: ["main"],
+        runId: "run-1",
+        status: "running",
+        endedAt: 160,
+      }),
+    ).toEqual({
+      ...result,
+      sessions: [
+        {
+          ...result.sessions[0],
+          activeRunIds: ["run-2"],
+          hasActiveRun: true,
+          status: "running",
         },
       ],
     });
@@ -212,14 +245,44 @@ describe("terminal metadata ownership", () => {
     });
   });
 
-  it("preserves an idle run's existing terminal identity and timing", async () => {
+  it.each([
+    "same done",
+    "same failed",
+    "same killed",
+    "unknown IDs",
+    "foreign ID",
+    "overlap",
+    "missing previous ID",
+    "idle",
+    "queued",
+    "running",
+  ] as const)("preserves unowned or same-run timing (%s)", async (mode) => {
+    const same = mode.startsWith("same ");
+    const status: SessionRunStatus =
+      mode === "same failed"
+        ? "failed"
+        : mode === "same killed"
+          ? "killed"
+          : mode === "queued" || mode === "running"
+            ? mode
+            : "done";
     const initial = {
       ...previousTerminal,
-      lastRunId: "old-run",
-      status: "done" as const,
-      hasActiveRun: false,
-      activeRunIds: [],
-      abortedLastRun: false,
+      lastRunId: same ? "new-run" : mode === "missing previous ID" ? undefined : "old-run",
+      status: same || mode === "idle" ? status : ("running" as const),
+      hasActiveRun: mode !== "idle",
+      activeRunIds:
+        mode === "unknown IDs"
+          ? undefined
+          : mode === "foreign ID"
+            ? ["other-run"]
+            : mode === "overlap"
+              ? ["new-run", "other-run"]
+              : mode === "idle"
+                ? []
+                : ["new-run"],
+      abortedLastRun: status === "killed",
+      ...(status === "failed" ? { lastRunError: "Current failure" } : {}),
     };
     const h = await terminalOwner(initial, "primary");
     const previous = h.result();
@@ -227,7 +290,7 @@ describe("terminal metadata ownership", () => {
     const changed = h.sessions.reconcileRunTerminal({
       sessionKeys: [initial.key],
       runId: "new-run",
-      status: "done",
+      status,
       endedAt: 900,
     });
     expect(h.row()).toMatchObject({
@@ -236,10 +299,61 @@ describe("terminal metadata ownership", () => {
       runtimeMs: 100,
     });
     expect(h.row()?.lastRunId).toBe(initial.lastRunId);
-    expect(changed).toBe(false);
-    expect(h.result()).toBe(previous);
-    expect(h.updates).not.toHaveBeenCalled();
+    if (same) {
+      expect(h.row()?.abortedLastRun).toBe(initial.abortedLastRun);
+      expect(h.row()?.lastRunError).toBe(initial.lastRunError);
+    }
+    if (mode === "unknown IDs" || mode === "foreign ID" || mode === "idle") {
+      expect(changed).toBe(false);
+      expect(h.result()).toBe(previous);
+      expect(h.updates).not.toHaveBeenCalled();
+    }
+    if (mode === "overlap") {
+      expect(h.row()).toMatchObject({ hasActiveRun: true, activeRunIds: ["other-run"] });
+    }
+    if (mode === "queued" || mode === "running") {
+      expect(h.row()?.status).toBe(mode);
+    }
   });
+
+  it.each([
+    { lastRunId: "current-run", status: "done" },
+    { lastRunId: undefined, status: "done" },
+    { lastRunId: "previous-run", status: "running" },
+  ] as const)(
+    "preserves existing settlement for $lastRunId / $status",
+    async ({ lastRunId, status }) => {
+      const initial: GatewaySessionRow = {
+        ...previousTerminal,
+        lastRunId,
+        status: "failed",
+        lastRunError: "Recorded failure",
+        hasActiveRun: false,
+        activeRunIds: [],
+      };
+      const h = await terminalOwner(initial, "primary");
+
+      expect(
+        h.sessions.reconcileRunTerminal({
+          sessionKeys: [initial.key],
+          runId: "current-run",
+          status,
+          endedAt: 900,
+        }),
+      ).toBe(true);
+
+      expect(h.row()).toMatchObject({
+        status,
+        hasActiveRun: false,
+        activeRunIds: [],
+        startedAt: 100,
+        endedAt: 200,
+        runtimeMs: 100,
+      });
+      expect(h.row()?.lastRunId).toBe(lastRunId);
+      expect(h.row()?.lastRunError).toBeUndefined();
+    },
+  );
 });
 
 describe("terminal observations", () => {

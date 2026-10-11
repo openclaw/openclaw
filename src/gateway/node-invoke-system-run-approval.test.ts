@@ -744,6 +744,55 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_ENV_MISMATCH");
   });
 
+  test("consumes allow-once approvals and blocks same runId replay", async (testContext) => {
+    const approvalManager = createTestApprovalManager(testContext);
+    const runId = "approval-replay-1";
+    const record = approvalManager.create(
+      {
+        host: "node",
+        nodeId: "node-1",
+        command: echoSafeCommand,
+        commandArgv: echoSafeArgv,
+        systemRunBinding: systemRunApprovalBinding(echoSafeArgv),
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+      },
+      60_000,
+      runId,
+    );
+    record.requestedByConnId = "conn-1";
+    record.requestedByDeviceId = "dev-1";
+    record.requestedByClientId = "cli-1";
+    record.requestedByDeviceTokenAuth = false;
+
+    const decisionPromise = (await approvalManager.register(record, 60_000)).decision;
+    await approvalManager.resolve(runId, "allow-once", "operator");
+    await expect(decisionPromise).resolves.toBe("allow-once");
+
+    const params = approvedRunParams({
+      command: echoSafeArgv,
+      rawCommand: echoSafeCommand,
+      runId,
+    });
+
+    const first = await sanitizeSystemRunParamsForForwarding({
+      nodeId: "node-1",
+      rawParams: params,
+      client,
+      execApprovalManager: approvalManager,
+    });
+    expectAllowOnceForwardingResult(first);
+
+    const second = await sanitizeSystemRunParamsForForwarding({
+      nodeId: "node-1",
+      rawParams: params,
+      client,
+      execApprovalManager: approvalManager,
+    });
+    expectRejectedForwardingResult(second, "APPROVAL_REQUIRED");
+  });
+
   test("rejects approval ids that do not bind a nodeId", async () => {
     const record = makeRecord(echoSafeCommand);
     record.request.nodeId = null;
