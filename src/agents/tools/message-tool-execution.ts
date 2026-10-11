@@ -502,6 +502,7 @@ function* createMessageToolSteps(
             agentId: resolvedAgentId,
             target: route.target,
           }),
+        currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
         currentChannelId: effectiveCurrentChannel.currentChannelId,
         currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
       });
