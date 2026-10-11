@@ -88,7 +88,7 @@ it.each([
         delivery: { hostCapabilities: host.hostCapabilities, onBlockReply: async () => {} },
       });
     const foreignQuestion = createDeferred<Awaited<ReturnType<typeof askQuestion>>>();
-    const writer = SessionManager.open(target, dir);
+    const writer = await SessionManager.openAsync(target, dir);
     const runStarted = createDeferred();
     const releaseAppend = createDeferred();
     const providerResumed = vi.fn();
@@ -103,7 +103,7 @@ it.each([
         const answer =
           scenario === "foreign-registration" ? await foreignQuestion.promise : await askQuestion();
         await releaseAppend.promise;
-        const entryId = writer.appendMessage({
+        const entryId = await writer.appendMessageAsync({
           role: "toolResult",
           toolCallId: "trip-question",
           toolName: "ask_user",
