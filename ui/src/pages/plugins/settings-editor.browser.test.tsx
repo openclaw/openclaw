@@ -1,7 +1,6 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
-import type { ApplicationContext } from "../../app/context.ts";
 import { REDACTED_SENTINEL, type JsonSchema } from "../../lib/config-form-utils.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
@@ -10,6 +9,7 @@ import {
   createApplicationGateway,
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
+import { createContext } from "./plugins-page.test-support.ts";
 import { PluginSettingsEditor, type PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-view.tsx";
@@ -100,16 +100,10 @@ describe("grouped plugin settings", () => {
       setValue({ plugins: { label: String(next) } });
     });
     const { gateway } = createApplicationGateway();
+    const context = createContext(gateway);
     const plugins = new ControlUiPluginRuntime(() => context);
     onTestFinished(() => plugins.dispose());
-    // The inventory consumes this fixture's Gateway and real, empty plugin registry.
-    const context = {
-      gateway,
-      plugins,
-      basePath: "",
-      resourceBasePath: "",
-      navigate: vi.fn(),
-    } as ApplicationContext;
+    context.plugins = plugins;
     const provider = createSolidApplicationContextProvider(context);
     const mounted = mountSolid(
       () => (

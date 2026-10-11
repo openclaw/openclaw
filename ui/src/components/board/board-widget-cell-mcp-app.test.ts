@@ -271,13 +271,13 @@ describe("board MCP App cell lifecycle", () => {
     const cell = await mount(widget(), callbacks({ refreshWidgetAppView }));
     await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
     const view = cell.querySelector("mcp-app-view")!;
-    vi.spyOn(view, "teardown").mockImplementation(() => retired.promise);
+    const teardown = vi.spyOn(view, "teardown").mockImplementation(() => retired.promise);
     view.dispatchEvent(
       new CustomEvent("openclaw-mcp-app-view-expired", { bubbles: true, composed: true }),
     );
     await settle(cell);
 
-    expect(view.teardown).toHaveBeenCalled();
+    expect(teardown).toHaveBeenCalled();
     expect(cell.querySelector("mcp-app-view")).toBe(view);
     expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).toBeNull();
     retired.resolve();
