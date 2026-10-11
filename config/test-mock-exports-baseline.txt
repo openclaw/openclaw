@@ -3893,7 +3893,6 @@
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","../../agents/thinking-runtime.js","066b8fc319e9b5cbf6e3487ae569bb2a18e393d8c5a3858208cf145f2efce5da",1]
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","../commands-text-routing.js","ca5f539f1d390e8e91b80cbb3266d7636610587aec8e30f8ef07aefc73b5b72c",1]
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./commands-context.js","12276fc15f8409a11a10df3ea0a3c5d726ddffcd9867449d64156afd599faff9",1]
-["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./directive-handling.parse.js","8afd85265d3db8a2d86d33f96d621a54ff3af44f44591fe6649f4aef0e4f1017",1]
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./get-reply-directives-apply.js","ae5ce54fd515423f178a7400449c367c1044f40d84882153d8b9cfbb04ddf356",1]
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./get-reply-exec-overrides.js","e715b278ec5ed6c02543dddfdb5164b1622b779621a2b750b2fca1b3e0e1bf2b",1]
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","./get-reply-fast-path.js","1b419415bb7106580fdfaae9a30b960b8b2177c736edd6269ac83c58e24b4d2a",1]

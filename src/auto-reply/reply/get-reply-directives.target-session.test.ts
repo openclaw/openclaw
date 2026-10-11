@@ -13,6 +13,7 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
   expectContinueResult,
   makeSessionEntry,
+  parseInlineDirectivesForTargetSessionTest,
   makeTypingController,
   mockCallInput,
 } from "./get-reply-directives.target-session.test-helpers.js";
@@ -190,10 +191,11 @@ vi.mock("./commands-context.js", () => ({
   })),
 }));
 
-vi.mock("./directive-handling.parse.js", async () => {
+vi.mock("./directive-handling.parse.js", async (importOriginal) => {
   const { parseInlineDirectivesForTargetSessionTest } =
     await import("./get-reply-directives.target-session.test-helpers.js");
   return {
+    ...(await importOriginal<typeof import("./directive-handling.parse.js")>()),
     parseInlineSessionDirectives: vi.fn(parseInlineDirectivesForTargetSessionTest),
     resolveReplyDirectiveCommand: vi.fn(() => undefined),
   };
@@ -321,6 +323,33 @@ describe("resolveReplyDirectives", () => {
     });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
+  });
+
+  it("marks a terminal elevated refusal as a command-owner reply", async () => {
+    const { resolveElevatedPermissions } = await import("./reply-elevated.js");
+    vi.mocked(resolveElevatedPermissions).mockReturnValueOnce({
+      enabled: false,
+      allowed: false,
+      failures: [],
+    });
+    mocks.shouldHandleTextCommands.mockReturnValue(true);
+    const { parseInlineSessionDirectives } = await import("./directive-handling.parse.js");
+    vi.mocked(parseInlineSessionDirectives).mockReturnValueOnce({
+      ...parseInlineDirectivesForTargetSessionTest("hello"),
+      cleaned: "",
+      hasElevatedDirective: true,
+    });
+    const { result } = await resolveHelloWithModelDefaults({
+      body: "/elevated full",
+      commandAuthorized: true,
+    });
+
+    if (result.kind !== "reply" || !result.reply || Array.isArray(result.reply)) {
+      throw new Error("expected a single elevated refusal");
+    }
+    // Command exchanges record only command-owner replies; the refusal is one.
+    expect(result.reply.text).toBe("elevated unavailable");
+    expect(getReplyPayloadMetadata(result.reply)?.commandReply).toBe(true);
   });
 
   it("preserves combined directive rejection delivery and its invocation rejection fact", async () => {

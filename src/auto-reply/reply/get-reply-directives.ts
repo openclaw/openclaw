@@ -297,13 +297,13 @@ export async function resolveReplyDirectives(params: {
     }).sandboxed;
     return {
       kind: "reply" as const,
-      reply: {
+      reply: markCommandReplyForDelivery({
         text: formatElevatedUnavailableMessage({
           runtimeSandboxed,
           failures: elevatedFailures,
           sessionKey: ctx.SessionKey,
         }),
-      },
+      }),
     };
   }
 
