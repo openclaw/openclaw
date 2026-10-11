@@ -36,6 +36,7 @@ import type {
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
 import type { SessionReconcileOptions } from "./reconcile.ts";
+import type { BootRoster } from "./session-boot-roster.ts";
 import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
@@ -240,6 +241,7 @@ export type SessionCapability = {
     readonly scope: "per-sender" | "global";
   };
   whenCachedRosterSettled: () => Promise<void>;
+  captureBootRoster: () => BootRoster | null;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */

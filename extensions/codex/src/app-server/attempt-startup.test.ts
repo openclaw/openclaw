@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  embeddedAgentLog,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { startCodexAttemptThread } from "./attempt-startup.js";
 import {
@@ -513,27 +516,89 @@ describe("startCodexAttemptThread", () => {
     continued.releaseSharedClientLease();
   });
 
-  it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
-    vi.useFakeTimers();
-    const { harness, run } = startThreadWithHarness(500);
-    const runError = run.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    await answerInitialize(harness);
-    await waitForThreadStart(harness);
-    await vi.advanceTimersByTimeAsync(500);
+  it.each([
+    {
+      method: "initialize",
+      stage: "client-acquire",
+      acquireBoundary: "initialize",
+      loggerThrows: false,
+    },
+    {
+      method: "thread/start",
+      stage: "thread-lifecycle",
+      acquireBoundary: undefined,
+      loggerThrows: false,
+    },
+    {
+      method: "thread/start",
+      stage: "thread-lifecycle",
+      acquireBoundary: undefined,
+      loggerThrows: true,
+    },
+  ])(
+    "records the blocked $method before timeout cleanup (logger throws=$loggerThrows)",
+    async (blocked) => {
+      // Keep transport exit and worker I/O live while the startup clock is frozen.
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const harness = createAttemptClientHarness();
+      const paths = createAttemptPaths(tempRoots);
+      const attemptParams = createAttemptParams(paths);
+      const timeoutWarnings: { metadata: unknown; transportClosed: boolean }[] = [];
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation((message, metadata) => {
+        if (message === "codex app-server startup timed out") {
+          timeoutWarnings.push({ metadata, transportClosed: harness.stdinDestroyed });
+          if (blocked.loggerThrows) {
+            throw new Error("diagnostic logger failed");
+          }
+        }
+      });
+      const { run } = startThreadWithHarness(500, undefined, {
+        harness,
+        paths,
+        buildAttemptParams: () => attemptParams,
+      });
+      const runError = run.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      if (blocked.method !== "initialize") {
+        await answerInitialize(harness);
+      }
+      for (let index = 0; ; index += 1) {
+        const [request] = readHarnessMessages([await harness.waitForWrite(index)]);
+        if (request?.method === blocked.method) {
+          break;
+        }
+      }
+      await vi.advanceTimersByTimeAsync(500);
 
-    const error = await runError;
-    await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
-      interval: 1,
-      timeout: 1_000,
-    });
-    expect(error).toBeInstanceOf(Error);
-    expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
-    expect((error as Error).message).toBe("codex app-server startup timed out");
-    expect(harness.stdinDestroyed).toBe(true);
-  });
+      const error = await runError;
+      await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
+        interval: 1,
+        timeout: 1_000,
+      });
+      expect(error).toBeInstanceOf(Error);
+      expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
+      expect((error as Error).message).toBe("codex app-server startup timed out");
+      expect(harness.stdinDestroyed).toBe(true);
+      expect(timeoutWarnings).toEqual([
+        {
+          transportClosed: false,
+          metadata: expect.objectContaining({
+            runId: attemptParams.runId,
+            sessionId: attemptParams.sessionId,
+            stage: blocked.stage,
+            acquireBoundary: blocked.acquireBoundary,
+            clientInstanceId: harness.client.getInstanceId(),
+            clientPendingRequestMethods: [blocked.method],
+            elapsedMs: 500,
+            timeoutMs: 500,
+          }),
+        },
+      ]);
+      expect(JSON.stringify(timeoutWarnings)).not.toContain(paths.workspaceDir);
+    },
+  );
 
   it("bounds initialize and closes the transport with stderr=true", async () => {
     // Transport exit uses setImmediate; advance the deadline without freezing its delivery.
