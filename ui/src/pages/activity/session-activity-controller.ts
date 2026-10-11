@@ -6,10 +6,7 @@ import { activityPersonFromPath, activityPersonLocation } from "../../app-route-
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import {
-  createSessionRowProvenance,
-  createSessionWriteObservation,
-} from "../../lib/sessions/session-row-provenance.ts";
+import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { activityPulseBoundaries } from "./activity-pulse-window.ts";
 import {
   readCurrentWorkChange,
@@ -118,7 +115,6 @@ export class SessionActivityController {
   private applySummaryBatch(
     result: SessionsListResult,
     rows: readonly GatewaySessionRow[],
-    readCutoff: number,
     summaries: ReadonlyMap<string, GatewaySessionRow["activitySummary"]> | null,
   ): void {
     this.result = {
@@ -131,12 +127,6 @@ export class SessionActivityController {
           ? summaries.get(summaryRowKey(row))
           : { ...row.activitySummary, state: "unavailable" as const };
         const next = this.historyRows.inheritRow({ ...row, activitySummary }, row);
-        this.historyRows.observeFields(
-          next,
-          ["activitySummary"],
-          createSessionWriteObservation(++this.historyRevision, null, readCutoff),
-          row.agentId,
-        );
         return next;
       }),
     };
@@ -244,7 +234,6 @@ export class SessionActivityController {
           this.summaryAttempts.set(key, summaryRevision(row));
           this.summaryRetries.delete(key);
         }
-        const readRevision = ++this.historyRevision;
         try {
           const result = await client.request<{
             sessions: Array<Pick<GatewaySessionRow, "key" | "agentId" | "activitySummary">>;
@@ -264,12 +253,12 @@ export class SessionActivityController {
           const summaries = new Map(
             result.sessions.map((row) => [summaryRowKey(row), row.activitySummary]),
           );
-          this.applySummaryBatch(this.result, rows, readRevision, summaries);
+          this.applySummaryBatch(this.result, rows, summaries);
         } catch {
           if (!current() || !this.result) {
             return;
           }
-          this.applySummaryBatch(this.result, rows, readRevision, null);
+          this.applySummaryBatch(this.result, rows, null);
         }
         this.notify();
       }

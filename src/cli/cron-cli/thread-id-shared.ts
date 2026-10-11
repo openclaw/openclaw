@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { CronJob } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
 
 export function parseCronThreadIdOption(value: unknown): number | undefined {
@@ -20,7 +21,9 @@ export function parseCronThreadIdOption(value: unknown): number | undefined {
   return parsed;
 }
 
-export function normalizeCronSessionTargetOption(value: unknown): string | undefined {
+export function normalizeCronSessionTargetOption(
+  value: unknown,
+): CronJob["sessionTarget"] | undefined {
   // Preserve explicit session ids after `session:` while normalizing the mode prefix.
   const raw = normalizeOptionalString(value);
   if (!raw) {

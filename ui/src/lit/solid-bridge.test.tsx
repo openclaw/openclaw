@@ -243,6 +243,29 @@ it("delivers the original bubbling, cancelable event with its exact detail", asy
   expect(received?.defaultPrevented).toBe(true);
 });
 
+it("runs nested bridge effects after the parent render scope", () => {
+  const Ready = defineSolidBridge(
+    "openclaw-solid-bridge-effect-test",
+    () => {
+      const [ready, setReady] = createSignal(false);
+      createEffect(
+        () => true,
+        () => {
+          setReady(true);
+        },
+      );
+      return <output>{ready() ? "ready" : "pending"}</output>;
+    },
+    { properties: {} },
+  );
+  const view = render(() => (
+    <section>
+      <Ready />
+    </section>
+  ));
+  expect(view.container.querySelector("output")?.textContent).toBe("ready");
+});
+
 it("uses a single Solid-owned host and preserves reactive props, children, events, and disposal", async () => {
   const [label, setLabel] = createSignal("solid");
   const action = vi.fn();
@@ -275,6 +298,19 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   view.unmount();
   await Promise.resolve();
   expect(disposed).toHaveBeenCalledTimes(1);
+});
+
+it("accepts property publication while a Solid owner adopts a mounted bridge", async () => {
+  const host = createHost();
+  document.body.append(host);
+  await host.updateComplete;
+  const view = render(() => {
+    host.label = "adopted";
+    return <div>{host}</div>;
+  });
+  await host.updateComplete;
+  expect(view.container.querySelector("output")?.textContent).toBe("adopted:0:false");
+  expect(mounted).toHaveBeenCalledTimes(1);
 });
 
 it.each(["attribute", "Solid props"])(

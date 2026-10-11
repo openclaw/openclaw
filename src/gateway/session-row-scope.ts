@@ -6,7 +6,6 @@ import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-s
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -91,25 +90,11 @@ export function createSessionRowRegistryRead(owner: {
                       entry.schemaVersion === source.schemaVersion &&
                       (entry.path === source.path || entry.path === source.physicalPath),
                   ) &&
-                  captured.some((store) => {
-                    if (
-                      typeof store.identity !== "string" ||
-                      `file:${store.identity}` !== source.identity ||
-                      store.target.agentId !== source.agentId
-                    ) {
-                      return false;
-                    }
-                    try {
-                      return [...new Set([store.filename, source.path, source.physicalPath])].every(
-                        (filename) => {
-                          const file = readDatabasePathIdentitySync(filename);
-                          return file.key === source.identity && file.birthtime === store.birthtime;
-                        },
-                      );
-                    } catch {
-                      return false;
-                    }
-                  }),
+                  captured.some(
+                    (store) =>
+                      `file:${String(store.identity)}` === source.identity &&
+                      store.target.agentId === source.agentId,
+                  ),
               ),
           );
           const { assertCurrent } = await registry.read();

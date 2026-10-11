@@ -14,10 +14,6 @@ import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  FreeBsdPkgOwnershipError,
-} from "../../infra/update-freebsd-pkg-ownership.js";
 import { inspectImmutableInstall } from "../../infra/update-immutable-install.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
 import {
@@ -35,6 +31,10 @@ import {
 } from "../../infra/update-run-write.async.js";
 import { resolveUpdateInstallSurface } from "../../infra/update-runner-install-surface.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner-types.js";
+import {
+  createSystemPackageOwnershipInspection,
+  SystemPackageOwnershipError,
+} from "../../infra/update-system-package-ownership.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -184,7 +184,7 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   });
   // Status discovery is read-only; admit ownership before campaign adoption
   // or a managed handoff can select and launch an updater.
-  await createFreeBsdPkgOwnershipInspection(timeoutMs).assertUnowned(root);
+  await createSystemPackageOwnershipInspection(timeoutMs).assertUnowned(root);
   const installSurface = await resolveUpdateInstallSurface({
     root,
     installKind: status.installKind,
@@ -311,9 +311,12 @@ export async function createUnexpectedUpdateFailureResult(
   error: unknown,
   warn: (message: string) => void,
 ): Promise<UpdateRunResult> {
+  if (error instanceof SystemPackageOwnershipError && error.owned) {
+    return { ...previous, status: "skipped", reason: error.reason };
+  }
   const activeStep = current.steps.findLast((step) => step.status === "in_progress");
   const name = activeStep?.step ?? current.phase;
-  const reason = error instanceof FreeBsdPkgOwnershipError ? error.reason : "unexpected-error";
+  const reason = error instanceof SystemPackageOwnershipError ? error.reason : "unexpected-error";
   const step = {
     name,
     command: "",

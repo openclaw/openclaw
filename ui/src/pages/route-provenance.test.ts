@@ -14,7 +14,7 @@ import {
 import type { PluginsRouteData } from "./plugins/route-data.ts";
 import { pages as pluginPages } from "./plugins/route.ts";
 import { pages as skillPages } from "./skills/route.ts";
-import type { SkillsRouteData } from "./skills/skills-page.ts";
+import type { SkillsRouteData } from "./skills/skills-page.tsx";
 import { page as usagePage } from "./usage/route.ts";
 import type { UsageRouteData } from "./usage/usage-page.tsx";
 

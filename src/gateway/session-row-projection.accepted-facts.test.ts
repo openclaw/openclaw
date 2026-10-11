@@ -47,10 +47,10 @@ import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.j
 import { defaultPersistDigest } from "./session-observer-model.js";
 import * as projectionWork from "./session-projection-work.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
-import * as databaseFactsRead from "./session-row-projection-read.js";
 import { ready } from "./session-row-projection-record.js";
 import { withAcceptedSuffix } from "./session-row-projection.accepted-facts.test-support.js";
 import { createSessionRowProjection } from "./session-row-projection.js";

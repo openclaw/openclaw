@@ -4,6 +4,7 @@ import {
   createComponent,
   createEffect,
   createRenderEffect,
+  createRoot,
   createSignal,
   flush,
   onCleanup,
@@ -217,56 +218,65 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       }));
     }
 
-    #view(children?: () => JSX.Element, source?: JSX.Element) {
-      this.#mountedApplication = this.#application;
-      const [revision, setRevision] = createSignal(0);
-      this.#notify = () => setRevision((value) => value + 1);
-      const props = {
-        ...defaults,
-        get children() {
-          return children ? children() : source;
-        },
-      };
-      for (const [key] of properties) {
-        Object.defineProperty(props, key, {
-          get: () => {
-            revision();
-            return this.#values.get(key);
-          },
-        });
+    #mount(children?: () => JSX.Element) {
+      let source: JSX.Element;
+      if (!this.#solidOwned) {
+        if (!this.#content) {
+          this.#content = this.ownerDocument.createDocumentFragment();
+          this.#start = this.ownerDocument.createComment("solid-bridge-content");
+          this.prepend(this.#start);
+        } else {
+          this.append(...this.#content.childNodes);
+        }
+        // Adopt passthrough children in place so lazy upgrade keeps focus and hover intent.
+        source = [...this.childNodes];
       }
+      this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
-      const renderContent = () => content(props, this.#host);
-      const view = () =>
-        layout
-          ? createComponent(ShellLayoutProvider, {
-              value: { owner: layout, host: this },
+      const view = () => {
+        // Solid-owned hosts publish property updates while their parent renders.
+        const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+        this.#notify = () => setRevision((value) => value + 1);
+        const props = {
+          ...defaults,
+          get children() {
+            return children ? children() : source;
+          },
+        };
+        for (const [key] of properties) {
+          Object.defineProperty(props, key, {
+            get: () => {
+              revision();
+              return this.#values.get(key);
+            },
+          });
+        }
+        const renderContent = () => content(props, this.#host);
+        const contentView = () =>
+          layout
+            ? createComponent(ShellLayoutProvider, {
+                value: { owner: layout, host: this },
+                get children() {
+                  return renderContent();
+                },
+              })
+            : renderContent();
+        return this.#application
+          ? createComponent(ApplicationProvider, {
+              value: this.#application,
               get children() {
-                return renderContent();
+                return contentView();
               },
             })
-          : renderContent();
-      return this.#application
-        ? createComponent(ApplicationProvider, {
-            value: this.#application,
-            get children() {
-              return view();
-            },
+          : contentView();
+      };
+      // A nested top-level render would flush child effects under the parent's render owner.
+      this.#dispose = this.#solidOwned
+        ? createRoot((dispose) => {
+            insert(this, view());
+            return dispose;
           })
-        : view();
-    }
-
-    #mount() {
-      if (!this.#content) {
-        this.#content = this.ownerDocument.createDocumentFragment();
-        this.#start = this.ownerDocument.createComment("solid-bridge-content");
-        this.prepend(this.#start);
-      } else {
-        this.append(...this.#content.childNodes);
-      }
-      // Adopt passthrough children in place so lazy upgrade keeps focus and hover intent.
-      const source = [...this.childNodes];
-      this.#dispose = render(() => this.#view(undefined, source), this, source);
+        : render(view, this, source);
     }
 
     #disposeRoot() {
@@ -299,12 +309,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           },
         );
       }
-      // Solid callers already have a render root; nested render() would flush
-      // effects while the parent component is still constructing its children.
-      insert(
-        host,
-        host.#view(() => props.children),
-      );
+      host.#mount(() => props.children);
       onCleanup(() => host.#disposeRoot());
       return host;
     }
@@ -328,7 +333,7 @@ export function LitContent(props: {
   if (tag === "span") {
     host.style.display = "contents";
   }
-  const className = untrack(() => props.class);
+  const className = untrack(() => props.class ?? "lit-content");
   if (className) {
     host.className = className;
   }

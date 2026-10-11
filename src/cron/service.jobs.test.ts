@@ -423,7 +423,7 @@ describe("script payload validation", () => {
 
   it("rejects the current session target", () => {
     expect(() => createJob(fixtureState(), scriptInput("return 1", "current"))).toThrow(
-      'sessionTarget="main" or "isolated"',
+      'scripts run headless and support only "main" or "isolated"',
     );
   });
 
