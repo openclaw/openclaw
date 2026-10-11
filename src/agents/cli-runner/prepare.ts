@@ -160,10 +160,7 @@ import {
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import { resolveCliSkillsPrompt } from "./skills-prompt.js";
-import {
-  captureCliRunToolAuthority,
-  finalizeCliSessionEventSourcePolicy,
-} from "./tool-authority.js";
+import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
@@ -916,6 +913,10 @@ async function prepareCliRunContextWithinReadFence(
       tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
     ),
   );
+  const sessionEventSourcePolicy = callerToolAuthority.finalizeSessionEventSourcePolicy(
+    params,
+    promptBuildToolsAllow,
+  );
   const { mcpGrant, projectNativeToolAuthority, exclusiveTools } = mcp.prepareCliMcpGrant(params, {
     context: mcpContextBase,
     tools: projectedTools,
@@ -946,6 +947,7 @@ async function prepareCliRunContextWithinReadFence(
       mcpLoopbackRuntime && mcpGrant
         ? mintMcpLoopbackClientGrant({
             ...mcpGrant,
+            sessionEventSourcePolicy,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
             bindQuestionAnswerAuthority: (assertActive) =>
               bindQuestionAnswerAuthorityForSession(mcpGrant.context.sessionKey, assertActive),
@@ -1647,11 +1649,7 @@ async function prepareCliRunContextWithinReadFence(
     const buildPreparedContext = (preparedParams: PreparedCliRunContext["params"]) => ({
       params: preparedParams,
       bindQuestionAnswerAuthority,
-      sessionEventSourcePolicy: finalizeCliSessionEventSourcePolicy(
-        callerToolAuthority.sessionEventSourcePolicy,
-        preparedParams,
-        promptBuildToolsAllow,
-      ),
+      sessionEventSourcePolicy,
       effectiveAuthProfileId,
       ...(authStore ? { authProfileStore: authStore } : {}),
       agentDir,

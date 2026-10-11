@@ -159,8 +159,10 @@ for shell work. Native `Bash` is disabled for those turns. A command still runni
 after the default 10-second yield window returns a managed process handle instead
 of holding the tool call until it finishes. When completion notifications are
 enabled, the result wakes the originating conversation; a busy conversation handles
-it after its current turn. If only waiting remains, the agent reports that the job
-is running and ends its turn instead of repeatedly polling. Exec policy, configured
+it after its current turn. The continuation retains the originating turn’s tool
+policy, including native and other MCP tools, subject to current session policy.
+Restricted turns keep their original limits. If only waiting remains, the agent
+reports that the job is running and ends its turn instead of repeatedly polling. Exec policy, configured
 yield windows, command deadlines, and explicit notification settings still apply.
 
 Exact tool selections, tool-free side questions, standalone CLI runs without
