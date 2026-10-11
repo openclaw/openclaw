@@ -336,6 +336,7 @@ export async function sendPayload(
 export async function handlePreviewFinalizedResult(
   turn: Turn,
   result: LaneDeliveryResult,
+  payload: ReplyPayload,
 ): Promise<void> {
   if (result.kind !== "preview-finalized" && result.kind !== "preview-finalized-partial") {
     return;
@@ -353,7 +354,9 @@ export async function handlePreviewFinalizedResult(
       isGroup: turn.context.isGroup,
       groupId: turn.context.isGroup ? String(turn.context.chatId) : undefined,
     });
-    const transcriptMirror = createTelegramTranscriptMirror(turn);
+    const transcriptMirror = hasReplyPayloadFinalDeliveryCapture(payload)
+      ? undefined
+      : createTelegramTranscriptMirror(turn);
     if (transcriptMirror && result.delivery.content) {
       void transcriptMirror({ text: result.delivery.content }).catch((err: unknown) => {
         logVerbose(
@@ -528,7 +531,7 @@ export async function deliverFinalAnswerText(
   } else {
     await observeFinalDelivery(turn, result.deliveryResult, finalPayload.isError === true);
   }
-  await handlePreviewFinalizedResult(turn, result);
+  await handlePreviewFinalizedResult(turn, result, finalPayload);
   if (result.kind === "preview-finalized") {
     registerTelegramQuestionDeliveryForMessage(turn, finalPayload, {
       messageId: result.delivery.messageId,
@@ -685,7 +688,7 @@ export function createDeliveryState(
         durable: false,
       });
       turn.activeAnswerBlockDelivery = undefined;
-      await handlePreviewFinalizedResult(turn, result);
+      await handlePreviewFinalizedResult(turn, result, block.payload);
     },
     resolveCurrentTurnTranscriptFinal: context.ctxPayload.GroupThread
       ? async () => undefined
