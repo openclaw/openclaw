@@ -6,6 +6,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ChannelsPage } from "./channels-page.tsx";
 
@@ -785,7 +786,7 @@ describe("ChannelsPage lifecycle", () => {
       commandOwnerConfigured: true,
       limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
     };
-    const refreshPairing = vi.spyOn(source.channels, "refreshPairing").mockResolvedValue();
+    const refreshPairing = vi.spyOn(source.channels, "refreshPairing");
     const page = mountPage(source.context);
     await settle();
     refreshPairing.mockClear();
@@ -803,14 +804,15 @@ describe("ChannelsPage lifecycle", () => {
 
     setGatewayScopes(gateway, ["operator.pairing", "operator.read"]);
 
-    await waitForSolid(() => expect(refreshPairing).toHaveBeenCalled());
+    await waitForSolid(() => {
+      expect(refreshPairing).toHaveBeenCalled();
+      expect(source.channels.state.pairingSnapshot).not.toBeNull();
+    });
+    await updatePickers(page);
     expect(page.querySelector(".channels-pairing-dialog")).toBeNull();
-    expect(
-      page.querySelectorAll(".channels-pairing-filters .picker-select__trigger")[0]?.textContent,
-    ).toContain("All channels");
-    expect(
-      page.querySelectorAll(".channels-pairing-filters .picker-select__trigger")[1]?.textContent,
-    ).toContain("All accounts");
+    const filters = page.querySelectorAll(".channels-pairing-filters .picker-select__trigger");
+    expect(filters[0]?.textContent).toContain("All channels");
+    expect(filters[1]?.textContent).toContain("All accounts");
     source.runtimeConfig.dispose();
     source.channels.dispose();
   });

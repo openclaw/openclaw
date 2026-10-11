@@ -119,7 +119,7 @@ class ChannelsPageController {
       if (this.context.channels !== context.channels) {
         return;
       }
-      this.reconcilePairingFilter(channels.read().pairingSnapshot);
+      this.reconcilePairingFilter(context.channels.state.pairingSnapshot);
       this.pluginPresentation.ensure(this.context.gateway.snapshot.client);
       this.requestUpdate();
     };
@@ -664,8 +664,10 @@ export function ChannelsPage(props: { host: HTMLElement; context?: ApplicationCo
   const host = untrack(() => props.host);
   const context = () => props.context ?? application!;
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const controller = new ChannelsPageController(context, host, () =>
-    setRevision((value) => value + 1),
+  const controller = new ChannelsPageController(
+    () => untrack(context),
+    host,
+    () => setRevision((value) => value + 1),
   );
   createEffect(context, (value) => controller.bindContext(value));
   onCleanup(() => controller.dispose());
