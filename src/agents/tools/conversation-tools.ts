@@ -14,6 +14,7 @@ import {
   readConversation,
   type ConversationRecord,
 } from "../../config/sessions/conversation-registry.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveEffectiveMessageToolsConfig } from "../../infra/outbound/outbound-policy.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -201,9 +202,14 @@ async function resolveConversationBudgetContext(
   // the other agent-prefixed splits one turn across two slots and lets alternating the
   // tools evade the nudge and hard cap. This only changes the ledger slot key; the raw
   // agentSessionKey still flows unchanged to the Gateway sourceSessionKey and operationId.
+  // Main-session aliases fold as in the message tool and the CLI loopback grant.
+  const agentId = resolveToolAgentId(options);
+  const rawSessionKey = options.agentSessionKey?.trim();
   const ledgerSessionKey = buildTurnSendLedgerSessionKey(
-    resolveToolAgentId(options),
-    options.agentSessionKey,
+    agentId,
+    rawSessionKey
+      ? canonicalizeMainSessionAlias({ cfg: options.config, agentId, sessionKey: rawSessionKey })
+      : undefined,
   );
   if (!ledgerSessionKey || !options.runId || !options.config) {
     return undefined;

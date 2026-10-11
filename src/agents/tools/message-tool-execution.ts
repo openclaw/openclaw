@@ -10,6 +10,7 @@ import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gat
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
@@ -147,9 +148,22 @@ function* createMessageToolSteps(
     (options?.agentSessionKey
       ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: options.config })
       : undefined);
-  const turnSendSessionKey = buildTurnSendLedgerSessionKey(resolvedAgentId, rawPollEchoSessionKey);
+  // Fold main-session aliases the way the CLI loopback grant does, so native and CLI
+  // candidates of one logical turn share a ledger slot (mcp-grant-context.ts).
+  const turnSendSessionKey = buildTurnSendLedgerSessionKey(
+    resolvedAgentId,
+    resolvedAgentId && rawPollEchoSessionKey
+      ? canonicalizeMainSessionAlias({
+          cfg: options?.config,
+          agentId: resolvedAgentId,
+          sessionKey: rawPollEchoSessionKey,
+        })
+      : undefined,
+  );
   const pollEchoSessionKey =
-    sourceReplySinkDeliveryMode === "message_tool_only" ? turnSendSessionKey : undefined;
+    sourceReplySinkDeliveryMode === "message_tool_only"
+      ? buildTurnSendLedgerSessionKey(resolvedAgentId, rawPollEchoSessionKey)
+      : undefined;
   const turnAuthority = createMessageToolTurnAuthority({
     token: options?.messageActionTurnCapability,
     agentId: resolvedAgentId,
