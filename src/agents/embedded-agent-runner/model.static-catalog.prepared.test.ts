@@ -108,57 +108,70 @@ describe("prepared bundled provider static catalogs", () => {
     mocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
   });
 
-  it("keeps nested provider ownership on the prepared metadata generation", async () => {
-    const metadataSnapshot = createMetadataSnapshot(["shared", "unrelated"]);
-    mocks.resolveOwningPluginIdsForProviderRef.mockImplementation(
-      ({ provider: providerId }: { provider: string }) =>
-        providerId === "outer"
-          ? ["shared"]
-          : providerId === "nested"
-            ? ["shared", "unrelated"]
-            : undefined,
-    );
-    mocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["shared", "unrelated"]);
-    mocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(
-      async ({ onlyPluginIds }: { onlyPluginIds: string[] }) =>
-        onlyPluginIds.map((pluginId) => ({
-          id: pluginId,
-          pluginId,
-          label: pluginId,
-          auth: [],
-        })),
-    );
-    mocks.normalizePluginDiscoveryResult.mockImplementation(
-      ({ provider: catalogProvider }: { provider: { pluginId: string } }) =>
-        catalogProvider.pluginId === "shared"
-          ? {
-              nested: {
-                models: [{ id: "model", contextWindow: 256_000, contextTokens: 128_000 }],
-              },
-            }
-          : {},
-    );
+  it.each([undefined, "synthetic"] as const)(
+    "keeps nested provider ownership and provenance %s",
+    async (contextWindowSource) => {
+      const metadataSnapshot = createMetadataSnapshot(["shared", "unrelated"]);
+      mocks.resolveOwningPluginIdsForProviderRef.mockImplementation(
+        ({ provider: providerId }: { provider: string }) =>
+          providerId === "outer"
+            ? ["shared"]
+            : providerId === "nested"
+              ? ["shared", "unrelated"]
+              : undefined,
+      );
+      mocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["shared", "unrelated"]);
+      mocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(
+        async ({ onlyPluginIds }: { onlyPluginIds: string[] }) =>
+          onlyPluginIds.map((pluginId) => ({
+            id: pluginId,
+            pluginId,
+            label: pluginId,
+            auth: [],
+          })),
+      );
+      mocks.normalizePluginDiscoveryResult.mockImplementation(
+        ({ provider: catalogProvider }: { provider: { pluginId: string } }) =>
+          catalogProvider.pluginId === "shared"
+            ? {
+                nested: {
+                  models: [
+                    {
+                      id: "model",
+                      contextWindow: 256_000,
+                      contextTokens: 128_000,
+                      ...(contextWindowSource ? { contextWindowSource } : {}),
+                    },
+                  ],
+                },
+              }
+            : {},
+      );
 
-    const resolveContext = createBundledProviderStaticCatalogContextResolver({
-      cfg,
-      metadataSnapshot,
-    });
-    await expect(resolveContext({ provider: "outer", modelId: "nested/model" })).resolves.toEqual({
-      contextWindow: 256_000,
-      contextTokens: 128_000,
-    });
+      const resolveContext = createBundledProviderStaticCatalogContextResolver({
+        cfg,
+        metadataSnapshot,
+      });
+      await expect(resolveContext({ provider: "outer", modelId: "nested/model" })).resolves.toEqual(
+        {
+          contextWindow: 256_000,
+          contextTokens: 128_000,
+          ...(contextWindowSource ? { contextWindowSource } : {}),
+        },
+      );
 
-    expect(mocks.resolveOwningPluginIdsForProviderRef).toHaveBeenCalledTimes(3);
-    for (const [params] of mocks.resolveOwningPluginIdsForProviderRef.mock.calls) {
-      expect(params).toEqual(expect.objectContaining({ metadataSnapshot }));
-    }
-    expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["shared"],
-        pluginMetadataSnapshot: metadataSnapshot,
-      }),
-    );
-  });
+      expect(mocks.resolveOwningPluginIdsForProviderRef).toHaveBeenCalledTimes(3);
+      for (const [params] of mocks.resolveOwningPluginIdsForProviderRef.mock.calls) {
+        expect(params).toEqual(expect.objectContaining({ metadataSnapshot }));
+      }
+      expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
+        expect.objectContaining({
+          onlyPluginIds: ["shared"],
+          pluginMetadataSnapshot: metadataSnapshot,
+        }),
+      );
+    },
+  );
 
   it("projects heterogeneous prepared rows without rerunning hooks or resolving empty providers", async () => {
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);

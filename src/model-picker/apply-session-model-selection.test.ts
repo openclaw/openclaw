@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import { FOLLOWUP_QUEUES, getFollowupQueue } from "../auto-reply/reply/queue/state.js";
@@ -717,4 +718,90 @@ describe("applySessionModelSelection", () => {
     });
     expectNoSelectionEffects();
   });
+
+  it.each([
+    {
+      name: "synthetic native",
+      runtime: "codex",
+      window: 128_000,
+      synthetic: true,
+      prompt: undefined,
+      expected: 128_000,
+    },
+    {
+      name: "genuine native",
+      runtime: "codex",
+      window: 64_000,
+      synthetic: false,
+      prompt: undefined,
+      expected: 64_000,
+    },
+    {
+      name: "reported native prompt",
+      runtime: "codex",
+      window: 128_000,
+      synthetic: true,
+      prompt: 777_000,
+      expected: 777_000,
+    },
+    {
+      name: "missing native",
+      runtime: "codex",
+      window: undefined,
+      synthetic: false,
+      prompt: undefined,
+      expected: 200_000,
+    },
+    {
+      name: "API",
+      runtime: "openclaw",
+      window: 128_000,
+      synthetic: true,
+      prompt: undefined,
+      expected: 1_000_000,
+    },
+  ])(
+    "keeps $name selection capacity separate from warm API facts",
+    async ({ runtime, window, synthetic, prompt, expected }) => {
+      const provider = "openai",
+        model = "selection-context-fixture";
+      const modelCatalog: ModelCatalogEntry[] = [
+        ...(window === undefined
+          ? []
+          : [
+              {
+                provider,
+                id: model,
+                name: "Native context fixture",
+                nativeRuntime: "codex",
+                contextWindow: window,
+                contextTokens: prompt,
+                ...(synthetic ? { contextWindowSource: "synthetic" as const } : {}),
+              },
+            ]),
+        { provider, id: model, name: "API context fixture", contextWindow: 1_000_000 },
+      ];
+      const caches = getContextWindowCaches();
+      const key = providerContextTokenCacheKey(provider, model);
+      caches.contextWindowCache.set(key, 1_000_000);
+      caches.discoveredTokenCache.set(key, 1_000_000);
+      try {
+        const result = await applySessionModelSelection(
+          createParams({
+            modelCatalog,
+            thinkingCatalog: modelCatalog,
+            request: createRequest(provider, model, { runtime: { kind: "set", runtime } }),
+          }),
+        );
+        expect(result).toMatchObject({
+          status: "applied",
+          agentRuntime: runtime,
+          contextTokens: expected,
+        });
+      } finally {
+        caches.contextWindowCache.delete(key);
+        caches.discoveredTokenCache.delete(key);
+      }
+    },
+  );
 });

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
@@ -62,6 +63,26 @@ describe("executeAgentTurn: CLI session routing", () => {
         isInternalMessageChannel(typeof channel === "string" ? channel : undefined),
       );
       const followupRun = createCliRun("claude-cli", "claude-sonnet-4-6");
+      followupRun.run.config = {
+        agents: {
+          defaults: {
+            models: {
+              "claude-cli/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      };
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            pluginId: "anthropic",
+            config: { command: "claude" },
+          },
+        ],
+      });
       state.runCliAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "done" }],
         meta: {},
@@ -71,6 +92,7 @@ describe("executeAgentTurn: CLI session routing", () => {
         {
           provider: "claude-cli",
           id: "claude-sonnet-4-6",
+          nativeRuntime: "claude-cli",
           contextWindow: 400_000,
           contextTokens: 321_000,
           input: ["text", "image"],
@@ -95,6 +117,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
         modelContextWindow: 400_000,
         modelContextTokens: 321_000,
+        nativeRuntime: "claude-cli",
         currentThreadTs: "42",
         currentMessageId,
       });
