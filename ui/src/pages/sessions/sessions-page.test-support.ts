@@ -105,7 +105,7 @@ export async function createPage(
     dispose = view.unmount;
     flush();
   };
-  const page = new Proxy(host, {
+  const page = new Proxy<HTMLElement>(host, {
     get(target, property) {
       if (property === "updateComplete") {
         return controller.updateComplete.then(() => {

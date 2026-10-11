@@ -733,7 +733,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const client = {} as GatewayBrowserClient;
     const context = () => createSessionsContext(gatewayWithClient(client, false), createSessions());
     const page = await createSessionsPage(context());
-    const row = { key: "old", sessionId: "old-session" };
+    const row = { key: "old", sessionId: "old-session", kind: "direct" as const };
     page.result = sessionsResult([row], 1);
     page.selectedSessions = new Map([[row.key, row]]);
 
