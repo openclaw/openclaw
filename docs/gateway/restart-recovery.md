@@ -878,6 +878,9 @@ For native children with completion notifications disabled, recovery sends a
 private continuation to the original parent when its saved session identity still
 matches. Normal successful completion stays quiet. A reset or cancellation does
 not authorize a continuation into a replacement parent session.
+Cancelled or completed turns can retain a cleanup lease briefly. That lease does
+not make them restart candidates; an immediate Gateway restart preserves their
+terminal outcome. A turn interrupted by the restart itself remains recoverable.
 Its recovery input lists current unfinished child session and run identities,
 including children interrupted by the restart. Older runs superseded by a newer
 child run are omitted, as are records from another store, parent session, or

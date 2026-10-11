@@ -1,10 +1,14 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../agents/run-termination.js";
 import {
   beginSessionWorkAdmission,
   captureSessionWorkRunInterruptions,
   collectActiveSessionWorkAdmissions,
+  consumeSessionWorkAdmissionHandoff,
   getActiveSessionWorkAdmissionCount,
   getCompetingSessionWorkAdmissionRelease,
   getSessionWorkAdmissionRelease,
@@ -15,6 +19,60 @@ import {
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
 } from "./session-lifecycle-admission.js";
+
+it.each(["completed", "cancelled", "cancelled-then-restart", "restart"] as const)(
+  "uses the adopted run's %s outcome when capturing restart work",
+  async (outcome) => {
+    const scope = "settling-restart.sqlite";
+    const sessionKey = "agent:main:settling";
+    const sessionId = "settling-session";
+    const resolveGatewayContext = () => undefined;
+    const admission = await beginSessionWorkAdmission({
+      scope,
+      identities: [sessionKey, sessionId],
+      resolveGatewayContext,
+      isSettling: () => false,
+      assertAllowed: () => {},
+    });
+    let settled = false;
+    const reason =
+      outcome === "restart"
+        ? createAgentRunRestartAbortError()
+        : outcome.startsWith("cancelled")
+          ? createAgentRunDirectAbortError()
+          : undefined;
+    const target = { scope, sessionKey, sessionId };
+    const captured = captureGatewaySessionWorkAdmissions(resolveGatewayContext);
+    try {
+      expect(captured.isActive(target)).toBe(true);
+      expect(
+        consumeSessionWorkAdmissionHandoff({
+          handoffId: admission.createHandoff(),
+          scope,
+          identities: [sessionKey, sessionId],
+          isSettling: () => settled,
+          getAbortReason: () => reason,
+        }),
+      ).toBe(admission);
+      settled = true;
+      if (outcome === "cancelled-then-restart") {
+        startSessionWorkAdmissionInterruption({
+          scope,
+          identities: [sessionKey, sessionId],
+          reason: createAgentRunRestartAbortError(),
+        });
+      }
+      expect(captured.isActive(target)).toBe(outcome === "restart");
+      expect(captureGatewaySessionWorkAdmissions(resolveGatewayContext).isActive(target)).toBe(
+        outcome === "restart",
+      );
+      // Cleanup keeps its exclusion lease without authorizing a stopped turn to resume.
+      expect(isSessionWorkAdmissionActive(scope, [sessionKey, sessionId])).toBe(true);
+    } finally {
+      admission.release();
+    }
+  },
+);
 
 it.each(["released", "interrupted", "undeclared", "caller", "wrong receipt"] as const)(
   "targeted run interruption rejects a %s admission",
