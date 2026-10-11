@@ -81,8 +81,8 @@ async function rewritePreparedTranscriptMessage<T>(params: {
             memory.authority,
           ),
         );
-        // SAFETY: This invocation's typed preparer is the only source of the replacement message.
         return {
+          // SAFETY: This invocation's typed preparer is the only source of the replacement message.
           result: committed.result as { generation: string; messageId: string; message: T } | null,
         };
       },

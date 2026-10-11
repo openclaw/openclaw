@@ -1,5 +1,4 @@
 import { performance } from "node:perf_hooks";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
@@ -11,10 +10,6 @@ import type {
   SessionGoalOperation,
   SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
@@ -22,7 +17,6 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 // chat.send owns admission, ACK timing, and detached dispatch handoff.
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -34,10 +28,6 @@ import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcri
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
-import {
-  resolveChatSendSessionKey,
-  resolveRequestedSessionAgentId,
-} from "../session-request-agent.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
@@ -56,6 +46,7 @@ import {
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
+import { runChatSendWithStorage } from "./chat-send-storage.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import { createChatSendGoalCommitGuard } from "./chat-send-work-admission.js";
 import { prepareChatSendAckTiming } from "./chat-server-timing.js";
@@ -647,85 +638,15 @@ async function handleChatSendWithOptions(
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
   options?: ChatSendInternalOptions,
 ): Promise<void> {
-  const rawKey = handlerOptions.params.sessionKey;
-  if (typeof rawKey !== "string" || !isIncognitoSessionKey(rawKey)) {
-    return handleChatSendWithStorage(
+  await runChatSendWithStorage(handlerOptions, (storage) =>
+    handleChatSendWithStorage(
       handlerOptions,
       onAdmissionOwned,
       externalAuthorityAdmission,
       options,
-    );
-  }
-  const cfg = handlerOptions.context.getRuntimeConfig();
-  const requested = resolveRequestedSessionAgentId(
-    cfg,
-    rawKey,
-    typeof handlerOptions.params.agentId === "string" ? handlerOptions.params.agentId : undefined,
+      storage,
+    ),
   );
-  if (!requested.ok) {
-    handlerOptions.respond(false, undefined, requested.error);
-    return;
-  }
-  let active = true;
-  let retained = false;
-  const assertCurrent = () => {
-    if (!active) {
-      throw new Error("Chat session storage admission ended");
-    }
-  };
-  const binding = await acquireSessionActorStorage(
-    {
-      sessionKey: resolveChatSendSessionKey(cfg, rawKey, requested.agentId),
-      agentId: requested.agentId,
-    },
-    {
-      lifetime: { assertCurrent, assertReadable: assertCurrent },
-      authority: { assertCurrent, authorize: assertCurrent },
-    },
-  );
-  if (!binding) {
-    handlerOptions.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Incognito session "${resolveChatSendSessionKey(cfg, rawKey, requested.agentId)}" was not found.`,
-      ),
-    );
-    return;
-  }
-  const release = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    void binding.actor.release().catch((error: unknown) => {
-      handlerOptions.context.logGateway.warn(
-        `Chat session storage cleanup failed: ${String(error)}`,
-      );
-    });
-  };
-  try {
-    await runWithSessionActorStorage(binding, () =>
-      handleChatSendWithStorage(
-        handlerOptions,
-        onAdmissionOwned,
-        externalAuthorityAdmission,
-        options,
-        {
-          release,
-          retain() {
-            retained = true;
-          },
-        },
-      ),
-    );
-  } finally {
-    // The existing chat admission retains the binding across ACK and collected work.
-    if (!retained) {
-      release();
-    }
-  }
 }
 
 export async function handleChatSend(

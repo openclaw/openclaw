@@ -26,7 +26,7 @@ type MemoryDeadline = {
 };
 
 /** Deadlines come from committed actor state; deletion owns transport and session cleanup. */
-export function startIncognitoActorSessionLifetime(params: {
+function startIncognitoActorSessionLifetime(params: {
   owner: MemoryOwner;
   scheduler: GatewayScheduler;
   logWarning: (message: string) => void;
@@ -138,7 +138,7 @@ export function startIncognitoActorSessionLifetime(params: {
 }
 
 /** Follow existing memory owners without creating sessions or retaining database workers. */
-export function startIncognitoActorsSessionLifetime(params: {
+export function startIncognitoSessionLifetime(params: {
   context: GatewayRequestContext;
   scheduler: GatewayScheduler;
   logWarning: (message: string) => void;

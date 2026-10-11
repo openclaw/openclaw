@@ -12,10 +12,6 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
-import {
-  extractAssistantPhaseText,
-  extractFirstTextBlock,
-} from "../../shared/chat-message-content.js";
 import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
@@ -38,7 +34,6 @@ import {
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
   type TranscriptEntryAnchor,
-  type TranscriptEvent,
 } from "./session-accessor.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -67,17 +62,22 @@ import {
   type AssistantBeforeMessageWrite,
 } from "./transcript-assistant-message.js";
 import {
+  extractRecentConversationText,
+  type ReadRecentSessionConversationTextOptions,
+  type SessionRecentConversationText,
+} from "./transcript-conversation-text.js";
+import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
 } from "./transcript-mirror.js";
 import {
   isWithinTranscriptWindow,
   normalizeRecentTranscriptLimit,
-  normalizeTranscriptTimestamp,
-  readPreferredUpstreamUserText,
 } from "./transcript-recent-window.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context.js";
+
+export type { SessionRecentConversationText } from "./transcript-conversation-text.js";
 
 type SessionTranscriptAppendTarget = {
   agentId?: string;
@@ -118,23 +118,6 @@ export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appen
   [ASSISTANT_DISPLAY_CONTENT_FIELD]?: Array<Record<string, unknown>>;
 };
 
-export type SessionRecentConversationText = {
-  id?: string;
-  role: "user" | "assistant";
-  text: string;
-  timestamp?: number;
-  sourceChannel?: string;
-};
-
-type ReadRecentSessionConversationTextOptions = {
-  beforeTimestampMs?: number;
-  includeCronDirectDeliveryContext?: boolean;
-  limit?: number;
-  minTimestampMs?: number;
-  role?: "user" | "assistant";
-  preferUpstreamUserText?: boolean;
-};
-
 type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
   agentId: string;
   sessionKey: string;
@@ -166,77 +149,6 @@ function parseAssistantTranscriptText(line: string): LatestAssistantTranscriptTe
     return undefined;
   }
   return projectAssistantTranscriptText(message, id);
-}
-
-function extractRecentConversationText(
-  event: TranscriptEvent,
-  options: ReadRecentSessionConversationTextOptions = {},
-): SessionRecentConversationText | undefined {
-  const parsed = event as {
-    id?: unknown;
-    message?: unknown;
-  };
-  const message = parsed.message as
-    | {
-        role?: unknown;
-        timestamp?: unknown;
-        provenance?: unknown;
-        provider?: unknown;
-        model?: unknown;
-        openclawDeliveryMirror?: unknown;
-        __openclaw?: unknown;
-      }
-    | undefined;
-  if (
-    !message ||
-    (message.role !== "user" && message.role !== "assistant") ||
-    (options.role && message.role !== options.role)
-  ) {
-    return undefined;
-  }
-  const deliveryMirror = message.openclawDeliveryMirror;
-  const includeCronDirectDeliveryContext =
-    options.includeCronDirectDeliveryContext === true &&
-    deliveryMirror !== null &&
-    typeof deliveryMirror === "object" &&
-    !Array.isArray(deliveryMirror) &&
-    "kind" in deliveryMirror &&
-    deliveryMirror.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND;
-  if (
-    message.role === "assistant" &&
-    isTranscriptOnlyOpenClawAssistantMessage(message) &&
-    !includeCronDirectDeliveryContext
-  ) {
-    return undefined;
-  }
-  const upstreamUserText =
-    options.preferUpstreamUserText && message.role === "user"
-      ? readPreferredUpstreamUserText(message)
-      : undefined;
-  if (upstreamUserText === null) {
-    return undefined;
-  }
-  const text =
-    message.role === "assistant"
-      ? extractAssistantPhaseText(message)
-      : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
-  if (!text) {
-    return undefined;
-  }
-  const provenance =
-    message.provenance && typeof message.provenance === "object"
-      ? (message.provenance as { sourceChannel?: unknown })
-      : undefined;
-  const timestamp = normalizeTranscriptTimestamp(message.timestamp);
-  return {
-    ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
-    role: message.role,
-    text,
-    ...(timestamp !== undefined ? { timestamp } : {}),
-    ...(typeof provenance?.sourceChannel === "string" && provenance.sourceChannel.trim()
-      ? { sourceChannel: provenance.sourceChannel.trim() }
-      : {}),
-  };
 }
 
 async function readRecentUserAssistantTextFromSqliteTranscript(

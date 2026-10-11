@@ -7,8 +7,6 @@ import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEntryRows from "../config/sessions/session-accessor.sqlite-status.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -16,13 +14,20 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { setAvatar, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import * as sessionHistoryState from "./session-history-state.js";
 import { SessionHistorySseState } from "./session-history-state.js";
+import {
+  expectErrorResponse,
+  fetchSessionHistory,
+  readSessionHistoryBody,
+  registerMemorySessionHistoryTests,
+  type SessionHistoryBody,
+  type SessionHistoryMessage,
+} from "./sessions-history-http-read.test-support.js";
 import {
   closeHistoryHarness,
   makeTranscriptAssistantMessage,
@@ -39,7 +44,6 @@ import {
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
-const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -94,34 +98,6 @@ async function appendText(storePath: string, text: string, emitInlineMessage = t
   return appended.messageId;
 }
 
-async function fetchSessionHistory(
-  port: number,
-  sessionKey: string,
-  params?: {
-    query?: string;
-    headers?: Record<string, string>;
-  },
-) {
-  return fetch(
-    `http://127.0.0.1:${port}/sessions/${encodeURIComponent(sessionKey)}/history${params?.query ?? ""}`,
-    { headers: { ...READ_SCOPE_HEADER, ...params?.headers } },
-  );
-}
-
-type SessionHistoryMessage = {
-  role?: string;
-  content?: Array<{ text?: string }>;
-  __openclaw?: { id?: string; seq?: number; turnBoundary?: boolean };
-};
-
-type SessionHistoryBody = {
-  sessionKey?: string;
-  items?: SessionHistoryMessage[];
-  messages?: SessionHistoryMessage[];
-  nextCursor?: string;
-  hasMore?: boolean;
-};
-
 function sessionHistoryRowIdentity(message: unknown): string {
   const record = requireRecord(message, "session history row");
   const metadata = requireRecord(record["__openclaw"], "session history row metadata");
@@ -133,16 +109,6 @@ function sessionHistoryRowIdentity(message: unknown): string {
     (typeof firstContent?.id === "string" ? firstContent.id : undefined) ??
     (typeof record.toolCallId === "string" ? record.toolCallId : "");
   return `${String(metadata.seq)}:${String(record.role)}:${label}`;
-}
-
-async function readSessionHistoryBody(
-  port: number,
-  sessionKey: string,
-  params?: Parameters<typeof fetchSessionHistory>[2],
-): Promise<SessionHistoryBody> {
-  const res = await fetchSessionHistory(port, sessionKey, params);
-  expect(res.status).toBe(200);
-  return (await res.json()) as SessionHistoryBody;
 }
 
 function attributedHistoryMessageProjection(value: unknown) {
@@ -184,10 +150,6 @@ type SessionHistorySseStream = {
   reader: ReadableStreamDefaultReader<Uint8Array>;
   streamState: { buffer: string };
 };
-
-function expectErrorResponse(body: unknown, expected: { type: string; message: string }) {
-  expect(body).toEqual({ ok: false, error: expected });
-}
 
 async function openSessionHistorySse(
   port: number,
@@ -255,90 +217,7 @@ describe("session history HTTP endpoints", () => {
     testState.agentsConfig = undefined;
   });
 
-  test("reads unbound memory history without creating missing owners and withholds a closed owner's snapshot", async () => {
-    await createSessionStoreFile();
-    await withGatewayHarness(async (harness) => {
-      const sessionKey = "agent:main:dashboard:incognito-http-history";
-      const sessionId = "memory-http-history";
-      const text = "Private memory reply";
-      const location = {
-        agentId: AGENT_ID,
-        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: AGENT_ID }),
-      };
-      expect(memorySessionActorOwners.read(location)).toBeUndefined();
-      try {
-        const missing = await fetchSessionHistory(harness.port, sessionKey);
-        expect(missing.status).toBe(404);
-        expectErrorResponse(await missing.json(), {
-          type: "not_found",
-          message: `Session not found: ${sessionKey}`,
-        });
-        expect(memorySessionActorOwners.read(location)).toBeUndefined();
-
-        const authority = { assertCurrent() {}, authorize() {} };
-        const created = await withSessionActorStorage(
-          { agentId: AGENT_ID, sessionKey, storePath: location.path },
-          {
-            create: true,
-            authority,
-            lifetime: { assertCurrent() {}, assertReadable() {} },
-          },
-          ({ actor }) =>
-            actor.storage.mutate(
-              {
-                type: "session.entry.create",
-                input: {
-                  entry: {
-                    sessionId,
-                    updatedAt: Date.now(),
-                    incognito: true,
-                    lifecycleRevision: "memory-http-lifecycle",
-                  },
-                  transcriptEvents: [
-                    { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
-                    {
-                      type: "message",
-                      id: "memory-http-reply",
-                      parentId: null,
-                      message: makeTranscriptAssistantMessage({ text }),
-                    },
-                  ],
-                },
-              },
-              authority,
-            ),
-        );
-        expect(created?.kind).toBe("committed");
-
-        const history = await readSessionHistoryBody(harness.port, sessionKey);
-        expect(history.sessionKey).toBe(sessionKey);
-        expect(history.messages?.map((message) => message.content?.[0]?.text)).toEqual([text]);
-
-        const readSnapshot = sessionHistoryState.readSessionHistorySnapshotAsync;
-        const snapshotSpy = vi
-          .spyOn(sessionHistoryState, "readSessionHistorySnapshotAsync")
-          .mockImplementationOnce(async (params) => {
-            const snapshot = await readSnapshot(params);
-            memorySessionActorOwners.closeDatabase(location);
-            return snapshot;
-          });
-        try {
-          const closed = await fetchSessionHistory(harness.port, sessionKey);
-          expect(closed.status).toBe(404);
-          expectErrorResponse(await closed.json(), {
-            type: "not_found",
-            message: `Session not found: ${sessionKey}`,
-          });
-          expect(snapshotSpy).toHaveBeenCalledOnce();
-          expect(memorySessionActorOwners.read(location)).toBeUndefined();
-        } finally {
-          snapshotSpy.mockRestore();
-        }
-      } finally {
-        memorySessionActorOwners.closeDatabase(location);
-      }
-    });
-  });
+  registerMemorySessionHistoryTests(createSessionStoreFile);
 
   test("uses SSE only for an explicit acceptable event-stream media range", async () => {
     const expectedText = "accept negotiation sentinel";

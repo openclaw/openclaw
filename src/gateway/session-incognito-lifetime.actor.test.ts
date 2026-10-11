@@ -1,10 +1,7 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionActor } from "../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import {
-  getSessionActorStorageBinding,
-  type SessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionActorStorageAuthority } from "../config/sessions/session-actor-storage-contract.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -17,7 +14,7 @@ import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars
 import * as deletion from "./server-methods/sessions-delete.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import { startIncognitoActorSessionLifetime } from "./session-incognito-lifetime.js";
+import { startIncognitoSessionLifetime } from "./session-incognito-lifetime.js";
 
 // These adapters must not allocate persistence or consume database-worker capacity.
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -33,6 +30,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   }),
 }));
 
+// mock-isolation: Keep unrelated OAuth state outside the memory lifetime startup fixture.
 vi.mock("./github-oauth-lifecycle.js", () => ({
   createGitHubOAuthLifecycle: () => ({ start() {}, async stop() {} }),
   installActiveGitHubOAuthLifecycle: () => () => {},
@@ -43,6 +41,10 @@ const authority: SessionActorStorageAuthority = { assertCurrent() {}, authorize(
 const actors: SessionActor[] = [];
 const sessionKey = "agent:main:dashboard:incognito-expiry";
 const day = 24 * 60 * 60_000;
+
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+});
 
 afterEach(async () => {
   await Promise.all(actors.splice(0).map((actor) => actor.release()));
@@ -74,16 +76,49 @@ async function createSession(createdAt: number, key = sessionKey, sessionId = "o
   return { owner, actor };
 }
 
-async function deleteSession(binding: SessionActorStorageBinding, expectedSessionId: string) {
+async function deleteSession(params: Parameters<typeof deletion.deleteGatewaySession>[0]) {
+  const binding = getSessionActorStorageBinding({ sessionKey: params.params.key });
+  if (!binding) {
+    throw new Error("Missing memory binding");
+  }
+  params.assertCurrent?.();
   const result = await binding.actor.storage!.mutate(
     {
       type: "session.lifecycle.delete",
-      input: { expectedSessionId },
+      input: { expectedSessionId: params.params.expectedSessionId },
     },
     binding.authority,
   );
   expect(result).toMatchObject({ kind: "committed", value: { deleted: true } });
+  return {
+    ok: true as const,
+    result: { ok: true as const, key: params.params.key, deleted: true, archived: [] },
+  };
 }
+
+it("observes startup and publications without creating a memory owner", async () => {
+  const time = createGatewaySchedulerClock(1_000);
+  const scheduler = createTestGatewayScheduler(time.clock);
+  const deleteGatewaySession = vi.spyOn(deletion, "deleteGatewaySession");
+  const sidecar = startIncognitoSessionLifetime({
+    context: {} as GatewayRequestContext,
+    scheduler,
+    logWarning: vi.fn(),
+  });
+  try {
+    sessionChanges.emit({
+      agentId: "main",
+      sessionKey,
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+    });
+    await time.advanceBy(day);
+    expect(memorySessionActorOwners.list()).toEqual([]);
+    expect(deleteGatewaySession).not.toHaveBeenCalled();
+  } finally {
+    await sidecar.stop();
+    await scheduler.stop();
+  }
+});
 
 it("keeps the creation deadline after activity and joins accepted expiry before shutdown", async () => {
   const time = createGatewaySchedulerClock(1_000);
@@ -93,16 +128,17 @@ it("keeps the creation deadline after activity and joins accepted expiry before 
   const release = createDeferredCore();
   const order: string[] = [];
   const logWarning = vi.fn();
-  const sidecar = startIncognitoActorSessionLifetime({
-    owner,
+  vi.spyOn(deletion, "deleteGatewaySession").mockImplementation(async (params) => {
+    started.resolve();
+    await release.promise;
+    const result = await deleteSession(params);
+    order.push("deleted");
+    return result;
+  });
+  const sidecar = startIncognitoSessionLifetime({
+    context: {} as GatewayRequestContext,
     scheduler,
     logWarning,
-    async deleteSession(deadline, binding) {
-      started.resolve();
-      await release.promise;
-      await deleteSession(binding, deadline.sessionId);
-      order.push("deleted");
-    },
   });
   let waking: Promise<void> | undefined;
   let stopping: Promise<void> | undefined;
@@ -151,17 +187,17 @@ it("retries failed cleanup without extending the original lifetime", async () =>
   const { owner } = await createSession(time.clock.now());
   const logWarning = vi.fn();
   let attempts = 0;
-  const sidecar = startIncognitoActorSessionLifetime({
-    owner,
+  vi.spyOn(deletion, "deleteGatewaySession").mockImplementation(async (params) => {
+    attempts += 1;
+    if (attempts === 1) {
+      throw new Error("Transient cleanup failure");
+    }
+    return deleteSession(params);
+  });
+  const sidecar = startIncognitoSessionLifetime({
+    context: {} as GatewayRequestContext,
     scheduler,
     logWarning,
-    async deleteSession(deadline, binding) {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new Error("Transient cleanup failure");
-      }
-      await deleteSession(binding, deadline.sessionId);
-    },
   });
   try {
     await time.advanceBy(day);
@@ -185,15 +221,9 @@ it("starts memory expiry with Gateway sidecars and preserves replacement deadlin
   const first = await createSession(time.clock.now());
   const deleted: string[] = [];
   vi.spyOn(deletion, "deleteGatewaySession").mockImplementation(async (params) => {
-    const binding = getSessionActorStorageBinding({ sessionKey: params.params.key });
-    if (!binding) {
-      throw new Error("Missing memory binding");
-    }
-    params.assertCurrent?.();
-    const id = params.params.expectedSessionId!;
-    await deleteSession(binding, id);
-    deleted.push(id);
-    return { ok: true, result: { ok: true, key: params.params.key, deleted: true, archived: [] } };
+    const result = await deleteSession(params);
+    deleted.push(params.params.expectedSessionId!);
+    return result;
   });
   const logWarning = vi.fn();
   const sidecar = createGatewaySidecarStopOwner();

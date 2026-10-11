@@ -340,9 +340,13 @@ export async function withSessionEntriesFromStoresInWorker<T>(
       snapshotFields: input.snapshotFields?.slice(),
       preparedSource: input.preparedSource && { ...input.preparedSource },
     };
-    return input.selection
-      ? { ...input, ...captured, selection: { ...input.selection } }
-      : { ...input, ...captured, sessionKeys: [...input.sessionKeys] };
+    if (!input.selection) {
+      return { ...input, ...captured, sessionKeys: [...input.sessionKeys] };
+    }
+    if (input.projection === "list") {
+      return { ...input, ...captured, selection: { ...input.selection } };
+    }
+    return { ...input, ...captured, selection: { ...input.selection } };
   });
   if (options?.ordered && !capturedInputs.some((input) => captureMemoryExactSessionReader(input))) {
     return withOrderedSessionEntriesInWorker(capturedInputs, consume, {

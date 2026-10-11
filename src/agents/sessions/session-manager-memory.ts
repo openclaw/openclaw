@@ -99,7 +99,7 @@ export function createSessionManagerMemoryDatabase(
         ) {
           commandSignal = options?.signal;
           commandSignal?.throwIfAborted();
-          // The manager contract pairs each metadata key with the same actor operation/result.
+          // SAFETY: Both contracts use SessionMetadataOperations; execute preserves the command's key/result pairing.
           return execute(command as SessionActorMemoryMetadataCommand) as Promise<
             SessionMetadataOperations[Key]["output"]
           >;

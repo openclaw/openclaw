@@ -27,13 +27,11 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   type SessionEntryCreateWithTranscriptOptions,
-  resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import {
   captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
   withSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
@@ -98,6 +96,7 @@ import {
   resolveSessionCreateModelInputError,
   resolveSessionForkMaxTokens,
 } from "./session-create-model-selection.js";
+import { tryResetGatewaySessionForCreation } from "./session-create-reset.js";
 import type {
   CreatedGatewaySession,
   CreateGatewaySessionParams,
@@ -105,7 +104,10 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
-import { readSessionCreateTarget } from "./session-create-target.js";
+import {
+  readRequestedSessionCreateTarget,
+  readSessionCreateTarget,
+} from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
   prepareGatewaySessionLifecycleTargets,
@@ -286,16 +288,8 @@ async function createGatewaySessionInScope(
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return invalidSessionRequest("trusted plugin session owner is not authorized");
   }
-  // Capture the requested incarnation before worker discovery yields to authority preparation.
-  const initialTargetEntry = explicitTargetKey
-    ? getSessionActorStorageBinding({ sessionKey: explicitTargetKey, agentId })
-      ? loadGatewaySessionEntryReadOnly(explicitTargetKey, { agentId }, params.cfg).entry
-      : resolveSessionEntryAccessTarget({
-          cfg: params.cfg,
-          sessionKey: explicitTargetKey,
-          agentId,
-        }).entry
-    : undefined;
+  const explicitTarget = await readRequestedSessionCreateTarget(params, agentId, explicitTargetKey);
+  const initialTargetEntry = explicitTarget?.entry;
   if (
     explicitTargetKey &&
     isAgentHarnessSessionKey(explicitTargetKey) &&
@@ -370,12 +364,14 @@ async function createGatewaySessionInScope(
 
   const targetSessionKey =
     explicitTargetKey ?? generatedKey ?? buildDashboardSessionKey(agentId, { incognito });
-  const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.cfg,
-    key: targetSessionKey,
-    agentId,
-    assertActive: commitGuard,
-  });
+  const target =
+    explicitTarget ??
+    (await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: targetSessionKey,
+      agentId,
+      assertActive: commitGuard,
+    }));
   const initializingSessionFailure = () =>
     unavailableSessionRequest(
       `Session ${target.canonicalKey} is still initializing; retry creation later.`,
@@ -448,78 +444,17 @@ async function createGatewaySessionInScope(
     commitGuard?.();
   }
 
-  if (
-    canonicalParentSessionKey &&
-    params.fork !== true &&
-    params.emitCommandHooks === true &&
-    !requestedKey &&
-    params.resetMainWhenUnspecified === true &&
-    !requestedToolOverrides &&
-    !parentIncognito &&
-    // Catalog targets need a fresh locked row; resetting main would return before
-    // the catalog-owned model/runtime pair is persisted.
-    !params.catalogTarget &&
-    params.cfg.session?.dmScope === "main"
-  ) {
-    const parentAgentId = normalizeAgentId(
-      parentSelectedAgentId ?? resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? agentId,
-    );
-    const parentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: parentAgentId });
-    if (canonicalParentSessionKey === parentMainKey) {
-      if (params.visibility) {
-        return invalidSessionRequest("sessions.create visibility requires a new session");
-      }
-      const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
-      const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
-      const execCwd = normalizeOptionalString(params.execCwd);
-      const resetResult = await performGatewaySessionReset({
-        key: canonicalParentSessionKey,
-        ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
-        ...(params.requestingOperatorProfileId
-          ? { requestingOperatorProfileId: params.requestingOperatorProfileId }
-          : {}),
-        ...(params.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
-        reason: "new",
-        commandSource: params.commandSource,
-        ...(params.creation ? { creation: params.creation } : {}),
-        ...(spawnedCwd ? { spawnedCwd } : {}),
-        ...(params.sessionRoot ? { sessionRoot: params.sessionRoot } : {}),
-        ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
-        ...(params.fastMode !== undefined
-          ? {
-              fastModeSelection: {
-                value: params.fastMode,
-                allowExistingChange: params.allowExistingModelSelection === true,
-              },
-            }
-          : {}),
-        ...(params.prepareLifecycle ? { prepareLifecycle: params.prepareLifecycle } : {}),
-        ...(params.onLifecycleCleanupError
-          ? { onLifecycleCleanupError: params.onLifecycleCleanupError }
-          : {}),
-        ...(params.execNode ? { execNode: params.execNode } : {}),
-        ...(execCwd ? { execCwd } : {}),
-        ...(params.clearExecBinding ? { clearExecBinding: true } : {}),
-        ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
-        ...(params.armSessionDiffBaselineCapture ? { armSessionDiffBaselineCapture: true } : {}),
-        ...(commitGuard ? { assertAuthorizedInstance: commitGuard } : {}),
-      });
-      if (!resetResult.ok) {
-        return resetResult;
-      }
-      if ("incognitoDeleted" in resetResult) {
-        return invalidSessionRequest("incognito sessions cannot reset in place");
-      }
-      return {
-        ok: true,
-        key: resetResult.key,
-        agentId: resetResult.agentId,
-        entry: projectPublicSessionEntry(resetResult.entry),
-        resolved: resetResult.resolved,
-        resetExisting: true,
-        postCommit: { status: "completed" },
-      };
-    }
+  const reset = tryResetGatewaySessionForCreation(params, {
+    parentSessionKey: canonicalParentSessionKey,
+    parentSelectedAgentId,
+    agentId,
+    parentIncognito,
+    requestedKey,
+    requestedToolOverrides,
+    commitGuard,
+  });
+  if (reset) {
+    return await reset;
   }
 
   let createdContext: CreatedGatewaySession | undefined;

@@ -41,12 +41,11 @@ export function prepareSessionManagerMemoryRead(
           sessionKey: binding.target.sessionKey,
           database: { kind: "memory", handle: "absent", incarnation: "absent" },
         });
-        // SAFETY: The history dispatcher pairs every query key with this same output contract.
-        return readSessionActorMemoryHistoryQuery(
-          state,
-          { type, input } as SessionActorMemoryHistoryQuery,
-          binding.database,
-        ) as SessionActorMemoryHistoryReads[Key]["output"];
+        // SAFETY: The generic key pairs this input with its closed history-query variant.
+        const query = { type, input } as SessionActorMemoryHistoryQuery;
+        const result = readSessionActorMemoryHistoryQuery(state, query, binding.database);
+        // SAFETY: The dispatcher returns the output paired with this query key.
+        return result as SessionActorMemoryHistoryReads[Key]["output"];
       });
     },
   };

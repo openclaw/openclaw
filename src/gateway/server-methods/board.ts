@@ -1,7 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import {
-  type BoardSnapshot,
-  type GatewayCoreRequestParams,
   type BoardWidgetMaterializedPutParams,
   validateBoardActionParams,
   validateBoardDataReadParams,
@@ -41,7 +39,6 @@ import {
   assertBoardCapabilityParamsSize,
   captureBoardRequestAuthority,
   readBoardDataBinding,
-  respondBoardError,
   runBoardActionVerb,
   triggerBoardCronJob,
 } from "../board-host-tools.js";
@@ -62,9 +59,15 @@ import {
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
+import {
+  defineBoardMethod,
+  resolveBoardSession,
+  projectBoardSnapshot,
+  broadcastBoardChanged,
+} from "./board-handler-context.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
+import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type CanvasDocumentReader = typeof readCanvasDocumentHtmlSource;
 type McpAppDependencies = {
@@ -73,50 +76,6 @@ type McpAppDependencies = {
   mintFromTranscript: typeof mintMcpAppViewFromTranscript;
 };
 type BoardHandlerDependencies = Partial<McpAppDependencies>;
-
-function defineBoardMethod<Method extends keyof GatewayCoreRequestParams>(
-  ...[method, validate, handler]: Parameters<typeof defineValidatedGatewayMethod<Method>>
-) {
-  return defineValidatedGatewayMethod(method, validate, async (invocation) => {
-    try {
-      await handler(invocation);
-    } catch (error) {
-      respondBoardError(error, invocation.respond);
-    }
-  });
-}
-
-function resolveBoardSession(
-  params: { sessionKey: string; agentId?: string | undefined },
-  context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
-  respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
-): Required<BoardSessionTarget> | undefined {
-  const cfg = context.getRuntimeConfig();
-  const requested = resolveRequestedSessionStoreTarget(cfg, params.sessionKey, params.agentId);
-  if (!requested.ok) {
-    respond(false, undefined, requested.error);
-    return undefined;
-  }
-  return requested.value;
-}
-
-function projectBoardSnapshot<T extends BoardSnapshot>(snapshot: T, agentId: string): T {
-  // Observer identities distinguish global boards on the wire, never in stored rows.
-  return { ...snapshot, sessionKey: sessionObserverScopeKey(snapshot.sessionKey, agentId) };
-}
-
-function broadcastBoardChanged(
-  context: GatewayRequestContext,
-  session: Required<BoardSessionTarget>,
-  { sessionKey, revision }: BoardSnapshot,
-  widget?: string,
-) {
-  context.broadcast(
-    "board.changed",
-    { sessionKey, revision, ...(widget !== undefined ? { widget } : {}) },
-    { sessionKeys: [session.sessionKey], agentId: session.agentId },
-  );
-}
 
 export function createBoardHandlers(
   store: BoardStore,

@@ -349,7 +349,7 @@ describe("memory session side-data consumers", () => {
       sessionActor: first.binding,
     });
     expect(sink).not.toBeNull();
-    sink!.write(initial, JSON.stringify(initial));
+    sink!.write({ ...initial, data: { text: "unbounded source" } }, JSON.stringify(initial));
     await sink!.flush();
     const read = await loadSqliteTrajectoryRuntimeEvents(first.scope);
     expect(read).toEqual([initial]);
@@ -375,13 +375,14 @@ describe("memory session side-data consumers", () => {
         maxEventCount: 0,
       }),
     ).toEqual([{ event: newer, seq: 1 }]);
+    const retained = trajectory(second.scope.sessionId, "new", 2);
     committed(
       await second.storage.mutate(
         {
           type: "session.trajectory.append",
           input: {
             sessionId: second.scope.sessionId,
-            events: [trajectory(second.scope.sessionId, "new", 2)],
+            events: [{ runId: retained.runId, ts: retained.ts, line: JSON.stringify(retained) }],
             maxRuntimeBytes: 1000,
             maxGlobalRuntimeBytes: 1,
           },

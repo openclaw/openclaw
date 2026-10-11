@@ -59,10 +59,10 @@ function toMemoryCollaborationCommand(
     command.type === "participant" && command.input.params.identity.type === "profile"
       ? [...readResidentUserProfileAliases(command.input.params.identity.id, { env: scope.env })]
       : undefined;
-  // SAFETY: The discriminant retains the existing collaboration input/result pair.
   return {
     type: `session.collaboration.${command.type}`,
     input: { ...input, ...(profileAliases ? { profileAliases } : {}) },
+    // SAFETY: Only the command prefix changes; input and result remain paired by the same suffix.
   } as SessionActorMemoryCollaborationCommand;
 }
 
@@ -104,6 +104,7 @@ export async function runSessionCollaborationWrite<
         const outcome = await memory.actor.storage!.mutate(actorCommand, memory.authority, {
           committed(committedOutcome) {
             value = publish(
+              // SAFETY: toMemoryCollaborationCommand preserves this Key's input/result pair.
               committedOutcome.value as SessionSharingWorkerOperations[Key]["output"],
               {
                 agentId: memory.agentId,

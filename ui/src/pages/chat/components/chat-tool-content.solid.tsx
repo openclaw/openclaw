@@ -326,20 +326,13 @@ function CommandBody(props: { state: ContentState }) {
           <TerminalBlock command={props.state.view.command!} output={props.state.card.outputText} />
         }
       >
-        <Show
-          when={sourceKey() === "input"}
-          fallback={
-            <>
-              <ToolDataBlock label={t("chat.toolCards.toolInput")} text={props.state.view.code!} />
-              <Show when={props.state.card.outputText !== undefined}>
-                <ToolDataBlock text={props.state.card.outputText!} />
-              </Show>
-            </>
-          }
-        >
-          <Show when={props.state.card.outputText !== undefined}>
-            <ToolDataBlock text={props.state.card.outputText!} />
-          </Show>
+        <Show when={sourceKey() !== "input"}>
+          <ToolDataBlock label={t("chat.toolCards.toolInput")} text={props.state.view.code!} />
+        </Show>
+        <Show when={props.state.card.outputText !== undefined}>
+          <ToolDataBlock text={props.state.card.outputText!} />
+        </Show>
+        <Show when={sourceKey() === "input"}>
           <details class="chat-tool-card__input">
             <summary>{t("chat.toolCards.toolInput")}</summary>
             <ToolDataBlock text={props.state.view.code!} />
@@ -548,14 +541,12 @@ defineSolidBridge<{
     },
   },
 );
-defineSolidBridge<{ text: string }>(
-  "openclaw-chat-tool-raw",
-  (props) => <RawOutputToggle text={props.text} />,
-  { properties: { text: { default: "", attribute: false } } },
-);
+defineSolidBridge<{ text: string }>("openclaw-chat-tool-raw", RawOutputToggle, {
+  properties: { text: { default: "", attribute: false } },
+});
 defineSolidBridge<{ outcome: ToolCardOutcome; exitCode?: number }>(
   "openclaw-chat-tool-outcome",
-  (props) => <ToolOutcome outcome={props.outcome} exitCode={props.exitCode} />,
+  ToolOutcome,
   {
     properties: {
       outcome: { default: "unknown", attribute: false },

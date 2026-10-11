@@ -68,7 +68,9 @@ export function createSessionActorMemoryConversationOwner(options: {
     return {
       context,
       commit() {
-        if (changed) options.installConversations(changed);
+        if (changed) {
+          options.installConversations(changed);
+        }
       },
     };
   };
@@ -77,6 +79,7 @@ export function createSessionActorMemoryConversationOwner(options: {
     authority: SessionActorAuthority,
   ): SessionActorMemoryConversationReads[Key]["output"] {
     const { context } = transaction(authority);
+    // SAFETY: The generic query key and input select the same closed conversation variant.
     const command = query as SessionActorMemoryConversationQuery;
     const value =
       command.type === "session.conversation.delivery.read"
@@ -100,6 +103,7 @@ export function createSessionActorMemoryConversationOwner(options: {
       authority: SessionActorAuthority,
       selectEligible?: (identities: readonly ConversationIdentity[]) => readonly boolean[],
     ): Promise<SessionActorMemoryConversationWrites[Key]["output"]> {
+      // SAFETY: Cloning preserves the command key and its paired input variant.
       const captured = structuredClone(command) as SessionActorMemoryConversationCommand;
       return options.enqueue(() => {
         const { context, commit } = transaction(authority, selectEligible);
