@@ -4,7 +4,6 @@ import {
   finishSqliteDatabaseWrite,
 } from "../sqlite-database-admission.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
-import type { SqliteTransactionOptions } from "../sqlite-transaction.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -22,7 +21,7 @@ function assertPostgresOperationCurrent(): void {
 export function runPostgresTransactionSync<T>(
   db: PostgresSyncConnection,
   operation: () => T,
-  options?: SqliteTransactionOptions,
+  options?: { withCommit?: (commit: () => void) => void },
   readOnly = false,
   reserved = false,
   admitWorker = true,

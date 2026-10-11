@@ -9,11 +9,13 @@ import {
   getSqliteDatabaseAdmission,
   openNodeSqliteDatabase,
   publishSqliteDatabaseAdmission,
-  type SqlConnection,
+  type PostgresSyncConnection,
   type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { openWorkboardPostgresDatabase } from "./postgres-store.js";
 import { SCHEMA_VERSION, WORKBOARD_SCHEMA_SQL } from "./workboard-schema.js";
+export type WorkboardSqlConnection = DatabaseSync | PostgresSyncConnection;
+
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -106,7 +108,7 @@ export function createWorkboardDatabase(
   dbPath: string,
   retainClose?: (close: () => void) => void,
 ): {
-  db: SqlConnection;
+  db: WorkboardSqlConnection;
   close: () => void;
 } {
   prepareWorkboardDatabasePath(dbPath);
