@@ -162,7 +162,8 @@ export async function sendCronAnnouncePayloadStrict(params: {
         deps: createOutboundSendDeps(params.deps),
         signal: params.abortSignal,
         assertDirectAdapterHandoff: fence?.assertCurrent,
-        onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
+        onDeliveredPayload: ({ hookContent, ...payload }) =>
+          deliveredPayloads.push({ ...payload, spokenText: hookContent }),
         onDeliveryResult: () => {
           if (!recipientReached) {
             recipientReached = true;

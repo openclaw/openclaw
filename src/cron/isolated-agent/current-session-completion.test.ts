@@ -118,6 +118,7 @@ describe("current-session completion media", () => {
         };
         const registry = captureActivePluginRegistrySnapshot();
         const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "forbidden" }));
+        const sendMedia = vi.fn(async () => ({ channel: "telegram", messageId: "media" }));
         setActivePluginRegistry(
           createTestRegistry([
             {
@@ -125,7 +126,7 @@ describe("current-session completion media", () => {
               source: "test",
               plugin: {
                 ...createChannelTestPluginBase({ id: "telegram" }),
-                outbound: { deliveryMode: "direct", sendText },
+                outbound: { deliveryMode: "direct", sendText, sendMedia },
               },
             },
           ]),
@@ -147,7 +148,7 @@ describe("current-session completion media", () => {
             isRecord(request.facts) &&
             request.facts.type === "managedImages.insert"
           ) {
-            expect(sendText).toHaveBeenCalledOnce();
+            expect(sendMedia).toHaveBeenCalledOnce();
             revokeOccurrence();
           }
           admit(request, grant);
@@ -222,7 +223,7 @@ describe("current-session completion media", () => {
           });
           await cron.run(job.id, "force");
           expect(revoked).toBe(true);
-          expect(sendText).toHaveBeenCalledTimes(stage === "commit" ? 1 : 0);
+          expect(sendMedia).toHaveBeenCalledTimes(stage === "commit" ? 1 : 0);
           expect(await fixture.messages()).toHaveLength(0);
           if (stage === "commit") {
             expect(await fixture.records()).toEqual([]);

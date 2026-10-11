@@ -9,6 +9,7 @@ import type * as SessionAccessor from "../../config/sessions/session-accessor.js
 import type * as SessionEntryReadRuntime from "../../config/sessions/session-entry-read-runtime.js";
 import * as deliveryQueueSqlite from "../../infra/delivery-queue-sqlite.js";
 import type * as OutboundSession from "../../infra/outbound/outbound-session.js";
+import { summarizeOutboundPayloadForTransport } from "../../infra/outbound/payloads.js";
 
 const directCronCompletionRetention = {
   idPrefix: "cron-direct-delivery:v1:",
@@ -252,7 +253,12 @@ function expectSessionDeleted() {
 describe("dispatchCronDelivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    deliverOutboundPayloadsMock.mockReset().mockResolvedValue([{ ok: true }]);
+    deliverOutboundPayloadsMock.mockReset().mockImplementation(async (delivery) => {
+      for (const payload of delivery.payloads) {
+        delivery.onDeliveredPayload?.(summarizeOutboundPayloadForTransport(payload));
+      }
+      return [{ channel: "telegram", messageId: "delivered-report" }];
+    });
     vi.spyOn(deliveryQueueSqlite, "inspectDeliveryQueueReceipt").mockResolvedValue({
       status: undefined,
       pendingEntry: null,
@@ -757,15 +763,16 @@ describe("dispatchCronDelivery", () => {
 
   it("applies TTS to the notification before committing confirmed destination output", async () => {
     const speech = {
-      text: "Briefing",
+      text: "",
       spokenText: "Briefing",
       audioAsVoice: true,
       mediaUrl: "file:///tmp/voice.mp3",
       mediaUrls: ["file:///tmp/chart.png", "file:///tmp/narration.ogg"],
     };
     vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (delivery) => {
-      delivery.onPayload?.({
-        text: "Briefing",
+      delivery.onDeliveredPayload?.({
+        text: "",
+        hookContent: "Briefing",
         audioAsVoice: true,
         mediaUrls: [...speech.mediaUrls, speech.mediaUrl],
       });
@@ -799,7 +806,7 @@ describe("dispatchCronDelivery", () => {
     expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:telegram:direct:123456",
-        text: "[[tts]] Briefing",
+        text: "Briefing\nchart.png",
       }),
     );
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
