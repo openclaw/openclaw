@@ -327,6 +327,49 @@ function findCandidateCallSequences(
   return sequences;
 }
 
+/**
+ * Last line start holding an unfinished call marker such as "<funct" or "<|channel|".
+ * A later chunk can still complete it into a call, so the buffered suffix must stay
+ * private while the text before it is already decided.
+ */
+function findTrailingCallPrefix(
+  candidate: StandalonePlainTextToolCallCandidate,
+  matcher: PlainTextToolCallNameMatcher,
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
+): { named: boolean; start: number } | undefined {
+  const { text, boundaries, structuralLineBreaks } = createCandidateScanView(candidate);
+  const protectedRanges = resolveProtectedRanges?.(text) ?? [];
+  const boundarySet = new Set(boundaries);
+  let tail: { named: boolean; start: number } | undefined;
+  let index = 0;
+  while (index < text.length) {
+    if (
+      index !== 0 &&
+      text[index - 1] !== "\n" &&
+      text[index - 1] !== "\r" &&
+      !boundarySet.has(index)
+    ) {
+      index += 1;
+      continue;
+    }
+    const callStart = skipLineIndentation(text, index);
+    if (isOffsetInProtectedRanges(callStart, protectedRanges)) {
+      index += 1;
+      continue;
+    }
+    const scan = scanPlainTextToolCall(text, callStart, {
+      matcher,
+      maxPayloadBytes: MAX_PAYLOAD_BYTES,
+      structuralLineBreaks,
+    });
+    if (scan.kind === "prefix" && !scannedCall(scan)) {
+      tail = { named: scanHasNamedCandidate(scan), start: index };
+    }
+    index = Math.max(index + 1, scan.next);
+  }
+  return tail;
+}
+
 function createCandidateScanView(candidate: StandalonePlainTextToolCallCandidate) {
   const boundaries = candidate.parts.slice(1).map((part) => part.start);
   return {
@@ -703,7 +746,28 @@ type PendingClassification =
   | { kind: "pending" }
   | { kind: "stripped"; text: string }
   | { kind: "suppress"; suppressor: OverCapSuppressor }
-  | { candidate: StandalonePlainTextToolCallCandidate; kind: "trim" };
+  | {
+      candidate: StandalonePlainTextToolCallCandidate;
+      kind: "trim";
+      /** False-positive prefix that must stay user-visible when the trim reruns. */
+      replayedText?: string;
+    };
+
+function sliceCandidateFrom(
+  candidate: StandalonePlainTextToolCallCandidate,
+  start: number,
+): StandalonePlainTextToolCallCandidate {
+  return {
+    text: candidate.text.slice(start),
+    parts: candidate.parts
+      .filter((part) => part.end > start)
+      .map((part) => ({
+        contentIndex: part.contentIndex,
+        start: Math.max(0, part.start - start),
+        end: part.end - start,
+      })),
+  };
+}
 
 const XML_PARAMETER_CLOSE = "</parameter>";
 const XML_FUNCTION_CLOSE = "</function>";
@@ -818,16 +882,7 @@ function classifyPending(
   const overCapRanges = sequences.filter(({ overCap }) => overCap);
   const leading = sequences[0]?.start === 0 ? sequences[0] : undefined;
   if (leading?.activeStart !== undefined && (pending.sequenceOverCap || overCapRanges.length > 0)) {
-    const activeCandidate = {
-      text: candidate.text.slice(leading.activeStart),
-      parts: candidate.parts
-        .filter((part) => part.end > (leading.activeStart ?? 0))
-        .map((part) => ({
-          contentIndex: part.contentIndex,
-          start: Math.max(0, part.start - (leading.activeStart ?? 0)),
-          end: part.end - (leading.activeStart ?? 0),
-        })),
-    };
+    const activeCandidate = sliceCandidateFrom(candidate, leading.activeStart);
     const suppressor = createOverCapSuppressor(activeCandidate, matcher, true);
     if (suppressor) {
       return { kind: "suppress", suppressor };
@@ -846,6 +901,21 @@ function classifyPending(
     leading.activeStart === undefined &&
     skipWhitespace(candidate.text, leading.end) < candidate.text.length
   ) {
+    // A later chunk can still complete the trailing marker into a call ("<funct" plus
+    // "ion=read>"). Replaying it now would emit half a call as visible text and then
+    // leak the rest mid-buffer, so hold the whole buffer like the unsplit stream does.
+    const tailScan = scanPlainTextToolCall(
+      candidate.text,
+      skipWhitespace(candidate.text, leading.end),
+      {
+        matcher,
+        maxPayloadBytes: MAX_PAYLOAD_BYTES,
+        structuralLineBreaks: view.structuralLineBreaks,
+      },
+    );
+    if (!finalize && tailScan.kind === "prefix" && !scannedCall(tailScan)) {
+      return { kind: "pending" };
+    }
     return { kind: "stripped", text: createRangeRemover([leading])(candidate.text) };
   }
   if (leading && leading.activeStart === undefined) {
@@ -855,6 +925,44 @@ function classifyPending(
   }
   if (leading?.activeStart !== undefined) {
     return !hasNamedCandidate && finalize ? { kind: "false-positive" } : { kind: "pending" };
+  }
+  const firstSequence = sequences[0];
+  if (firstSequence && firstSequence.start > 0) {
+    // An earlier chunk can buffer a line that looked candidate-shaped before later text
+    // proved it is not a call. Replay only that false-positive prefix: call text stays
+    // private, and an active tail keeps buffering for the same repair decision.
+    if (firstSequence.activeStart !== undefined) {
+      return {
+        candidate: sliceCandidateFrom(candidate, firstSequence.activeStart),
+        kind: "trim",
+        replayedText: candidate.text.slice(0, firstSequence.start),
+      };
+    }
+    if (
+      sequences.length > 1 ||
+      skipWhitespace(candidate.text, firstSequence.end) < candidate.text.length
+    ) {
+      return { kind: "stripped", text: createRangeRemover(sequences)(candidate.text) };
+    }
+    // Nothing visible follows the call yet, but a later chunk can still deliver the
+    // block's trailing line break. Stripping now would make that break visible, so keep
+    // the call buffered exactly like a leading complete call does.
+    return {
+      candidate: sliceCandidateFrom(candidate, firstSequence.start),
+      kind: "trim",
+      replayedText: candidate.text.slice(0, firstSequence.start),
+    };
+  }
+  const trailingPrefix = findTrailingCallPrefix(candidate, matcher, resolveProtectedRanges);
+  if (trailingPrefix && trailingPrefix.start > 0 && (!finalize || trailingPrefix.named)) {
+    // A line-start tail can still complete into a call on a later chunk ("<funct" plus
+    // "ion=read>"). Keep only that tail private and re-surface the prefix, so the call
+    // decision stops depending on where the provider's chunks happen to split.
+    return {
+      candidate: sliceCandidateFrom(candidate, trailingPrefix.start),
+      kind: "trim",
+      replayedText: candidate.text.slice(0, trailingPrefix.start),
+    };
   }
   if (
     terminalScan.kind === "prefix" &&
@@ -1203,6 +1311,44 @@ export async function* normalizePlainTextToolCallStreamEvents(
     });
   };
 
+  const applyCandidateTrim = (
+    state: CandidatePendingState,
+    classification: Extract<PendingClassification, { kind: "trim" }>,
+    key: number,
+  ): Record<string, unknown>[] => {
+    // A trim either discards an over-cap prefix or re-surfaces a false-positive one; only
+    // the second kind is user-visible text, and a replayed trim must not repeat units the
+    // caller already streamed for this content block.
+    const trimmed = classification.candidate;
+    const output: Record<string, unknown>[] = [];
+    if (classification.replayedText !== undefined) {
+      const emittedUnits = emittedTextUnits.get(key) ?? 0;
+      const novelText = classification.replayedText.slice(
+        Math.max(0, emittedUnits - state.snapshotOffset),
+      );
+      if (novelText) {
+        output.push(createSyntheticTextDelta(state.template, novelText));
+        lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, novelText));
+        advanceProtectionContext(novelText);
+      }
+    }
+    const trimmedOffset = state.buffer.length - trimmed.text.length;
+    state.buffer = trimmed.text;
+    state.bufferBytes = cappedUtf8ByteLength(trimmed.text);
+    state.entries = undefined;
+    state.entryBytes = 0;
+    state.nextScanChars = 256;
+    state.parts = trimmed.parts;
+    state.sequenceOverCap = classification.replayedText === undefined;
+    state.snapshotOffset =
+      classification.replayedText === undefined ? 0 : state.snapshotOffset + trimmedOffset;
+    state.template = {
+      ...state.template,
+      contentIndex: trimmed.parts[0]?.contentIndex ?? state.template.contentIndex,
+    };
+    return output;
+  };
+
   async function* normalizeEvents() {
     for await (const sourceEvent of source) {
       let record = asOptionalObjectRecord(sourceEvent);
@@ -1507,19 +1653,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
             scrubFuturePartials = true;
             const partialProjection = scrubSnapshot(record.partial, true, true);
             yield* forceProjectPendingAux(pending, partialProjection);
-            const candidate = classification.candidate;
-            pending.buffer = candidate.text;
-            pending.bufferBytes = cappedUtf8ByteLength(candidate.text);
-            pending.entries = undefined;
-            pending.entryBytes = 0;
-            pending.nextScanChars = 256;
-            pending.parts = candidate.parts;
-            pending.sequenceOverCap = true;
-            pending.snapshotOffset = 0;
-            pending.template = {
-              ...pending.template,
-              contentIndex: candidate.parts[0]?.contentIndex ?? pending.template.contentIndex,
-            };
+            yield* applyCandidateTrim(pending, classification, key);
             break;
           }
           if (classification.kind === "suppress") {
@@ -1648,7 +1782,13 @@ export async function* normalizePlainTextToolCallStreamEvents(
               options.resolveProtectedRanges,
               true,
             );
-            if (classification.kind === "stripped" && classification.text) {
+            if (classification.kind === "trim") {
+              yield* applyCandidateTrim(
+                pending,
+                classification,
+                eventContentIndex(pending.template),
+              );
+            } else if (classification.kind === "stripped" && classification.text) {
               const template = projectEventIndex(pending.template, normalized);
               if (template) {
                 const projectedText = projectedTextForEvent(pending.template, normalized);
@@ -1667,13 +1807,20 @@ export async function* normalizePlainTextToolCallStreamEvents(
           yield { ...record, message: normalized.message };
         } else {
           let message = record.message;
-          if (
-            pending?.kind === "candidate" &&
-            classifyPending(pending, options.matcher, options.resolveProtectedRanges, true).kind ===
-              "false-positive"
-          ) {
+          const pendingClassification =
+            pending?.kind === "candidate"
+              ? classifyPending(pending, options.matcher, options.resolveProtectedRanges, true)
+              : undefined;
+          if (pending?.kind === "candidate" && pendingClassification?.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
           } else if (pending) {
+            if (pending.kind === "candidate" && pendingClassification?.kind === "trim") {
+              yield* applyCandidateTrim(
+                pending,
+                pendingClassification,
+                eventContentIndex(pending.template),
+              );
+            }
             const projection = scrubSnapshot(record.message, true, true);
             yield* forceProjectPendingAux(pending, projection);
             message = projection?.message ?? message;
@@ -1706,11 +1853,20 @@ export async function* normalizePlainTextToolCallStreamEvents(
       }
 
       if (type === "error") {
+        const pendingClassification =
+          pending?.kind === "candidate"
+            ? classifyPending(pending, options.matcher, options.resolveProtectedRanges, true)
+            : undefined;
+        if (pending?.kind === "candidate" && pendingClassification?.kind === "trim") {
+          yield* applyCandidateTrim(
+            pending,
+            pendingClassification,
+            eventContentIndex(pending.template),
+          );
+        }
         const knownCandidate =
           pending?.kind === "suppressing" ||
-          (pending?.kind === "candidate" &&
-            classifyPending(pending, options.matcher, options.resolveProtectedRanges, true).kind !==
-              "false-positive");
+          (pending?.kind === "candidate" && pendingClassification?.kind !== "false-positive");
         if (pending?.kind === "candidate" && !knownCandidate) {
           yield* replayFalsePositiveCandidate(pending);
         }
@@ -1753,6 +1909,9 @@ export async function* normalizePlainTextToolCallStreamEvents(
             pending = undefined;
             continue;
           }
+          if (pending.kind === "candidate" && classification?.kind === "trim") {
+            yield* applyCandidateTrim(pending, classification, eventContentIndex(pending.template));
+          }
           forceScrubTerminal = true;
           if (pending.kind === "candidate") {
             scrubFuturePartials = true;
@@ -1781,12 +1940,20 @@ export async function* normalizePlainTextToolCallStreamEvents(
       }
     }
 
-    if (
-      pending?.kind === "candidate" &&
-      classifyPending(pending, options.matcher, options.resolveProtectedRanges, true).kind ===
-        "false-positive"
-    ) {
-      yield* replayFalsePositiveCandidate(pending);
+    if (pending?.kind === "candidate") {
+      const classification = classifyPending(
+        pending,
+        options.matcher,
+        options.resolveProtectedRanges,
+        true,
+      );
+      if (classification.kind === "false-positive") {
+        yield* replayFalsePositiveCandidate(pending);
+      } else if (classification.kind === "trim") {
+        yield* applyCandidateTrim(pending, classification, eventContentIndex(pending.template));
+      } else {
+        yield* forceProjectPendingAux(pending);
+      }
     } else if (pending) {
       yield* forceProjectPendingAux(pending);
     }

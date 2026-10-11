@@ -96,6 +96,35 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expect(textDeltas(events)).toEqual([raw]);
     expectTerminalContent(events, terminal, textContent(raw));
   });
+
+  it.each<[string, Record<string, unknown>[], string[], string]>([
+    [
+      "keeps a replayed false prefix stable when a call marker spans chunks",
+      streamDeltas(" [read]\n", "<function=read>"),
+      [" [read]\n"],
+      "<function=read>",
+    ],
+    [
+      "holds a stacked function call whose marker spans chunks",
+      streamDeltas('[tool:read]\n{"path":"a"}<funct', "ion=read></function>"),
+      [],
+      "<function=read>",
+    ],
+    [
+      "holds a stacked Harmony call whose marker spans chunks",
+      streamDeltas('[tool:read]\n{"path":"a"} <|channel|>', "commentary to=read code<|message|>  "),
+      [],
+      "<|channel|>",
+    ],
+  ])("%s", async (_name, source, visible, hidden) => {
+    const events = await normalize(source);
+    expect(textDeltas(events)).toEqual(visible);
+    expect(JSON.stringify(events)).not.toContain(hidden);
+    const unsplit = await normalize([
+      streamTextDelta(source.map((event) => event.delta as string).join("")),
+    ]);
+    expect(textDeltas(events)).toEqual(textDeltas(unsplit));
+  });
   it("preserves prose that invalidates an over-cap XML prefix", async () => {
     const prefix = overCapXml.slice(0, -"</function>".length);
     const visible = "Visible answer";
