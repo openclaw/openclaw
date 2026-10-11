@@ -1139,6 +1139,12 @@ describe("runtime postbuild static assets", () => {
 
 describe("previous release update compatibility", () => {
   const integrity = `sha512-${Buffer.alloc(64).toString("base64")}`;
+  const targetVersion = (
+    JSON.parse(fsSync.readFileSync(path.join(MODULE_ROOT, "package.json"), "utf8")) as {
+      version: string;
+    }
+  ).version;
+  const newerReleaseVersion = `${Number(targetVersion.split(".")[0]) + 1}.1.1-beta.2`;
 
   function write(root: string, relative: string, contents: string): void {
     const file = path.join(root, relative);
@@ -1808,7 +1814,7 @@ describe("previous release update compatibility", () => {
     const npmArgs = ["view", "openclaw", "dist-tags", "--json"];
     const { result, calls } = runInventoryCli(
       ["--check", "--output", output],
-      [{ args: npmArgs, value: { latest: "2026.9.3", beta: "2026.10.1-beta.2" } }],
+      [{ args: npmArgs, value: { latest: "2026.9.3", beta: newerReleaseVersion } }],
     );
     expect(result.status, result.stderr).toBe(0);
     expect(calls).toEqual([npmArgs]);
@@ -1818,7 +1824,7 @@ describe("previous release update compatibility", () => {
     const root = createTempDir("update-compat-newer-source-");
     const output = writeWindowInventory(root);
     const original = fsSync.readFileSync(output, "utf8");
-    const version = "2026.10.1-beta.2";
+    const version = newerReleaseVersion;
     let args: string[];
     if (mode === "generate") {
       const packageDir = path.join(root, version);
@@ -1839,7 +1845,7 @@ describe("previous release update compatibility", () => {
     const before = fsSync.readFileSync(output, "utf8");
     const { result, calls } = runInventoryCli(args);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("source 2026.10.1-beta.2 is newer than target 2026.9.9");
+    expect(result.stderr).toContain(`source ${version} is newer than target ${targetVersion}`);
     expect(fsSync.readFileSync(output, "utf8")).toBe(before);
     expect(calls).toEqual([]);
   });

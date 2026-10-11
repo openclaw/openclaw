@@ -5,6 +5,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { resolveExtendedStablePackage } from "../../src/infra/update-check.js";
 import { waitForFixtureFile } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
@@ -46,6 +47,7 @@ async function expectArchive(url: string, archive: string) {
 it.each([
   { scenario: "legacy-operator-state", version: BASELINE },
   { scenario: "legacy-operator-state", version: "2026.9.6" },
+  { scenario: "legacy-operator-state", version: "2026.9.33" },
   { scenario: "base", version: BASELINE },
   { scenario: "base", version: "2026.9.6" },
 ])(
@@ -217,6 +219,30 @@ read -r done
       child.stdin.write("candidate\n");
       await waitForStage("candidate");
       const candidateUrl = readFileSync(join(root, "candidate-url"), "utf8");
+      if (scenario === "legacy-operator-state") {
+        const coreMetadata = await (await fetch(`${candidateUrl}/openclaw`)).json();
+        expect(coreMetadata["dist-tags"]["extended-stable"]).toBe(
+          version === "2026.9.33" ? version : undefined,
+        );
+        if (version === "2026.9.33") {
+          await expect(
+            resolveExtendedStablePackage({
+              installKind: "package",
+              timeoutMs: 5_000,
+              env: {
+                NPM_CONFIG_REGISTRY: candidateUrl,
+                OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw",
+              },
+            }),
+          ).resolves.toEqual({
+            status: "resolved",
+            selector: "extended-stable",
+            version,
+            packageSpec: `openclaw@${version}`,
+          });
+          await expectArchive(coreMetadata.versions[version].dist.tarball, core);
+        }
+      }
       const publishedPaths = readFileSync(join(root, "published-paths"), "utf8").trim().split("\n");
       for (const { id, name, published, candidate } of packages) {
         const selected = version === BASELINE ? published : candidate;

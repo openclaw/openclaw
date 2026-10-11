@@ -14,6 +14,8 @@ import {
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { updateStatusHandlers } from "./update-status.js";
 
+vi.mock("../../version.js", () => ({ VERSION: "2026.9.7" }));
+
 const history = vi.hoisted(() => vi.fn(async () => ({ activeRun: undefined, lastRun: undefined })));
 const install = vi.hoisted(() => vi.fn());
 vi.mock("../../infra/update-run-ledger.js", () => ({

@@ -10,6 +10,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import {
@@ -30,6 +31,7 @@ import {
 } from "./install.npm-spec.test-support.js";
 import { runPluginPayloadSmokeCheck } from "./payload-verification.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { observeNpmInstallLifecycle } from "./test-helpers/npm-install-lifecycle-diagnostics.test-support.js";
 import {
   packPlugins,
   registryPackages,
@@ -60,6 +62,7 @@ afterEach(async () => {
       process.env[key] = original;
     }
   }
+  await closeStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
@@ -94,20 +97,26 @@ function useRegistry(registry: string): void {
 describe("installPluginFromNpmSpec e2e", () => {
   registerNpmPayloadIdentityTests({ makeInstallFixture, uniquePackageName, useStaticRegistry });
 
-  it.each(["npm", "npm-pack"] as const)(
+  it.for(["npm", "npm-pack"] as const)(
     "preserves a real %s successor when an earlier lifecycle lease has closed",
     { timeout: 120_000 },
-    async (source) => {
+    async (source, context) => {
+      const observe = await observeNpmInstallLifecycle(source, context);
       const { rootDir, npmRoot } = await makeInstallFixture("npm-rollback-owner-e2e");
       const packageName = uniquePackageName("rollback-owner");
+      observe("fixtures-pack-start");
       const versions = await packPlugins(rootDir, [
         { packageName, version: "1.0.0" },
         { packageName, version: "2.0.0" },
       ]);
+      observe("fixtures-pack-end");
       await useStaticRegistry([{ packageName, latest: "2.0.0", versions }]);
+      observe("registry-ready");
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(rootDir, "state") };
-      const install = (version: string, deferCommit = false, cancelBeforePublish = false) =>
-        withPluginLifecycleLease({ env }, async (lease) => {
+      const install = (version: string, deferCommit = false, cancelBeforePublish = false) => {
+        observe("lease-requested", { version });
+        return withPluginLifecycleLease({ env }, async (lease) => {
+          observe("lease-acquired", { version });
           let callerActive = true;
           const params = requestDeferredPluginInstall(
             {
@@ -115,11 +124,13 @@ describe("installPluginFromNpmSpec e2e", () => {
               mode: "update" as const,
               timeoutMs: 120_000,
               beforePersistentApply: () => {
+                observe("publish-fence", { version });
                 if (!callerActive) {
                   throw new Error("caller authority closed");
                 }
               },
               onBeforePluginArtifactCommit: async () => {
+                observe("artifact-fence", { version });
                 lease.assertOwned();
                 callerActive = !cancelBeforePublish;
               },
@@ -127,6 +138,7 @@ describe("installPluginFromNpmSpec e2e", () => {
             undefined,
             () => lease.assertOwned(),
           );
+          observe("install-start", { version });
           const result =
             source === "npm"
               ? await installPluginFromNpmSpec({ ...params, spec: `${packageName}@${version}` })
@@ -134,6 +146,7 @@ describe("installPluginFromNpmSpec e2e", () => {
                   ...params,
                   archivePath: path.join(rootDir, `${packageName}-${version}.tgz`),
                 });
+          observe("install-returned", { version });
           if (!result.ok) {
             throw new Error(result.error);
           }
@@ -142,10 +155,17 @@ describe("installPluginFromNpmSpec e2e", () => {
             throw new Error("expected deferred npm install");
           }
           if (!deferCommit) {
+            observe("transaction-commit-start", { version });
             await transaction.commit();
+            observe("transaction-commit-end", { version });
           }
+          observe("lease-callback-return", { version });
           return { result, transaction };
+        }).then((result) => {
+          observe("lease-released", { version });
+          return result;
         });
+      };
 
       await install("1.0.0");
       const older = await install("2.0.0", true);
@@ -168,16 +188,19 @@ describe("installPluginFromNpmSpec e2e", () => {
       }
       const before = await Promise.all(protectedFiles.map((file) => fs.readFile(file)));
 
+      observe("older-rollback-start");
       const rollbackError = await older.transaction.rollback().then(
         () => undefined,
         (error: unknown) => error,
       );
+      observe("older-rollback-end");
       expect.soft(rollbackError).toHaveProperty("code", "OPENCLAW_STATE_LEASE_LOST");
       const after = await Promise.all(protectedFiles.map((file) => fs.readFile(file)));
       expect(after).toEqual(before);
 
       await expect(install("2.0.0", false, true)).rejects.toThrow("caller authority closed");
       expect(await Promise.all(protectedFiles.map((file) => fs.readFile(file)))).toEqual(before);
+      observe("case-complete");
     },
   );
 

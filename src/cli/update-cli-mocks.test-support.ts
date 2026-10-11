@@ -14,6 +14,12 @@ import type { RetainUpdateRuntime } from "../infra/update-retained-runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
+// These scenarios model a stable driver, independent of the repository's release channel.
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.9",
+}));
+
 const commandTransport = vi.hoisted(() => ({
   run: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
   hostEnv: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },

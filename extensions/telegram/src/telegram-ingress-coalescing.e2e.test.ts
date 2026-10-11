@@ -359,9 +359,11 @@ describe("Telegram durable ingress coalescing", () => {
       const createGuard = messageDispatchDedupe.createTelegramMessageDispatchReplayGuard;
       const commitReplay = messageDispatchDedupe.commitTelegramMessageDispatchReplay;
       const settlements: Promise<void>[] = [];
+      const replayBatchSizes: number[] = [];
       const commitSpy = vi
         .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
         .mockImplementation((params) => {
+          replayBatchSizes.push(params.claims?.length ?? 0);
           const settlement = commitReplay(params);
           settlements.push(settlement);
           return settlement;
@@ -407,6 +409,9 @@ describe("Telegram durable ingress coalescing", () => {
             },
           };
         });
+      // Keep the forward max-wait clock fixed; worker and shutdown timers stay native.
+      vi.useFakeTimers({ toFake: ["performance"] });
+      const forwardTimers = holdTelegramMediaTimeouts(80);
       let stopping: Promise<void> | undefined;
       try {
         await writeTelegramSpooledUpdate({
@@ -419,6 +424,19 @@ describe("Telegram durable ingress coalescing", () => {
         });
         const { monitor } = await createMonitor({ onRuntimeError: vi.fn() });
         monitor.start();
+        // This adoption case needs one two-key batch, regardless of state-worker latency.
+        await monitor.waitForIdle();
+        const queue = openTelegramIngressQueue({ stateDir });
+        expect((await queue.listClaims()).map((claim) => claim.id).toSorted()).toEqual([
+          telegramQueueEventId(901),
+          telegramQueueEventId(902),
+        ]);
+        expect(commitSpy).not.toHaveBeenCalled();
+        const flush = resolveFlushTimerForDelay(forwardTimers, 80);
+        if (!flush) {
+          throw new Error("Expected the adoption batch's forward flush timer");
+        }
+        flush();
         await operationStarted.promise;
         let stopped = false;
         stopping = monitor.stop().then(() => {
@@ -430,12 +448,15 @@ describe("Telegram durable ingress coalescing", () => {
         expect(stopped).toBe(false);
       } finally {
         releaseOperation.resolve();
+        forwardTimers.mockRestore();
         await Promise.allSettled(settlements);
         await stopping;
         commitSpy.mockRestore();
         guardSpy.mockRestore();
+        vi.useRealTimers();
       }
       const queue = openTelegramIngressQueue({ stateDir });
+      expect(replayBatchSizes).toEqual([2]);
       expect(await queue.listClaims()).toEqual([]);
       if (phase === "commit") {
         await assertSpoolTombstoned({ stateDir, updateIds: [901, 902] });

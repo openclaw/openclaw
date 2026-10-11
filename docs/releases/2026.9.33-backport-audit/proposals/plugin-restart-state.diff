@@ -1,0 +1,116 @@
+diff --git a/src/plugins/runtime.ts b/src/plugins/runtime.ts
+index 2e4e7f78efc3..f89a4742a80c 100644
+--- a/src/plugins/runtime.ts
++++ b/src/plugins/runtime.ts
+@@ -516,7 +516,11 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
+                 await clearActivePluginRegistry(previous);
+               } else {
+                 const retainedRegistry = survivor?.activeRegistry ?? null;
+-                retirePluginRegistryIfUnused(previous, () => retainedRegistry);
++                preparePluginRegistryRetirement(
++                  previous,
++                  () => retainedRegistry,
++                  false,
++                )?.retireIfUnused();
+               }
+               return await waitForPluginRegistryRetirement(previous);
+             }));
+@@ -659,11 +663,11 @@ export async function clearActivePluginRegistry(
+         if (previousRegistry) {
+           await waitForPluginCommandExecutions(previousRegistry);
+           if (registryHasPluginHostCleanupWork(previousRegistry)) {
++            // Gateway shutdown releases runtime resources; only disable/removal erases session state.
+             await cleanupWork.track(() =>
+               disposePluginRegistryInstances(previousRegistry, () => state.activeRegistry, {
+                 cfg,
+                 runContextCleanup,
+-                cleanupPersistentState: true,
+               }),
+             );
+           }
+diff --git a/src/plugins/host-hook-cleanup.retirement.test.ts b/src/plugins/host-hook-cleanup.retirement.test.ts
+index 01e4c054d98d..2be354bdc1fe 100644
+--- a/src/plugins/host-hook-cleanup.retirement.test.ts
++++ b/src/plugins/host-hook-cleanup.retirement.test.ts
+@@ -13,13 +13,22 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
+ import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
+ import {
+   clearActivePluginRegistry,
++  createPluginRegistryOwner,
+   disposePluginRegistryInstances,
+   setActivePluginRegistry,
+ } from "./runtime.js";
+ import { createPluginRecord } from "./status.test-helpers.js";
+
+ describe("plugin retirement session-store ownership", () => {
+-  it.each(["stable", "replace", "direct", "clear-command", "explicit"] as const)(
++  it.each([
++    "stable",
++    "replace",
++    "direct",
++    "clear-command",
++    "explicit",
++    "gateway-owner",
++    "gateway-survivor",
++  ] as const)(
+     "keeps the retiring configuration across admitted work (%s)",
+     async (mode) => {
+       await withOpenClawTestState({ label: "plugin-retirement-config" }, async (state) => {
+@@ -50,6 +59,11 @@ describe("plugin retirement session-store ownership", () => {
+         registry.plugins.push(record);
+         const instance = new PluginInstance(record.id, { record, registry });
+         setActivePluginRegistry(registry);
++        const registryOwner =
++          mode === "gateway-owner" || mode === "gateway-survivor"
++            ? createPluginRegistryOwner(registry)
++            : undefined;
++        let survivorOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
+         const release = createDeferredCore();
+         const call =
+           mode === "clear-command"
+@@ -57,7 +71,14 @@ describe("plugin retirement session-store ownership", () => {
+             : instance.run(() => release.promise);
+         let retirement: Promise<unknown> | undefined;
+         try {
+-          if (mode === "explicit" || mode === "direct") {
++          if (registryOwner) {
++            if (mode === "gateway-survivor") {
++              const successor = createEmptyPluginRegistry();
++              setActivePluginRegistry(successor);
++              survivorOwner = createPluginRegistryOwner(successor);
++            }
++            retirement = registryOwner.close();
++          } else if (mode === "explicit" || mode === "direct") {
+             retirement = createPluginHostRegistryRetirement({
+               ...(mode === "explicit" ? { cfg } : {}),
+               previousRegistry: registry,
+@@ -77,13 +98,14 @@ describe("plugin retirement session-store ownership", () => {
+           });
+           await Promise.resolve();
+           expect(finished).toBe(false);
+-          if (mode !== "stable") {
++          if (mode !== "stable" && !registryOwner) {
+             const next = { ...cfg, session: { store: newPath } };
+             setRuntimeConfigSnapshot(next, next);
+           }
+           release.resolve();
+           await Promise.all([call, retirement]);
+           expect(loadSessionEntry(scope(oldPath))?.pluginExtensions).toEqual({
++            ...(mode === "clear-command" || registryOwner ? { fixture: { value: "old" } } : {}),
+             other: { value: "preserve" },
+           });
+           expect(loadSessionEntry(scope(newPath))?.pluginExtensions).toEqual({
+@@ -92,7 +114,12 @@ describe("plugin retirement session-store ownership", () => {
+           });
+         } finally {
+           release.resolve();
+-          await Promise.allSettled([call, retirement]);
++          await Promise.allSettled([
++            call,
++            retirement,
++            registryOwner?.close(),
++            survivorOwner?.close(),
++          ]);
+           await clearActivePluginRegistry();
+         }
+       });

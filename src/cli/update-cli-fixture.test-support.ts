@@ -270,9 +270,9 @@ export function createUpdateCliFixture() {
   };
 
   const setupNonInteractiveDowngrade = async () => {
-    const tempDir = await mockPackageInstallAtCaseDir();
+    const tempDir = await mockPackageInstallAtCaseDir("openclaw-update", VERSION);
     setTty(false);
-    readPackageVersion.mockResolvedValue("2.0.0");
+    readPackageVersion.mockResolvedValue(VERSION);
     primeNpmChannelTag(isBetaTag(VERSION) ? "beta" : "latest", "0.0.1");
     vi.mocked(updateGitCheckout).mockResolvedValue(makeOkUpdateResult({ mode: "npm" }));
     vi.mocked(defaultRuntime.error).mockClear();

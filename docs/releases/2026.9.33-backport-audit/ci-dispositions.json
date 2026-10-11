@@ -1,0 +1,174 @@
+{
+  "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca",
+  "tooling": "6d3f75a1baa71ea5f51db7150ba1eb2d6f067be1",
+  "qualificationRun": false,
+  "groups": [
+    {
+      "id": "docker-promotion-policy",
+      "decision": "already-covered",
+      "sourceBound": "6d3f75a1baa71ea5f51db7150ba1eb2d6f067be1",
+      "ownerPaths": [
+        "scripts/docker-channel-promote.mjs",
+        "scripts/check-workflows.mts"
+      ],
+      "companionPaths": [
+        "test/scripts/docker-channel-promote.test.ts",
+        "test/scripts/docker-release-policy.test.ts"
+      ],
+      "coverage": "Full baseline-to-pinned-main unit diff reviewed. Production delta is comments/control-flow cleanup; main removes retained baseline authority/alias/suffix/platform/policy test cases. Existing two-suite baseline proof: 50/50 pass. No production/workflow backport selected and no Docker write performed.",
+      "remainingGates": [
+        "Exact prepared artifact Docker build/readback and alias publication remain unrun and unauthorized."
+      ]
+    },
+    {
+      "id": "self-upgrade-aggregate-deduplication",
+      "decision": "already-covered",
+      "orderedSourceSHAs": [
+        "aa6008ad198ef99c43f9d89dbd01694708712974"
+      ],
+      "ownerPaths": [
+        "scripts/plan-release-workflow-matrix.mjs"
+      ],
+      "companionPaths": [
+        "scripts/lib/docker-e2e-scenarios.mts",
+        ".github/workflows/package-acceptance.yml"
+      ],
+      "coverage": "Baseline planner already omits duplicate package-update-self-upgrade aggregate. Actual package-acceptance selectors retain upgrade survivor, first-hop compatibility, published survivor, root-managed VPS and restart-auth. Scenario inventories and workflow consumption inspected; no fewer-job-name inference.",
+      "remainingGates": [
+        "Exact-candidate package/product scenario executions are unrun; retained admission and warning/fallback gates are not waived."
+      ]
+    },
+    {
+      "id": "docker-survivor-auto-auth-budget",
+      "decision": "already-covered",
+      "orderedSourceSHAs": [
+        "4d8c9bddda7f992e293005b78f6bc1f8adea81ed"
+      ],
+      "ownerPaths": [
+        "scripts/lib/docker-e2e-scenarios.mts"
+      ],
+      "coverage": "Shipped baseline already has measured 1500s inner command, 2280s Docker run timeout and 2580s lane budget. Source owner diff and baseline body reviewed. Raw workflow/test cherry-pick conflict does not remove baseline production equivalence.",
+      "remainingGates": [
+        "Hosted artifact-only survivor execution is unrun; no deadline or coverage reduction is selected."
+      ]
+    },
+    {
+      "id": "source-independent-admission-doctor-startup",
+      "decision": "present-equivalent",
+      "ownerPaths": [
+        "scripts/e2e/lib/upgrade-survivor/project-worktree-startup.mjs",
+        ".github/workflows/package-acceptance.yml"
+      ],
+      "coverage": "Worktree startup owner is byte-identical baseline-to-pinned-main. Existing maintenance-lock/migrate/drain/close producer and explicit schema/warning checks inspected; close/drain errors remain surfaced. Frozen admission tooling identity checks remain in package acceptance.",
+      "remainingGates": [
+        "Published-driver × exact-candidate stateful upgrade matrix is not rerun by preparation."
+      ]
+    },
+    {
+      "id": "installed-package-tree-budget",
+      "decision": "current-tooling-only",
+      "orderedSourceSHAs": [
+        "8f98c12c581fa16e8c2af1ff5fbe92e1af350878"
+      ],
+      "ownerPaths": [
+        "scripts/check-openclaw-installed-package-budget.mts",
+        ".github/workflows/package-acceptance.yml",
+        "scripts/lib/ci-proof-test-inventory.mts"
+      ],
+      "coverage": "Full 158-line producer, six-line workflow consumer and protected-test inventory companion reviewed. Trusted pinned-main tooling owns the gate; no candidate product change selected. Installed-tree admission budgets remain 47,500 entries / 900 MiB against unpatchable shipped-driver caps 50,000 / 1 GiB.",
+      "remainingGates": [
+        "Measure the exact installed prepared package under trusted package acceptance before candidate freeze."
+      ]
+    },
+    {
+      "id": "other-mainline-ci-optimizations",
+      "decision": "blocked-carry-forward",
+      "orderedSourceSHAs": [
+        "aa4bbb40d504e0dfeed2a82962010e67288518ea",
+        "0c8e56cf9859f1be33edacf199f353d4db417b5b",
+        "fd357f48322259ec40131f8bdb48652d58b6ff62",
+        "2d991c67599c2adc4dc5deaee940d27e3c15cf07"
+      ],
+      "coverage": "Not imported into this preparation-only product branch. Full producer/consumer selection and retained qualification child coverage are not all proven for September. Each exact inventory row keeps its review/probe/closure gap; no publication blocker is hidden by optimization selection.",
+      "remainingGates": [
+        "Resolve relevant current-tooling optimizer closure and retained scenario inventory before freezing an exact release candidate."
+      ]
+    },
+    {
+      "id": "subagent-browser-cleanup-follow-up",
+      "decision": "applied-ci-repair",
+      "orderedSourceSHAs": [
+        "b725cc7b27f64ae1b1cf72eccc0bd5959d982839"
+      ],
+      "ownerPaths": [
+        "src/agents/subagents/registry/subagent-registry-terminal-effects.ts",
+        "src/gateway/session-subagent-reactivation.ts"
+      ],
+      "companionPaths": [
+        "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts",
+        "src/gateway/server.heartbeat-store-lifecycle.product-proof.test.ts"
+      ],
+      "originalInventoryDisposition": "Blocked conflicted/unreviewed row in the frozen initial audit; this later disposition supersedes that status for the adapted cleanup-claim/follow-up contract only. The original inventory counts and accepted cursor are not advanced.",
+      "coverage": "Persist the browser-cleanup claim through the existing native worker before browser dispatch; drain actual newly admitted predecessor writes before replacement. Preserve exact durable-source comparison, duplicate browser exclusion, rollback on known non-commit, and original source/caller guards. Adapt only to the shipped synchronous session-effect contract; no mainline session-effect or registry refactor.",
+      "baseline": {
+        "head": "7606c0406765877713b2cf85e50bc59e115d52be",
+        "failed": 4,
+        "passed": 8,
+        "total": 12,
+        "commandWallSeconds": 30.648,
+        "entryPoint": "pnpm test src/agents/subagents/registry/subagent-registry-task-replacement.test.ts --maxWorkers=1",
+        "symptom": "Held browser cleanup and native cleanup acknowledgement-before-publication expose the exact replacement error and preserve source/caller retirement negative controls."
+      },
+      "localProof": {
+        "entryPoint": "pnpm test <focusedTargets> --maxWorkers=1",
+        "focusedTargets": [
+          "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts",
+          "src/agents/subagents/registry/subagent-registry-lifecycle.test.ts",
+          "src/agents/subagents/registry/subagent-registry-context-cleanup.test.ts",
+          "src/gateway/session-subagent-reactivation.test.ts",
+          "src/gateway/server.portals.session.test.ts",
+          "src/gateway/server.request-lifetime.test.ts",
+          "src/gateway/server.startup-recovery-webchat.test.ts",
+          "src/gateway/server.operator-observer-lifetime.test.ts",
+          "src/gateway/server.heartbeat-store-lifecycle.product-proof.test.ts",
+          "src/gateway/server.spawn-broker.test.ts",
+          "src/gateway/server.users-preferences.test.ts",
+          "src/gateway/server.worker-placement-startup-context.test.ts"
+        ],
+        "macOS": {
+          "node": "24.16.0",
+          "passed": 253,
+          "total": 253,
+          "files": 12,
+          "commandWallSeconds": 236.209,
+          "sourcesUnchanged": true
+        },
+        "linuxArm64": {
+          "node": "24.19.0",
+          "passed": 253,
+          "total": 253,
+          "files": 12,
+          "commandWallSeconds": 256.643,
+          "sourcesUnchanged": true,
+          "sourceBase": "9c04627f49d1471eaf5e0af04118a2bd809b8c28",
+          "committedCorrections": [
+            "95541748739ac72c8bce1e3ba1f40a798f0a55d0",
+            "7606c0406765877713b2cf85e50bc59e115d52be"
+          ],
+          "scope": "Disposable source probe with matching hashes for all twelve test inputs and the two runtime owners; not a full prepared-package qualification."
+        },
+        "sourceSha256": {
+          "src/gateway/session-subagent-reactivation.ts": "f6073340f0d64bbb1220b75eaec03aaff11f80fcc7bed340393e0d9a8bf0b16f",
+          "src/agents/subagents/registry/subagent-registry-terminal-effects.ts": "ef94dac8302ed636f480a8233e0cb30c5c9104ed98140cf8797ce6e6134dbac6",
+          "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts": "2a2ada542dee35458bfb91eb424e9c3e744abfd1a80356066f919eaa4ef3d726"
+        }
+      },
+      "validationStatus": "Local focused proof passed on both platforms. Required pre-push static/review results and terminal hosted exact-head CI are tracked on the preparation PR; local passes do not imply hosted CI or full release qualification.",
+      "updateBehavior": "Uses existing 9.9 registry payload fields, schema, worker mutation owner and APIs; no migration or update-driver change. Published-driver x exact-candidate release qualification remains unrun.",
+      "remainingGates": [
+        "Required static/review results and terminal exact-head PR CI are owned by the preparation PR.",
+        "Exact-candidate full-release/package/Docker/published-driver qualification before candidate freeze."
+      ]
+    }
+  ]
+}

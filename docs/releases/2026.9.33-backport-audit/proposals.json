@@ -1,0 +1,1760 @@
+{
+  "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca",
+  "status": "proposal-only",
+  "approved": false,
+  "productBackportsApplied": 0,
+  "groups": [
+    {
+      "id": "canonical-service-home",
+      "category": "material-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "68834d21c435361630421e0cc24207df5d62719b"
+      ],
+      "productionPaths": [
+        "src/config/paths.ts",
+        "src/infra/gateway-supervision.ts"
+      ],
+      "symbols": [
+        "isDefaultInstallIdentity",
+        "resolveRequiredOsHomeDir",
+        "assertGatewayServiceMutationAllowed"
+      ],
+      "application": {
+        "orderedCombinedSourceShas": [
+          "68834d21c435361630421e0cc24207df5d62719b",
+          "6922a50b287ad76557b085eb78125fc9a250a2dd",
+          "b578706c394ebf6b486ce54a2817356b0bac77d8",
+          "8a04eb61ae46ee8e1728110e64573871efb6ab46"
+        ],
+        "results": [
+          "clean",
+          "clean",
+          "clean",
+          "clean"
+        ],
+        "workingAndCachedDiffChecks": [
+          {
+            "sha": "68834d21c435361630421e0cc24207df5d62719b",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "6922a50b287ad76557b085eb78125fc9a250a2dd",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "b578706c394ebf6b486ce54a2817356b0bac77d8",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "8a04eb61ae46ee8e1728110e64573871efb6ab46",
+            "workingExit": 0,
+            "cachedExit": 0
+          }
+        ],
+        "productionPatchSha256": "5d7dcc1ca184d608c2edd5360cbf42598d02dddf9f8290562c904a48c47df91e",
+        "cleanApplicationIsNotSafetyProof": true
+      },
+      "prerequisites": [
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "src/infra/home-dir.ts",
+            "packages/normalization-core/src/home-dir.ts"
+          ],
+          "symbols": [
+            "resolveRequiredOsHomeDir",
+            "resolveOsHomeDir",
+            "normalizeHomeDirValue"
+          ],
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "src/daemon/paths.ts",
+            "src/commands/doctor-maintenance.ts",
+            "src/infra/gateway-supervision.ts"
+          ],
+          "symbols": [
+            "resolveDaemonHomeDir",
+            "resolveGatewayStateDir",
+            "beginDoctorMaintenance",
+            "assertGatewayServiceMutationAllowed"
+          ],
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "selected",
+          "sourceShas": [
+            "68834d21c435361630421e0cc24207df5d62719b"
+          ],
+          "paths": [
+            "src/config/paths.ts",
+            "src/config/paths.test.ts",
+            "src/commands/doctor-maintenance.service-identity.test.ts",
+            "src/infra/gateway-supervision.test.ts"
+          ]
+        },
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "src/daemon/service.test-helpers.ts",
+            "src/commands/doctor-maintenance.test-support.ts",
+            "test/helpers/temp-dir.ts"
+          ],
+          "symbols": [
+            "mockSystemAccountHome",
+            "createMockGatewayService",
+            "useDoctorMaintenanceRuntimeDirectory",
+            "useAutoCleanupTempDirTracker"
+          ],
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "package/dist/paths-CtO6iw0c.mjs"
+          ],
+          "symbols": [
+            "isDefaultInstallIdentity"
+          ],
+          "sourceShas": [
+            "bcfc88812a35243893585dbeca87ca41b48272ca"
+          ]
+        }
+      ],
+      "sourceClosure": {
+        "status": "closed for inspected selected contract",
+        "meaning": "Baseline owners, helpers, regression producers, retained lifecycle/visibility guards and shipped npm owner inspected; not blanket mainline semantic closure.",
+        "retainedCallerClosure": {
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca",
+          "reviewedBoundaryPaths": [
+            "src/cli/daemon-cli/status.gather.ts",
+            "src/cli/update-cli/status.ts",
+            "src/commands/doctor-foreign-launchd-jobs.ts",
+            "src/commands/doctor-gateway-daemon-flow.ts",
+            "src/commands/doctor-gateway-services.ts",
+            "src/commands/node-runtime-diagnostics.ts",
+            "src/daemon/systemd-scope.ts",
+            "src/flows/doctor-core-checks.ts",
+            "src/flows/doctor-health-contribution-runners.gateway.ts",
+            "src/gateway/server-methods/session-catalog-provider-access.ts",
+            "src/gateway/server-methods/session-catalog-terminal-start.ts",
+            "src/gateway/server-methods/terminal.ts",
+            "src/gateway/server-plugins.ts",
+            "src/plugins/session-catalog-active.ts",
+            "src/sessions/session-upstream-monitor.ts"
+          ],
+          "symbols": [
+            "isDefaultInstallIdentity",
+            "allowsProcessHomeSessionScan",
+            "allowProcessHomeFallback",
+            "runGatewayServicesHealth",
+            "runGatewayDaemonHealth"
+          ],
+          "behavior": "Manually inspected retained service/diagnostic/catalog caller gate bodies. Canonical home resumes existing default-install behavior; profile/state/config/native-service identity gates remain, named profiles still deny process-HOME catalog fallback, and catalog terminal plans retain explicit cwd/host checks.",
+          "reviewScope": "Owner gate/consumer boundary snippets, not full-file audit claims."
+        }
+      },
+      "publication": {
+        "dependencyGroup": "canonical-service-home",
+        "package": "openclaw",
+        "version": "2026.9.9",
+        "publishedOwnerPath": "package/dist/paths-CtO6iw0c.mjs",
+        "sha256": "0fcef768ea381d210de1044327b4afb4602c76d1167a6f7147c729e7fd579b70",
+        "symbols": [
+          "isDefaultInstallIdentity"
+        ],
+        "manuallyInspectedShippedBehavior": "Published code rejects any nonblank OPENCLAW_HOME at line 66 before canonical-home comparisons.",
+        "scope": "Root npm tarball; Docker inherits root runtime owners. No plugin package separately needed."
+      },
+      "baseline": {
+        "failed": 2,
+        "passed": 0,
+        "owner": "beginDoctorMaintenance -> isDefaultInstallIdentity",
+        "symptom": "canonical service OPENCLAW_HOME refused before the state-offline fence"
+      },
+      "positive": {
+        "requestedFiles": [
+          "src/config/paths.test.ts",
+          "src/infra/gateway-supervision.test.ts",
+          "src/commands/doctor-maintenance.service-identity.test.ts"
+        ],
+        "observedFiles": {
+          "src/config/paths.test.ts": {
+            "passed": 51,
+            "failed": 0,
+            "project": "runtime-config"
+          },
+          "src/infra/gateway-supervision.test.ts": {
+            "passed": 14,
+            "failed": 0,
+            "project": "infra"
+          },
+          "src/commands/doctor-maintenance.service-identity.test.ts": {
+            "passed": 2,
+            "failed": 0,
+            "project": "commands"
+          }
+        },
+        "passed": 67,
+        "failed": 0,
+        "allRequestedExecuted": true,
+        "allObservedPassed": true,
+        "status": "passed-focused-source-behavior"
+      },
+      "sdkConfigWarning": "Existing environment compatibility behavior changes in src/config/paths.ts, but no key/schema/default/SDK declaration changes. No-surface-change alternative is this existing helper-based runtime gate repair; readable SDK diff/config manifest comparison still required before staged qualification.",
+      "branchLocalAlternative": "Use only this inspected existing private runtime-owner fix and its regression tests; do not import mainline SDK/config/dependency/CI refactors.",
+      "remainingGates": [
+        "Retained archive-byte-budget sibling timeout disposition; unchanged 120 s deadline, no coverage deletion.",
+        "Generated readable SDK/config/plugin-publication manifest comparison on an approved staged candidate.",
+        "Published-driver x approved candidate update cell and packaged npm/Docker survivor/acceptance gates.",
+        "Closest unrun owning RPC/store/Doctor selector siblings and required changed checks after approved application."
+      ],
+      "releaseQualified": false
+    },
+    {
+      "id": "approval-source-config-fence",
+      "category": "material-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "6922a50b287ad76557b085eb78125fc9a250a2dd"
+      ],
+      "productionPaths": [
+        "src/gateway/server-methods/approval-record-lookup.ts",
+        "src/gateway/server-methods/approval-request-authority.ts",
+        "src/gateway/server-methods/approval-shared.ts",
+        "src/gateway/server-methods/approval-visible-record.ts"
+      ],
+      "symbols": [
+        "createApprovalRequestAuthority",
+        "captureApprovalSourcePolicy",
+        "readApprovalRequestSource",
+        "loadVisibleApproval",
+        "handleApprovalWaitDecision"
+      ],
+      "application": {
+        "orderedCombinedSourceShas": [
+          "68834d21c435361630421e0cc24207df5d62719b",
+          "6922a50b287ad76557b085eb78125fc9a250a2dd",
+          "b578706c394ebf6b486ce54a2817356b0bac77d8",
+          "8a04eb61ae46ee8e1728110e64573871efb6ab46"
+        ],
+        "results": [
+          "clean",
+          "clean",
+          "clean",
+          "clean"
+        ],
+        "workingAndCachedDiffChecks": [
+          {
+            "sha": "68834d21c435361630421e0cc24207df5d62719b",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "6922a50b287ad76557b085eb78125fc9a250a2dd",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "b578706c394ebf6b486ce54a2817356b0bac77d8",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "8a04eb61ae46ee8e1728110e64573871efb6ab46",
+            "workingExit": 0,
+            "cachedExit": 0
+          }
+        ],
+        "productionPatchSha256": "5d7dcc1ca184d608c2edd5360cbf42598d02dddf9f8290562c904a48c47df91e",
+        "cleanApplicationIsNotSafetyProof": true
+      },
+      "prerequisites": [
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "src/gateway/server-methods/approval-request-authority.ts",
+            "src/gateway/server-methods/approval-record-lookup.ts",
+            "src/gateway/server-methods/approval-visible-record.ts",
+            "src/gateway/server-methods/approval-shared.ts"
+          ],
+          "symbols": [
+            "createApprovalRequestAuthority",
+            "resolveApprovalRecordForState",
+            "loadVisibleApproval",
+            "handleApprovalWaitDecision"
+          ],
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "src/gateway/session-store-key.ts",
+            "src/gateway/operator-role-policy.ts",
+            "src/gateway/auth-policy.ts",
+            "src/gateway/gateway-access-revision.ts"
+          ],
+          "symbols": [
+            "resolveSessionStoreIdentity",
+            "onOperatorRolePolicyChanged",
+            "captureGatewayAuthPolicy",
+            "readGatewayAccessRevision"
+          ],
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "selected",
+          "sourceShas": [
+            "6922a50b287ad76557b085eb78125fc9a250a2dd"
+          ],
+          "paths": [
+            "src/gateway/server-methods/approval-request-authority.ts",
+            "src/gateway/server-methods/approval-record-lookup.ts",
+            "src/gateway/server-methods/approval-shared.ts",
+            "src/gateway/server-methods/approval-visible-record.ts",
+            "src/gateway/server-methods/approval.request-authority.test.ts",
+            "src/gateway/server-methods/approval.test-support.ts"
+          ]
+        },
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "package/dist/approval-request-authority-CmGRKbRo.mjs"
+          ],
+          "symbols": [
+            "captureApprovalConfigPolicy",
+            "createApprovalRequestAuthority"
+          ],
+          "sourceShas": [
+            "bcfc88812a35243893585dbeca87ca41b48272ca"
+          ]
+        }
+      ],
+      "sourceClosure": {
+        "status": "closed for inspected selected contract",
+        "meaning": "Baseline owners, helpers, regression producers, retained lifecycle/visibility guards and shipped npm owner inspected; not blanket mainline semantic closure."
+      },
+      "publication": {
+        "dependencyGroup": "approval-source-config-fence",
+        "package": "openclaw",
+        "version": "2026.9.9",
+        "publishedOwnerPath": "package/dist/approval-request-authority-CmGRKbRo.mjs",
+        "sha256": "c4cf865c42f1c2b3b84c60f788ebc92b6404add2ffe123673a3fdc0fed94c021",
+        "symbols": [
+          "captureApprovalConfigPolicy",
+          "createApprovalRequestAuthority"
+        ],
+        "manuallyInspectedShippedBehavior": "Published code captures all configured agents/stores and revokes authority when unrelated inventories change.",
+        "scope": "Root npm tarball; Docker inherits root runtime owners. No plugin package separately needed."
+      },
+      "baseline": {
+        "failed": 3,
+        "passed": 46,
+        "owner": "approval request/wait authority",
+        "symptom": "unrelated agent edits reject native/regular approval and legacy waitDecision; retained target routing/store/role/profile revocations pass"
+      },
+      "positive": {
+        "requestedFiles": [
+          "src/gateway/server-methods/approval.request-authority.test.ts"
+        ],
+        "observedFiles": {
+          "src/gateway/server-methods/approval.request-authority.test.ts": {
+            "passed": 49,
+            "failed": 0,
+            "project": "gateway-database-workers"
+          }
+        },
+        "passed": 49,
+        "failed": 0,
+        "allRequestedExecuted": true,
+        "allObservedPassed": true,
+        "status": "passed-focused-source-behavior"
+      },
+      "sdkConfigWarning": "No new public SDK export/signature, configuration key/schema/default, dependency, migration or operator action is selected. Internal owner-only source patch; generated readable SDK/config manifest comparison remains an unrun release gate.",
+      "branchLocalAlternative": "Use only this inspected existing private runtime-owner fix and its regression tests; do not import mainline SDK/config/dependency/CI refactors.",
+      "remainingGates": [
+        "Retained archive-byte-budget sibling timeout disposition; unchanged 120 s deadline, no coverage deletion.",
+        "Generated readable SDK/config/plugin-publication manifest comparison on an approved staged candidate.",
+        "Published-driver x approved candidate update cell and packaged npm/Docker survivor/acceptance gates.",
+        "Closest unrun owning RPC/store/Doctor selector siblings and required changed checks after approved application."
+      ],
+      "releaseQualified": false
+    },
+    {
+      "id": "cold-storage-self-reference",
+      "category": "material-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "b578706c394ebf6b486ce54a2817356b0bac77d8"
+      ],
+      "productionPaths": [
+        "src/config/sessions/session-cold-storage-eligibility.ts"
+      ],
+      "symbols": [
+        "readSessionColdStorageProtection",
+        "readLegacyCompactionHistory",
+        "row.current_session_id"
+      ],
+      "application": {
+        "orderedCombinedSourceShas": [
+          "68834d21c435361630421e0cc24207df5d62719b",
+          "6922a50b287ad76557b085eb78125fc9a250a2dd",
+          "b578706c394ebf6b486ce54a2817356b0bac77d8",
+          "8a04eb61ae46ee8e1728110e64573871efb6ab46"
+        ],
+        "results": [
+          "clean",
+          "clean",
+          "clean",
+          "clean"
+        ],
+        "workingAndCachedDiffChecks": [
+          {
+            "sha": "68834d21c435361630421e0cc24207df5d62719b",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "6922a50b287ad76557b085eb78125fc9a250a2dd",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "b578706c394ebf6b486ce54a2817356b0bac77d8",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "8a04eb61ae46ee8e1728110e64573871efb6ab46",
+            "workingExit": 0,
+            "cachedExit": 0
+          }
+        ],
+        "productionPatchSha256": "5d7dcc1ca184d608c2edd5360cbf42598d02dddf9f8290562c904a48c47df91e",
+        "cleanApplicationIsNotSafetyProof": true
+      },
+      "prerequisites": [
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "src/config/sessions/legacy-compaction-history.ts",
+            "src/config/sessions/session-cold-storage.ts",
+            "src/config/sessions/session-cold-storage-worker.ts"
+          ],
+          "symbols": [
+            "readLegacyCompactionHistory",
+            "archiveSessionColdBatch",
+            "mutateSessionColdTranscriptInWorker",
+            "verifyPublishedArchive"
+          ],
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "selected",
+          "sourceShas": [
+            "b578706c394ebf6b486ce54a2817356b0bac77d8"
+          ],
+          "paths": [
+            "src/config/sessions/session-cold-storage-eligibility.ts",
+            "src/config/sessions/session-cold-storage-eligibility.test.ts"
+          ]
+        },
+        {
+          "disposition": "not-applicable",
+          "paths": [
+            "src/state/openclaw-agent-db.generated.d.ts"
+          ],
+          "symbols": [
+            "schema migration"
+          ],
+          "reason": "Existing session_nodes/current_session_id and cold archives suffice; no schema/data migration is introduced."
+        },
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "package/dist/session-cold-storage-eligibility-CDJ9s_qj.mjs"
+          ],
+          "symbols": [
+            "readSessionColdStorageProtection"
+          ],
+          "sourceShas": [
+            "bcfc88812a35243893585dbeca87ca41b48272ca"
+          ]
+        }
+      ],
+      "sourceClosure": {
+        "status": "closed for inspected selected contract",
+        "meaning": "Baseline owners, helpers, regression producers, retained lifecycle/visibility guards and shipped npm owner inspected; not blanket mainline semantic closure."
+      },
+      "publication": {
+        "dependencyGroup": "cold-storage-self-reference",
+        "package": "openclaw",
+        "version": "2026.9.9",
+        "publishedOwnerPath": "package/dist/session-cold-storage-eligibility-CDJ9s_qj.mjs",
+        "sha256": "fcb887f83114ec04ab3240b0b020e9da28ebe04c39525202911c3df6122343bd",
+        "symbols": [
+          "readSessionColdStorageProtection"
+        ],
+        "manuallyInspectedShippedBehavior": "Published code unconditionally protects all legacy checkpoint IDs, including the current-session self-reference.",
+        "scope": "Root npm tarball; Docker inherits root runtime owners. No plugin package separately needed."
+      },
+      "baseline": {
+        "failed": 1,
+        "passed": 18,
+        "owner": "readSessionColdStorageProtection",
+        "symptom": "idle self-referenced current generation stays protected, while older-generation protection is retained"
+      },
+      "positive": {
+        "requestedFiles": [
+          "src/config/sessions/session-cold-storage-eligibility.test.ts"
+        ],
+        "observedFiles": {
+          "src/config/sessions/session-cold-storage-eligibility.test.ts": {
+            "passed": 19,
+            "failed": 0,
+            "project": "runtime-config"
+          }
+        },
+        "passed": 19,
+        "failed": 0,
+        "allRequestedExecuted": true,
+        "allObservedPassed": true,
+        "status": "passed-focused-source-behavior"
+      },
+      "sdkConfigWarning": "No new public SDK export/signature, configuration key/schema/default, dependency, migration or operator action is selected. Internal owner-only source patch; generated readable SDK/config manifest comparison remains an unrun release gate.",
+      "branchLocalAlternative": "Use only this inspected existing private runtime-owner fix and its regression tests; do not import mainline SDK/config/dependency/CI refactors.",
+      "remainingGates": [
+        "Retained archive-byte-budget sibling timeout disposition; unchanged 120 s deadline, no coverage deletion.",
+        "Generated readable SDK/config/plugin-publication manifest comparison on an approved staged candidate.",
+        "Published-driver x approved candidate update cell and packaged npm/Docker survivor/acceptance gates.",
+        "Closest unrun owning RPC/store/Doctor selector siblings and required changed checks after approved application."
+      ],
+      "releaseQualified": false
+    },
+    {
+      "id": "doctor-explicit-store-agent",
+      "category": "material-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "8a04eb61ae46ee8e1728110e64573871efb6ab46"
+      ],
+      "productionPaths": [
+        "src/commands/doctor-session-sqlite-targets.ts"
+      ],
+      "symbols": [
+        "resolveDoctorSessionSqliteTargets",
+        "resolveSessionStoreTargets"
+      ],
+      "application": {
+        "orderedCombinedSourceShas": [
+          "68834d21c435361630421e0cc24207df5d62719b",
+          "6922a50b287ad76557b085eb78125fc9a250a2dd",
+          "b578706c394ebf6b486ce54a2817356b0bac77d8",
+          "8a04eb61ae46ee8e1728110e64573871efb6ab46"
+        ],
+        "results": [
+          "clean",
+          "clean",
+          "clean",
+          "clean"
+        ],
+        "workingAndCachedDiffChecks": [
+          {
+            "sha": "68834d21c435361630421e0cc24207df5d62719b",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "6922a50b287ad76557b085eb78125fc9a250a2dd",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "b578706c394ebf6b486ce54a2817356b0bac77d8",
+            "workingExit": 0,
+            "cachedExit": 0
+          },
+          {
+            "sha": "8a04eb61ae46ee8e1728110e64573871efb6ab46",
+            "workingExit": 0,
+            "cachedExit": 0
+          }
+        ],
+        "productionPatchSha256": "5d7dcc1ca184d608c2edd5360cbf42598d02dddf9f8290562c904a48c47df91e",
+        "cleanApplicationIsNotSafetyProof": true
+      },
+      "prerequisites": [
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "src/config/sessions/targets.ts",
+            "src/commands/doctor-session-sqlite-targets.ts",
+            "src/commands/doctor-session-sqlite-types.ts"
+          ],
+          "symbols": [
+            "resolveSessionStoreTargets",
+            "SessionStoreSelectionOptions",
+            "DoctorSessionSqliteOptions"
+          ],
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "selected",
+          "sourceShas": [
+            "8a04eb61ae46ee8e1728110e64573871efb6ab46"
+          ],
+          "paths": [
+            "src/commands/doctor-session-sqlite-targets.ts",
+            "src/commands/doctor-session-sqlite.explicit-agent.test.ts"
+          ]
+        },
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "test/helpers/temp-dir.ts"
+          ],
+          "symbols": [
+            "useAutoCleanupTempDirTracker"
+          ],
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "present-equivalent",
+          "paths": [
+            "package/dist/doctor-session-sqlite-5HMsD0nh.mjs"
+          ],
+          "symbols": [
+            "resolveDoctorSessionSqliteTargets"
+          ],
+          "sourceShas": [
+            "bcfc88812a35243893585dbeca87ca41b48272ca"
+          ]
+        }
+      ],
+      "sourceClosure": {
+        "status": "closed for inspected selected contract",
+        "meaning": "Baseline owners, helpers, regression producers, retained lifecycle/visibility guards and shipped npm owner inspected; not blanket mainline semantic closure."
+      },
+      "publication": {
+        "dependencyGroup": "doctor-explicit-store-agent",
+        "package": "openclaw",
+        "version": "2026.9.9",
+        "publishedOwnerPath": "package/dist/doctor-session-sqlite-5HMsD0nh.mjs",
+        "sha256": "8b9318a7a7bf7ddb87febc257abeffc6c7a766d2eb1ce0cf17a842a4d1411ef3",
+        "symbols": [
+          "resolveDoctorSessionSqliteTargets"
+        ],
+        "manuallyInspectedShippedBehavior": "Published explicit-store branch forwards only store, dropping existing agent/allAgents selectors.",
+        "scope": "Root npm tarball; Docker inherits root runtime owners. No plugin package separately needed."
+      },
+      "baseline": {
+        "failed": 1,
+        "passed": 0,
+        "owner": "resolveDoctorSessionSqliteTargets",
+        "symptom": "requested explicit agent other resolved to main"
+      },
+      "positive": {
+        "requestedFiles": [
+          "src/commands/doctor-session-sqlite.explicit-agent.test.ts"
+        ],
+        "observedFiles": {
+          "src/commands/doctor-session-sqlite.explicit-agent.test.ts": {
+            "passed": 1,
+            "failed": 0,
+            "project": "unit-fast"
+          }
+        },
+        "passed": 1,
+        "failed": 0,
+        "allRequestedExecuted": true,
+        "allObservedPassed": true,
+        "status": "passed-focused-source-behavior"
+      },
+      "sdkConfigWarning": "Restores existing CLI selector propagation only; no new flag, config key, migration or SDK. Doctor owner path is review context; compare readable SDK/config manifests before qualification.",
+      "branchLocalAlternative": "Use only this inspected existing private runtime-owner fix and its regression tests; do not import mainline SDK/config/dependency/CI refactors.",
+      "remainingGates": [
+        "Retained archive-byte-budget sibling timeout disposition; unchanged 120 s deadline, no coverage deletion.",
+        "Generated readable SDK/config/plugin-publication manifest comparison on an approved staged candidate.",
+        "Published-driver x approved candidate update cell and packaged npm/Docker survivor/acceptance gates.",
+        "Closest unrun owning RPC/store/Doctor selector siblings and required changed checks after approved application."
+      ],
+      "releaseQualified": false
+    },
+    {
+      "id": "sqlite-snapshot-birthtime-minimal",
+      "category": "material-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "d4ce3b2f33d41e8322a38c31430c9ce0e97a44c2"
+      ],
+      "productionPaths": [
+        "src/infra/sqlite-snapshot.ts"
+      ],
+      "adaptation": "Port only sameFileStatFingerprint repair to the unsplit 9.9 owner; add zero/ctime/corruption regression cases using its existing durability seam. Existing copy fallback/unknown identity/source independence coverage retained.",
+      "proposedPatch": "proposals/snapshot-birthtime.diff",
+      "patchSha256": "476ed95fb5e494f72bc32d3c58372faba4e506c6b0e7da259659ab3b0e8442f8",
+      "rawApplicability": {
+        "status": "conflicted",
+        "exitCode": 1,
+        "mergeMainline": null,
+        "conflicts": [
+          "src/infra/sqlite-snapshot-file.ts",
+          "src/infra/sqlite-snapshot.transfer.test.ts"
+        ]
+      },
+      "minimalApplication": {
+        "kind": "git apply --check then apply; exact two task-owned paths staged",
+        "status": "clean",
+        "paths": [
+          "src/infra/sqlite-snapshot.transfer.test.ts",
+          "src/infra/sqlite-snapshot.ts"
+        ],
+        "gitDiffCheck": {
+          "exitCode": 0
+        },
+        "gitDiffCachedCheck": {
+          "exitCode": 0
+        }
+      },
+      "prerequisites": [
+        {
+          "disposition": "selected",
+          "contract": "Timestamp-independent transfer fingerprint",
+          "paths": [
+            "src/infra/sqlite-snapshot.ts"
+          ],
+          "symbols": [
+            "sameFileStatFingerprint",
+            "publishSqliteFile"
+          ],
+          "evidenceSha": "d4ce3b2f33d41e8322a38c31430c9ce0e97a44c2"
+        },
+        {
+          "disposition": "present-equivalent",
+          "contract": "Pinned dev/inode and independent expected byte hash validation before staging, after transfer, and after final publication; strict replacement cleanup unchanged",
+          "paths": [
+            "src/infra/sqlite-snapshot.ts",
+            "src/infra/directory-durability.ts"
+          ],
+          "symbols": [
+            "sameFileIdentity",
+            "assertExpectedContent",
+            "hashOpenFile"
+          ],
+          "evidenceSha": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "present-equivalent",
+          "contract": "Existing fs-safe link-or-copy exclusive publication and Stats receipt",
+          "paths": [
+            "package.json",
+            "src/infra/directory-durability.ts"
+          ],
+          "symbols": [
+            "publishFileExclusive"
+          ],
+          "evidenceSha": "bcfc88812a35243893585dbeca87ca41b48272ca",
+          "version": "@openclaw/fs-safe 0.21.1 confirmed in test resolution"
+        },
+        {
+          "disposition": "present-equivalent",
+          "contract": "Doctor schema-maintenance backup owner consumes verified snapshot without new versions",
+          "paths": [
+            "src/commands/doctor-migration-backup.ts",
+            "src/commands/doctor-migration-backup.test.ts"
+          ],
+          "symbols": [
+            "backupDoctorMigrationDatabases"
+          ],
+          "evidenceSha": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "not-applicable",
+          "contract": "Main split sqlite-snapshot-file module and later state20/refactor/migration prerequisites",
+          "paths": [
+            "src/infra/sqlite-snapshot-file.ts"
+          ]
+        }
+      ],
+      "publication": {
+        "artifactCommit": "bcfc88812a35243893585dbeca87ca41b48272ca",
+        "artifactOwner": "package/dist/sqlite-snapshot-BIy-VUMb.mjs",
+        "artifactFaultLines": [
+          163,
+          164
+        ],
+        "rootFilesPositive": "dist/",
+        "excluded": false
+      },
+      "baseline": {
+        "exitCode": 1,
+        "testsPassed": 10,
+        "testsFailed": 1,
+        "failure": "ctime-derived birthtime changes after owned hard-link source retirement; sqlite-snapshot.ts:443 rejects unchanged bytes."
+      },
+      "positive": {
+        "exitCode": 0,
+        "testsPassed": 22,
+        "command": [
+          "node",
+          "--import",
+          "./scripts/tsx.mjs",
+          "scripts/test-projects.mts",
+          "src/infra/sqlite-snapshot.transfer.test.ts",
+          "src/commands/doctor-migration-backup.test.ts"
+        ],
+        "elapsedSeconds": 101.247,
+        "logSha256": "cde32820af3fa0af8820ae6893ee2d5a5cedd54c3a847eedbcae50de052aa9a1"
+      },
+      "sdkConfigWarning": "Existing private owner repair; no new public API/config/schema/dependency. Repeat the readable API/config comparison after approved application.",
+      "installedDriverLimit": "An already-loaded installed 9.9 Doctor/updater cannot be retroactively changed by candidate files. This repairs invocations using the candidate owner; driver × candidate packaging/upgrade proof remains a later release gate.",
+      "stableIssueMapping": {
+        "status": "proposed-backport-target-not-shipped-or-issue-closed",
+        "issue": 168138,
+        "url": "https://github.com/openclaw/openclaw/issues/168138",
+        "labels": [
+          "P0",
+          "maturity:stable"
+        ],
+        "mainRepair": "d4ce3b2f33d41e8322a38c31430c9ce0e97a44c2",
+        "mainPr": 164363
+      },
+      "remainingGates": [
+        "Approval and application of the categorized set.",
+        "Published-driver × exact-candidate stateful update and package/Docker qualification.",
+        "Actual approved staging SDK/config, focused tests/typecheck and combined release checks."
+      ],
+      "releaseQualified": false,
+      "patchFormatProof": {
+        "blankContextLinesWithoutPadding": true,
+        "defaultGitApplyCheckPassed": true,
+        "sameTreeAsTestedPatch": true,
+        "testedPatchSha256": "f39a21446aee68df78eeb6ea85b47cf2a8443934223e676cf522301f4b189523",
+        "exactStagedTree": "70de31d282d8bb7b84771a400cd05f0a76560c39"
+      }
+    },
+    {
+      "id": "plugin-restart-persistent-state",
+      "category": "material-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "6636dd6709bdbace1b6b72c3a86ff664bbdec244"
+      ],
+      "productionPaths": [
+        "src/plugins/runtime.ts"
+      ],
+      "adaptation": "Select only both runtime.ts shutdown hunks from the public main repair. Adapt baseline host retirement test to preserve shutdown state and add real last-owner/surviving-owner regressions. Explicit removal, scope capture, cleanup result and error-policy controls retained.",
+      "proposedPatch": "proposals/plugin-restart-state.diff",
+      "patchSha256": "af688b1b68c2b608ed18c4d33caf469e07014c91e090643e512a7be2360434a2",
+      "rawApplicability": {
+        "status": "conflicted",
+        "exitCode": 1,
+        "mergeMainline": null,
+        "conflicts": [
+          "docs/plugins/sdk-runtime.md",
+          "src/gateway/server-close.agent-databases.test.ts",
+          "src/gateway/server-close.plugin-failure.test.ts"
+        ]
+      },
+      "minimalApplication": {
+        "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca",
+        "status": "clean",
+        "steps": [
+          {
+            "exitCode": 0
+          },
+          {
+            "exitCode": 0
+          },
+          {
+            "command": [
+              "git",
+              "add",
+              "src/plugins/runtime.ts",
+              "src/plugins/host-hook-cleanup.retirement.test.ts"
+            ],
+            "exitCode": 0
+          },
+          {
+            "command": [
+              "git",
+              "diff",
+              "--check"
+            ],
+            "exitCode": 0
+          },
+          {
+            "command": [
+              "git",
+              "diff",
+              "--cached",
+              "--check"
+            ],
+            "exitCode": 0
+          }
+        ],
+        "stagedPaths": [
+          "src/plugins/host-hook-cleanup.retirement.test.ts",
+          "src/plugins/runtime.ts"
+        ],
+        "createdAt": "2026-10-10T07:19:57Z"
+      },
+      "prerequisites": [
+        {
+          "disposition": "selected",
+          "contract": "Gateway shutdown/restart retains persistent plugin session state in last-owner, command-drained, and surviving-owner paths",
+          "paths": [
+            "src/plugins/runtime.ts"
+          ],
+          "symbols": [
+            "createPluginRegistryOwner",
+            "clearActivePluginRegistry",
+            "preparePluginRegistryRetirement"
+          ],
+          "evidenceSha": "6636dd6709bdbace1b6b72c3a86ff664bbdec244"
+        },
+        {
+          "disposition": "present-equivalent",
+          "contract": "Existing retirement disposition defaults, owner liveness, quiescence, admitted command and instance drain, retained successor lookup and cleanup result collection",
+          "paths": [
+            "src/plugins/runtime.ts",
+            "src/plugins/plugin-instance.ts"
+          ],
+          "symbols": [
+            "disposePluginRegistryInstances",
+            "preparePluginRegistryRetirement",
+            "waitForPluginRegistryRetirement",
+            "isRegistryLive"
+          ],
+          "evidenceSha": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "present-equivalent",
+          "contract": "Existing skipPersistentSessionState selects restart hooks while releasing runtime/scheduler resources; explicit disable/removal still clears only owned persistent state and preserves locked harness/sibling entries",
+          "paths": [
+            "src/plugins/host-hook-cleanup.ts",
+            "src/config/sessions/session-accessor.lifecycle.ts"
+          ],
+          "symbols": [
+            "createPluginHostRegistryRetirement",
+            "runPluginHostCleanup",
+            "cleanupPluginHostSessionStore",
+            "collectSchedulerJobIds"
+          ],
+          "evidenceSha": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "present-equivalent",
+          "contract": "Real Gateway kernel creates the registry owner and server lifecycle routes closePluginRegistry to that owner; existing test facade already exports the owner helper",
+          "paths": [
+            "src/gateway/server-kernel.ts",
+            "src/gateway/server-lifecycle.ts",
+            "src/gateway/server-close.ts",
+            "src/plugin-sdk/plugin-test-runtime.ts"
+          ],
+          "symbols": [
+            "createPluginRegistryOwner",
+            "closePluginRegistry"
+          ],
+          "evidenceSha": "bcfc88812a35243893585dbeca87ca41b48272ca"
+        },
+        {
+          "disposition": "not-applicable",
+          "contract": "Main callback-warning/exit-status policy change and its server-close/docs test companions",
+          "paths": [
+            "src/gateway/server-close.ts",
+            "docs/plugins/sdk-runtime.md",
+            "src/gateway/server-close.agent-databases.test.ts",
+            "src/gateway/server-close.model-acquisition.test.ts",
+            "src/gateway/server-close.plugin-failure.test.ts"
+          ]
+        },
+        {
+          "disposition": "not-applicable",
+          "contract": "New SDK/config/dependency/runtime/schema or operator-action prerequisite",
+          "paths": [
+            "src/plugin-sdk/plugin-test-runtime.ts"
+          ]
+        }
+      ],
+      "publication": {
+        "artifactCommit": "bcfc88812a35243893585dbeca87ca41b48272ca",
+        "artifactOwner": "package/dist/runtime-9cxii0oQ.mjs",
+        "artifactFaultLines": [
+          909,
+          1018
+        ],
+        "rootFilesPositive": "dist/",
+        "excluded": false
+      },
+      "baseline": {
+        "name": "plugin-restart-before",
+        "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca",
+        "command": [
+          "node",
+          "--import",
+          "./scripts/tsx.mjs",
+          "scripts/test-projects.mts",
+          "src/plugins/host-hook-cleanup.retirement.test.ts"
+        ],
+        "logSha256": "1ce142712255895adc77f43ff64c7b5c95f6f061a700a21a524138642e2a8f6b",
+        "exitCode": 1,
+        "elapsedSeconds": 207.814,
+        "finishedAt": "2026-10-10T07:19:27Z",
+        "testsPassed": 10,
+        "testsFailed": 3,
+        "failureCases": [
+          "clear-command",
+          "gateway-owner",
+          "gateway-survivor"
+        ],
+        "failure": "Published owner erases fixture persistent pluginExtensions during ordinary retirement; unrelated plugin state remains. Existing explicit removal and cleanup failure controls pass."
+      },
+      "positive": {
+        "exitCode": 0,
+        "testsPassed": 29,
+        "command": [
+          "node",
+          "--import",
+          "./scripts/tsx.mjs",
+          "scripts/test-projects.mts",
+          "src/plugins/host-hook-cleanup.retirement.test.ts",
+          "src/plugins/host-hook-cleanup.session-store.test.ts"
+        ],
+        "elapsedSeconds": 179.235,
+        "logSha256": "2a70ad1a918cbaed3789fcb82923923eefb704e4bacd815474f5a025f2141770"
+      },
+      "sdkConfigWarning": [
+        "Existing plugin host cleanup reason on Gateway stop/restart is corrected from disable to restart; this repairs persistent-state ownership, without new exported signatures or config shapes. Main callback severity/exit policy is intentionally excluded."
+      ],
+      "installedDriverLimit": "Already-running 9.9 Gateway cleanup code cannot be retroactively repaired by candidate files. This repairs Gateway invocations using the candidate owner; no live Gateway was changed or restarted in this proof. Packaged service/upgrade qualification remains a later gate.",
+      "stableIssueMapping": {
+        "status": "source-audit-selected-no-exact-stable-issue-reference"
+      },
+      "remainingGates": [
+        "Approval and application of the categorized set.",
+        "Published-driver × exact-candidate stateful update and package/Docker qualification.",
+        "Actual approved staging SDK/config, focused tests/typecheck and combined release checks."
+      ],
+      "releaseQualified": false,
+      "patchFormatProof": {
+        "blankContextLinesWithoutPadding": true,
+        "defaultGitApplyCheckPassed": true,
+        "sameTreeAsTestedPatch": true,
+        "testedPatchSha256": "13d1338b3b6b0924e49430700343d77f283b856deb7f21c2dc8c812ef01a632b",
+        "exactStagedTree": "e1cfba0cb4f976b605e3ebe5707c20178bb48eb8"
+      }
+    },
+    {
+      "id": "memory-embedding-chinese-item-cap",
+      "category": "material-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "00c09b79fc0f440c390e67c5540d0099137fb0ba"
+      ],
+      "productionPaths": [
+        "extensions/memory-core/src/memory/manager-embedding-policy.ts"
+      ],
+      "reason": "Restore existing recursive split policy for an explicit Chinese provider batch-count rejection.",
+      "application": {
+        "type": "single-source-commit-group",
+        "actualCherryPickNoCommitProbe": {
+          "sha": "00c09b79fc0f440c390e67c5540d0099137fb0ba",
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca",
+          "command": [
+            "git",
+            "cherry-pick",
+            "--no-commit",
+            "00c09b79fc0f440c390e67c5540d0099137fb0ba"
+          ],
+          "status": "clean",
+          "exitCode": 0,
+          "conflicts": [],
+          "changedPaths": [
+            "extensions/memory-core/src/memory/manager-embedding-policy.test.ts",
+            "extensions/memory-core/src/memory/manager-embedding-policy.ts"
+          ],
+          "diffCheck": {
+            "exitCode": 0
+          },
+          "cachedDiffCheck": {
+            "exitCode": 0
+          },
+          "elapsedSeconds": 0.806
+        },
+        "note": "Complete ordered group has one source commit; actual probe includes all production/test changes. Both working-tree and cached diff checks pass."
+      },
+      "ownerBaselineEqualsSourceParent": true,
+      "ownerBaselineBlob": "a8bb91a6fdbacafb60286dc58cd28d665ef1325d",
+      "prerequisites": [
+        {
+          "symbols": [
+            "runMemoryEmbeddingBatchRetryWithSplit",
+            "isSplittableMemoryEmbeddingBatchError",
+            "runMemoryEmbeddingRetryLoop"
+          ],
+          "producer": "extensions/memory-core/src/memory/manager-embedding-policy.ts",
+          "exportOrCaller": "extensions/memory-core/src/memory/manager-embedding-ops.ts::embedBatchWithRetry",
+          "disposition": "present-equivalent",
+          "reason": "Shipped recursive splitter/retry budget/onSuccess cache path exists. Owner/caller reviewed; exact baseline bodies execute in bounded proof.",
+          "baselineBlob": "a8bb91a6fdbacafb60286dc58cd28d665ef1325d"
+        },
+        {
+          "symbols": [
+            "retryAsync"
+          ],
+          "producer": "src/infra/retry.ts",
+          "exportOrCaller": "src/plugin-sdk/retry-runtime.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing retry export chain; actual baseline helper executed, permanent HTTP400 control stays one attempt.",
+          "baselineBlob": "aeaaeb004750606d216270b1bcc5226e590b4400"
+        },
+        {
+          "symbols": [
+            "formatErrorMessage"
+          ],
+          "producer": "src/infra/errors.ts",
+          "exportOrCaller": "src/plugin-sdk/error-runtime.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing formatter body executes in exact baseline closure.",
+          "baselineBlob": "ab878e392d0c6640382c9404dc9c000bac8bccbf"
+        },
+        {
+          "symbols": [
+            "estimateStructuredEmbeddingInputBytes",
+            "estimateUtf8Bytes"
+          ],
+          "producer": "packages/memory-host-sdk/src/host/embedding-input-limits.ts",
+          "exportOrCaller": "src/plugin-sdk/memory-core-host-engine-embeddings.ts",
+          "disposition": "present-equivalent",
+          "reason": "Two unchanged SDK byte-estimate exports projected to their actual unchanged baseline body for proof bundling; no helper body is mocked.",
+          "baselineBlob": "933038d819d2501907b88dc45a18bdb0a48e25bf"
+        },
+        {
+          "symbols": [
+            "asOptionalRecord"
+          ],
+          "producer": "packages/normalization-core/src/record-coerce.ts",
+          "exportOrCaller": "src/plugin-sdk/string-coerce-runtime.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing coercion exporter.",
+          "baselineBlob": "0f803ddb4a99767b519b67ad3c3587131503882c"
+        },
+        {
+          "symbols": [
+            "normalizeOptionalString"
+          ],
+          "producer": "packages/normalization-core/src/string-coerce.ts",
+          "exportOrCaller": "src/plugin-sdk/string-coerce-runtime.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing string normalizer exporter.",
+          "baselineBlob": "e4b62ba10ed67bdf772801f9191bdb5dc050bda3"
+        },
+        {
+          "symbols": [
+            "sleepWithAbort"
+          ],
+          "producer": "src/infra/backoff.ts",
+          "exportOrCaller": "src/plugin-sdk/runtime-env.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing fixture import; no future test helper needed.",
+          "baselineBlob": "2bd23f00f81d93ae0385f9a07b42649d0a588a2d"
+        }
+      ],
+      "publication": {
+        "surface": "core npm / Gateway / Docker: bundled memory-core",
+        "publishedRootVersion": "2026.9.9",
+        "publishedOwner": ".artifacts/update-compat/2026.9.9/package/dist/extensions/memory-core/manager-runtime.js",
+        "externalPluginPackageRequired": false,
+        "publishedOwnerSha256": "6ae8f02e229a5422d88dde59a6c070cce03e1ac9ffe5fa87172db8512f0eea0e"
+      },
+      "proofKind": "Standalone bundled actual-baseline-owner boundary programs, not native Vitest or full CLI qualification. Baseline program asserts the reported failure; patched program asserts recovery and retained negative controls.",
+      "boundaryPrograms": [
+        {
+          "case": "embedding-chinese-item-cap",
+          "patched": false,
+          "exitCode": 0,
+          "loaderScope": "Only two actually-used embedding byte-estimate exports are projected from the unchanged baseline SDK barrel to their exact baseline implementation; no helper body is mocked. All other module bodies pinned to baseline.",
+          "stdoutSha256": "c88623e6090baa69c6020dc57ba331aedd14496b2b9c682a74062a652ce98e6e"
+        },
+        {
+          "case": "embedding-chinese-item-cap",
+          "patched": true,
+          "exitCode": 0,
+          "loaderScope": "Only two actually-used embedding byte-estimate exports are projected from the unchanged baseline SDK barrel to their exact baseline implementation; no helper body is mocked. All other module bodies pinned to baseline.",
+          "stdoutSha256": "2f7f5b4d4cbd11b9fa7d684ed8f073933c4b032669412f152984e8013b3aa8f5"
+        }
+      ],
+      "sdkConfigWarning": {
+        "warning": "No new public SDK export/signature, config/manifest field/default, protocol shape, dependency, runtime requirement, migration or operator action in the selected source delta. Parent final current-main API/config gate and native CI are not claimed passed by private owner probes.",
+        "branchLocalAlternative": "Selected source already repairs the shipped existing owner; do not add a public SDK/config seam."
+      },
+      "remainingGates": [
+        "Parent selected-branch focused native tests/typecheck and readable current-main API/config comparison.",
+        "Parent dependency/publication inventory and combined staging checks.",
+        "Full CLI memory-index integration not rerun by lane. Private proof executes actual existing recursive policy with exact reported HTTP400 response, ordered100 outputs and invalid-response negative controls."
+      ],
+      "releaseQualified": false
+    },
+    {
+      "id": "compaction-replay-suffix-rewrite",
+      "category": "material-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "7d8fe30ce9b68723ba18b9eccdc9fdc4b886e3eb"
+      ],
+      "productionPaths": [
+        "packages/ai/src/transports/provider-compaction-replay.ts"
+      ],
+      "reason": "Preserve the existing opaque compaction checkpoint across a same-position uncovered tool-call suffix rewrite.",
+      "application": {
+        "type": "single-source-commit-group",
+        "actualCherryPickNoCommitProbe": {
+          "sha": "7d8fe30ce9b68723ba18b9eccdc9fdc4b886e3eb",
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca",
+          "command": [
+            "git",
+            "cherry-pick",
+            "--no-commit",
+            "7d8fe30ce9b68723ba18b9eccdc9fdc4b886e3eb"
+          ],
+          "status": "clean",
+          "exitCode": 0,
+          "conflicts": [],
+          "changedPaths": [
+            "packages/ai/src/transports/provider-compaction-replay.test.ts",
+            "packages/ai/src/transports/provider-compaction-replay.ts",
+            "src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.compaction.test.ts"
+          ],
+          "diffCheck": {
+            "exitCode": 0
+          },
+          "cachedDiffCheck": {
+            "exitCode": 0
+          },
+          "elapsedSeconds": 0.579
+        },
+        "note": "Complete ordered group has one source commit; actual probe includes all production/test changes. Both working-tree and cached diff checks pass."
+      },
+      "ownerBaselineEqualsSourceParent": true,
+      "ownerBaselineBlob": "5aef96c390789731d6e2e1706f957beeb23c4ce2",
+      "prerequisites": [
+        {
+          "symbols": [
+            "captureOpenAIResponsesCompaction",
+            "buildOpenAIResponsesReasoningReplayMetadata",
+            "createCompactionTracker"
+          ],
+          "producer": "packages/ai/src/transports/openai-responses-compaction-replay.ts",
+          "exportOrCaller": "packages/ai/src/transports.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing checkpoint producer/state/model/session/auth identity contract; producer and metadata helper executed in proof. No new state or protocol.",
+          "baselineBlob": "7c610ef9b6df7c9ead3120c96657dd8d81060ac0"
+        },
+        {
+          "symbols": [
+            "replaceCompactionReplayOwnerContent"
+          ],
+          "producer": "packages/ai/src/transports/provider-compaction-replay.ts",
+          "exportOrCaller": "packages/ai/src/transports.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing exported helper/signature. Only same-length unchanged-covered-prefix early-return body selected.",
+          "baselineBlob": "5aef96c390789731d6e2e1706f957beeb23c4ce2"
+        },
+        {
+          "symbols": [
+            "sanitizeOpenAIResponsesReplayForStream"
+          ],
+          "producer": "src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts",
+          "exportOrCaller": "src/agents/embedded-agent-runner/run/attempt-stream.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing actual sanitizer/repair consumer executes in proof; stream caller invokes this same boundary.",
+          "baselineBlob": "35e71646db25117cf4e8a8b70f9df9d1af7cbcba"
+        },
+        {
+          "symbols": [
+            "convertResponsesMessages"
+          ],
+          "producer": "packages/ai/src/transports/openai-responses-replay-messages-internal.ts",
+          "exportOrCaller": "packages/ai/src/transports/openai-responses-replay-internal.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing Responses wire converter consumes captured identity/checkpoint; actual baseline body executed in5 cases.",
+          "baselineBlob": "14fb660a18cd68b8a0f9d35324e90f4b777b9c4d"
+        },
+        {
+          "symbols": [
+            "createZeroUsageFixture"
+          ],
+          "producer": "src/agents/test-helpers/usage-fixtures.ts",
+          "exportOrCaller": "source new sanitizer regression test",
+          "disposition": "present-equivalent",
+          "reason": "Existing baseline fixture export; no future helper imported.",
+          "baselineBlob": "7f8443f5ded56b004a64d4d968c4120730c7a8d1"
+        },
+        {
+          "symbols": [
+            "createZeroUsage"
+          ],
+          "producer": "packages/ai/src/usage.test-support.ts",
+          "exportOrCaller": "packages/ai/src/transports/provider-compaction-replay.test.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing baseline fixture export; no new fixture requirement.",
+          "baselineBlob": "813a864c1db42c56343a64e84a4b431b5d5e710c"
+        }
+      ],
+      "publication": {
+        "surface": "core dependency @openclaw/ai npm, NOT root-bundled transport implementation",
+        "publishedRootVersion": "2026.9.9",
+        "publishedRootDependency": "@openclaw/ai@2026.9.9",
+        "publishedImplementationPackage": "@openclaw/ai@2026.9.9",
+        "verifiedTarballIntegrity": "sha512-LDbeo2dLskAugSswqi+od+PZ+jy1jP3OP8NuOr+k5PdRF2DrD6aRAqGns923LT2rG5cXu2xU8OmSX9+983jH+w==",
+        "publishedOwner": "package/dist/transports.mjs",
+        "releaseRequirement": "Parent must build/include @openclaw/ai@2026.9.33 publication obligation alongside root exact dependency; parent already version-aligned package. No publication performed by lane.",
+        "publishedOwnerSha256": "8a369112d9ad39167e7ae098d77c8f9f4ef6c7801f93810462d24e764eccda42"
+      },
+      "proofKind": "Standalone bundled actual-baseline-owner boundary programs, not native Vitest or full CLI qualification. Baseline program asserts the reported failure; patched program asserts recovery and retained negative controls.",
+      "boundaryPrograms": [
+        {
+          "case": "compaction-replay-suffix-rewrite",
+          "patched": false,
+          "exitCode": 0,
+          "loaderScope": "All module bodies pinned to baseline; workspace dist export paths mapped to matching baseline src owner.",
+          "stdoutSha256": "ade55254ff9ba3a2dc6a4bf9e18a6235a80a968b822ae0ca1835789b44e4ee69"
+        },
+        {
+          "case": "compaction-replay-suffix-rewrite",
+          "patched": true,
+          "exitCode": 0,
+          "loaderScope": "All module bodies pinned to baseline; workspace dist export paths mapped to matching baseline src owner.",
+          "stdoutSha256": "2670a455dded59ae5e807dcf3b27e7b2caebac81adf68ab838a720ba48fabdbf"
+        }
+      ],
+      "sdkConfigWarning": {
+        "warning": "Existing public workspace helper @openclaw/ai/transports changes behavior, not exported name/parameter/return declaration. Selected source adds no SDK/config/default/protocol/dependency contract. Parent final readable API/config gate remains required.",
+        "branchLocalAlternative": "Selected source already repairs the shipped existing owner; do not add a public SDK/config seam."
+      },
+      "remainingGates": [
+        "Parent selected-branch focused native tests/typecheck and readable current-main API/config comparison.",
+        "Parent dependency/publication inventory and combined staging checks."
+      ],
+      "releaseQualified": false
+    },
+    {
+      "id": "deep-mcp-result-projection",
+      "category": "material-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "452c808d5b1bab8bfb2f929035db422e6f71acf3"
+      ],
+      "productionPaths": [
+        "src/agents/mcp-content.ts"
+      ],
+      "reason": "Handle deeply recursive MCP structured-content projection without propagating RangeError or retaining unsafe details.",
+      "application": {
+        "type": "single-source-commit-group",
+        "actualCherryPickNoCommitProbe": {
+          "sha": "452c808d5b1bab8bfb2f929035db422e6f71acf3",
+          "baseline": "bcfc88812a35243893585dbeca87ca41b48272ca",
+          "command": [
+            "git",
+            "cherry-pick",
+            "--no-commit",
+            "452c808d5b1bab8bfb2f929035db422e6f71acf3"
+          ],
+          "status": "clean",
+          "exitCode": 0,
+          "conflicts": [],
+          "changedPaths": [
+            "src/agents/mcp-content.test.ts",
+            "src/agents/mcp-content.ts"
+          ],
+          "diffCheck": {
+            "exitCode": 0
+          },
+          "cachedDiffCheck": {
+            "exitCode": 0
+          },
+          "elapsedSeconds": 1.179
+        },
+        "note": "Complete ordered group has one source commit; actual probe includes all production/test changes. Both working-tree and cached diff checks pass."
+      },
+      "ownerBaselineEqualsSourceParent": true,
+      "ownerBaselineBlob": "f4ff981d63a3b3f380e1d4c8c14b57095de2c89e",
+      "prerequisites": [
+        {
+          "symbols": [
+            "stableStringify"
+          ],
+          "producer": "packages/normalization-core/src/stable-stringify.ts",
+          "exportOrCaller": "packages/normalization-core/src/index.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing recursive canonical serializer; exact baseline body reproduces RangeError, existing record schema allows nested arbitrary values.",
+          "baselineBlob": "faf32d46772114fe550562820019c32272166b82"
+        },
+        {
+          "symbols": [
+            "projectMcpCallToolResult"
+          ],
+          "producer": "src/agents/mcp-content.ts",
+          "exportOrCaller": "src/agents/agent-bundle-mcp-materialize.ts and src/agents/node-plugin-tools.ts",
+          "disposition": "present-equivalent",
+          "reason": "Both actual callers pass only server/tool identity details, not conflicting success flags. Full owner/caller projection contracts reviewed.",
+          "baselineBlob": "f4ff981d63a3b3f380e1d4c8c14b57095de2c89e"
+        },
+        {
+          "symbols": [
+            "isToolResultError"
+          ],
+          "producer": "src/agents/tool-result-error.ts",
+          "exportOrCaller": "src/agents/mcp-content.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing details.status=error protocol recognizes handled failure. Actual helper tested on deep patched failure and shallow/success controls.",
+          "baselineBlob": "8314206532980abc90a212e9919d847468ea9a4e"
+        },
+        {
+          "symbols": [
+            "consumeMcpCodeModeGuestResult"
+          ],
+          "producer": "src/agents/mcp-content.ts",
+          "exportOrCaller": "src/agents/tool-search-json.ts",
+          "disposition": "present-equivalent",
+          "reason": "Existing snapshot/one-shot guest consumer executes on patched deep error and ordinary result; no deep original survives.",
+          "baselineBlob": "f4ff981d63a3b3f380e1d4c8c14b57095de2c89e"
+        },
+        {
+          "symbols": [
+            "fetchMcpAppView"
+          ],
+          "producer": "src/agents/mcp-ui-resource.ts",
+          "exportOrCaller": "src/agents/agent-bundle-mcp-materialize.ts",
+          "disposition": "present-equivalent",
+          "reason": "Optional raw-result App-view byte measurement already catches serialization errors and returns undefined. Baseline owner inspected; no app protocol feature selected.",
+          "baselineBlob": "70faf6169481a5c5d557a62a52416dbb9cb1649c"
+        }
+      ],
+      "publication": {
+        "surface": "core npm / Gateway / Docker",
+        "publishedRootVersion": "2026.9.9",
+        "publishedOwner": ".artifacts/update-compat/2026.9.9/package/dist/mcp-content-CZXA4YSJ.mjs",
+        "externalPluginPackageRequired": false,
+        "publishedOwnerSha256": "dc83ecd0422031be900380a0ad2a51d596e1fa0e0171733d47e169c59993ab09"
+      },
+      "proofKind": "Standalone bundled actual-baseline-owner boundary programs, not native Vitest or full CLI qualification. Baseline program asserts the reported failure; patched program asserts recovery and retained negative controls.",
+      "boundaryPrograms": [
+        {
+          "case": "deep-mcp-result-projection",
+          "patched": false,
+          "exitCode": 0,
+          "loaderScope": "All module bodies pinned to baseline; workspace dist export paths mapped to matching baseline src owner.",
+          "stdoutSha256": "865a5307f96a74dadb52750a363495bdea0ff66cb1c8e80a1af3af5d4eff9182"
+        },
+        {
+          "case": "deep-mcp-result-projection",
+          "patched": true,
+          "exitCode": 0,
+          "loaderScope": "All module bodies pinned to baseline; workspace dist export paths mapped to matching baseline src owner.",
+          "stdoutSha256": "4cbb4507805e61b99e2457be165e5a0d9e82cc5004cb14d7b5427968a53f89e2"
+        }
+      ],
+      "sdkConfigWarning": {
+        "warning": "No new public SDK export/signature, config/manifest field/default, protocol shape, dependency, runtime requirement, migration or operator action in the selected source delta. Parent final current-main API/config gate and native CI are not claimed passed by private owner probes.",
+        "branchLocalAlternative": "Selected source already repairs the shipped existing owner; do not add a public SDK/config seam."
+      },
+      "remainingGates": [
+        "Parent selected-branch focused native tests/typecheck and readable current-main API/config comparison.",
+        "Parent dependency/publication inventory and combined staging checks."
+      ],
+      "releaseQualified": false
+    },
+    {
+      "id": "queued-plugin-composer",
+      "category": "material-ux-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "15716905f62344c36b975583c5ab4e6d96b41052"
+      ],
+      "productionPaths": [
+        "ui/src/pages/chat/chat-view.ts",
+        "ui/src/pages/chat/components/chat-composer-view.ts"
+      ],
+      "reason": "Restore one actionable queued-input row beside custom plugin composers; preserve delegated and error composer ownership.",
+      "application": {
+        "status": "clean",
+        "firstParentMerge": false,
+        "exitCode": 0,
+        "conflictPaths": [],
+        "diffCheckExitCode": 0,
+        "detail": ""
+      },
+      "prerequisites": [
+        {
+          "symbols": [
+            "buildPendingInputQueueItems",
+            "renderChatComposer"
+          ],
+          "disposition": "present-equivalent",
+          "reason": "Shipped queue producer and default composer owner are present; exact baseline owner/caller and custom-composer lifecycle reviewed."
+        }
+      ],
+      "publication": {
+        "surface": "Core npm Control UI assets / Gateway / Docker",
+        "externalPluginPackageRequired": false
+      },
+      "proof": {
+        "type": "native-vitest-owner-and-sibling-suite",
+        "worktreeBaseline": "bcfc88812a35243893585dbeca87ca41b48272ca",
+        "suiteFiles": [
+          "ui/src/pages/model-setup/wizard-runner.test.ts",
+          "ui/src/pages/model-setup/model-setup-activation.test.ts",
+          "ui/src/pages/chat/chat-view.plugin-questions.test.ts"
+        ],
+        "runner": "node scripts/run-vitest.mjs run (routed to test/vitest/vitest.ui.config.ts)",
+        "isolation": "Detached shipped-baseline worktree; task-owned read-only baseline-lock dependency links; separate compiler-cache path per control/group execution.",
+        "baseline": {
+          "exitCode": 1,
+          "passed": 96,
+          "failed": 7,
+          "total": 103,
+          "failures": "One missing disconnect notice, five timeout message expectations and one custom-composer queue assertion."
+        },
+        "patchedGroup": {
+          "exitCode": 0,
+          "passed": 103,
+          "failed": 0,
+          "total": 103,
+          "workingAndCachedDiffCheckExitCode": 0
+        },
+        "warnings": "Existing JSDOM CSS parse warnings occur in both controls and do not fail the suite. No full browser or release qualification is claimed."
+      },
+      "sdkConfigWarning": {
+        "warning": "Private Control UI rendering/lifecycle changes; no public plugin SDK/config/protocol/dependency seam. Current staging remains metadata only.",
+        "branchLocalAlternative": "Keep existing owner/callback boundaries."
+      },
+      "remainingGates": [
+        "Apply only after categorized set approval; current staging has no product change.",
+        "Combined approved-set browser, package, typecheck and exact-candidate qualification not run."
+      ],
+      "releaseQualified": false
+    },
+    {
+      "id": "model-sign-in-suspension",
+      "category": "material-ux-reliability",
+      "status": "proposed-not-applied",
+      "orderedSourceSHAs": [
+        "b933d4151925503546d3e8b16cb009c7988bc668"
+      ],
+      "productionPaths": [
+        "ui/src/components/wizard-login-controller.ts",
+        "ui/src/i18n/locales/en.ts",
+        "ui/src/pages/model-setup/model-setup-page.ts",
+        "ui/src/pages/model-setup/state.ts",
+        "ui/src/pages/model-setup/wizard-runner.ts",
+        "ui/src/pages/model-setup/wizard-view.ts"
+      ],
+      "reason": "Close the reserved sign-in popup on Gateway suspension and restore actionable existing recovery controls; replace raw timeout messages.",
+      "application": {
+        "status": "clean",
+        "firstParentMerge": false,
+        "exitCode": 0,
+        "conflictPaths": [],
+        "diffCheckExitCode": 0,
+        "detail": "Auto-merging ui/src/i18n/locales/en.ts\nAuto-merging ui/src/pages/model-setup/wizard-runner.ts"
+      },
+      "prerequisites": [
+        {
+          "symbols": [
+            "ModelSetupWizardRunner.suspend",
+            "reservedWindow",
+            "restore",
+            "onWizardConnectionNotice"
+          ],
+          "disposition": "present-equivalent",
+          "reason": "Shipped popup owner and both real model-setup/wizard-login callers reviewed; both callers receive the private callback and retain the existing authenticated owner/restore boundary."
+        },
+        {
+          "symbols": [
+            "English sign-in recovery message keys"
+          ],
+          "disposition": "missing",
+          "reason": "Two English keys are selected; canonical generated locale parity must be resolved after set approval. This proposal is not locale-qualified."
+        }
+      ],
+      "publication": {
+        "surface": "Core npm Control UI assets / Gateway / Docker",
+        "externalPluginPackageRequired": false
+      },
+      "proof": {
+        "type": "native-vitest-owner-and-sibling-suite",
+        "worktreeBaseline": "bcfc88812a35243893585dbeca87ca41b48272ca",
+        "suiteFiles": [
+          "ui/src/pages/model-setup/wizard-runner.test.ts",
+          "ui/src/pages/model-setup/model-setup-activation.test.ts",
+          "ui/src/pages/chat/chat-view.plugin-questions.test.ts"
+        ],
+        "runner": "node scripts/run-vitest.mjs run (routed to test/vitest/vitest.ui.config.ts)",
+        "isolation": "Detached shipped-baseline worktree; task-owned read-only baseline-lock dependency links; separate compiler-cache path per control/group execution.",
+        "baseline": {
+          "exitCode": 1,
+          "passed": 96,
+          "failed": 7,
+          "total": 103,
+          "failures": "One missing disconnect notice, five timeout message expectations and one custom-composer queue assertion."
+        },
+        "patchedGroup": {
+          "exitCode": 0,
+          "passed": 103,
+          "failed": 0,
+          "total": 103,
+          "workingAndCachedDiffCheckExitCode": 0
+        },
+        "warnings": "Existing JSDOM CSS parse warnings occur in both controls and do not fail the suite. No full browser or release qualification is claimed."
+      },
+      "sdkConfigWarning": {
+        "warning": "Private Control UI rendering/lifecycle changes; no public plugin SDK/config/protocol/dependency seam. Current staging remains metadata only.",
+        "branchLocalAlternative": "Keep existing owner/callback boundaries."
+      },
+      "remainingGates": [
+        "Apply only after categorized set approval; current staging has no product change.",
+        "Canonical generated locale parity for two new English keys.",
+        "Combined approved-set browser, package, typecheck and exact-candidate qualification not run."
+      ],
+      "releaseQualified": false
+    }
+  ],
+  "gatewayRetainedSiblingProof": {
+    "command": [
+      "node",
+      "scripts/run-vitest.mjs",
+      "src/config/paths.test.ts",
+      "src/infra/gateway-supervision.test.ts",
+      "src/commands/doctor-maintenance.service-identity.test.ts",
+      "src/gateway/server-methods/approval.request-authority.test.ts",
+      "src/config/sessions/session-cold-storage-eligibility.test.ts",
+      "src/commands/doctor-session-sqlite.explicit-agent.test.ts",
+      "src/config/sessions/targets.selection.test.ts",
+      "src/config/sessions/session-cold-storage.test.ts",
+      "--maxWorkers",
+      "1"
+    ],
+    "exitCode": 1,
+    "wallSeconds": 709.836,
+    "requestedFileCount": 8,
+    "observedFileCount": 7,
+    "observedByFile": {
+      "src/commands/doctor-session-sqlite.explicit-agent.test.ts": {
+        "passed": 1,
+        "failed": 0,
+        "project": "unit-fast"
+      },
+      "src/gateway/server-methods/approval.request-authority.test.ts": {
+        "passed": 49,
+        "failed": 0,
+        "project": "gateway-database-workers"
+      },
+      "src/infra/gateway-supervision.test.ts": {
+        "passed": 14,
+        "failed": 0,
+        "project": "infra"
+      },
+      "src/config/sessions/session-cold-storage.test.ts": {
+        "passed": 23,
+        "failed": 1,
+        "project": "runtime-config"
+      },
+      "src/config/paths.test.ts": {
+        "passed": 51,
+        "failed": 0,
+        "project": "runtime-config"
+      },
+      "src/config/sessions/session-cold-storage-eligibility.test.ts": {
+        "passed": 19,
+        "failed": 0,
+        "project": "runtime-config"
+      },
+      "src/config/sessions/targets.selection.test.ts": {
+        "passed": 3,
+        "failed": 0,
+        "project": "runtime-config"
+      }
+    },
+    "passed": 160,
+    "failed": 1,
+    "failure": "Unchanged retained session-cold-storage.test.ts aggregate archive-byte-budget fixture timed out at 120000 ms.",
+    "stopBeforeCommandsFixture": "Maintained test-projects-run.mts:284-295 stops scheduling after a failed shard at concurrency 1; Doctor service-identity commands fixture was not reached. Separate exact-production-patch proof completes that file.",
+    "separateDoctorProof": {
+      "command": [
+        "node",
+        "scripts/run-vitest.mjs",
+        "src/commands/doctor-maintenance.service-identity.test.ts",
+        "--maxWorkers",
+        "1"
+      ],
+      "exitCode": 0,
+      "wallSeconds": 73.435,
+      "dependencyGroup": "canonical-service-home",
+      "environment": {
+        "inheritedNames": [
+          "PATH",
+          "LANG",
+          "LC_ALL",
+          "TERM",
+          "SHELL"
+        ],
+        "noCredentialsHydrated": true
+      }
+    },
+    "aggregateDistinctFilesObserved": 8,
+    "aggregatePassed": 162,
+    "aggregateFailed": 1,
+    "allFourRegressionsPassed": true,
+    "allEightFilesGreen": false,
+    "baselineSiblingComparison": {
+      "command": [
+        "node",
+        "scripts/run-vitest.mjs",
+        "src/config/sessions/session-cold-storage.test.ts",
+        "--maxWorkers",
+        "1",
+        "-t",
+        "bounds aggregate archive bytes per pass and continues with the remaining large transcript"
+      ],
+      "exitCode": 0,
+      "wallSeconds": 109.834,
+      "dependencyGroup": "unchanged-archive-byte-budget",
+      "environment": {
+        "inheritedNames": [
+          "PATH",
+          "LANG",
+          "LC_ALL",
+          "TERM",
+          "SHELL"
+        ],
+        "noCredentialsHydrated": true
+      },
+      "controls": {
+        "allSelectedProductionOwnersRestoredToBaselineBeforeComparison": true,
+        "unchangedFixturePath": "src/config/sessions/session-cold-storage.test.ts",
+        "unchangedDeadlineMs": 120000,
+        "boundedSelection": "One exact failing retained case; 23 sibling cases filtered in this baseline comparison only",
+        "observedCasePassed": 1,
+        "observedCaseMilliseconds": 18181,
+        "noInheritedFailureClaim": true,
+        "noCandidateGreenClaim": true
+      }
+    },
+    "baselineSiblingObservedCases": {
+      "src/config/sessions/session-cold-storage.test.ts": {
+        "passed": 1,
+        "failed": 0,
+        "project": "runtime-config"
+      }
+    },
+    "baselineSiblingDisposition": "Exact unchanged fixture comparison observed; candidate sibling timeout remains non-green. A passing baseline repetition alone does not attribute timing difference to the source group."
+  }
+}
