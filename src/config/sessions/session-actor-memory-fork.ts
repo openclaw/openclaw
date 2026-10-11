@@ -25,7 +25,7 @@ import type { SessionActorMemoryStorageContext } from "./session-actor-memory-st
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { planSessionMessageCut } from "./session-message-cut-plan.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { mergeSessionEntry } from "./types.js";
+import { mergeSessionEntry, type InternalSessionEntry as SessionEntry } from "./types.js";
 
 export function readSessionActorMemoryForkQuery(
   context: SessionActorMemoryStorageContext,
@@ -88,22 +88,24 @@ function commitParentFork(
   }
   const providers = new Set(input.cliForkProviders?.map(normalizeProviderId));
   const sessionId = randomUUID();
-  const next = mergeSessionEntry(base, {
-    ...input.patch?.forked,
-    forkSource: { sessionKey: parentKey, sessionId: parentEntry.sessionId },
-    forkedFromParent: true,
+  const next: SessionEntry = {
+    ...mergeSessionEntry(base, {
+      ...input.patch?.forked,
+      forkSource: { sessionKey: parentKey, sessionId: parentEntry.sessionId },
+      forkedFromParent: true,
+      sessionId,
+      totalTokens: undefined,
+      totalTokensFresh: false,
+      totalTokensVersion: undefined,
+      cliSessionBindings: forkCliSessionBindings(parentEntry, (provider) =>
+        providers.has(normalizeProviderId(provider)),
+      ),
+      cliSessionIds: undefined,
+      claudeCliSessionId: undefined,
+    }),
     lifecycleRunId: undefined,
     lastRunId: undefined,
-    sessionId,
-    totalTokens: undefined,
-    totalTokensFresh: false,
-    totalTokensVersion: undefined,
-    cliSessionBindings: forkCliSessionBindings(parentEntry, (provider) =>
-      providers.has(normalizeProviderId(provider)),
-    ),
-    cliSessionIds: undefined,
-    claudeCliSessionId: undefined,
-  });
+  };
   const target = context.edit(targetKey);
   const sessionEntry = installSessionActorMemoryEntry(target, next);
   const events = createSessionActorMemoryEvents({ ...context, state: target });
@@ -171,4 +173,5 @@ export function executeSessionActorMemoryForkCommand(
       return { ...plan.result, entry };
     }
   }
+  throw new Error("Unknown memory fork command");
 }

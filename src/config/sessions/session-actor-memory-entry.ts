@@ -92,6 +92,7 @@ export function readSessionActorMemoryEntryQuery(
       });
     }
   }
+  throw new Error("Unknown memory entry query");
 }
 
 function requireExpectedEntry(
@@ -280,7 +281,6 @@ export function executeSessionActorMemoryEntryCommand(
       return {
         archivedTranscripts: [],
         previousEntry,
-        previousSessionFile: previousEntry?.sessionFile,
         previousSessionId: previousEntry?.sessionId,
         nextEntry,
         progressCardReset,
@@ -318,4 +318,5 @@ export function executeSessionActorMemoryEntryCommand(
       return { removedSessionKeys };
     }
   }
+  throw new Error("Unknown memory entry command");
 }

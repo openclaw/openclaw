@@ -225,6 +225,7 @@ function maintenance(
       return { kind, events };
     }
   }
+  throw new Error("Unknown memory transcript maintenance operation");
 }
 
 function branches(navigation: Navigation): SessionBranchSummary[] {
@@ -285,6 +286,8 @@ export function readSessionActorMemoryHistoryFacts(
         }
       }
       return undefined;
+    default:
+      break;
   }
   const navigation = createSessionActorMemoryHistoryNavigation(window);
   switch (query.type) {
@@ -453,4 +456,5 @@ export function readSessionActorMemoryHistoryFacts(
       return { messages, ...(end < rows.length ? { nextOffset: end } : {}) };
     }
   }
+  throw new Error("Unknown memory history facts query");
 }

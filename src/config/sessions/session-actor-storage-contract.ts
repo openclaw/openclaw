@@ -132,7 +132,7 @@ export type SessionActorStorageAuthority = SessionActorAuthority & {
   ): boolean;
 };
 
-export type SessionActorStorageCommitObserver<Value> = {
+type SessionActorStorageCommitObserver<Value> = {
   committed(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
 };
 

@@ -70,7 +70,10 @@ describe("actor-owned memory storage", () => {
     const patch = storage(second).mutate(
       {
         type: "session.entry.patch",
-        input: { operation: { kind: "fields", patch: { label: "Current" } } },
+        input: {
+          operation: { kind: "fields", patch: { label: "Current" } },
+          preserveActivity: true,
+        },
       },
       authority,
     );

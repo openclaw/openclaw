@@ -472,11 +472,16 @@ describe("Plugin link reader panel", () => {
   });
 
   it("opens, selects, deduplicates, and closes icon-bearing tabs without reloading cached documents", async () => {
-    const request = vi.fn(async (_method: string, params: unknown) => requestedItem(params));
+    const request = vi.fn(async (_method: string, params: unknown) => ({
+      ...requestedItem(params),
+      files: [{ path: "src/example.ts", additions: 1, deletions: 1, patch: "-old\n+new" }],
+    }));
     const panel = await mount(request);
     open(panel, itemUrl(1), undefined, true);
     await expectTitle(panel, "Item 1");
     const firstContent = panel.querySelector(".lr-content");
+    const firstFile = firstContent!.querySelector<HTMLDetailsElement>(".lr-file")!;
+    firstFile.open = true;
     open(panel, itemUrl(2), undefined, true);
     await expectTitle(panel, "Item 2");
     expect(panel.querySelectorAll("wa-tab")).toHaveLength(2);
@@ -485,6 +490,8 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
     expect(panel.querySelectorAll("wa-tab")).toHaveLength(2);
     expect(panel.querySelector(".lr-content:not([hidden])")).toBe(firstContent);
+    expect(firstContent!.querySelector(".lr-file")).toBe(firstFile);
+    expect(firstFile.open).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
     expect(panel.querySelector<HTMLAnchorElement>(".lr-external")?.href).toBe(itemUrl(1));
     panel.querySelectorAll<HTMLButtonElement>(".tabstrip-tab__close")[1]?.click();
