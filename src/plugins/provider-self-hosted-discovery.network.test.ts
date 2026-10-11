@@ -1,4 +1,4 @@
-import { lookup } from "node:dns/promises";
+import type { LookupAddress } from "node:dns";
 import { Agent, EnvHttpProxyAgent, ProxyAgent } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
@@ -7,7 +7,11 @@ import { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
 import type { Model } from "../llm/types.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 
-vi.mock("node:dns/promises", { spy: true });
+const lookupMock = vi.hoisted(() => vi.fn<() => Promise<LookupAddress[]>>());
+vi.mock("node:dns/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns/promises")>()),
+  lookup: lookupMock,
+}));
 
 const baseUrl = "http://local-provider.example:8081/v1";
 const model: Model<"openai-completions"> = {
@@ -25,6 +29,7 @@ const model: Model<"openai-completions"> = {
 
 afterEach(async () => {
   await closeProviderTransportDispatcherPool();
+  lookupMock.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -60,7 +65,7 @@ describe.each([
     { address: "192.168.1.2", defaultAllowed: true, strictAllowed: false },
     { address: "93.184.216.34", defaultAllowed: true, strictAllowed: true },
   ])("admits $address identically for discovery and inference", async (testCase) => {
-    vi.mocked(lookup).mockResolvedValue([
+    lookupMock.mockResolvedValue([
       { address: testCase.address, family: testCase.address.includes(":") ? 6 : 4 },
     ]);
     const fetch = vi.fn(async () => Response.json({ data: [{ id: "local-model" }] }));
@@ -93,7 +98,7 @@ describe.each([
   });
 
   it("keeps the inference guard on cross-host redirects during discovery", async () => {
-    vi.mocked(lookup).mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     const fetch = vi.fn(
       async () =>
         new Response(null, { status: 302, headers: { location: "http://169.254.169.254/latest" } }),
