@@ -279,93 +279,123 @@ describe("Bedrock prompt cache ownership", () => {
     }
   });
 
-  it.each(["direct"])(
-    "advances the retained-carrier checkpoint through a tool loop (%s)",
-    async (route) => {
-      const canonicalModelId = "claude-fable-5-1";
-      const model: Model<"bedrock-converse-stream"> = bedrockModel({
-        id:
-          route === "direct"
-            ? `anthropic.${canonicalModelId}-v1:0`
-            : "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/cache-test",
-        name: "Test deployment",
-        ...(route === "application-profile" ? { params: { canonicalModelId } } : {}),
-      });
-      const context: Context = {
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "OpenClaw runtime context:\nFirst request" },
-              { type: "text", text: "Retained context one" },
-            ],
-            timestamp: 0,
-            runtimeContext: {},
-          },
-          {
-            role: "assistant",
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            content: [{ type: "text", text: "First answer" }],
-            stopReason: "stop",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            timestamp: 1,
-          },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "OpenClaw runtime context:\nSecond request" },
-              { type: "text", text: "Retained context two" },
-            ],
-            timestamp: 2,
-            runtimeContext: {},
-          },
-        ],
-      };
-      const first = await captureMessages(model, context, { cacheRetention: "short" });
-      expect(first[2]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
-      const previousAssistant = context.messages[1];
-      if (previousAssistant?.role !== "assistant") {
-        throw new Error("missing assistant fixture");
-      }
-      context.messages.push(
+  it.each([
+    ["anthropic.claude-haiku-5-5", "1h"],
+    ["global.anthropic.claude-haiku-5-5", "1h"],
+    ["us.anthropic.claude-fable-5", "1h"],
+    ["us.anthropic.claude-mythos-5", "1h"],
+    ["global.anthropic.claude-opus-5", "1h"],
+    ["global.anthropic.claude-sonnet-5", "1h"],
+    ["opaque-deployment", undefined],
+    ["anthropic.claude-3-7-sonnet-20250219-v1:0", undefined],
+    ["us.anthropic.claude-3-7-sonnet-20250219-v1:0", undefined],
+    ["anthropic.claude-sonnet-4-20250514-v1:0", undefined],
+    ["anthropic.claude-opus-4-1-20250805-v1:0", undefined],
+    ["anthropic.claude-sonnet-4-5-20250929-v1:0", "1h"],
+    ["anthropic.claude-opus-4-8", "1h"],
+    ["anthropic.claude-sonnet-5-5", "1h"],
+    ["anthropic.claude-fable-5-1", "1h"],
+  ])("uses the supported long-retention TTL for %s", async (id, ttl) => {
+    vi.stubEnv("AWS_BEDROCK_FORCE_CACHE", id === "opaque-deployment" ? "1" : undefined);
+    const payload = await capturePayload(
+      bedrockModel({ id, name: "Test deployment" }),
+      {
+        systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
+        messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+      },
+      { cacheRetention: "long" },
+    );
+    const checkpoint = { cachePoint: { type: "default", ...(ttl ? { ttl } : {}) } };
+    expect(payload.system).toEqual([
+      { text: "Stable workspace" },
+      checkpoint,
+      { text: "Today: Monday" },
+    ]);
+    expect(payload.messages?.[0]?.content).toEqual([{ text: "Hello" }, checkpoint]);
+  });
+
+  it("advances the retained-carrier checkpoint through a tool loop", async () => {
+    const model: Model<"bedrock-converse-stream"> = bedrockModel({
+      id: "anthropic.claude-fable-5-1-v1:0",
+      name: "Test deployment",
+    });
+    const previousAssistant = {
+      role: "assistant",
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      content: [{ type: "text", text: "First answer" }],
+      stopReason: "stop",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: 1,
+    } satisfies Context["messages"][number];
+    const context: Context = {
+      messages: [
         {
-          ...previousAssistant,
+          role: "user",
           content: [
-            { type: "toolCall", id: "read_1", name: "read", arguments: { path: "README.md" } },
+            { type: "text", text: "OpenClaw runtime context:\nFirst request" },
+            { type: "text", text: "Retained context one" },
           ],
-          stopReason: "toolUse",
-          timestamp: 3,
+          timestamp: 0,
+          runtimeContext: {},
         },
+        previousAssistant,
         {
-          role: "toolResult",
-          toolCallId: "read_1",
-          toolName: "read",
-          content: [{ type: "text", text: "Tool output" }],
-          isError: false,
-          timestamp: 4,
+          role: "user",
+          content: [
+            { type: "text", text: "OpenClaw runtime context:\nSecond request" },
+            { type: "text", text: "Retained context two" },
+            ...Array.from({ length: 21 }, (_, index) => ({
+              type: "text" as const,
+              text: `Attached document block ${index}`,
+            })),
+          ],
+          timestamp: 2,
+          runtimeContext: {},
         },
-      );
-      const second = await captureMessages(model, context, { cacheRetention: "short" });
-      expect(second[3]?.content).toEqual([
-        { toolUse: { toolUseId: "read_1", name: "read", input: { path: "README.md" } } },
-      ]);
-      expect(second[2]?.content).toEqual([
-        { text: "OpenClaw runtime context:\nSecond request" },
-        { text: "Retained context two" },
-      ]);
-      expect(second[4]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
-      expect(second.slice(0, 2)).toEqual(first.slice(0, 2));
-    },
-  );
+      ],
+    };
+    const first = await captureMessages(model, context, { cacheRetention: "short" });
+    expect(first[0]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
+    expect(first[2]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
+    context.messages.push(
+      {
+        ...previousAssistant,
+        content: [
+          { type: "toolCall", id: "read_1", name: "read", arguments: { path: "README.md" } },
+        ],
+        stopReason: "toolUse",
+        timestamp: 3,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "read_1",
+        toolName: "read",
+        content: [{ type: "text", text: "Tool output" }],
+        isError: false,
+        timestamp: 4,
+      },
+    );
+    const second = await captureMessages(model, context, { cacheRetention: "short" });
+    expect(second[3]?.content).toEqual([
+      { toolUse: { toolUseId: "read_1", name: "read", input: { path: "README.md" } } },
+    ]);
+    expect(second[2]?.content).toEqual(first[2]?.content);
+    expect(second[4]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
+    expect(second[0]?.content).toEqual([
+      { text: "OpenClaw runtime context:\nFirst request" },
+      { text: "Retained context one" },
+    ]);
+    expect(second[1]).toEqual(first[1]);
+  });
 
   const model = () =>
     bedrockModel({ id: "anthropic.claude-haiku-4-5-20251001-v1:0", name: "Claude Haiku 4.5" });

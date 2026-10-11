@@ -10,13 +10,16 @@ import type { NativeHookRelayClientReadResult } from "./native-hook-relay-client
 export async function readNativeHookRelayClientBridgeRecord(params: {
   relayId: string;
   stateDbPath?: string;
+  signal?: AbortSignal;
 }): Promise<NativeHookRelayBridgeRecord | undefined> {
+  params.signal?.throwIfAborted();
   const pathname = path.resolve(params.stateDbPath ?? resolveOpenClawStateSqlitePath());
   const input = { relayId: params.relayId, stateDbPath: pathname };
   if (!process.versions.bun) {
     // The one-shot Node CLI already owns its process. Never block its deadline
     // on a SQLite lock; the asynchronous bridge retry owner handles contention.
     const { readNativeHookRelayClientRecord } = await import("./native-hook-relay-client-read.js");
+    params.signal?.throwIfAborted();
     return readNativeHookRelayClientRecord(input, 0);
   }
   // Bun retains native SQLite handles after close until the worker exits.
@@ -31,6 +34,7 @@ export async function readNativeHookRelayClientBridgeRecord(params: {
   try {
     const result = await pool.run(input, {
       inputBytes: 2 * (params.relayId.length + pathname.length),
+      signal: params.signal,
     });
     if (!result.ok) {
       throw result.newerSchema

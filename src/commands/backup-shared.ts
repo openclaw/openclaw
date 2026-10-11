@@ -29,10 +29,10 @@ import {
   type ResolvedSkillDiscoveryLimits,
 } from "../skills/loading/skill-root-discovery.js";
 import { tryRealpath } from "../skills/loading/symlink-targets.js";
-import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
+import { recordBackupRunOutcomeWithOwner } from "./backup-outcome.js";
 import {
   createBackupResourcePlan,
   type BackupAgentRoot,
@@ -47,12 +47,12 @@ export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
 
 export async function recordBackupOutcomeBestEffort(
   runtime: RuntimeEnv,
-  params: Parameters<typeof recordBackupRunOutcome>[0],
+  params: Parameters<typeof recordBackupRunOutcomeWithOwner>[0],
 ): Promise<void> {
   try {
     // A rejected private input must not be reopened for best-effort outcome writes.
     assertNotUpdateCapturePath(resolveOpenClawStateSqlitePath(), resolveStateDir());
-    await recordBackupRunOutcome(params);
+    await recordBackupRunOutcomeWithOwner(params);
   } catch (error) {
     const label = params.kind === "git" ? "Git backup" : "backup";
     runtime.error(
@@ -568,7 +568,8 @@ async function resolveBackupPlanFromState(params: {
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
   const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
-  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot) ?? configSnapshot;
+  const discoverySnapshot =
+    (await resolveLegacyConfigSnapshotForBackup(configSnapshot)) ?? configSnapshot;
   const configCapture = await resolveBackupConfigCapture(configRead);
   if (discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(

@@ -68,6 +68,16 @@ export function resolveMeetingAudioRuntimeForFormat(params: {
   const backend = resolveMeetingAudioBackend(params.backend, params.platform);
   const bytesPerSecond = format.sampleRate * format.channels * Math.ceil(format.bits / 8);
   const pulseLatencyMs = Math.max(1, Math.ceil((params.bufferBytes / bytesPerSecond) * 1_000));
+  const pulseCommand = (command: "parec" | "pacat", device: string) => [
+    command,
+    "--raw",
+    ...(command === "pacat" ? ["--playback"] : []),
+    `--device=${device}`,
+    `--format=${format.encoding === "mu-law" ? "ulaw" : "s16le"}`,
+    `--rate=${format.sampleRate}`,
+    `--channels=${format.channels}`,
+    `--latency-msec=${pulseLatencyMs}`,
+  ];
   const defaults =
     backend === "blackhole-2ch"
       ? buildMeetingSoxAudioCommands({
@@ -77,25 +87,8 @@ export function resolveMeetingAudioRuntimeForFormat(params: {
           format,
         })
       : {
-          inputCommand: [
-            "parec",
-            "--raw",
-            `--device=${PIPEWIRE_SOURCE_NAME}`,
-            `--format=${format.encoding === "mu-law" ? "ulaw" : "s16le"}`,
-            `--rate=${format.sampleRate}`,
-            `--channels=${format.channels}`,
-            `--latency-msec=${pulseLatencyMs}`,
-          ],
-          outputCommand: [
-            "pacat",
-            "--raw",
-            "--playback",
-            `--device=${PIPEWIRE_SINK_NAME}`,
-            `--format=${format.encoding === "mu-law" ? "ulaw" : "s16le"}`,
-            `--rate=${format.sampleRate}`,
-            `--channels=${format.channels}`,
-            `--latency-msec=${pulseLatencyMs}`,
-          ],
+          inputCommand: pulseCommand("parec", PIPEWIRE_SOURCE_NAME),
+          outputCommand: pulseCommand("pacat", PIPEWIRE_SINK_NAME),
         };
   return {
     backend,

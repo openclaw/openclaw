@@ -1,5 +1,10 @@
 import path from "node:path";
 import { runPreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../../runtime-api.js";
@@ -151,6 +156,168 @@ describe("msteams message authorization and supplemental context", () => {
     graph.fetchChannelMessage.mockReset();
     graph.fetchThreadReplies.mockReset().mockResolvedValue([]);
     graph.fetchChatMessageText.mockReset();
+  });
+
+  it.each(["revoked", "disabled", "removed"])(
+    "rechecks a %s named account after reload without blocking a sibling",
+    async (change) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          msteams: {
+            enabled: true,
+            accounts: {
+              support: { appId: "test-app", dmPolicy: "allowlist", allowFrom: ["alice-aad"] },
+              sales: { appId: "test-app", dmPolicy: "allowlist", allowFrom: ["alice-aad"] },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      try {
+        const resolveRoute = ({ accountId = "default" }: { accountId?: string | null }) => ({
+          sessionKey: "agent:main:msteams:" + accountId + ":direct:alice-aad",
+          agentId: "main",
+          accountId,
+        });
+        const support = createMessageHandlerDeps(cfg, {
+          accountId: "support",
+          resolveAgentRoute: resolveRoute,
+        });
+        const supportHandler = createMSTeamsMessageHandler(support.deps);
+        const sales = createMessageHandlerDeps(cfg, {
+          accountId: "sales",
+          resolveAgentRoute: resolveRoute,
+        });
+        const salesHandler = createMSTeamsMessageHandler(sales.deps);
+        const incoming = () =>
+          activity({ conversation: { id: "19:shared-dm", conversationType: "personal" } });
+        await supportHandler(incoming());
+        expect(dispatch.mock.calls.at(-1)?.[0].ctx.AccountId).toBe("support");
+        dispatch.mockClear();
+        const accounts = { ...cfg.channels?.msteams?.accounts };
+        if (change === "removed") {
+          delete accounts.support;
+        } else {
+          accounts.support =
+            change === "disabled"
+              ? { ...accounts.support, enabled: false }
+              : { ...accounts.support, allowFrom: ["another-user"] };
+        }
+        setRuntimeConfigSnapshot({
+          channels: {
+            msteams: {
+              ...cfg.channels?.msteams,
+              accounts,
+            },
+          },
+        });
+        await supportHandler(incoming());
+        expect(dispatch).not.toHaveBeenCalled();
+        await salesHandler(incoming());
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0]?.[0].ctx.AccountId).toBe("sales");
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
+  it.each(["team", "channel"])(
+    "rejects a %s revoked during thread preparation without blocking a sibling account",
+    async (revoked) => {
+      const account: MSTeamsConfig = {
+        appId: "test-app",
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { team123: { channels: { "19:channel@thread.tacv2": {} } } },
+      };
+      const cfg: OpenClawConfig = {
+        channels: { msteams: { enabled: true, accounts: { support: account, sales: account } } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const resolveRoute = ({ accountId = "default" }: { accountId?: string | null }) => ({
+        sessionKey: "agent:main:msteams:" + accountId + ":channel:19:channel@thread.tacv2",
+        agentId: "main",
+        accountId,
+      });
+      const support = createMessageHandlerDeps(cfg, {
+        accountId: "support",
+        resolveAgentRoute: resolveRoute,
+      });
+      const supportHandler = createMSTeamsMessageHandler(support.deps);
+      const sales = createMessageHandlerDeps(cfg, {
+        accountId: "sales",
+        resolveAgentRoute: resolveRoute,
+      });
+      const salesHandler = createMSTeamsMessageHandler(sales.deps);
+      const started = createDeferred<void>();
+      const replies = createDeferred<GraphThreadMessage[]>();
+      graph.fetchThreadReplies.mockImplementationOnce(() => {
+        started.resolve();
+        return replies.promise;
+      });
+      const pending = supportHandler(threadActivity());
+      try {
+        await started.promise;
+        expect(support.conversationStore.upsert).toHaveBeenCalled();
+        expect(dispatch).not.toHaveBeenCalled();
+        setRuntimeConfigSnapshot({
+          channels: {
+            msteams: {
+              ...cfg.channels?.msteams,
+              accounts: {
+                support: {
+                  ...account,
+                  teams:
+                    revoked === "team"
+                      ? { anotherTeam: { channels: { "19:channel@thread.tacv2": {} } } }
+                      : { team123: { channels: { "19:other-channel@thread.tacv2": {} } } },
+                },
+                sales: account,
+              },
+            },
+          },
+        });
+        replies.resolve([]);
+        await pending;
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(support.deps.log.info).toHaveBeenCalledWith(
+          "dropping message (dispatch-time account authorization changed)",
+        );
+        await salesHandler(threadActivity());
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0]?.[0].ctx.AccountId).toBe("sales");
+      } finally {
+        replies.resolve([]);
+        await pending;
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
+  it("does not dispatch one account's admitted sender through a denied sibling route", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          accounts: {
+            support: { appId: "test-app", dmPolicy: "allowlist", allowFrom: ["alice-aad"] },
+            sales: { appId: "test-app", dmPolicy: "allowlist", allowFrom: ["another-user"] },
+          },
+        },
+      },
+    };
+    const { deps } = createMessageHandlerDeps(cfg, {
+      accountId: "support",
+      resolveAgentRoute: () => ({
+        sessionKey: "agent:main:msteams:sales:direct:alice-aad",
+        agentId: "main",
+        accountId: "sales",
+      }),
+    });
+    await createMSTeamsMessageHandler(deps)(
+      activity({ conversation: { id: "19:shared-dm", conversationType: "personal" } }),
+    );
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("does not widen an empty group sender allowlist through pairing or route entries", async () => {

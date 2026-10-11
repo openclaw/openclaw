@@ -1,7 +1,11 @@
 // Msteams tests cover sso token store plugin behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,6 +89,40 @@ describe("msteams sso token store (plugin state)", () => {
       }),
     ).toBeNull();
     await fs.access(storePath);
+  });
+
+  it("preserves migrated default tokens and isolates named-account updates and removal", async () => {
+    const stateDir = tempDirs.make("openclaw-msteams-sso-accounts-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const token = {
+      connectionName: "graph",
+      userId: "same-user",
+      token: "legacy-token",
+      updatedAt: "2026-04-10T00:00:00.000Z",
+    };
+    const legacyKey =
+      "v2:" +
+      createHash("sha256")
+        .update(JSON.stringify(["graph", "same-user"]))
+        .digest("hex");
+    const legacyStore = createPluginStateKeyedStoreForTests<typeof token>("msteams", {
+      namespace: "sso-tokens",
+      maxEntries: 5000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    await legacyStore.register(legacyKey, token);
+    const defaultStore = createMSTeamsSsoTokenStoreFs({ accountId: "default" });
+    const namedStore = createMSTeamsSsoTokenStoreFs({ accountId: "support" });
+    expect(await defaultStore.get(token)).toEqual(token);
+    expect(await namedStore.get(token)).toBeNull();
+    await namedStore.save({ ...token, token: "named-token" });
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    const reopened = createMSTeamsSsoTokenStoreFs({ accountId: "support" });
+    expect(await reopened.get(token)).toEqual({ ...token, token: "named-token" });
+    expect(await createMSTeamsSsoTokenStoreFs().get(token)).toEqual(token);
+    await reopened.remove(token);
+    expect(await createMSTeamsSsoTokenStoreFs().get(token)).toEqual(token);
   });
 
   it("keeps plugin-state keys bounded for long Teams identifiers", async () => {

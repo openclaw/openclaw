@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { getCodeModeSourceAppend } from "../../agents/transcript-code-mode-source.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
@@ -10,6 +11,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
+import { normalizePersistedSteerTargetRunId } from "../../sessions/user-turn-transcript.metadata.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -20,6 +22,7 @@ import type {
   TranscriptEvent,
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
+import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   createTranscriptIdentityReader,
   findAssistantTranscriptEventInDatabase,
@@ -245,6 +248,22 @@ export function appendTranscriptEventInTransaction(
     cursor.insertIdentity({ ...identity, seq, createdAt });
   }
   advanceCliHistoryBoundaryInTransaction(database, scope, seq);
+  if (
+    isRecord(persistedEvent) &&
+    persistedEvent.type === "compaction" &&
+    parseCompactionDetails(persistedEvent.details)?.qualityDegraded
+  ) {
+    const entry = readSessionEntryRow(database, scope.sessionKey)?.entry;
+    if (entry?.sessionId === scope.sessionId && !entry.compactionQualityDegraded) {
+      // A later successful summary cannot recover facts already lost from this history.
+      writeSessionEntry(
+        database,
+        scope.sessionKey,
+        { ...entry, compactionQualityDegraded: true },
+        { previousEntry: entry },
+      );
+    }
+  }
   if (options.touchMutation !== false) {
     touchTranscriptMutationInTransaction(database, scope.sessionId);
   }
@@ -502,7 +521,11 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
       );
     }
   }
-  rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+  // Steering correlation changes no admitted input. Keep its running turn's fence,
+  // while every other payload rewrite still invalidates admissions and cursors.
+  if (!rewrites.every((row) => isSteerConfirmationRewrite(row.expectedEventJson, row.eventJson))) {
+    rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+  }
   if (!projectionUnchanged) {
     if (options.legacyTextStorage) {
       // Media Doctor rebuilds after the physical storage migration; schema-22 readers
@@ -513,6 +536,38 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     }
   }
   touchTranscriptMutationInTransaction(database, resolved.sessionId);
+}
+
+function isSteerConfirmationRewrite(beforeJson: string, afterJson: string): boolean {
+  const before: unknown = JSON.parse(beforeJson);
+  const after: unknown = JSON.parse(afterJson);
+  for (const event of [before, after]) {
+    if (
+      !isRecord(event) ||
+      event.type !== "message" ||
+      !isRecord(event.message) ||
+      event.message.role !== "user"
+    ) {
+      return false;
+    }
+    const metadata = event.message["__openclaw"];
+    if (metadata !== undefined && !isRecord(metadata)) {
+      return false;
+    }
+    if (event === after) {
+      const target = normalizePersistedSteerTargetRunId(metadata?.steerTargetRunId);
+      if (!target || target !== metadata?.steerTargetRunId) {
+        return false;
+      }
+    }
+    if (metadata) {
+      delete metadata.steerTargetRunId;
+      if (Object.keys(metadata).length === 0) {
+        delete event.message["__openclaw"];
+      }
+    }
+  }
+  return isDeepStrictEqual(before, after);
 }
 
 function transcriptRewritePreservesProjection(beforeJson: string, afterJson: string): boolean {

@@ -38,7 +38,9 @@ const statSync = fs.statSync.bind(fs);
 const readFile = fs.promises.readFile.bind(fs.promises);
 function admitted(kind) {
   process.on("SIGTERM", () => {});
-  fs.writeFileSync(started, JSON.stringify({ pid: process.pid, kind }));
+  const temporary = started + "." + process.pid + ".tmp";
+  fs.writeFileSync(temporary, JSON.stringify({ pid: process.pid, kind }));
+  fs.renameSync(temporary, started);
 }
 fs.promises.stat = async function(file, ...args) {
   if (file === target) {

@@ -4,7 +4,10 @@ import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js
 import type { SystemAgentAssistantPlanner } from "./assistant.js";
 import { resolveSystemAgentOperation } from "./dialogue.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
+import {
+  requireSystemAgentInferenceRoute,
+  requireSystemAgentPersistentApplyInference,
+} from "./inference-guard.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
@@ -52,32 +55,6 @@ export type RunSystemAgentOptions = {
 /** User-supplied command options before the inference gate binds the run. */
 export type SystemAgentCommandOptions = Omit<RunSystemAgentOptions, "verifiedInference">;
 
-async function requirePersistentApplyInference(
-  opts: RunSystemAgentOptions,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  if (!opts.verifiedInference) {
-    throw new SystemAgentInferenceUnavailableError("conversation");
-  }
-  try {
-    const { resolvePersistentApplyInference } = await import("./setup-inference.js");
-    const route = await resolvePersistentApplyInference({
-      binding: opts.verifiedInference,
-      runtime,
-      deps: opts.deps,
-    });
-    if (route) {
-      return;
-    }
-  } catch (error) {
-    if (error instanceof SystemAgentInferenceUnavailableError) {
-      throw error;
-    }
-    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
-  }
-  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
-}
-
 async function runOneShot(
   operation: SystemAgentOperation,
   runtime: RuntimeEnv,
@@ -91,7 +68,15 @@ async function runOneShot(
   await requireSystemAgentInferenceRoute(opts.verifiedInference, opts.deps, "conversation");
   const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
   if (approved && isPersistentSystemAgentOperation(operation)) {
-    await requirePersistentApplyInference(opts, runtime);
+    await requireSystemAgentPersistentApplyInference(
+      { binding: opts.verifiedInference, runtime, deps: opts.deps },
+      (failures) => {
+        if (failures[0] instanceof SystemAgentInferenceUnavailableError) {
+          throw failures[0];
+        }
+        throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
+      },
+    );
   }
   await executeSystemAgentOperation(operation, runtime, {
     approved,

@@ -12,12 +12,13 @@ import {
   captureMemoryAgentDatabaseOptions,
   captureMemoryAgentReadTarget,
 } from "./memory-agent-database.js";
-import type {
-  MemoryEntryOriginOperations,
-  MemoryOriginDeletion,
-  MemoryOriginRecord,
-  MemorySessionTombstone,
+import {
+  MEMORY_SESSION_TOMBSTONE_BATCH_SIZE,
+  type MemoryEntryOriginOperations,
+  type MemoryOriginDeletion,
+  type MemoryOriginRecord,
 } from "./memory-entry-origins-task.js";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
 
 export type { MemoryEntryOrigin };
@@ -92,17 +93,29 @@ export async function listMemoryEntryOrigins(
   return (await runMemoryOriginRead({ ...target, ...filters, kind: "origin-rows" })).rows;
 }
 
-export async function listMemorySessionTombstones(params: {
+export async function findForgottenMemorySessionIds(params: {
   agentId: string;
-  sessionIds?: readonly string[];
-}): Promise<MemorySessionTombstone[]> {
-  if (params.sessionIds?.length === 0) {
-    return [];
+  sessionIds: readonly string[];
+}): Promise<Set<string>> {
+  const forgotten = new Set<string>();
+  if (params.sessionIds.length === 0) {
+    return forgotten;
   }
   const target = captureMemoryAgentReadTarget(captureMemoryAgentDatabaseOptions(params.agentId));
-  const sessionIds = params.sessionIds ? [...params.sessionIds] : undefined;
+  const sessionIds = [...params.sessionIds];
   const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
-  return (await runMemoryOriginRead({ ...target, sessionIds, kind: "session-tombstones" })).rows;
+  for (let start = 0; start < sessionIds.length; start += MEMORY_SESSION_TOMBSTONE_BATCH_SIZE) {
+    const page = sessionIds.slice(start, start + MEMORY_SESSION_TOMBSTONE_BATCH_SIZE);
+    const { indices } = await runMemoryOriginRead({
+      ...target,
+      sessionIds: page,
+      kind: "session-tombstones",
+    });
+    for (const index of indices) {
+      forgotten.add(page[index]!);
+    }
+  }
+  return forgotten;
 }
 
 export async function recordMemoryEntryOrigins(
@@ -123,10 +136,14 @@ export async function recordMemoryEntryOrigins(
       observedAt: origin.observedAt,
     })),
   };
-  return executeOriginCommand(captureMemoryAgentDatabaseOptions(params.agentId), {
-    type: "record",
-    input,
-  });
+  return executeOriginCommand(
+    captureMemoryAgentDatabaseOptions(params.agentId),
+    {
+      type: "record",
+      input,
+    },
+    captureMemoryMutationAuthority(),
+  );
 }
 
 async function deleteMemoryEntryOrigins(

@@ -8,7 +8,6 @@ import {
 } from "./thread-bindings.persistence.js";
 import {
   BINDINGS_BY_THREAD_ID,
-  ensureBindingsLoaded,
   ensureBindingsLoadedAsync,
   resolveBindingIdsForSession,
   MANAGERS_BY_ACCOUNT_ID,
@@ -24,7 +23,6 @@ export function resolveBindingIdsForTargetSession(params: {
   accountId?: string;
   targetKind?: ThreadBindingTargetKind;
 }) {
-  ensureBindingsLoaded();
   return resolveBindingIdsForSession({
     ...params,
     accountId: params.accountId ? normalizeAccountId(params.accountId) : undefined,

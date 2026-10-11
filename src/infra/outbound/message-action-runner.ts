@@ -59,7 +59,7 @@ import {
   normalizeSandboxMediaParams,
   parseJsonMessageParam,
   resolveAttachmentMediaPolicy,
-  resolveExtraActionMediaSourceParamKeys,
+  resolveExtraActionMediaSourceParamKeysAsync,
 } from "./message-action-params.js";
 import { prepareMessageRoute, resolveMessageTarget } from "./message-action-routing.js";
 import { withSendNormalization } from "./message-action-send-payload.js";
@@ -558,18 +558,21 @@ async function runMessageActionWithAuthority(
           const { channel, channelPlugin, accountId, dryRun, defersExternalTargetResolution } =
             route;
 
-          const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
-            cfg,
-            action,
-            args: params,
-            channel,
-            accountId,
-            sessionKey: input.sessionKey,
-            sessionId: input.sessionId,
-            agentId: resolvedAgentId,
-            requesterSenderId: input.requesterSenderId,
-            senderIsOwner: input.senderIsOwner,
-          });
+          const extraActionMediaSourceParamKeys = await resolveExtraActionMediaSourceParamKeysAsync(
+            {
+              cfg,
+              action,
+              args: params,
+              channel,
+              accountId,
+              sessionKey: input.sessionKey,
+              sessionId: input.sessionId,
+              agentId: resolvedAgentId,
+              requesterSenderId: input.requesterSenderId,
+              senderIsOwner: input.senderIsOwner,
+            },
+          );
+          (route.assertTargetAuthorityCurrent ?? input.assertDirectAdapterHandoff)?.();
           const structuredAttachmentMode = action === "send" ? "all" : "selected";
 
           const mediaAccess =

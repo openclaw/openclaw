@@ -1,7 +1,10 @@
 import { Type } from "typebox";
 import { vi } from "vitest";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
-import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import {
+  createDiagnosticEmbeddedRunOwner,
+  type DiagnosticEmbeddedRunOwner,
+} from "../../../logging/diagnostic-run-activity.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   buildToolLifecycleErrorResult,
@@ -28,6 +31,7 @@ import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 
 export function prepareCatalogExecutor(options?: {
   activeSession?: AgentSession;
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   sessionManager?: SessionManager;
   hookRunner?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["agentSession"]["hookRunner"];
   attempt?: Partial<Parameters<typeof prepareEmbeddedAttemptStream>[0]["attempt"]>;
@@ -44,6 +48,7 @@ export function prepareCatalogExecutor(options?: {
   onAttemptAbort?: () => void;
   abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
   markExternalAbort?: () => void;
+  recoverStalledModelCall?: () => boolean;
   toolProgressDetail?: "explain" | "raw";
   onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
@@ -86,15 +91,18 @@ export function prepareCatalogExecutor(options?: {
     },
     hookAgentId: "main",
     diagnosticTrace: {} as never,
-    diagnosticOwner: createDiagnosticEmbeddedRunOwner({
-      sessionId: "session-output-schema",
-      runId: "run-output-schema",
-    }),
+    diagnosticOwner:
+      options?.diagnosticOwner ??
+      createDiagnosticEmbeddedRunOwner({
+        sessionId: "session-output-schema",
+        runId: "run-output-schema",
+      }),
     nestedToolActivityState,
     isReplaySafeTool: () => false,
     runAbortController,
     abortRun: options?.abortRun ?? vi.fn(),
     markExternalAbort: options?.markExternalAbort ?? vi.fn(),
+    recoverStalledModelCall: options?.recoverStalledModelCall,
     getRunState:
       options?.getRunState ??
       (() => ({

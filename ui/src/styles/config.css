@@ -5,11 +5,15 @@
    pieces layered on top of the settings primitives. */
 
 /* Mirrors the .settings-page column so config chrome lines up with it. */
-.config-lead {
+.config-lead,
+.config-content-callout {
   width: 100%;
   max-width: 760px;
   margin: 0 auto;
   padding: var(--space-3) var(--space-4) 0;
+}
+
+.config-lead {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -168,13 +172,6 @@
 
 .config-content > .settings-page {
   padding-top: 0;
-}
-
-.config-content-callout {
-  width: 100%;
-  max-width: 760px;
-  margin: 0 auto;
-  padding: var(--space-3) var(--space-4) 0;
 }
 
 .config-content-callout .callout {
@@ -766,7 +763,10 @@
   display: contents;
 }
 
-.cfg-structured-draft__error .settings-row__control {
+.cfg-structured-draft__error .settings-row__control,
+.cfg-json-editor > .settings-input,
+.cfg-json-editor > .settings-secret,
+.cfg-array .settings-row--stacked .settings-row__control {
   width: 100%;
 }
 
@@ -776,15 +776,6 @@
   flex-direction: column;
   gap: 6px;
   min-width: 0;
-  width: 100%;
-}
-
-.cfg-json-editor > .settings-input,
-.cfg-json-editor > .settings-secret {
-  width: 100%;
-}
-
-.cfg-array .settings-row--stacked .settings-row__control {
   width: 100%;
 }
 
@@ -839,9 +830,13 @@
   }
 }
 
-.mcp-page {
+.mcp-page,
+.memory-page__panel {
   display: grid;
   gap: 14px;
+}
+
+.mcp-page {
   margin-top: 12px;
 }
 
@@ -855,11 +850,6 @@
    does not. */
 .shell--settings .content.content--memory-page {
   scrollbar-gutter: stable;
-}
-
-.memory-page__panel {
-  display: grid;
-  gap: 14px;
 }
 
 /* Overview and Memories render a .settings-page descendant, while Dreams does

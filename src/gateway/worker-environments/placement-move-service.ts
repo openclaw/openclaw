@@ -10,7 +10,7 @@ import type {
 import type {
   WorkerPlacementMoveIntent,
   WorkerPlacementMoveTarget,
-} from "./placement-move-intent.js";
+} from "./placement-move-intent.types.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import type { WorkerReclaimPlacement } from "./placement-reclaim-contract.js";
 import {
