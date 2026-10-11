@@ -5,7 +5,8 @@ import {
   type PluginCommandCatalogDecision,
   type PluginCommandDispatch,
 } from "openclaw/plugin-sdk/plugin-command-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createArgMenusHarness,
   createSlashCommand,
@@ -236,12 +237,34 @@ describe("Slack native command argument menus", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("renders runtime-specific /think choices", async () => {
+  it.each(["config", "parent"])("renders /think choices from the %s model", async (source) => {
+    const parentKey = "agent:main:slack:channel:c1";
+    const sessionKey = `${parentKey}:thread:100`;
+    if (source === "parent") {
+      const reader = vi
+        .spyOn(sessionStore, "getSessionEntryAsync")
+        .mockImplementation(async (params) =>
+          params.sessionKey === parentKey
+            ? {
+                sessionId: "parent",
+                updatedAt: 1,
+                providerOverride: "openai",
+                modelOverride: "gpt-5.6-luna",
+              }
+            : undefined,
+        );
+      onTestFinished(() => reader.mockRestore());
+      getSlackSlashMocks().resolveAgentRouteMock.mockReturnValue({
+        agentId: "main",
+        sessionKey,
+        accountId: "acct",
+      });
+    }
     const testHarness = createArgMenusHarness({
       commands: { native: true, nativeSkills: false },
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
+          model: { primary: source === "parent" ? "openai/gpt-5.4" : "openai/gpt-5.6-luna" },
           models: {
             "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
           },
@@ -255,6 +278,11 @@ describe("Slack native command argument menus", () => {
 
     expect(values.length).toBeGreaterThan(0);
     expect(values).toContain("ultra");
+    if (source === "parent") {
+      expect(sessionStore.getSessionEntryAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "main", sessionKey: parentKey }),
+      );
+    }
   });
 
   it("falls back to static menus when app.options() throws during registration", async () => {
@@ -304,9 +332,11 @@ describe("Slack native command argument menus", () => {
         commandText: `/${name}`,
         commandId: expect.stringMatching(/^slack:/),
         replyId: "argument-menu",
-        replyText: expect.stringContaining(firstCallPayload(respond, "menu").text),
       }),
     );
+    expect(
+      getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls[0]?.[0].replyText,
+    ).toContain(firstCallPayload(respond, "menu").text);
     expect(
       getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls[0]?.[0].replyText,
     ).not.toContain("openclaw_cmdarg");

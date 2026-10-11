@@ -526,7 +526,7 @@ export function createSlackCommandHandler(params: {
             : undefined;
         const menuModelContext =
           menuNeedsModelContext && menuRoute
-            ? resolveSlackCommandMenuModelContext({
+            ? await resolveSlackCommandMenuModelContext({
                 cfg,
                 agentId: menuRoute.agentId,
                 sessionKey: menuRoute.sessionKey,
