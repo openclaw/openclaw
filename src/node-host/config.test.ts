@@ -17,7 +17,10 @@ import {
   readConfigMachineState,
   readConfigMachineStateWithMetadata,
 } from "../state/config-machine-state.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { nodeHostConfigRuntimeEntrypoint } from "./config-runtime.test-support.js";
 import {
   configureNodeHost,
@@ -102,6 +105,7 @@ async function runConcurrentImplicitConfigures(
 
 describe("node-host SQLite config", () => {
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fixture.cleanup();
   });
@@ -164,7 +168,7 @@ describe("node-host SQLite config", () => {
       1_234,
     );
     expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).not.toHaveProperty("token");
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     await expect(loadNodeHostConfig(env)).resolves.toEqual(configured);
     await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
       code: "ENOENT",
@@ -189,7 +193,7 @@ describe("node-host SQLite config", () => {
       nowMs: 2,
     });
     expect(enabled.installedAppsSharing).toBe(true);
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ installedAppsSharing: true });
   });
 
@@ -201,7 +205,7 @@ describe("node-host SQLite config", () => {
       commands: [" fixture.read ", "fixture.list", "fixture.read"],
       env,
     });
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     await expect(loadNodeHostConfig(env)).resolves.toMatchObject({
       commands: ["fixture.list", "fixture.read"],
     });
@@ -209,7 +213,7 @@ describe("node-host SQLite config", () => {
       configureNodeHost({ fallbackDisplayName: "node", gateway: { host: "new.example" }, env }),
     ).resolves.toMatchObject({ commands: ["fixture.list", "fixture.read"] });
     await configureNodeHost({ fallbackDisplayName: "node", gateway: {}, commands: [], env });
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ commands: [] });
   });
 
@@ -221,7 +225,7 @@ describe("node-host SQLite config", () => {
     const cleared = await configureNodeHost({ ...params, allCommands: true });
     expect(cleared).not.toHaveProperty("commands");
     expect(cleared.nodeId).toBe(restricted.nodeId);
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).not.toHaveProperty("commands");
     await expect(loadNodeHostConfig(env)).resolves.not.toHaveProperty("commands");
     await expect(configureNodeHost(params)).resolves.not.toHaveProperty("commands");

@@ -14,12 +14,14 @@ declare module "@solidjs/web" {
       "wa-tab": HTMLAttributes<HTMLElement> & {
         panel?: string;
         active?: boolean;
+        "prop:active"?: boolean;
         "prop:tabIndex"?: number;
       };
       "wa-tab-panel": HTMLAttributes<HTMLElement> &
         Properties<HTMLElement> & {
           name?: string;
           active?: boolean;
+          "prop:active"?: boolean;
         };
       "resizable-divider": Omit<HTMLAttributes<HTMLElement>, "onResize"> & {
         "prop:orientation": "horizontal" | "vertical";

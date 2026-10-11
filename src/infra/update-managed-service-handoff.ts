@@ -92,7 +92,7 @@ import type {
 } from "./update-managed-service-handoff-types.js";
 import { resolveManagedUpdateRequester } from "./update-requester-authority.js";
 import type { ForegroundUpdateOrigin } from "./update-restart-sentinel-payload.js";
-import { recordUpdateRunStep } from "./update-run-ledger.js";
+import { createUpdateRunProcessIdentityWarning } from "./update-run-write.async.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 import { looksLikeGitCheckout } from "./update-runner-install-surface.js";
 
@@ -1227,25 +1227,7 @@ async function spawnManagedServiceUpdateHandoff(
     databasePath: updateLeaseDatabaseIdentity.databasePath,
     existingIdentity: updateLeaseDatabaseIdentity,
     serviceManagerEnv: resolveServiceManagerEnv(serviceEnv),
-    onProcessIdentityWarning: (pid, message) => {
-      console.warn(`[update] ${message}`);
-      if (params.runId) {
-        try {
-          recordUpdateRunStep(
-            params.runId,
-            {
-              step: `warning:process-start-identity:${pid}`,
-              status: "completed",
-              detail: message,
-              endedAtMs: Date.now(),
-            },
-            { env: serviceEnv },
-          );
-        } catch {
-          /* Identity warnings must not abort an update. */
-        }
-      }
-    },
+    onProcessIdentityWarning: createUpdateRunProcessIdentityWarning(params.runId, serviceEnv),
   });
   owner.leaseStore = identityStore;
   const parentStartIdentity = identityStore.processIdentity(parentPid).startIdentity;

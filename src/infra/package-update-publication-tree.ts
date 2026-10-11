@@ -7,6 +7,7 @@ import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import { packageActivationIdentityOrAbsent as entryIdentity } from "./package-update-activation-custody.js";
 import type { PackageActivationDescriptor } from "./package-update-activation-journal.js";
+import { LEGACY_PACKAGE_RECOVERY_HELPER } from "./package-update-activation-paths.js";
 import {
   assertPackagePathIdentity,
   createPackagePathAssertion,
@@ -112,12 +113,14 @@ export async function copyPackagePublicationTree(
 }
 
 export function createPackagePublicationTreeMatcher(
-  candidate: PackageActivationDescriptor["candidate"],
+  descriptor: Pick<PackageActivationDescriptor, "candidate" | "previous" | "helperDigest">,
   onWarning: (message: string) => void,
 ) {
   let candidateWarningRecorded = false;
   const verified = new WeakMap<PackageIntegrityFingerprint, PackageIntegrityFingerprint>();
-  return async (
+  let legacyWarning: string | undefined;
+  const legacy = descriptor.helperDigest === LEGACY_PACKAGE_RECOVERY_HELPER;
+  const matches = async (
     file: string,
     expected: PackageActivationDescriptor["candidate"],
     logical: string,
@@ -133,14 +136,17 @@ export function createPackagePublicationTreeMatcher(
     if (!contents) {
       return true;
     }
+    // Legacy package code is reinstallable; accept its previous identity/version without the stale seal.
+    const legacyPrevious = legacy && expected === descriptor.previous;
     // A prepared descriptor carries its in-process observation, so settled unchanged
     // files are not re-read. A recovery process parses one without and re-reads all.
-    if ("digest" in expected) {
+    if ("digest" in expected && !legacyPrevious) {
       try {
         const observed = await createPackageIntegrityReader().tree(
           file,
           logical,
           verified.get(expected) ?? expected,
+          legacy,
         );
         if (!isDeepStrictEqual(observed, expected)) {
           throw new PackageIntegrityMismatchError(
@@ -153,7 +159,7 @@ export function createPackagePublicationTreeMatcher(
         verified.set(expected, observed);
         return true;
       } catch (error) {
-        if (expected !== candidate || !isPackageIntegrityResourceError(error)) {
+        if (expected !== descriptor.candidate || !isPackageIntegrityResourceError(error)) {
           throw error;
         }
       }
@@ -162,6 +168,14 @@ export function createPackagePublicationTreeMatcher(
     if (observed?.identity !== expected.identity || observed.version !== expected.version) {
       throw new Error(`Package publication object changed: ${file}`);
     }
+    if (legacyPrevious) {
+      if (!legacyWarning) {
+        legacyWarning =
+          "legacy package record settled by identity and version; content could not be re-verified";
+        onWarning(legacyWarning);
+      }
+      return true;
+    }
     if (!candidateWarningRecorded) {
       onWarning(
         "candidate package fingerprint incomplete; activation requires the directory identity, package version and launchers; full package contents are unverified",
@@ -169,5 +183,11 @@ export function createPackagePublicationTreeMatcher(
       candidateWarningRecorded = true;
     }
     return true;
+  };
+  return {
+    matches,
+    get legacyWarning() {
+      return legacyWarning;
+    },
   };
 }

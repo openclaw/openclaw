@@ -25,7 +25,7 @@ type McpAppCatalogProps = {
   surface: "global" | "thread" | "sidebar" | "file";
   filePath: string;
 };
-export type McpAppCatalogElement = SolidBridgeElement<McpAppCatalogProps>;
+type McpAppCatalogElement = SolidBridgeElement<McpAppCatalogProps>;
 
 function CatalogIcon(props: { server: McpAppDiscoveredServer; entry: McpAppDiscoveredEntrypoint }) {
   const icon = () =>
@@ -299,7 +299,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
   );
 }
 
-export const McpAppCatalog = defineSolidBridge<McpAppCatalogProps>(
+defineSolidBridge<McpAppCatalogProps>(
   "openclaw-mcp-app-catalog",
   (props, host) => <McpAppCatalogContent {...props} host={host} />,
   {
