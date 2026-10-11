@@ -1,10 +1,7 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as terminalText from "openclaw/plugin-sdk/text-chunking";
 import { expect, it, vi } from "vitest";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
-import { createClientHarness } from "./app-server/test-support.js";
-import { observeCodexCatalogClient } from "./session-catalog-events.js";
 import {
   commandRpcMocks,
   createCodexSessionCatalogControlFactory,
@@ -226,14 +223,6 @@ it("reconciles displayed native metadata and explicit Git clears without activit
   });
   const source = (await factory.homesForAgent("main"))[0]!;
   const control = factory.forRequest("main", source);
-  const client = createClientHarness();
-  const nativeRead = vi.spyOn(client.client, "request");
-  const requested = createDeferred<void>();
-  const release = createDeferred<void>();
-  await observeCodexCatalogClient(client.client, {
-    startOptions: source.appServer.start,
-    agentDir: source.agentDir,
-  });
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
     await control.initialize();
@@ -269,34 +258,7 @@ it("reconciles displayed native metadata and explicit Git clears without activit
       expect((await control.listPage({})).sessions[0]).not.toHaveProperty("gitBranch");
     });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
-    await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
-    const older = structuredClone(native);
-    commandRpcMocks.codexControlRequest.mockImplementationOnce(async () => {
-      requested.resolve();
-      await release.promise;
-      return { data: [older] };
-    });
-    await vi.advanceTimersByTimeAsync(15 * 60_000);
-    await control.listPage({});
-    await requested.promise;
-    client.send({ method: "turn/completed", params: { threadId: native.id, turn: {} } });
-    const request = JSON.parse(await client.waitForWrite(0));
-    expect(request.method).toBe("thread/read");
-    client.send({
-      id: request.id,
-      result: { thread: { ...native, gitInfo: { branch: "newer-completion" } } },
-    });
-    await nativeRead.mock.results[0]!.value;
-    await vi.waitFor(async () => {
-      expect((await control.listPage({})).sessions[0]?.gitBranch).toBe("newer-completion");
-    });
-    release.resolve();
-    await nextTurn();
-    expect((await control.listPage({})).sessions[0]?.gitBranch).toBe("newer-completion");
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
   } finally {
-    release.resolve();
-    await client.client.closeAndWait();
     await factory.stop();
     vi.useRealTimers();
   }

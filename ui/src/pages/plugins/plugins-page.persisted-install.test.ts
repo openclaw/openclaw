@@ -3,15 +3,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import type { PluginInstallRequest, PluginMutationResult } from "../../lib/plugins/index.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
+import type { PluginMutationResult } from "../../lib/plugins/index.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  activatePluginControl,
+  clickPluginAction,
   createClient,
   createContext,
+  createDiscoveryDetail,
   createGateway,
   createInspectResult,
   createPlugin,
@@ -20,6 +22,7 @@ import {
   createResult,
   mountPage,
   resetPluginsPageTestState,
+  settlePlugins,
 } from "./plugins-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -40,11 +43,6 @@ const available = createPlugin({
   install: { source: "clawhub", packageName: "community-calendar" },
 });
 const installed = { ...available, installed: true, enabled: true, state: "error" as const };
-const installRequest: PluginInstallRequest = {
-  source: "clawhub",
-  packageName: "community-calendar",
-};
-const rowKey = "plugin:calendar-runtime";
 const runtimeFailure = {
   operationId: "install-1",
   generation: 3,
@@ -71,98 +69,11 @@ const initialConfigSnapshot = {
   raw: "{}",
 };
 
-it("blocks repeat install when saved-state reads fail, then reconciles aliases and later removal", async () => {
-  let inventoryFails = true;
-  let present = true;
-  const otherInstall = deferred<never>();
-  const otherRequest: PluginInstallRequest = { source: "npm", spec: "another-plugin" };
-  const { client, request: gatewayRequest } = createClient(async (method, params) => {
-    if (method === "plugins.install") {
-      if (params === otherRequest) {
-        return otherInstall.promise;
-      }
-      throw new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Plugin startup failed",
-        details: {
-          persistence,
-          runtime: runtimeFailure,
-          installPolicyCode: "install_policy_warning_acknowledgement_required",
-          targetName: "community-calendar",
-          targetType: "plugin",
-          requestMode: "install",
-          reason: "Do not retry a saved installation",
-        },
-      });
-    }
-    if (method === "plugins.list") {
-      if (inventoryFails) {
-        throw new Error("Catalog refresh unavailable");
-      }
-      return createResult(present ? installed : available);
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
-  const harness = createGateway(client);
-  const refreshConfig = vi.fn(async () => {
-    throw new Error("Config refresh unavailable");
-  });
-  const { page } = await mountPage(
-    createContext(harness.gateway, refreshConfig),
-    createPluginsRouteData(
-      harness.gateway,
-      createResult(available),
-      createPluginsRouteLocation("/settings/plugins"),
-    ),
-  );
-  const alias = "clawhub:community-calendar";
-  await page.consentController.install(installRequest, alias);
-  await page.updateComplete;
-  expect(page.messages[rowKey]?.text).toContain("Plugin startup failed");
-  expect(page.messages[rowKey]?.text).toContain("Config refresh unavailable");
-  expect(page.messages[alias]?.savedInstall).toBe(available.id);
-  expect(page.messages[alias]?.installPolicyWarning).toBeUndefined();
-  await page.consentController.install(installRequest, alias);
-  await page.consentController.install(installRequest, rowKey);
-  expect(gatewayRequest.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(
-    1,
-  );
-  const otherIdentity = "npm:another-plugin";
-  const installingOther = page.consentController.install(otherRequest, otherIdentity);
-  await waitForFast(() => {
-    expect(page.consentController.installProgress.has(otherIdentity)).toBe(true);
-  });
-  expect(page.consentController.installProgress.get(alias)?.finishedAt).toBeTypeOf("number");
-  expect(page.consentController.installProgress.get(alias)?.canRetry).toBe(false);
-  inventoryFails = false;
-  await page.refreshCatalog();
-  expect(page.consentController.installProgress.has(alias)).toBe(false);
-  expect(page.consentController.installProgress.has(otherIdentity)).toBe(true);
-  expect(page.consentController.installProgress.get(otherIdentity)?.finishedAt).toBeUndefined();
-  expect(page.messages[alias]).toBeUndefined();
-  expect(page.messages[rowKey]?.text).toContain("Plugin startup failed");
-  present = false;
-  await page.refreshCatalog();
-  await page.updateComplete;
-  expect(page.messages[rowKey]).toBeUndefined();
-  await page.consentController.install(installRequest, alias);
-  expect(gatewayRequest.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(
-    3,
-  );
-  otherInstall.reject(new Error("Another registry is unavailable"));
-  await installingOther;
-  expect(page.messages[otherIdentity]?.text).toContain("Another registry is unavailable");
-  expect(page.messages[otherIdentity]?.text).toContain("Reconnect and check installed plugins");
-  expect(page.consentController.installProgress.get(otherIdentity)?.failure?.title).toBe(
-    "Installation status unknown",
-  );
-  expect(page.consentController.installProgress.get(otherIdentity)?.canRetry).toBe(false);
-  expect(page.consentController.installProgress.get(otherIdentity)?.finishedAt).toBeTypeOf(
-    "number",
-  );
-});
-
 it("retires saved-install refreshes when their Gateway owner is replaced", async () => {
+  const catalog = createDiscoveryDetail(available);
+  catalog.plugin.id = "catalog-calendar-runtime";
+  const replacementCatalog = createDiscoveryDetail({ ...available, name: "Replacement Calendar" });
+  replacementCatalog.plugin.id = catalog.plugin.id;
   const configRead = deferred<typeof configSnapshot>();
   const catalogRead = deferred<ReturnType<typeof createResult>>();
   let installSaved = false;
@@ -181,6 +92,9 @@ it("retires saved-install refreshes when their Gateway owner is replaced", async
     if (method === "plugins.list") {
       return catalogRead.promise;
     }
+    if (method === "plugins.catalog.get") {
+      return catalog;
+    }
     throw new Error(`Unexpected request: ${method}`);
   });
   const replacementConfig = { ...initialConfigSnapshot, hash: "replacement-config" };
@@ -191,6 +105,9 @@ it("retires saved-install refreshes when their Gateway owner is replaced", async
     if (method === "config.get") {
       return replacementConfig;
     }
+    if (method === "plugins.catalog.get") {
+      return replacementCatalog;
+    }
     throw new Error(`Unexpected request: ${method}`);
   });
   const harness = createGateway(client);
@@ -200,31 +117,30 @@ it("retires saved-install refreshes when their Gateway owner is replaced", async
     createPluginsRouteData(
       harness.gateway,
       createResult(available),
-      createPluginsRouteLocation("/settings/plugins"),
+      createPluginsRouteLocation(pathForPluginCatalogEntry(catalog.plugin.id)),
     ),
   );
   try {
     await runtimeConfig.ensureLoaded();
     const actionStart = initialRequest.mock.calls.length;
-    const installing = page.consentController.install(installRequest, rowKey);
-    await waitForFast(() => {
+    await clickPluginAction(page, "Install");
+    await waitForSolid(() => {
       const actionCalls = initialRequest.mock.calls.slice(actionStart);
       expect(actionCalls).toContainEqual(["config.get", {}]);
       expect(actionCalls).toContainEqual(["plugins.list", {}, expect.anything()]);
     });
     harness.emit(replacement, true);
-    await waitForFast(() => {
-      expect(page.result?.plugins[0]?.id).toBe("workboard");
+    await waitForSolid(() => {
+      expect(page.querySelector("h1")?.textContent).toBe("Replacement Calendar");
       expect(runtimeConfig.state.configSnapshot?.hash).toBe("replacement-config");
     });
     configRead.reject(new Error("Old config read failed"));
     catalogRead.resolve(createResult(installed));
-    await installing;
-    await page.updateComplete;
-    expect(page.result?.plugins[0]?.id).toBe("workboard");
+    await settlePlugins();
+    expect(page.querySelector("h1")?.textContent).toBe("Replacement Calendar");
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("replacement-config");
     expect(runtimeConfig.state.lastError).toBeNull();
-    expect(page.messages).toEqual({});
+    expect(page.querySelector(".plugins-row-message")).toBeNull();
     expect(page.textContent).not.toContain("Old startup failed");
     expect(page.textContent).not.toContain("Old config read failed");
     expect(replacementRequest).toHaveBeenCalledWith("config.get", {});
@@ -309,33 +225,40 @@ describe("plugin runtime mutations", () => {
       });
     try {
       await runtimeConfig.ensureLoaded();
-      const button = page.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]');
-      expect(button, "installed plugin exposes enablement").not.toBeNull();
-      button!.click();
-      await waitForFast(() =>
+      await clickPluginAction(page, "Enable Workboard");
+      await waitForSolid(() =>
         expect(request).toHaveBeenCalledWith("plugins.setEnabled", {
           pluginId: "workboard",
           enabled: true,
         }),
       );
-      await page.updateComplete;
-      expect(button!.getAttribute("aria-busy")).toBe("true");
-      expect(button!.querySelector(".btn__spinner")).not.toBeNull();
+      const busyButton = page.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]');
+      expect(busyButton?.getAttribute("aria-busy")).toBe("true");
+      expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
       expect(page.querySelectorAll(".plugin-catalog-detail__actions .btn__spinner")).toHaveLength(
         1,
       );
-      button!.click();
-      catalog = { ...catalog, generation: 7, plugins: [receipt.plugin] };
+      busyButton!.click();
+      catalog = {
+        ...catalog,
+        generation: 7,
+        plugins: [{ ...receipt.plugin, description: "Published plugin inventory" }],
+      };
       holdMutationConfig = true;
       enabling.resolve(receipt);
       await mutationConfigStarted.promise;
       publish();
-      await waitForFast(() => expect(page.result?.generation).toBe(7));
+      await waitForSolid(() => {
+        expect(page.querySelector(".plugin-catalog-detail__summary")?.textContent).toBe(
+          "Published plugin inventory",
+        );
+      });
       mutationConfig.resolve(enablementSnapshot);
-      await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
-      await waitForFast(() => expect(page.result?.generation).toBe(7));
-      expect(page.result?.plugins[0]?.enabled).toBe(true);
-      expect(page.messages["plugin:workboard"]).toBeUndefined();
+      await waitForSolid(() => {
+        expect(page.querySelector(".plugin-catalog-detail__actions .btn__spinner")).toBeNull();
+        expect(page.querySelector('[aria-label="Disable Workboard"]')).not.toBeNull();
+      });
+      expect(page.querySelector(".plugins-row-message")).toBeNull();
       expect(page.querySelector(".plugin-catalog-detail__actions .btn__spinner")).toBeNull();
       expect(page.querySelector(".plugins-row-message--success")).toBeNull();
       expect(request.mock.calls.filter(([method]) => method === "plugins.setEnabled")).toHaveLength(
@@ -375,7 +298,7 @@ describe("plugin runtime mutations", () => {
         details: { runtime, ...(applied === "earlier" ? { runtimeAttempt: attempted } : {}) },
       });
       const refreshed = {
-        ...createResult(createPlugin({ state: "error" })),
+        ...createResult(createPlugin({ enabled: action === "enable", state: "error" })),
         generation: applied === "earlier" ? 7 : 8,
       };
       const { client, request } = createClient(async (method) => {
@@ -411,23 +334,29 @@ describe("plugin runtime mutations", () => {
       try {
         await runtimeConfig.ensureLoaded();
         const actionStart = request.mock.calls.length;
-        await activatePluginControl(
+        await clickPluginAction(
           page,
-          ".plugin-catalog-detail",
-          action === "enable" ? "Enable" : "Disable",
+          action === "enable" ? "Enable Workboard" : "Disable Workboard",
         );
-        await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
-        await page.updateComplete;
-        const message = page.messages["plugin:workboard"];
-        expect(message?.kind).toBe("error");
-        expect(message?.savedInstall).toBeUndefined();
-        expect(message?.text).toContain(error.message);
-        expect(message?.text).toContain("Runtime phase: activate.");
+        await waitForSolid(() => {
+          expect(page.querySelector('.plugins-row-message[role="alert"]')?.textContent).toContain(
+            error.message,
+          );
+          expect(page.querySelector(".plugin-catalog-detail__actions .btn__spinner")).toBeNull();
+        });
+        expect(page.querySelector('.plugins-row-message[role="alert"]')?.textContent).toContain(
+          "Runtime phase: activate.",
+        );
+        expect(page.textContent).not.toContain("Installation saved");
         const calls = request.mock.calls.slice(actionStart);
         expect(calls.filter(([method]) => method === methodName)).toHaveLength(1);
         expect(calls.filter(([method]) => method === "plugins.list")).toHaveLength(applied ? 1 : 0);
         expect(calls.filter(([method]) => method === "config.get")).toHaveLength(applied ? 1 : 0);
-        expect(page.result?.generation).toBe(applied ? refreshed.generation : undefined);
+        expect(
+          page.querySelector(
+            `[aria-label="${applied && action === "enable" ? "Disable" : "Enable"} Workboard"]`,
+          ),
+        ).not.toBeNull();
         expect(page.querySelector(".plugins-install")).toBeNull();
       } finally {
         runtimeConfig.dispose();

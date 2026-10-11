@@ -1,5 +1,4 @@
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
@@ -8,11 +7,7 @@ import type {
 import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
 
 export type SessionEventDelivery<Registration extends { snapshot: unknown }> = {
-  captures: (entry: Registration) => boolean;
-  results: Map<
-    Registration,
-    { snapshot: Registration["snapshot"]; result: SessionChangedRowResult }
-  >;
+  results: Map<Registration, SessionChangedRowResult>;
   deliver: (event: GatewayEventFrame, acceptsGeneration?: () => boolean) => void;
 };
 
@@ -23,16 +18,11 @@ export function createSessionEventDelivery<
   connection: SessionConnectionOwner,
   isAttached: (entry: Registration) => boolean,
   isCurrent: (entry: Registration) => boolean,
-  hasNewerFacts: (row: GatewaySessionRow, revision: number) => boolean,
 ) {
-  return (
-    scope: SessionConnectionScope | null,
-    revision: number,
-  ): SessionEventDelivery<Registration> => {
+  return (scope: SessionConnectionScope | null): SessionEventDelivery<Registration> => {
     const registrations = new Set([...entries].filter(isCurrent));
     const results: SessionEventDelivery<Registration>["results"] = new Map();
     return {
-      captures: (entry) => registrations.has(entry),
       results,
       deliver(event, acceptsGeneration) {
         for (const entry of registrations) {
@@ -47,12 +37,8 @@ export function createSessionEventDelivery<
             const result: Parameters<SessionRowEventListener>[1] =
               acceptsGeneration?.() === false
                 ? { applied: false, generationRejected: true }
-                : recorded &&
-                    (isCurrent(entry) || recorded.result.deletedKey) &&
-                    entry.snapshot === recorded.snapshot &&
-                    (!recorded.result.admittedRow ||
-                      !hasNewerFacts(recorded.result.admittedRow, revision))
-                  ? recorded.result
+                : recorded && (isCurrent(entry) || recorded.deletedKey)
+                  ? recorded
                   : { applied: false };
             // Rejected generations still wake outboxes; they cannot mutate a pane's transcript.
             entry.onEvent(event, result);

@@ -16,6 +16,7 @@ import {
   createQuestionPromptState,
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
+  isQuestionNotFoundError,
   listQuestionPrompts,
   setQuestionPromptClient,
   submitQuestionPrompt,
@@ -28,7 +29,7 @@ import {
   renderChatQuestionSummary,
 } from "../chat/components/chat-question-card.ts";
 
-type QuestionPageRequestError = "connection" | "unavailable" | null;
+type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 
 export class QuestionPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
@@ -192,9 +193,9 @@ export class QuestionPage extends OpenClawLightDomElement {
           payload: { id, status: record.status },
         });
       }
-    } catch {
+    } catch (error) {
       if (this.client === client && this.operationGeneration === generation) {
-        this.requestError = "unavailable";
+        this.requestError = isQuestionNotFoundError(error) ? "unavailable" : "load";
       }
     } finally {
       if (this.client === client && this.operationGeneration === generation) {
@@ -240,7 +241,9 @@ export class QuestionPage extends OpenClawLightDomElement {
       return t(
         this.requestError === "connection"
           ? "chat.questions.disconnected"
-          : "chat.questions.unavailable",
+          : this.requestError === "load"
+            ? "chat.questions.loadFailed"
+            : "chat.questions.unavailable",
       );
     }
     return prompt && prompt.status !== "pending"
@@ -254,7 +257,24 @@ export class QuestionPage extends OpenClawLightDomElement {
     );
     const content =
       this.loading || this.requestError
-        ? html`<div class="approval-page__state" role="status">${this.pageTitle(prompt)}</div>`
+        ? html`<div class="approval-page__state" role="status">
+            ${this.pageTitle(prompt)}
+            ${
+              !this.loading && this.requestError === "load"
+                ? html`<button
+                    type="button"
+                    class="btn"
+                    @click=${() => {
+                      if (this.client) {
+                        void this.loadQuestion(this.client);
+                      }
+                    }}
+                  >
+                    ${t("common.retry")}
+                  </button>`
+                : nothing
+            }
+          </div>`
         : prompt
           ? this.renderQuestion(prompt)
           : nothing;

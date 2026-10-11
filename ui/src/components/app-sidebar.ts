@@ -10,7 +10,7 @@ import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import "./session-menu.ts";
-import "./mcp-app-catalog.ts";
+import "./mcp-app-catalog.tsx";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
@@ -29,11 +29,11 @@ import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import { sidebarOnlineOrder, renderAppSidebarOnline } from "./app-sidebar-online.ts";
 import "../styles/sidebar-rail.css";
-import { renderSidebarRail, renderSidebarPages, renderSidebarScope } from "./app-sidebar-rail.ts";
-import { renderAppSidebarBrand } from "./app-sidebar-render.ts";
+import { renderSidebarRail, renderSidebarPages } from "./app-sidebar-rail.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import "../styles/app-sidebar.css";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
+import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.ts";
 import { renderSessionList } from "./app-sidebar-session-list-render.ts";
 import type {
   SidebarNarrationSyncInput,
@@ -85,7 +85,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void {
     this.sidebarSnapshot = model;
     this.navigationView = model.navigationView;
-    this.navigationScope = model.navigationScope;
     this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
     const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];
     for (const row of rows) {
@@ -122,9 +121,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   sidebarSnapshotSettled(): boolean {
     const context = this.context;
     if (!this.connected || !context) {
-      return false;
-    }
-    if (context.gateway.snapshot.selfUser?.id && !this.navigationCatalog.scopesReady) {
       return false;
     }
     if (this.navigationView === "pages" && this.navigationCatalog.dashboards?.loading !== false) {
@@ -644,12 +640,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       >
         ${renderSidebarRail(this)}
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
-          ${renderAppSidebarBrand(
-            this,
-            this.sidebarAgentsMode === "roster"
-              ? this.rosterRenderer?.renderSidebarNewSessionMenu(this)
-              : nothing,
-          )}
           <div class="sidebar-shell__content">
             <div
               class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData.sessionsScrollState}"
@@ -661,7 +651,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   : this.navigationView === "online"
                     ? renderAppSidebarOnline(this)
                     : html`
-                        ${renderSidebarScope(this)}
+                        ${renderSessionListToolbar(this, this.sidebarAgentsMode === "roster" ? this.rosterRenderer?.renderSidebarNewSessionMenu(this) : undefined)}
                         <div
                           class="sidebar-session-content"
                           ?hidden=${Boolean(this.contextualSidebar)}

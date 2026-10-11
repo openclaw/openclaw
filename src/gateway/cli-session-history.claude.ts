@@ -319,7 +319,7 @@ const INTERNAL_PROMPT_PREFIX = new RegExp(
 );
 
 /** Removes the resume note and queued system events OpenClaw put in front of a user turn. */
-export function stripClaudeCliGeneratedUserPrefixes(text: string): string {
+function stripClaudeCliGeneratedUserPrefixes(text: string): string {
   return stripCliPromptDecorations(text);
 }
 

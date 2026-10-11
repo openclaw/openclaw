@@ -12,13 +12,10 @@ import {
   noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobMessageSourceAuthorityMutation,
   noteActiveCronJobScheduleMutation,
-  onCronJobInactive,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
-import { projectCronReceiptAuthorityJobFacts } from "../store/receipt-authority-facts.js";
-import { observeCronReceiptAuthority } from "../store/receipt-authority-owner.js";
 import {
   CronRunReceiptRevisionError,
   prepareCronRunReceiptAdjudication,
@@ -26,7 +23,6 @@ import {
   trackCronRunReceiptSettlement,
 } from "../store/run-receipt-store.js";
 import type {
-  CronRunReceiptCurrentFacts,
   CronRunReceiptHandle,
   CronRunReceiptCurrentReadCommand,
   CronRunReceiptOwnerObservation,
@@ -35,6 +31,10 @@ import type {
 } from "../store/run-receipt.types.js";
 import type { CronAgentScope } from "../types-shared.js";
 import type { CronJob, CronRunStatus } from "../types.js";
+import {
+  resolveCronJobMessageActionAuthorityInputs,
+  resolveCronJobMessageToolAuthorityInputs,
+} from "./jobs-tool-policy.js";
 import type { CronServiceState } from "./state.js";
 import { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
 
@@ -92,85 +92,43 @@ export function markServiceCronJobActive(
   runReceipt: CronRunReceiptHandle,
 ): CronActiveJobMarker | undefined {
   const context = captureOpenClawStateWorkerContext();
-  const facts = {
-    receipt: runReceipt,
-    job: projectCronReceiptAuthorityJobFacts(job),
-    deletionBlocked: false,
-  };
-  const observation = observeCronReceiptAuthority(
-    context,
-    {
-      type: "cron.currentReceipt",
-      handle: runReceipt,
-      includeJob: true,
-      includeAvailability: true,
-    },
-    facts,
-  );
-  const assertFacts = (current: CronRunReceiptCurrentFacts) =>
-    assertCronRunReceiptCurrentFacts({
-      handle: runReceipt,
-      facts: current,
-      resolveAgentId: (currentJob) => resolveCronRunReceiptAgentId(state, currentJob),
-      isAgentAvailable: state.deps.isAgentAvailable,
-      env: context.environment,
-    });
-  const isCurrent = (sourceSensitive: boolean) => () => {
-    const current = observation.readForPreparation();
-    try {
-      assertFacts(current.facts);
-    } catch (error) {
-      if (error instanceof CronRunReceiptRevisionError) {
-        return false;
-      }
-      throw error;
+  const assertOwner = () => {
+    context.admission.assertCurrent();
+    if (
+      resolveCronRunReceiptAgentId(state, job) !== runReceipt.agentId ||
+      state.deps.isAgentAvailable?.(runReceipt.agentId, undefined, {
+        deletionBlocked: false,
+      }) === false
+    ) {
+      throw new CronRunReceiptRevisionError(runReceipt.receiptId, "cron owner changed");
     }
-    return !(sourceSensitive ? current.sourceRevoked : current.messageRevoked);
+  };
+  const isCurrent = () => {
+    try {
+      assertOwner();
+      return true;
+    } catch {
+      return false;
+    }
   };
   const marker = markCronJobActive(job.id, {
     agentId: runReceipt.agentId,
     stateIdentityKey: context.admission.identity.key,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
-    isMessageActionAuthorityCurrent: facts.job.messageToolAuthorityInputs
-      ? isCurrent(false)
+    isMessageActionAuthorityCurrent: resolveCronJobMessageToolAuthorityInputs(job)
+      ? isCurrent
       : undefined,
-    isMessageSourceAuthorityCurrent: facts.job.messageActionAuthorityInputs
-      ? isCurrent(true)
+    isMessageSourceAuthorityCurrent: resolveCronJobMessageActionAuthorityInputs(job)
+      ? isCurrent
       : undefined,
-    prepareMessageUse: (sourceSensitive, assertCurrent, signal) =>
-      observation.acquireUse({
-        permission: sourceSensitive ? "source" : "message",
-        signal,
-        assertCurrent(current) {
-          assertCurrent();
-          assertFacts(current);
-        },
-      }),
   });
   if (marker) {
     marker.standingGrantAuthority = {
       context,
       handle: { ...runReceipt },
-      assertCurrent() {
-        context.admission.assertCurrent();
-        if (
-          resolveCronRunReceiptAgentId(state, job) !== runReceipt.agentId ||
-          state.deps.isAgentAvailable?.(runReceipt.agentId, undefined, {
-            deletionBlocked: false,
-          }) === false
-        ) {
-          throw new CronRunReceiptRevisionError(runReceipt.receiptId, "cron owner changed");
-        }
-      },
-      acquireUse: (assertCurrent, signal) =>
-        observation.acquireUse({
-          permission: "execution",
-          assertCurrent,
-          signal,
-        }),
+      assertCurrent: assertOwner,
     };
   }
-  onCronJobInactive(marker, () => observation.release());
   return marker;
 }
 

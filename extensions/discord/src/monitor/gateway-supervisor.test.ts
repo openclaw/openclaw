@@ -123,6 +123,7 @@ describe("createDiscordGatewaySupervisor", () => {
 
     supervisor.detachLifecycle();
     emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1006"));
+    emitter.emit("error", new Error("another retired socket failure"));
 
     expect(seen).toEqual(["disallowed-intents", "fatal"]);
     expect(runtime.error).toHaveBeenCalledTimes(1);
@@ -162,6 +163,7 @@ describe("createDiscordGatewaySupervisor", () => {
       const error = new Error(`late gateway error ${index}`);
       expect(() => emitter.emit("error", error)).not.toThrow();
       emitter.emit("error", error);
+      emitter.emit("error", new Error("different late gateway failure"));
     }
 
     expect(emitter.listenerCount("error")).toBe(1);

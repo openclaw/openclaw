@@ -209,7 +209,7 @@ export async function prepareWorktreeTemplate(params: {
             (await worktreePathExists(existing.path)) &&
             (await params.validate(existing, options))
           ) {
-            setWorktreePreparationTemplate("warm");
+            setWorktreePreparationTemplate("warm", { reason: "ready" });
             await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent);
             return retained;
           }
@@ -217,9 +217,18 @@ export async function prepareWorktreeTemplate(params: {
           retained = undefined;
         }
         if (params.reuseOnly || hasReaders) {
+          setWorktreePreparationTemplate("unavailable", {
+            reason: hasReaders
+              ? existing?.status === "preparing"
+                ? "template-building"
+                : "stale-template-in-use"
+              : existing
+                ? "template-stale"
+                : "template-missing",
+          });
           return undefined;
         }
-        setWorktreePreparationTemplate("cold");
+        setWorktreePreparationTemplate("cold", { reason: "template-disk-admission" });
         await params.requireSpace();
         if (existing) {
           await retireWorktreeTemplate(params.env, existing, options);
@@ -244,8 +253,10 @@ export async function prepareWorktreeTemplate(params: {
         retained = await retainWorktreeTemplate(params.env, record, assertCurrent);
         assertCurrent();
         await fs.mkdir(directory, { recursive: true });
+        setWorktreePreparationTemplate("cold", { reason: "template-build" });
         await params.prepare(record, options);
         await markTemplateReadyAsync(params.env, id, params.now(), assertCurrent);
+        setWorktreePreparationTemplate("cold", { reason: "ready" });
         return { ...retained, status: "ready" };
       },
     );

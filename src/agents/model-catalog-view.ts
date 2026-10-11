@@ -260,7 +260,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
   });
   const runtimePolicies = new WeakMap<
     ModelCatalogEntry,
-    ReturnType<typeof resolveAgentHarnessPolicy>
+    { policy: ReturnType<typeof resolveAgentHarnessPolicy>; hostConfigured?: boolean }
   >();
   const providerEndpoints = new Map<string, { endpoint?: string; api?: string }>();
   for (const [id, configured] of Object.entries(params.cfg.models?.providers ?? {})) {
@@ -284,9 +284,9 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       host: ModelAuthAvailabilityEvaluation,
       runtimeId?: string,
     ): ModelAuthAvailabilityEvaluation => {
-      let policy = runtimePolicies.get(entry);
-      if (!policy) {
-        policy = resolveAgentHarnessPolicy({
+      let prepared = runtimePolicies.get(entry);
+      if (!prepared) {
+        let policy = resolveAgentHarnessPolicy({
           provider: entry.provider,
           modelId: entry.id,
           modelApi: entry.api,
@@ -297,9 +297,10 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
         if (!policy.forcedByEnvironment && policy.runtimeSource === "implicit") {
           policy = { ...policy, runtime: routes.implicitNativeRuntime(entry) ?? policy.runtime };
         }
-        runtimePolicies.set(entry, policy);
+        prepared = { policy };
+        runtimePolicies.set(entry, prepared);
       }
-      const runtime = runtimeId ?? host.requestedRuntimeId ?? policy.runtime;
+      const runtime = runtimeId ?? host.requestedRuntimeId ?? prepared.policy.runtime;
       if (runtime === "auto" || runtime === "openclaw") {
         return host;
       }
@@ -307,40 +308,45 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
         entry.nativeRuntime === runtime ||
         routes.variantsOf(entry)?.some((variant) => variant.nativeRuntime === runtime) === true;
       const provider = normalizeProviderId(entry.provider);
-      const sameProvider =
-        !params.profileProvider || normalizeProviderId(params.profileProvider) === provider;
-      const configured = resolveMergedModelProviderConfig(params.cfg, provider);
-      const modelKey = (id: string) =>
-        stripSelfProviderModelPrefix(provider, splitTrailingAuthProfile(id).model.trim()).trim();
-      // Native account evidence cannot satisfy an authored host route, key, profile,
-      // or request override. Those keep the prepared host evaluation.
+      if (prepared.hostConfigured === undefined) {
+        const sameProvider =
+          !params.profileProvider || normalizeProviderId(params.profileProvider) === provider;
+        const configured = resolveMergedModelProviderConfig(params.cfg, provider);
+        const modelKey = (id: string) =>
+          stripSelfProviderModelPrefix(provider, splitTrailingAuthProfile(id).model.trim()).trim();
+        // This view captures configuration; native account readiness remains live below.
+        prepared.hostConfigured = Boolean(
+          (sameProvider && params.preferredProfileId) ||
+          (sameProvider && params.pinnedProfileId) ||
+          configured?.api ||
+          configured?.baseUrl ||
+          configured?.apiKey ||
+          configured?.auth ||
+          configured?.models?.some(
+            (model) => modelKey(model.id) === modelKey(entry.id) && (model.api || model.baseUrl),
+          ) ||
+          Object.keys(params.cfg.auth?.order ?? {}).some(
+            (id) => normalizeProviderId(id) === provider,
+          ) ||
+          Object.values(params.cfg.auth?.profiles ?? {}).some(
+            (profile) => normalizeProviderId(profile.provider) === provider,
+          ) ||
+          createModelProviderRouteOverrideResolver({
+            authoredConfig: params.cfg,
+            provider,
+          })(entry.id) === "present" ||
+          hasAuthoredProviderRequestParams({
+            config: params.cfg,
+            provider,
+            modelId: entry.id,
+            agentId: params.agentId,
+          }),
+        );
+      }
+      // Native account evidence cannot replace an authored host binding or live host credentials.
       if (
-        (sameProvider && params.preferredProfileId) ||
-        (sameProvider && params.pinnedProfileId) ||
-        (host.selectedAuthMode && (host.evidence !== "runtime" || !observedNative)) ||
-        configured?.api ||
-        configured?.baseUrl ||
-        configured?.apiKey ||
-        configured?.auth ||
-        configured?.models?.some(
-          (model) => modelKey(model.id) === modelKey(entry.id) && (model.api || model.baseUrl),
-        ) ||
-        Object.keys(params.cfg.auth?.order ?? {}).some(
-          (id) => normalizeProviderId(id) === provider,
-        ) ||
-        Object.values(params.cfg.auth?.profiles ?? {}).some(
-          (profile) => normalizeProviderId(profile.provider) === provider,
-        ) ||
-        createModelProviderRouteOverrideResolver({
-          authoredConfig: params.cfg,
-          provider,
-        })(entry.id) === "present" ||
-        hasAuthoredProviderRequestParams({
-          config: params.cfg,
-          provider,
-          modelId: entry.id,
-          agentId: params.agentId,
-        })
+        prepared.hostConfigured ||
+        (host.selectedAuthMode && (host.evidence !== "runtime" || !observedNative))
       ) {
         return host;
       }
@@ -599,15 +605,12 @@ export async function loadPreparedModelCatalogView(
     catalog = catalog.filter((entry) => !deprecatedKeys.has(keyOf(entry)));
     configured = configured.filter((entry) => !staticKeys.has(keyOf(entry)));
   }
-  const entries = [...catalog];
-  const seen = new Set(catalog.map((entry) => pickerModelKey(entry.provider, entry.id)));
-  for (const entry of configured) {
-    const key = pickerModelKey(entry.provider, entry.id);
-    if (!seen.has(key)) {
-      seen.add(key);
-      entries.push(entry);
-    }
-  }
+  const keyOf = (entry: ModelCatalogEntry) => pickerModelKey(entry.provider, entry.id);
+  const seen = new Set(catalog.map(keyOf));
+  const entries = [
+    ...catalog,
+    ...dedupeByKey(configured, keyOf).filter((entry) => !seen.has(keyOf(entry))),
+  ];
   return {
     snapshot: {
       ...view.snapshot,

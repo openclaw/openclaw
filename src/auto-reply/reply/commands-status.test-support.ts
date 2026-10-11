@@ -1,33 +1,7 @@
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildStatusReply, buildStatusText } from "./commands-status.js";
+import { buildStatusReply } from "./commands-status.js";
 import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
-
-type StatusTextParams = Parameters<typeof buildStatusText>[0];
-
-export function createStatusSessionParams(statusChannel = "mobilechat") {
-  return {
-    sessionKey: "agent:main:main",
-    parentSessionKey: "agent:main:main",
-    sessionScope: "per-sender",
-    statusChannel,
-  } satisfies Partial<StatusTextParams>;
-}
-
-export function createStatusDisplayParams(
-  resolvedFastMode = false,
-  resolveDefaultThinkingLevel: StatusTextParams["resolveDefaultThinkingLevel"] = async () =>
-    undefined,
-) {
-  return {
-    resolvedFastMode,
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel,
-    isGroup: false,
-    defaultGroupActivation: () => "mention",
-  } satisfies Partial<StatusTextParams>;
-}
 
 export async function buildStatusReplyForTest(params: {
   sessionKey?: string;

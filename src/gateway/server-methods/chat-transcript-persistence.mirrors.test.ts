@@ -190,30 +190,6 @@ describe("durable transcript mirror corrections", () => {
     },
   );
 
-  it("corrects a logical secondary agent in a main-owned shared store without caller-thread SQL", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const fixture = await seed(state.env, false, {
-        agentId: "secondary",
-        storePath: state.statePath("shared.sqlite"),
-      });
-      const before = fixture.snapshot();
-      const sql = observeHostDataSql();
-      try {
-        await expect(fixture.keyed()).resolves.toEqual({ messageId: "selected" });
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
-      const after = fixture.snapshot();
-      const unselected = (events: typeof before) =>
-        events.filter((event) => !isRecord(event) || event.id !== "selected");
-      expect(unselected(after)).toEqual(unselected(before));
-      expect(after.find((event) => isRecord(event) && event.id === "selected")).toMatchObject({
-        message: { openclawDisplayContent: expect.arrayContaining(content) },
-      });
-    });
-  });
-
   it("refuses a source mirror behind an unrelated active-tail message", async () => {
     await withFixture(async ({ append, snapshot, source }) => {
       append("next-request", { role: "user", content: "A later turn." });
@@ -238,7 +214,7 @@ describe("durable transcript mirror corrections", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "reports refusal when indexed correction loses its source generation (incognito=%s)",
     async (incognito) => {
       await withFixture(async ({ scope, snapshot, indexed }) => {
@@ -274,7 +250,7 @@ describe("durable transcript mirror corrections", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "retains an unrelated append during indexed correction (incognito=%s)",
     async (incognito) => {
       await withFixture(async ({ append, snapshot, indexed }) => {

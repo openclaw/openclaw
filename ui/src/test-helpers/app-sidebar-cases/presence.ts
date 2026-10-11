@@ -592,6 +592,7 @@ describe("AppSidebar viewer presence", () => {
         avatarUrl: "/api/users/00-self/avatar?v=1",
       },
     });
+    sidebar.setSessionOwnerFilter(null);
     await sidebar.updateComplete;
 
     const sessionFacepile = sidebar.querySelector<HTMLElement>(
