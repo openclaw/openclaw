@@ -635,7 +635,7 @@ describe("doctor config persistence", () => {
             if (included) {
               const text = panels.map(([message]) => message).join("\n");
               expect(text).not.toContain("retired runtime tuning knobs");
-              expect(text).not.toContain("canonical agent roster");
+              expect(text).not.toContain("agent roster");
             } else {
               expect(panels).toEqual([]);
             }
