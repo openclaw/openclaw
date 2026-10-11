@@ -75,6 +75,7 @@ import {
   type SessionEntryWritePostimage,
   type SessionEntryWritePostimages,
 } from "./session-entry-write-postimage.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import { resolveSessionPublicShare } from "./session-public-share.js";
 import { readStagedSessionTranscriptUpdatedAt } from "./session-transcript-authority.js";
 import {
@@ -248,6 +249,8 @@ function clearSqliteSessionEntryPreservingWindows(
   const cleared = {
     current_session_id: params.sessionId,
     entry_json: "{}",
+    ...deriveSessionPredicateColumns("{}"),
+    session_started_at: null,
     entry_valid: -1,
     updated_at: params.updatedAt,
     status: null,

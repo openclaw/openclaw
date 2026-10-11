@@ -325,7 +325,7 @@ describe("context-engine turn outbox", () => {
       if (failure === "missing-state") {
         database.db
           .prepare(
-            "UPDATE context_engine_turn_outbox SET payload_json = '{}' WHERE advancement_key = ?",
+            "UPDATE context_engine_turn_outbox SET payload_json = '{}', payload_state = NULL WHERE advancement_key = ?",
           )
           .run(payload.boundary.admission.logicalTurnId);
       }
@@ -505,12 +505,18 @@ describe("context-engine turn outbox", () => {
       engineId: "test",
       isHeartbeat: false,
     });
+    const storedState = () =>
+      database.db
+        .prepare("SELECT payload_state FROM context_engine_turn_outbox WHERE advancement_key = ?")
+        .get(payload.boundary.admission.logicalTurnId)?.payload_state;
+    expect(storedState()).toBe("admitted");
     acceptContextEngineTurnIntent({
       boundary: payload.boundary,
       database,
       engineId: "test",
       isHeartbeat: false,
     });
+    expect(storedState()).toBe("accepted");
     const warn = vi.fn();
 
     recoverContextEngineTurnOutbox({
@@ -519,6 +525,7 @@ describe("context-engine turn outbox", () => {
       sessionId: payload.boundary.admission.sessionId,
       warn,
     });
+    expect(storedState()).toBe("blocked");
 
     const queued = database.db
       .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")

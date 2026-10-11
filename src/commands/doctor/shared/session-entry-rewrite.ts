@@ -20,6 +20,7 @@ import {
   writeSessionEntrySnapshots,
 } from "../../../config/sessions/session-entry-snapshots.js";
 import { LEGACY_SESSION_ENTRY_STATE_FIELDS } from "../../../config/sessions/session-entry-state-format.js";
+import { deriveSessionPredicateColumns } from "../../../config/sessions/session-predicate-columns.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../../../config/sessions/store-entry-shape.js";
 import { assertSupportedSessionStoreEntry } from "../../../config/sessions/supported-session-store.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -269,12 +270,15 @@ export function rewriteDoctorSessionEntries(
                 ended_at: asFiniteNumber(runOutcome.endedAt) ?? null,
               }
             : undefined;
+          const predicateColumns = deriveSessionPredicateColumns(entryJson);
           executeSqliteQuerySync(
             database.db,
             db
               .updateTable("session_nodes")
               .set({
                 entry_json: entryJson,
+                ...predicateColumns,
+                session_started_at: sql<number | null>`${predicateColumns.session_started_at}`,
                 entry_valid: entryValid,
                 ...(runProjection ? { status: runProjection.status } : {}),
               })

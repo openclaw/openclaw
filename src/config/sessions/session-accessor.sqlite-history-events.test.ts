@@ -23,6 +23,7 @@ import {
 } from "./session-accessor.sqlite-history.test-support.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 function messageEvent(
   id: string,
@@ -526,9 +527,7 @@ describe("SQLite transcript history events", () => {
           activePosition: active ? 3 : 2,
         },
       ];
-      const insertEvent = database.db.prepare(
-        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-      );
+      const insertEvent = createTranscriptEventInserter(database.db, scope.sessionId);
       const insertIdentity = database.db.prepare(
         `INSERT INTO transcript_event_identities
          (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
@@ -540,7 +539,7 @@ describe("SQLite transcript history events", () => {
        VALUES (?, ?, ?, NULL, 1)`,
       );
       for (const event of boundaryEvents) {
-        insertEvent.run(scope.sessionId, event.seq, event.eventJson, event.seq);
+        insertEvent({ seq: event.seq, eventJson: event.eventJson, createdAt: event.seq });
         insertIdentity.run(scope.sessionId, event.id, event.seq, event.eventType, event.seq);
         if (event.activePosition !== undefined) {
           insertActive.run(scope.sessionId, event.activePosition, event.seq);

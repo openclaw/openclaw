@@ -657,7 +657,7 @@ describe("agent schema 25 migration", () => {
           database.setAuthorizer(null);
           expect(
             database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
-          ).toEqual(before.nodes);
+          ).toMatchObject(before.nodes);
           if (original) {
             const current = captureOpenClawMigrationWitness(database, {
               role: "agent",

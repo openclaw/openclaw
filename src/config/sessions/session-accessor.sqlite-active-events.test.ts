@@ -45,6 +45,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 const queuedSessionWrite = vi.hoisted(() => vi.fn());
 
@@ -633,14 +634,14 @@ describe("SQLite active transcript event projection", () => {
             appended = true;
             writer.exec("BEGIN IMMEDIATE;");
             try {
-              writer
-                .prepare(
-                  `
-                  INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-                  VALUES (?, ?, ?, ?)
-                `,
-                )
-                .run(scope.sessionId, nextSeq, JSON.stringify(appendedEvent), Date.now());
+              createTranscriptEventInserter(
+                writer,
+                scope.sessionId,
+              )({
+                seq: nextSeq,
+                eventJson: JSON.stringify(appendedEvent),
+                createdAt: Date.now(),
+              });
               writer
                 .prepare(
                   `
@@ -816,10 +817,7 @@ describe("SQLite active transcript event projection", () => {
       touchSessionEntry: false,
     });
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-    const insertEvent = database.db.prepare(`
-      INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-      VALUES (?, ?, ?, ?)
-    `);
+    const insertEvent = createTranscriptEventInserter(database.db, scope.sessionId);
     const insertIdentity = database.db.prepare(`
       INSERT INTO transcript_event_identities
         (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
@@ -844,27 +842,25 @@ describe("SQLite active transcript event projection", () => {
       database.db
         .prepare("DELETE FROM transcript_events WHERE session_id = ?")
         .run(scope.sessionId);
-      insertEvent.run(
-        scope.sessionId,
-        0,
-        JSON.stringify({ id: scope.sessionId, type: "session", version: 3 }),
-        0,
-      );
+      insertEvent({
+        seq: 0,
+        eventJson: JSON.stringify({ id: scope.sessionId, type: "session", version: 3 }),
+        createdAt: 0,
+      });
       // Cardinality and parent links drive this bound; keep unrelated payload bytes minimal.
       for (let index = 1; index <= 100_000; index += 1) {
         const eventId = `m${index}`;
         const parentId = index === 1 ? null : `m${index - 1}`;
-        insertEvent.run(
-          scope.sessionId,
-          index,
-          JSON.stringify({
+        insertEvent({
+          seq: index,
+          eventJson: JSON.stringify({
             type: "message",
             id: eventId,
             parentId,
             message: { role: "toolResult", content: "x" },
           }),
-          index,
-        );
+          createdAt: index,
+        });
         insertIdentity.run(scope.sessionId, eventId, index, parentId, index);
         insertActive.run(scope.sessionId, index - 1, index, index - 1);
       }

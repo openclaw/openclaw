@@ -59,8 +59,8 @@ import {
   transcriptEventJsonSql,
   transcriptEventModelBytesSql,
   transcriptEventModelNavigationSql,
-  transcriptEventNavigationSql,
 } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -380,10 +380,7 @@ function withTranscriptContextSnapshot<T>(
         database.db,
         () => {
           const db = getSessionKysely(database.db);
-          const role = db.fn("json_extract", [
-            transcriptEventNavigationSql(),
-            sql.val("$.message.role"),
-          ]);
+          const role = db.dynamic.ref("message_role");
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
@@ -398,15 +395,14 @@ function withTranscriptContextSnapshot<T>(
             database.db,
             base
               .select(transcriptEventJsonSql(database.db).as("event_json"))
-              .where(
-                /* kysely-allow-raw: the header discriminator is owned by the transcript codec. */
-                sql<string>`json_extract(${transcriptEventNavigationSql()}, '$.type')`,
-                "=",
-                "session",
+              .select("navigation_valid")
+              .where((eb) =>
+                eb.or([eb("navigation_type", "=", "session"), eb("navigation_valid", "=", 0)]),
               )
               .orderBy("seq", "asc")
               .limit(1),
           );
+          assertTranscriptNavigationValid(header?.navigation_valid);
           const tree = scanSessionTranscriptTree(
             (function* () {
               for (const row of iterateSqliteQuerySync(

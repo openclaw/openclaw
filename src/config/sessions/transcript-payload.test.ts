@@ -18,6 +18,7 @@ import {
 } from "./session-model-context-projection.js";
 import {
   createTranscriptEventInserter,
+  createTranscriptPayloadUpdater,
   prepareTranscriptPayload,
   prepareTranscriptPayloadForReuse,
   readTranscriptPayload,
@@ -30,6 +31,10 @@ import {
   transcriptEventWithoutCustomDataBytesSql,
   type TranscriptPayloadRecord,
 } from "./transcript-payload.js";
+import {
+  deriveTranscriptPredicateFields,
+  type TranscriptPredicateFields,
+} from "./transcript-predicate-fields.js";
 
 type PayloadDatabase = { transcript_events: TranscriptPayloadRecord & { seq: number } };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -42,14 +47,39 @@ function createTable(database: DatabaseSync): void {
   // Deliberately omit production constraints so reads also exercise corrupted persisted records.
   database.exec(`CREATE TABLE transcript_events (
     seq INTEGER PRIMARY KEY, event_json TEXT, event_zstd BLOB,
-    event_utf8_bytes INTEGER, navigation_json TEXT
+    event_utf8_bytes INTEGER, navigation_json TEXT,
+    navigation_type TEXT, navigation_custom_type TEXT, navigation_display INTEGER NOT NULL DEFAULT 0,
+    message_role TEXT, navigation_last_type TEXT, navigation_last_custom_type TEXT,
+    navigation_valid INTEGER NOT NULL DEFAULT 1
   ) STRICT`);
 }
 
-function insert(database: DatabaseSync, seq: number, row: TranscriptPayloadRecord): void {
+type PayloadFixture = Omit<TranscriptPayloadRecord, keyof TranscriptPredicateFields> &
+  Partial<TranscriptPredicateFields>;
+
+function insert(database: DatabaseSync, seq: number, row: PayloadFixture): void {
+  const fields = {
+    ...deriveTranscriptPredicateFields(row.event_json ?? row.navigation_json ?? "null"),
+    ...row,
+  };
   database
-    .prepare("INSERT INTO transcript_events VALUES (?, ?, ?, ?, ?)")
-    .run(seq, row.event_json, row.event_zstd, row.event_utf8_bytes, row.navigation_json);
+    .prepare(`INSERT INTO transcript_events (seq, event_json, event_zstd, event_utf8_bytes, navigation_json,
+      navigation_type, navigation_custom_type, navigation_display, message_role, navigation_last_type,
+      navigation_last_custom_type, navigation_valid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      seq,
+      row.event_json,
+      row.event_zstd,
+      row.event_utf8_bytes,
+      row.navigation_json,
+      fields.navigation_type,
+      fields.navigation_custom_type,
+      fields.navigation_display,
+      fields.message_role,
+      fields.navigation_last_type,
+      fields.navigation_last_custom_type,
+      fields.navigation_valid,
+    );
 }
 
 function readBody(database: DatabaseSync, seq: number, mode: "sql" | "row" = "sql") {
@@ -69,7 +99,7 @@ function readBody(database: DatabaseSync, seq: number, mode: "sql" | "row" = "sq
   )?.body;
 }
 
-function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): TranscriptPayloadRecord {
+function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): PayloadFixture {
   const codec = resolveZstdCodec();
   if (!codec) {
     throw new Error("Transcript compression boundary tests require native zstd support");
@@ -114,6 +144,61 @@ function inspectNavigation(database: DatabaseSync, event: RawBuilder<string>, se
 }
 
 describe("transcript payload storage boundary", () => {
+  it("publishes predicate columns with inserts and rewrites and rolls both back together", () => {
+    const database = openNodeSqliteDatabase(":memory:");
+    try {
+      createTable(database);
+      database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
+        ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
+      const write = createTranscriptEventInserter(database, "session");
+      write({
+        seq: 1,
+        createdAt: 1,
+        eventJson: '{"type":"message","message":{"role":"user","role":"assistant"}}',
+      });
+      const read = () =>
+        database
+          .prepare(`SELECT navigation_type, navigation_last_type,
+        navigation_display, message_role, navigation_valid FROM transcript_events WHERE seq = 1`)
+          .get();
+      expect(read()).toEqual({
+        navigation_type: "message",
+        navigation_last_type: "message",
+        navigation_display: 0,
+        message_role: "user",
+        navigation_valid: 1,
+      });
+      database.exec("BEGIN");
+      createTranscriptPayloadUpdater(
+        database,
+        "session",
+      )({
+        seq: 1,
+        ...prepareTranscriptPayload(
+          database,
+          '{"type":"custom_message","type":"reset","display":true}',
+        ),
+      });
+      expect(read()).toEqual({
+        navigation_type: "custom_message",
+        navigation_last_type: "reset",
+        navigation_display: 1,
+        message_role: null,
+        navigation_valid: 1,
+      });
+      database.exec("ROLLBACK");
+      expect(read()).toEqual({
+        navigation_type: "message",
+        navigation_last_type: "message",
+        navigation_display: 0,
+        message_role: "user",
+        navigation_valid: 1,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it.each([
     ["UTF-8", "UTF-16le"],
     ["UTF-8", "UTF-16be"],
