@@ -40,7 +40,7 @@ import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral
 import type { RuntimeEnv } from "../runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
-import { exitDoctorHealthFlow, intro, outro } from "./doctor-health-startup.js";
+import { exitDoctorHealthFlow, showDoctorIntro, showDoctorOutro } from "./doctor-health-startup.js";
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function runDoctorHealthFlow(
@@ -124,7 +124,7 @@ async function runDoctorHealthFlowWithResult(
   const { prepareDoctorHealthFlow, prepareDoctorInteractiveMaintenance } =
     await import("./doctor-health-startup.js");
   const { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root } =
-    await prepareDoctorHealthFlow(runtime, options, intro);
+    await prepareDoctorHealthFlow(runtime, options, showDoctorIntro);
   let maintenance: Awaited<
     ReturnType<typeof import("../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
@@ -141,7 +141,7 @@ async function runDoctorHealthFlowWithResult(
     // Config fixes were computed but refused by the writer; the warning above
     // already lists the manual work. This failure outranks a recoverable
     // post-install advisory because the run did not converge.
-    outro(
+    showDoctorOutro(
       ctx.configResultWriteCommitted === true
         ? "Doctor finished, but some config fixes were not applied."
         : "Doctor finished, but config fixes were not applied.",
@@ -168,7 +168,7 @@ async function runDoctorHealthFlowWithResult(
       options,
       databasePreflight,
       root,
-      outro,
+      outro: showDoctorOutro,
     });
     if (admission !== "accepted") {
       if (admission !== "handled") {
@@ -243,7 +243,7 @@ async function runDoctorHealthFlowWithResult(
           options,
           root,
           confirm: (p) => prompter.confirm(p),
-          outro,
+          outro: showDoctorOutro,
         });
         if (offeredUpdate.handled) {
           return undefined;
@@ -564,7 +564,7 @@ async function runDoctorHealthFlowWithResult(
       return;
     }
     if (pluginWarnings.length > 0) {
-      outro("Doctor finished with plugin load errors.");
+      showDoctorOutro("Doctor finished with plugin load errors.");
       if (options.nonInteractive && !isUpdateDoctorLintPass(process.env)) {
         exitCode = 1;
       }
@@ -599,7 +599,7 @@ async function runDoctorHealthFlowWithResult(
           );
         }
       }
-      outro("Doctor maintenance deferred; pending repairs remain unchanged.");
+      showDoctorOutro("Doctor maintenance deferred; pending repairs remain unchanged.");
       exitCode = 0;
       return;
     }
@@ -719,5 +719,5 @@ async function runDoctorHealthFlowWithResult(
     }
   }
 
-  outro("Doctor complete.");
+  showDoctorOutro("Doctor complete.");
 }

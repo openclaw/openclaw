@@ -97,12 +97,10 @@ function renderMetaRow(label: string, value?: string | null, opts?: { path?: boo
     return undefined;
   }
   return (
-    <>
-      <div class="exec-approval-meta-row">
-        <span>{label}</span>
-        <span>{opts?.path ? formatApprovalDisplayPath(value) : value}</span>
-      </div>
-    </>
+    <div class="exec-approval-meta-row">
+      <span>{label}</span>
+      <span>{opts?.path ? formatApprovalDisplayPath(value) : value}</span>
+    </div>
   );
 }
 
@@ -116,42 +114,32 @@ function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
       parts.push(request.command.slice(cursor, span.startIndex));
     }
     parts.push(
-      <>
-        <mark class="exec-approval-command-span">
-          {request.command.slice(span.startIndex, span.endIndex)}
-        </mark>
-      </>,
+      <mark class="exec-approval-command-span">
+        {request.command.slice(span.startIndex, span.endIndex)}
+      </mark>,
     );
     cursor = span.endIndex;
   }
   if (cursor < request.command.length) {
     parts.push(request.command.slice(cursor));
   }
-  return (
-    <>
-      <div class="exec-approval-command mono">{parts}</div>
-    </>
-  );
+  return <div class="exec-approval-command mono">{parts}</div>;
 }
 
 function renderDetails(content: JSX.Element) {
   return (
-    <>
-      <details class="exec-approval-details">
-        <summary>{t("execApproval.details")}</summary>
-        <div class="exec-approval-meta">{content}</div>
-      </details>
-    </>
+    <details class="exec-approval-details">
+      <summary>{t("execApproval.details")}</summary>
+      <div class="exec-approval-meta">{content}</div>
+    </details>
   );
 }
 
 function renderChip(kind: "plugin" | "agent", id?: string | null) {
   return id ? (
-    <>
-      <span class="exec-approval-chip mono" data-approval-chip={kind}>
-        {id}
-      </span>
-    </>
+    <span class="exec-approval-chip mono" data-approval-chip={kind}>
+      {id}
+    </span>
   ) : undefined;
 }
 
@@ -164,9 +152,7 @@ function renderExecBody(
       {" "}
       {renderCommandWithSpans(request)}
       {request.scope ? (
-        <>
-          <div class="exec-approval-scope">{summarizeApprovalScopeLabel(request.scope)}</div>
-        </>
+        <div class="exec-approval-scope">{summarizeApprovalScopeLabel(request.scope)}</div>
       ) : undefined}
       <div class="exec-approval-meta">
         {renderMetaRow(t("execApproval.labels.host"), request.host)}
@@ -191,21 +177,15 @@ function renderPluginBody(active: ExecApprovalRequest, variant: ExecApprovalCard
     <>
       {" "}
       {active.pluginDescription ? (
-        <>
-          <pre class="exec-approval-command mono">{active.pluginDescription}</pre>
-        </>
+        <pre class="exec-approval-command mono">{active.pluginDescription}</pre>
       ) : undefined}
       {active.pluginDetail ? (
-        <>
-          <pre class="exec-approval-command mono" dir="ltr">
-            {active.pluginDetail}
-          </pre>
-        </>
+        <pre class="exec-approval-command mono" dir="ltr">
+          {active.pluginDetail}
+        </pre>
       ) : undefined}
       {variant === "modal" && active.request.sessionKey
-        ? renderDetails(
-            <>{renderMetaRow(t("execApproval.labels.session"), active.request.sessionKey)}</>,
-          )
+        ? renderDetails(renderMetaRow(t("execApproval.labels.session"), active.request.sessionKey))
         : undefined}
     </>
   );
@@ -278,107 +258,95 @@ function SidebarApprovalRowContent(props: SidebarApprovalRowProps) {
   const reviewOnlyMessage = createMemo(() => t("execApproval.reviewOnly"));
   const grantError = createMemo(() => !props.canGrant && props.error === reviewOnlyMessage());
   return (
-    <>
-      <article
-        class="sidebar-approval-row sidebar-issues-panel__details--warning"
-        data-attention-kind="pendingApproval"
-        data-approval-id={approval().id}
-      >
-        <span class="sidebar-issues-panel__icon sidebar-approval-row__icon" aria-hidden="true">
-          {<Icon name="shieldQuestion" />}
-        </span>
-        <div class="sidebar-approval-row__content">
-          <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
-            <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
-              {sessionTitle()}
-            </span>
-            <openclaw-approval-countdown
-              class={[
-                "sidebar-approval-row__timer",
-                { "sidebar-approval-row__timer--urgent": expiryUrgent() },
-              ]}
-              role="timer"
-              aria-label={expiryLabel()}
-              title={expiryLabel()}
-              prop:expiresAtMs={approval().expiresAtMs}
-              prop:compact={true}
-            />
+    <article
+      class="sidebar-approval-row sidebar-issues-panel__details--warning"
+      data-attention-kind="pendingApproval"
+      data-approval-id={approval().id}
+    >
+      <span class="sidebar-issues-panel__icon sidebar-approval-row__icon" aria-hidden="true">
+        <Icon name="shieldQuestion" />
+      </span>
+      <div class="sidebar-approval-row__content">
+        <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
+          <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
+            {sessionTitle()}
+          </span>
+          <openclaw-approval-countdown
+            class={[
+              "sidebar-approval-row__timer",
+              { "sidebar-approval-row__timer--urgent": expiryUrgent() },
+            ]}
+            role="timer"
+            aria-label={expiryLabel()}
+            title={expiryLabel()}
+            prop:expiresAtMs={approval().expiresAtMs}
+            prop:compact={true}
+          />
+        </div>
+        <div class="sidebar-approval-row__command mono" title={approval().request.command}>
+          <span aria-hidden="true">$ </span>
+          {command()}
+        </div>
+        {approval().request.scope ? (
+          <div class="exec-approval-scope">
+            {summarizeApprovalScopeLabel(approval().request.scope)}
           </div>
-          <div class="sidebar-approval-row__command mono" title={approval().request.command}>
-            <span aria-hidden="true">$ </span>
-            {command()}
-          </div>
-          {approval().request.scope ? (
-            <>
-              <div class="exec-approval-scope">
-                {summarizeApprovalScopeLabel(approval().request.scope)}
-              </div>
-            </>
-          ) : undefined}
-          <div
-            class="sidebar-approval-row__actions"
-            role="group"
-            aria-label={t("approvalPage.actionsLabel")}
-          >
-            <For each={resolveApprovalDecisions(approval())}>
-              {(decision) => {
-                const label = createMemo(() => approvalDecisionLabel(decision, approval()));
-                return (
-                  <>
-                    <button
-                      type="button"
-                      class={[
-                        "btn btn--xs sidebar-approval-row__action",
-                        `sidebar-approval-row__action--${decision}`,
-                        { "btn--ghost": decision === "deny" },
-                      ]}
-                      aria-label={t("execApproval.decisionRequest", {
-                        decision: label(),
-                        command: command(),
-                      })}
-                      disabled={props.busy || !props.canGrant || expired()}
-                      onClick={(event: Event) => props.onDecision(event, approval().id, decision)}
-                    >
-                      {label()}
-                    </button>
-                  </>
-                );
-              }}
-            </For>
-            {props.openSessionHref && props.onOpenSession ? (
-              <>
-                <a
-                  class="sidebar-approval-row__open-session"
-                  href={props.openSessionHref}
-                  aria-label={t("sessionsView.openSession")}
-                  title={t("sessionsView.openSession")}
-                  onClick={props.onOpenSession}
+        ) : undefined}
+        <div
+          class="sidebar-approval-row__actions"
+          role="group"
+          aria-label={t("approvalPage.actionsLabel")}
+        >
+          <For each={resolveApprovalDecisions(approval())}>
+            {(decision) => {
+              const label = createMemo(() => approvalDecisionLabel(decision, approval()));
+              return (
+                <button
+                  type="button"
+                  class={[
+                    "btn btn--xs sidebar-approval-row__action",
+                    `sidebar-approval-row__action--${decision}`,
+                    { "btn--ghost": decision === "deny" },
+                  ]}
+                  aria-label={t("execApproval.decisionRequest", {
+                    decision: label(),
+                    command: command(),
+                  })}
+                  disabled={props.busy || !props.canGrant || expired()}
+                  onClick={(event: Event) => props.onDecision(event, approval().id, decision)}
                 >
-                  {<Icon name="arrowUpRight" />}
-                </a>
-              </>
-            ) : undefined}
-          </div>
-          {!props.canGrant ? (
-            <>
-              <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>
-                {reviewOnlyMessage()}
-              </div>
-            </>
-          ) : undefined}
-          {props.error && !grantError() ? (
-            <>
-              <div
-                class="sidebar-approval-row__message sidebar-approval-row__message--error"
-                role="alert"
-              >
-                {props.error}
-              </div>
-            </>
+                  {label()}
+                </button>
+              );
+            }}
+          </For>
+          {props.openSessionHref && props.onOpenSession ? (
+            <a
+              class="sidebar-approval-row__open-session"
+              href={props.openSessionHref}
+              aria-label={t("sessionsView.openSession")}
+              title={t("sessionsView.openSession")}
+              onClick={props.onOpenSession}
+            >
+              <Icon name="arrowUpRight" />
+            </a>
           ) : undefined}
         </div>
-      </article>
-    </>
+        {!props.canGrant ? (
+          <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>
+            {reviewOnlyMessage()}
+          </div>
+        ) : undefined}
+        {props.error && !grantError() ? (
+          <div
+            class="sidebar-approval-row__message sidebar-approval-row__message--error"
+            role="alert"
+          >
+            {props.error}
+          </div>
+        ) : undefined}
+      </div>
+    </article>
   );
 }
 
@@ -416,11 +384,9 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
           <div>
             <div class="exec-approval-title">{approvalTitle(active())}</div>
             {pluginId() || agentId() ? (
-              <>
-                <div class="exec-approval-chips">
-                  {renderChip("plugin", pluginId())} {renderChip("agent", agentId())}
-                </div>
-              </>
+              <div class="exec-approval-chips">
+                {renderChip("plugin", pluginId())} {renderChip("agent", agentId())}
+              </div>
             ) : undefined}
             <openclaw-approval-countdown
               class="exec-approval-sub exec-approval-countdown"
@@ -429,68 +395,56 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
             />
           </div>
           {(props.queueCount ?? 0) > 1 ? (
-            <>
-              <div class="exec-approval-queue">
-                {t("execApproval.pending", { count: String(props.queueCount) })}
-              </div>
-            </>
+            <div class="exec-approval-queue">
+              {t("execApproval.pending", { count: String(props.queueCount) })}
+            </div>
           ) : undefined}
         </div>
         {props.variant === "inline" && active().sourceSessionKey ? (
-          <>
-            <div class="exec-approval-warning" role="note">
-              {t("execApproval.requestedBySession", {
-                session: resolveSessionDisplayName(active().sourceSessionKey, props.sourceSession),
-              })}
-            </div>
-          </>
+          <div class="exec-approval-warning" role="note">
+            {t("execApproval.requestedBySession", {
+              session: resolveSessionDisplayName(active().sourceSessionKey, props.sourceSession),
+            })}
+          </div>
         ) : undefined}
         {active().kind === "exec"
           ? renderExecBody(active().request, props.variant)
           : renderPluginBody(active(), props.variant)}
         {active().kind === "exec" && !decisions().includes("allow-always") ? (
-          <>
-            <div class="exec-approval-warning">{t("execApproval.allowAlwaysUnavailable")}</div>
-          </>
+          <div class="exec-approval-warning">{t("execApproval.allowAlwaysUnavailable")}</div>
         ) : undefined}
         {!props.canGrant ? (
-          <>
-            <div
-              class={grantError() ? "exec-approval-error" : "exec-approval-warning"}
-              role={grantError() ? "alert" : "note"}
-            >
-              {reviewOnlyMessage()}
-            </div>
-          </>
+          <div
+            class={grantError() ? "exec-approval-error" : "exec-approval-warning"}
+            role={grantError() ? "alert" : "note"}
+          >
+            {reviewOnlyMessage()}
+          </div>
         ) : undefined}
         {props.error && !grantError() ? (
-          <>
-            <div class="exec-approval-error" role="alert">
-              {props.error}
-            </div>
-          </>
+          <div class="exec-approval-error" role="alert">
+            {props.error}
+          </div>
         ) : undefined}
         <div class="exec-approval-actions">
           <For each={decisions()}>
             {(decision) => {
               const label = createMemo(() => approvalDecisionLabel(decision, active()));
               return (
-                <>
-                  <button
-                    class={decisionClass(decision)}
-                    type="button"
-                    aria-label={label()}
-                    disabled={props.busy || !props.canGrant}
-                    title={
-                      props.variant === "modal" && props.canGrant
-                        ? `${label()} (${decisionShortcut(decision)})`
-                        : label()
-                    }
-                    onClick={() => void props.onDecision(active().id, decision)}
-                  >
-                    <span>{label()}</span>
-                  </button>
-                </>
+                <button
+                  class={decisionClass(decision)}
+                  type="button"
+                  aria-label={label()}
+                  disabled={props.busy || !props.canGrant}
+                  title={
+                    props.variant === "modal" && props.canGrant
+                      ? `${label()} (${decisionShortcut(decision)})`
+                      : label()
+                  }
+                  onClick={() => void props.onDecision(active().id, decision)}
+                >
+                  <span>{label()}</span>
+                </button>
               );
             }}
           </For>

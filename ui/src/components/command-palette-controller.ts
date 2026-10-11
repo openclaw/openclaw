@@ -65,21 +65,6 @@ export class PaletteController {
   private get context() {
     return this.readContext();
   }
-  private get onNavigate() {
-    return this.props.onNavigate;
-  }
-  private get onSelectSession() {
-    return this.props.onSelectSession;
-  }
-  private get onSlashCommand() {
-    return this.props.onSlashCommand;
-  }
-  private get desktopAvailable() {
-    return this.props.desktopAvailable;
-  }
-  private get custodianAvailable() {
-    return this.props.custodianAvailable;
-  }
   private open = false;
   private pluginIconUrls: Record<string, string> = {};
   private readonly pluginIcons = new PluginIconController({
@@ -485,10 +470,10 @@ export class PaletteController {
         return;
       }
       this.sessionSearchPending = Boolean(
-        this.onSelectSession && this.context?.sessions && this.gateway.connected,
+        this.props.onSelectSession && this.context?.sessions && this.gateway.connected,
       );
       void this.ensureCatalogItems();
-      if (this.onSelectSession) {
+      if (this.props.onSelectSession) {
         void this.searchSessions(search);
       } else {
         this.sessionSearchPending = false;
@@ -680,8 +665,8 @@ export class PaletteController {
       sessionSearchPartial: this.sessionSearchPartial,
       sessionSearchIndexing: this.sessionSearchIndexing,
       archivedTranscriptsExcluded: this.archivedTranscriptsExcluded,
-      desktopAvailable: this.desktopAvailable,
-      custodianAvailable: this.custodianAvailable,
+      desktopAvailable: this.props.desktopAvailable,
+      custodianAvailable: this.props.custodianAvailable,
       onToggle: this.togglePalette,
       onQueryChange: (query, event) => {
         this.draft.setMessage(
@@ -695,9 +680,9 @@ export class PaletteController {
         this.activeId = id;
         this.publish();
       },
-      onNavigate: this.onNavigate,
-      onSelectSession: this.onSelectSession,
-      onSlashCommand: this.onSlashCommand,
+      onNavigate: this.props.onNavigate,
+      onSelectSession: this.props.onSelectSession,
+      onSlashCommand: this.props.onSlashCommand,
       pluginIconUrls: this.pluginIconUrls,
       onPluginIconError: (pluginId) => this.pluginIcons.handleError(pluginId),
       onInputRef: this.handleInputRef,

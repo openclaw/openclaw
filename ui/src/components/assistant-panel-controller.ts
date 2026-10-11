@@ -76,33 +76,6 @@ export class AssistantPanelController {
   get context() {
     return this.props.context ?? this.application;
   }
-  get custodianAvailable() {
-    return this.props.custodianAvailable;
-  }
-  get homeAvailable() {
-    return this.props.homeAvailable;
-  }
-  get custodianSuppressed() {
-    return this.props.custodianSuppressed;
-  }
-  get pageSessionKey() {
-    return this.props.pageSessionKey;
-  }
-  get pageAgentId() {
-    return this.props.pageAgentId;
-  }
-  get pageRouteId() {
-    return this.props.pageRouteId;
-  }
-  get pageRouteFailed() {
-    return this.props.pageRouteFailed;
-  }
-  get minimizeRequestId() {
-    return this.props.minimizeRequestId;
-  }
-  get store() {
-    return this.props.store;
-  }
   get isConnected() {
     return this.element.isConnected;
   }
@@ -157,7 +130,7 @@ export class AssistantPanelController {
   } = {};
 
   constructor(
-    private props: AssistantPanelProps,
+    public props: AssistantPanelProps,
     private readonly element: SolidBridgeElement<AssistantPanelProps>,
     private controllerHost: SolidControllerHost,
     private application?: ApplicationContext,
@@ -188,7 +161,7 @@ export class AssistantPanelController {
         () => this.context,
         (context, notify) => subscribePluginHelp(context, notify),
       )
-      .watchStore(() => this.store)
+      .watchStore(() => this.props.store)
       .watchStore(() => this.context?.agentSelection)
       .watchStore(() => this.context?.agents)
       .watchStore(() => this.context?.theme)
@@ -247,13 +220,13 @@ export class AssistantPanelController {
     }
     this.dockLayout.setSuppressed(this.restoreSuppressed);
     if (
-      this.minimizeRequestId > 0 &&
-      this.minimizeRequestId !== this.handledMinimizeRequestId &&
-      this.custodianAvailable &&
-      this.store
+      this.props.minimizeRequestId > 0 &&
+      this.props.minimizeRequestId !== this.handledMinimizeRequestId &&
+      this.props.custodianAvailable &&
+      this.props.store
     ) {
-      this.handledMinimizeRequestId = this.minimizeRequestId;
-      if (typeof this.destination === "string" && this.store.hasRealUserTurn()) {
+      this.handledMinimizeRequestId = this.props.minimizeRequestId;
+      if (typeof this.destination === "string" && this.props.store.hasRealUserTurn()) {
         this.openDestination("custodian");
       }
     }
@@ -268,8 +241,8 @@ export class AssistantPanelController {
     if (
       typeof this.destination === "string" &&
       this.context &&
-      this.custodianAvailable &&
-      !this.custodianSuppressed &&
+      this.props.custodianAvailable &&
+      !this.props.custodianSuppressed &&
       window.innerWidth > 1100 &&
       consumePluginHelpAutoOpen(this.context)
     ) {
@@ -279,7 +252,8 @@ export class AssistantPanelController {
     this.contentLoader.requestWhileActive(
       ASSISTANT_CONTENT_ELEMENT,
       (this.dockLayout.open && (this.destination !== "home" || this.homeStarted)) ||
-        (this.custodianAvailable && this.minimizeRequestId > this.handledMinimizeRequestId),
+        (this.props.custodianAvailable &&
+          this.props.minimizeRequestId > this.handledMinimizeRequestId),
     );
     this.dockLayout.syncReservation();
     this.publishSessionKey();
@@ -295,7 +269,7 @@ export class AssistantPanelController {
       (pane) =>
         pane.presented !== false &&
         pane.sessionKey &&
-        areUiSessionKeysEquivalent(pane.sessionKey, this.pageSessionKey),
+        areUiSessionKeysEquivalent(pane.sessionKey, this.props.pageSessionKey),
     );
   }
 
@@ -303,7 +277,7 @@ export class AssistantPanelController {
     if (this.homeStarted || !this.dockLayout.open || this.destination !== "home") {
       return;
     }
-    if (this.pageRouteId !== "chat" || this.pageRouteFailed) {
+    if (this.props.pageRouteId !== "chat" || this.props.pageRouteFailed) {
       this.homeStarted = true;
       return;
     }
@@ -378,7 +352,7 @@ export class AssistantPanelController {
     // explicitly requested sessions so a denied read has its normal visible outcome.
     return (
       typeof destination !== "string" ||
-      (destination === "home" ? this.homeAvailable : this.custodianAvailable)
+      (destination === "home" ? this.props.homeAvailable : this.props.custodianAvailable)
     );
   }
 
@@ -388,20 +362,20 @@ export class AssistantPanelController {
 
   private get suppressed(): boolean {
     if (this.destination === "custodian") {
-      return this.custodianSuppressed;
+      return this.props.custodianSuppressed;
     }
     const context = this.context;
     const sessionPage =
       this.destination === "home"
-        ? this.pageRouteId === "chat"
-        : isSessionRouteId(this.pageRouteId);
+        ? this.props.pageRouteId === "chat"
+        : isSessionRouteId(this.props.pageRouteId);
     if (!context || !sessionPage) {
       return false;
     }
     const page = resolveUiConversationIdentity(
       this.homeDefaults,
-      this.pageSessionKey,
-      this.pageAgentId,
+      this.props.pageSessionKey,
+      this.props.pageAgentId,
     );
     const target =
       typeof this.destination === "string"
@@ -426,7 +400,8 @@ export class AssistantPanelController {
   private get restoreSuppressed(): boolean {
     // Home follows the visible Settings context; automatic diagnostic restores yield to it.
     return (
-      this.suppressed || (this.destination === "custodian" && isSettingsTakeover(this.pageRouteId))
+      this.suppressed ||
+      (this.destination === "custodian" && isSettingsTakeover(this.props.pageRouteId))
     );
   }
 
@@ -484,7 +459,7 @@ export class AssistantPanelController {
       return;
     }
     const { sessionKey, agentId } = this.homeTarget;
-    const { pageRouteId, pageSessionKey } = this;
+    const { pageRouteId, pageSessionKey } = this.props;
     const { client, hello } = context.gateway.snapshot;
     const target = sessionNavigationTarget({
       context,
@@ -501,8 +476,8 @@ export class AssistantPanelController {
       commit: () => {
         if (
           this.context !== context ||
-          this.pageRouteId !== pageRouteId ||
-          this.pageSessionKey !== pageSessionKey ||
+          this.props.pageRouteId !== pageRouteId ||
+          this.props.pageSessionKey !== pageSessionKey ||
           context.gateway.snapshot.client !== client ||
           context.gateway.snapshot.hello !== hello ||
           this.homeTarget.sessionKey !== sessionKey ||

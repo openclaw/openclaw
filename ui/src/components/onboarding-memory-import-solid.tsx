@@ -24,6 +24,7 @@ type PlanBinding = {
   agentId: string;
   plan: MigrationsMemoryPlanResult;
 };
+type ImportAction = "continue" | "import" | "skip" | "review";
 
 function plannedItems(provider: MemoryMigrationProviderPlan) {
   return provider.items.filter((item) => item.status === "planned");
@@ -58,6 +59,29 @@ function currentAgentId(context: ApplicationContext | undefined): string | null 
   return selected && list.agents.some((agent) => agent.id === selected)
     ? selected
     : (list.defaultId ?? list.agents[0]?.id ?? null);
+}
+
+function providerResultMessage(result: ProviderResult | undefined) {
+  if (!result) {
+    return "";
+  }
+  if (result.kind === "error") {
+    return t("onboarding.memoryImport.providerError", {
+      error: formatUiExternalText(result.message),
+    });
+  }
+  const summary = result.result.summary;
+  return result.kind === "partial"
+    ? t("onboarding.memoryImport.providerIncomplete", {
+        conflicts: String(summary.conflicts),
+        errors: String(summary.errors),
+        migrated: String(summary.migrated),
+        skipped: String(summary.skipped),
+      })
+    : t("onboarding.memoryImport.providerResult", {
+        migrated: String(summary.migrated),
+        skipped: String(summary.skipped),
+      });
 }
 
 function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryImportElement }) {
@@ -128,18 +152,13 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
     { equals: (left, right) => left.every((value, index) => value === right[index]) },
   );
   createEffect(planInputs, ([active, isClosed, guarded, client, admin, agentId]) => {
+    // Hiding an import must retain its frozen offer and eventual completion view.
+    if (applyingProviderId !== null || done) {
+      return undefined;
+    }
     binding = null;
     publish();
-    if (
-      !active ||
-      isClosed ||
-      guarded ||
-      !client ||
-      !admin ||
-      !agentId ||
-      applyingProviderId !== null ||
-      done
-    ) {
+    if (!active || isClosed || guarded || !client || !admin || !agentId) {
       return undefined;
     }
     const controller = new AbortController();
@@ -241,12 +260,9 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
         context?.gateway.snapshot.client !== current.client ||
         currentAgentId(context) !== current.agentId
       ) {
-        results = {
-          ...results,
-          [provider.providerId]: {
-            kind: "error",
-            message: t("onboarding.memoryImport.connectionChanged"),
-          },
+        results[provider.providerId] = {
+          kind: "error",
+          message: t("onboarding.memoryImport.connectionChanged"),
         };
         publish();
         continue;
@@ -270,20 +286,14 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
             overwrite: false,
           },
         );
-        results = {
-          ...results,
-          [provider.providerId]: {
-            kind: result.summary.errors > 0 || result.summary.conflicts > 0 ? "partial" : "success",
-            result,
-          },
+        results[provider.providerId] = {
+          kind: result.summary.errors > 0 || result.summary.conflicts > 0 ? "partial" : "success",
+          result,
         };
       } catch (error) {
-        results = {
-          ...results,
-          [provider.providerId]: {
-            kind: "error",
-            message: formatUiError(error, t("onboarding.memoryImport.unknownError")),
-          },
+        results[provider.providerId] = {
+          kind: "error",
+          message: formatUiError(error, t("onboarding.memoryImport.unknownError")),
         };
       }
       publish();
@@ -329,10 +339,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
             prop:checked={view().selectedByProvider[providerProps.provider.providerId] ?? false}
             disabled={view().applyingProviderId !== null || view().done}
             onChange={(event) => {
-              selectedByProvider = {
-                ...selectedByProvider,
-                [providerProps.provider.providerId]: event.currentTarget.checked,
-              };
+              selectedByProvider[providerProps.provider.providerId] = event.currentTarget.checked;
               publish();
             }}
           />
@@ -357,33 +364,9 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
           <Show
             when={view().applyingProviderId === providerProps.provider.providerId}
             fallback={
-              <Show when={result()} keyed>
-                {(value) => (
-                  <>
-                    {value.kind === "error" ? (
-                      <span role="alert">
-                        {t("onboarding.memoryImport.providerError", {
-                          error: formatUiExternalText(value.message),
-                        })}
-                      </span>
-                    ) : value.kind === "partial" ? (
-                      <span role="alert">
-                        {t("onboarding.memoryImport.providerIncomplete", {
-                          conflicts: String(value.result.summary.conflicts),
-                          errors: String(value.result.summary.errors),
-                          migrated: String(value.result.summary.migrated),
-                          skipped: String(value.result.summary.skipped),
-                        })}
-                      </span>
-                    ) : (
-                      t("onboarding.memoryImport.providerResult", {
-                        migrated: String(value.result.summary.migrated),
-                        skipped: String(value.result.summary.skipped),
-                      })
-                    )}
-                  </>
-                )}
-              </Show>
+              result()?.kind === "success"
+                ? providerResultMessage(result())
+                : result() && <span role="alert">{providerResultMessage(result())}</span>
             }
           >
             {t("onboarding.memoryImport.importingProvider")}
@@ -398,6 +381,26 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
       (sum, result) => sum + (result.kind === "error" ? 0 : result.result.summary[field]),
       0,
     );
+  };
+  const busy = () => view().applyingProviderId !== null;
+  const hasSelected = () =>
+    providers().some((provider) => view().selectedByProvider[provider.providerId]);
+  const actions = (): ImportAction[] => (view().done ? ["continue"] : ["import", "skip", "review"]);
+  const actionLabels = () => ({
+    continue: t("common.continue"),
+    import: t(busy() ? "common.importing" : "onboarding.memoryImport.import"),
+    skip: t("onboarding.memoryImport.skip"),
+    review: t("onboarding.memoryImport.reviewDetails"),
+  });
+  const runAction = (action: ImportAction) => {
+    if (action === "import") {
+      void importSelected();
+      return;
+    }
+    finish();
+    if (action === "review") {
+      host.context?.navigate("memory-import");
+    }
   };
   return (
     <Show when={isVisible()}>
@@ -433,57 +436,29 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
             <For each={providers()}>{(provider) => <Provider provider={provider} />}</For>
           </ul>
           <footer>
-            <Show
-              when={view().done}
-              fallback={
-                <>
-                  <button
-                    class="btn primary"
-                    type="button"
-                    data-test-id="onboarding-memory-import-import"
-                    disabled={
-                      providers().filter(
-                        (provider) => view().selectedByProvider[provider.providerId],
-                      ).length === 0 || view().applyingProviderId !== null
-                    }
-                    onClick={() => void importSelected()}
-                  >
-                    {view().applyingProviderId
-                      ? t("common.importing")
-                      : t("onboarding.memoryImport.import")}
-                  </button>
-                  <button
-                    class="btn"
-                    type="button"
-                    data-test-id="onboarding-memory-import-skip"
-                    disabled={view().applyingProviderId !== null}
-                    onClick={finish}
-                  >
-                    {t("onboarding.memoryImport.skip")}
-                  </button>
-                  <button
-                    class="btn btn--ghost onboarding-memory-import__review"
-                    type="button"
-                    disabled={view().applyingProviderId !== null}
-                    onClick={() => {
-                      finish();
-                      host.context?.navigate("memory-import");
-                    }}
-                  >
-                    {t("onboarding.memoryImport.reviewDetails")}
-                  </button>
-                </>
-              }
-            >
-              <button
-                class="btn primary"
-                type="button"
-                data-test-id="onboarding-memory-import-continue"
-                onClick={finish}
-              >
-                {t("common.continue")}
-              </button>
-            </Show>
+            <For each={actions()}>
+              {(action) => (
+                <button
+                  class={[
+                    "btn",
+                    {
+                      primary: action === "import" || action === "continue",
+                      "btn--ghost onboarding-memory-import__review": action === "review",
+                    },
+                  ]}
+                  type="button"
+                  data-test-id={
+                    action === "review" ? undefined : `onboarding-memory-import-${action}`
+                  }
+                  disabled={
+                    action !== "continue" && (busy() || (action === "import" && !hasSelected()))
+                  }
+                  onClick={() => runAction(action)}
+                >
+                  {actionLabels()[action]}
+                </button>
+              )}
+            </For>
           </footer>
         </section>
       </openclaw-modal-dialog>

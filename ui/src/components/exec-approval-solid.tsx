@@ -34,36 +34,32 @@ function renderApprovalQueueList(params: {
     return undefined;
   }
   return (
-    <>
-      <div class="exec-approval-list" aria-label={t("execApproval.otherPending")}>
-        <div class="exec-approval-list__heading">{t("execApproval.otherPending")}</div>
-        <For each={others}>
-          {(entry) => {
-            const command = compactApprovalCommand(entry.request.command);
-            const agent = entry.request.agentId?.trim() || "—";
-            return (
-              <>
-                <button
-                  class="exec-approval-list__item"
-                  type="button"
-                  aria-label={t("execApproval.reviewRequest", { agent, command })}
-                  onClick={() => params.onSelect(entry.id)}
-                >
-                  <span class="exec-approval-list__agent">{agent}</span>
-                  <span class="exec-approval-list__command mono">{command}</span>
-                  <openclaw-approval-countdown
-                    class="exec-approval-list__expiry"
-                    aria-hidden="true"
-                    prop:expiresAtMs={entry.expiresAtMs}
-                    prop:compact={true}
-                  />
-                </button>
-              </>
-            );
-          }}
-        </For>
-      </div>
-    </>
+    <div class="exec-approval-list" aria-label={t("execApproval.otherPending")}>
+      <div class="exec-approval-list__heading">{t("execApproval.otherPending")}</div>
+      <For each={others}>
+        {(entry) => {
+          const command = compactApprovalCommand(entry.request.command);
+          const agent = entry.request.agentId?.trim() || "—";
+          return (
+            <button
+              class="exec-approval-list__item"
+              type="button"
+              aria-label={t("execApproval.reviewRequest", { agent, command })}
+              onClick={() => params.onSelect(entry.id)}
+            >
+              <span class="exec-approval-list__agent">{agent}</span>
+              <span class="exec-approval-list__command mono">{command}</span>
+              <openclaw-approval-countdown
+                class="exec-approval-list__expiry"
+                aria-hidden="true"
+                prop:expiresAtMs={entry.expiresAtMs}
+                prop:compact={true}
+              />
+            </button>
+          );
+        }}
+      </For>
+    </div>
   );
 }
 

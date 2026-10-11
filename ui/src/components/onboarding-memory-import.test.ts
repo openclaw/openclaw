@@ -361,6 +361,35 @@ describe("OnboardingMemoryImport", () => {
     expect(element.textContent).toContain("Migrated 1");
   });
 
+  it("restores pending import results after reactivation without exposing them to another gateway", async () => {
+    let resolveApply!: (result: ReturnType<typeof createApplyResult>) => void;
+    const request = vi.fn(async (method: string) =>
+      method === "migrations.memory.plan"
+        ? createPlan()
+        : await new Promise<ReturnType<typeof createApplyResult>>((resolve) => {
+            resolveApply = resolve;
+          }),
+    );
+    const element = await mount(createContext(request));
+    (await waitForAction(element)).click();
+    await waitForOnboardingMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
+
+    element.active = false;
+    await element.updateComplete;
+    expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
+    element.active = true;
+    await element.updateComplete;
+    resolveApply(createApplyResult("codex"));
+
+    await waitForAction(element, "continue");
+    expect(element.textContent).toContain("Migrated 1, skipped 0");
+    expect(request).toHaveBeenCalledTimes(2);
+
+    element.context = createContext(vi.fn(async () => createPlan()));
+    await element.updateComplete;
+    expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
   it("sets the guard when skipped", async () => {
     const request = vi.fn(async () => createPlan());
     const element = await mount(createContext(request));

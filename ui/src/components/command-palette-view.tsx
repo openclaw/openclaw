@@ -265,6 +265,53 @@ function PaletteHint(props: { shortcut: SolidJSX.Element; label: string }) {
   );
 }
 
+function PaletteOption(props: {
+  item: CommandPaletteItem;
+  results: ReturnType<typeof resolvePaletteResults>;
+  readProps: () => CommandPaletteProps;
+}) {
+  const current = () => props.readProps();
+  const index = () => props.results.items.indexOf(props.item);
+  const active = () => index() === props.results.activeIndex;
+  const agentId = () =>
+    props.item.session
+      ? resolveUiSessionRowAgentId(props.item.session!, current().defaultAgentId)
+      : props.item.agentId;
+  const agent = () =>
+    agentId()
+      ? (current().agents.find((row) => row.id === agentId()) ?? { id: agentId()! })
+      : undefined;
+  return (
+    <div
+      id={getOptionId(index())}
+      class={[
+        "cmd-palette__item",
+        {
+          "cmd-palette__item--session": Boolean(props.item.session),
+          "cmd-palette__item--active": active(),
+        },
+      ]}
+      role="option"
+      aria-selected={active() ? "true" : "false"}
+      aria-disabled={current().draft.submitting || current().searchDebouncing ? "true" : undefined}
+      onClick={(event) => {
+        event.stopPropagation();
+        selectItem(props.item, current());
+      }}
+      onMouseEnter={() => current().onActiveIdChange(props.item.id)}
+    >
+      <CommandPaletteResult
+        item={props.item}
+        query={current().searchQuery}
+        agent={agent()}
+        identity={current().agentIdentity?.get(agentId())}
+        pluginIconUrls={current().pluginIconUrls}
+        onPluginIconError={current().onPluginIconError}
+      />
+    </div>
+  );
+}
+
 function PaletteSearch(props: { readProps: () => CommandPaletteProps }) {
   const current = () => props.readProps();
   const results = createMemo(() => resolvePaletteResults(current()));
@@ -344,64 +391,13 @@ function PaletteSearch(props: { readProps: () => CommandPaletteProps }) {
                 <span class="cmd-palette__group-count">{group()[1].length}</span>
               </div>
               <For each={group()[1]} keyed={(item) => item.id}>
-                {(item) => {
-                  const index = () => results().items.indexOf(item());
-                  const active = () => index() === results().activeIndex;
-                  const agentId = () =>
-                    item().session
-                      ? resolveUiSessionRowAgentId(item().session!, current().defaultAgentId)
-                      : item().agentId;
-                  const agent = () =>
-                    agentId()
-                      ? (current().agents.find((row) => row.id === agentId()) ?? { id: agentId()! })
-                      : undefined;
-                  return (
-                    <div
-                      id={getOptionId(index())}
-                      class={[
-                        "cmd-palette__item",
-                        {
-                          "cmd-palette__item--session": Boolean(item().session),
-                          "cmd-palette__item--active": active(),
-                        },
-                      ]}
-                      role="option"
-                      aria-selected={active() ? "true" : "false"}
-                      aria-disabled={
-                        current().draft.submitting || current().searchDebouncing
-                          ? "true"
-                          : undefined
-                      }
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        selectItem(item(), current());
-                      }}
-                      onMouseEnter={() => current().onActiveIdChange(item().id)}
-                    >
-                      <CommandPaletteResult
-                        item={item()}
-                        query={current().searchQuery}
-                        agent={agent()}
-                        identity={current().agentIdentity?.get(agentId())}
-                        pluginIconUrls={current().pluginIconUrls}
-                        onPluginIconError={current().onPluginIconError}
-                      />
-                    </div>
-                  );
-                }}
+                {(item) => <PaletteOption item={item()} results={results()} readProps={current} />}
               </For>
             </>
           )}
         </For>
       </div>
-      <Show when={current().modelSearchError}>
-        {(error) => (
-          <div class="cmd-palette__source-error" role="status">
-            {error()}
-          </div>
-        )}
-      </Show>
-      <For each={notices()}>
+      <For each={[current().modelSearchError, ...notices()].filter(Boolean)}>
         {(notice) => (
           <div class="cmd-palette__source-error" role="status">
             {notice}
@@ -438,6 +434,35 @@ function PaletteSearch(props: { readProps: () => CommandPaletteProps }) {
   );
 }
 
+function PaletteActions(props: { readProps: () => CommandPaletteProps }) {
+  const current = () => props.readProps();
+  const reason = () =>
+    current().draft.disabledReason ??
+    (current().draft.hasPrompt ? undefined : t("palette.promptRequired"));
+  return (
+    <>
+      <openclaw-tooltip prop:content={reason() ?? t("palette.startSessionBackground")}>
+        <button
+          type="button"
+          class="cmd-palette__create"
+          aria-label={t("palette.startSessionBackground")}
+          aria-busy={current().draft.submitting ? "true" : "false"}
+          disabled={current().composing || !current().draft.canSubmit}
+          onClick={() => {
+            if (!current().composing) {
+              void current().draft.submit();
+            }
+          }}
+        >
+          {t(current().draft.submitting ? "palette.startingSession" : "palette.startSession")}
+          <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />
+        </button>
+      </openclaw-tooltip>
+      <PaletteLitContent content={current().draft.renderControls()} />
+    </>
+  );
+}
+
 function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
   const current = () => props.readProps();
   const hideSearch = () =>
@@ -448,9 +473,6 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
   const mentionListboxId = () => paneDomId(current().mentionHost.paneId, "mention-menu-listbox");
   const mentionAnnouncementId = () =>
     paneDomId(current().mentionHost.paneId, "mention-announcement");
-  const startReason = () =>
-    current().draft.disabledReason ??
-    (current().draft.hasPrompt ? undefined : t("palette.promptRequired"));
   const recovery = createMemo(() => current().draft.renderRecovery());
   return (
     <>
@@ -482,12 +504,12 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
           <CommandPaletteInput
             value={current().query}
             placeholder={t("palette.placeholder")}
-            onInputRef={(element) => current().onInputRef(element)}
-            onValueChange={(value, event) => current().onQueryChange(value, event)}
-            onBeforeInput={(event) => current().onBeforeInput(event)}
-            onSelectionChange={(event) => current().onSelectionChange(event)}
-            onCompositionStart={() => current().onCompositionStart()}
-            onCompositionEnd={() => current().onCompositionEnd()}
+            onInputRef={current().onInputRef}
+            onValueChange={current().onQueryChange}
+            onBeforeInput={current().onBeforeInput}
+            onSelectionChange={current().onSelectionChange}
+            onCompositionStart={current().onCompositionStart}
+            onCompositionEnd={current().onCompositionEnd}
             onPaste={(event) => current().draft.pasteImages(event)}
             disabled={current().draft.submitting}
             readOnly={current().draft.messageLocked}
@@ -514,34 +536,7 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
                   ? undefined
                   : "cmd-palette-keys"
             }
-            actions={
-              <>
-                <openclaw-tooltip
-                  prop:content={startReason() ?? t("palette.startSessionBackground")}
-                >
-                  <button
-                    type="button"
-                    class="cmd-palette__create"
-                    aria-label={t("palette.startSessionBackground")}
-                    aria-busy={current().draft.submitting ? "true" : "false"}
-                    disabled={current().composing || !current().draft.canSubmit}
-                    onClick={() => {
-                      if (!current().composing) {
-                        void current().draft.submit();
-                      }
-                    }}
-                  >
-                    {t(
-                      current().draft.submitting
-                        ? "palette.startingSession"
-                        : "palette.startSession",
-                    )}
-                    <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />
-                  </button>
-                </openclaw-tooltip>
-                <PaletteLitContent content={current().draft.renderControls()} />
-              </>
-            }
+            actions={<PaletteActions readProps={current} />}
           />
           <Show when={current().draft.mentions.length > 0}>
             <div class="cmd-palette__mentions" inert={current().draft.messageLocked}>
@@ -582,11 +577,9 @@ function OpenPalette(props: { readProps: () => CommandPaletteProps }) {
             </div>
           </div>
           <Show when={current().draft.error}>
-            {(error) => (
-              <div class="cmd-palette__creation-error" role="alert">
-                {error()}
-              </div>
-            )}
+            <div class="cmd-palette__creation-error" role="alert">
+              {current().draft.error}
+            </div>
           </Show>
           <Show when={recovery()}>
             <div class="cmd-palette__footer">

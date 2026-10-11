@@ -213,7 +213,7 @@ that shared context is intentional.
 
 For `per-phone` and `per-call`, Voice Call stores generated session keys under
 the configured agent namespace (`agent:<agentId>:voice:*`). Raw explicit
-integration keys resolve into the same namespace: a canonical
+integration keys resolve into the same namespace: a normalized
 `agent:<configuredAgentId>:*` key keeps that owner and honors core
 main-session/global-scope aliasing; foreign or malformed `agent:*` input
 is scoped as an opaque key under the configured agent; `global` and `unknown`

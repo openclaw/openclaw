@@ -13,17 +13,16 @@ import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import { handleCopyButton } from "./copy-button-state.ts";
 import {
   type LoginFailureFeedback,
   type LoginFailureFeedbackParams,
   type LoginFailureStep,
   resolveLoginFailureFeedback,
 } from "./login-gate-feedback.ts";
-import { Icon } from "./solid/icon.tsx";
+import { CopyButton } from "./solid/copy-button.tsx";
+import { Icon, type IconName } from "./solid/icon.tsx";
 import "./theme-brand-icon.ts";
 import "./tooltip.ts";
-import "../styles/copy-button.css";
 
 registerEnglishCatalog(registerLoginEnglish);
 
@@ -45,6 +44,11 @@ type BridgeProps = { props?: LoginGateProps };
 export type LoginGateElement = SolidBridgeElement<BridgeProps>;
 type RefreshState = "idle" | "pending" | "failed";
 type ViewProps = { model: LoginGateProps; cancelRefresh: () => void };
+const STATUS_ICONS: Record<LoginFailureFeedback["tone"], IconName> = {
+  pending: "shieldEllipsis",
+  warn: "clock",
+  danger: "shieldAlert",
+};
 
 function ConnectCommand(props: { command: string; variant?: "hero" }) {
   const copyCommand = (event: { currentTarget: HTMLElement }) => {
@@ -53,11 +57,7 @@ function ConnectCommand(props: { command: string; variant?: "hero" }) {
   return (
     <openclaw-tooltip prop:content={t("connection.help.copyCommand")}>
       <div
-        class={
-          props.variant === "hero"
-            ? "login-gate__command login-gate__command--hero"
-            : "login-gate__command"
-        }
+        class={["login-gate__command", { "login-gate__command--hero": props.variant === "hero" }]}
         role="button"
         tabIndex={0}
         aria-label={t("connection.help.copyCommandAria", { command: props.command })}
@@ -74,30 +74,9 @@ function ConnectCommand(props: { command: string; variant?: "hero" }) {
         }}
       >
         <code translate="no">{props.command}</code>
-        <Show when={props.command} keyed>
-          {(command) => (
-            <openclaw-tooltip prop:content={t("connection.help.copyCommand")}>
-              <button
-                class="btn btn--xs chat-copy-btn"
-                type="button"
-                aria-label={t("connection.help.copyCommand")}
-                onClick={(event) =>
-                  void handleCopyButton(event, command, t("connection.help.copyCommand"))
-                }
-              >
-                <span class="chat-copy-btn__icon" aria-hidden="true">
-                  <span class="chat-copy-btn__icon-copy">
-                    <Icon name="copy" />
-                  </span>
-                  <span class="chat-copy-btn__icon-check">
-                    <Icon name="check" />
-                  </span>
-                </span>
-              </button>
-              <span data-copy-feedback role="status" hidden />
-            </openclaw-tooltip>
-          )}
-        </Show>
+        {props.command && (
+          <CopyButton text={props.command} idleLabel={t("connection.help.copyCommand")} />
+        )}
       </div>
     </openclaw-tooltip>
   );
@@ -243,22 +222,24 @@ function LoginForm(
             </button>
           </openclaw-tooltip>
         </span>
-        <Show when={setupCode()}>
+        {setupCode() && (
           <p id="login-gate-secret-hint" class="muted" role="status">
             {t("login.setupCodeHint")}
           </p>
-        </Show>
+        )}
       </div>
-      <Show when={props.withSubmit}>
+      {props.withSubmit && (
         <button class="btn primary login-gate__connect" onClick={connect}>
           {t("common.connect")}
         </button>
-      </Show>
+      )}
     </div>
   );
 }
 
 function ConnectionSummary(props: { model: LoginGateProps }) {
+  const credential = () =>
+    t(props.model.secret.trim() ? "login.connection.secretEntered" : "login.connection.noSecret");
   return (
     <summary>
       <span class="login-gate__connection-target">
@@ -267,14 +248,7 @@ function ConnectionSummary(props: { model: LoginGateProps }) {
           {t("login.connection.target", { host: formatGatewayHost(props.model.gatewayUrl) })}
         </span>
       </span>{" "}
-      <span class="login-gate__connection-cred">
-        ·{" "}
-        {t(
-          props.model.secret.trim()
-            ? "login.connection.secretEntered"
-            : "login.connection.noSecret",
-        )}
-      </span>{" "}
+      <span class="login-gate__connection-cred">· {credential()}</span>{" "}
       <span class="login-gate__connection-change">{t("login.connection.change")}</span>
     </summary>
   );
@@ -291,6 +265,12 @@ function StatusBody(
   const waiting = () => props.feedback.kind === "pairing-required" && props.model.reconnectPending;
   const retrySeconds = () =>
     Math.max(0, Math.ceil(((props.model.reconnectAt ?? 0) - props.now) / 1000));
+  const connectLabel = () => {
+    if (props.feedback.kind === "pairing-rejected" || props.feedback.kind === "pairing-expired") {
+      return t("login.failure.pairing.requestAgain");
+    }
+    return t(waiting() ? "login.failure.pairing.checkNow" : "common.connect");
+  };
   return (
     <section
       class="login-gate__body login-gate__failure"
@@ -301,15 +281,7 @@ function StatusBody(
     >
       <div class="login-gate__status-head">
         <span class="login-gate__status-icon" aria-hidden="true">
-          <Icon
-            name={
-              props.feedback.tone === "pending"
-                ? "shieldEllipsis"
-                : props.feedback.tone === "warn"
-                  ? "clock"
-                  : "shieldAlert"
-            }
-          />
+          <Icon name={STATUS_ICONS[props.feedback.tone]} />
         </span>
         <div class="login-gate__status-text">
           <h1 class="login-gate__failure-title">{props.feedback.title}</h1>
@@ -325,19 +297,19 @@ function StatusBody(
         )}
       </Show>
       <Steps feedback={props.feedback} />
-      <Show when={props.feedback.kind === "busy"}>
+      {props.feedback.kind === "busy" && (
         <p class="login-gate__retry" aria-live="off">
           {retrySeconds() > 0
             ? t("login.failure.busy.countdown", { seconds: String(retrySeconds()) })
             : t("login.failure.busy.retrying")}
         </p>
-      </Show>
-      <Show when={waiting()}>
+      )}
+      {waiting() && (
         <p class="login-gate__failure-summary">
           <span class="session-run-spinner" aria-hidden="true" />
           {t("login.failure.pairing.waiting")}
         </p>
-      </Show>
+      )}
       <div class="login-gate__actions">
         <Show when={props.feedback.refreshAction}>
           {(action) => (
@@ -362,11 +334,7 @@ function StatusBody(
             props.model.onConnect();
           }}
         >
-          {props.feedback.kind === "pairing-rejected" || props.feedback.kind === "pairing-expired"
-            ? t("login.failure.pairing.requestAgain")
-            : waiting()
-              ? t("login.failure.pairing.checkNow")
-              : t("common.connect")}
+          {connectLabel()}
         </button>
       </div>
       <details class="login-gate__connection">
@@ -396,41 +364,36 @@ function FormBody(props: ViewProps & { feedback: LoginFailureFeedback | null }) 
         </p>
       </div>
       <LoginForm {...props} withSubmit />
-      <Show
-        when={props.feedback}
-        fallback={
-          <details class="login-gate__help">
-            <summary class="login-gate__help-title">{t("connection.help.title")}</summary>
-            <ol class="login-gate__steps">
-              <li>
-                {t("connection.help.step1")}
-                <ConnectCommand command="openclaw gateway run" />
-              </li>
-              <li>
-                {t("connection.help.step2")} <ConnectCommand command="openclaw dashboard" />
-              </li>
-              <li>{t("connection.help.step3")}</li>
-            </ol>
-            <div class="login-gate__docs">
-              <a
-                class="session-link"
-                href="https://docs.openclaw.ai/web/dashboard"
-                target={EXTERNAL_LINK_TARGET}
-                rel={buildExternalLinkRel()}
-              >
-                {t("connection.help.docsLink")}
-              </a>
-            </div>
-          </details>
-        }
-      >
-        {(feedback) => (
-          <>
-            <Steps feedback={feedback()} />
-            <FailureFooter feedback={feedback()} />
-          </>
-        )}
-      </Show>
+      {props.feedback ? (
+        <>
+          <Steps feedback={props.feedback} />
+          <FailureFooter feedback={props.feedback} />
+        </>
+      ) : (
+        <details class="login-gate__help">
+          <summary class="login-gate__help-title">{t("connection.help.title")}</summary>
+          <ol class="login-gate__steps">
+            <li>
+              {t("connection.help.step1")}
+              <ConnectCommand command="openclaw gateway run" />
+            </li>
+            <li>
+              {t("connection.help.step2")} <ConnectCommand command="openclaw dashboard" />
+            </li>
+            <li>{t("connection.help.step3")}</li>
+          </ol>
+          <div class="login-gate__docs">
+            <a
+              class="session-link"
+              href="https://docs.openclaw.ai/web/dashboard"
+              target={EXTERNAL_LINK_TARGET}
+              rel={buildExternalLinkRel()}
+            >
+              {t("connection.help.docsLink")}
+            </a>
+          </div>
+        </details>
+      )}
     </section>
   );
 }
@@ -561,28 +524,24 @@ function LoginGateContent(props: { model: LoginGateProps; host: LoginGateElement
       <openclaw-toast-host />
       <div class="login-gate__card" data-mode={feedback()?.placement ?? "form"}>
         <header class="login-gate__brand">
-          <Show
-            when={brandIcon() !== "claw"}
-            fallback={
-              <img
-                class="login-gate__logo"
-                src={controlUiPublicAssetPath(
-                  "favicon.svg",
-                  normalizeBasePath(props.model.resourceBasePath),
-                )}
-                alt=""
-              />
-            }
-          >
+          {brandIcon() === "claw" ? (
+            <img
+              class="login-gate__logo"
+              src={controlUiPublicAssetPath(
+                "favicon.svg",
+                normalizeBasePath(props.model.resourceBasePath),
+              )}
+              alt=""
+            />
+          ) : (
             <span class="login-gate__logo login-gate__logo--neutral" aria-hidden="true">
-              <Show
-                when={branding().brandIcon !== "claw" && branding().brandIcon !== "mark"}
-                fallback={<Icon name="mark" />}
-              >
+              {branding().brandIcon !== "claw" && branding().brandIcon !== "mark" ? (
                 <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
-              </Show>
+              ) : (
+                <Icon name="mark" />
+              )}
             </span>
-          </Show>
+          )}
           <span class="login-gate__brand-name">{branding().brandName}</span>
         </header>
         <Show
@@ -602,7 +561,7 @@ function LoginGateContent(props: { model: LoginGateProps; host: LoginGateElement
             />
           )}
         </Show>
-        <Show when={props.model.onOpenGatewaySettings}>
+        {props.model.onOpenGatewaySettings && (
           <footer class="login-gate__recovery">
             <button
               type="button"
@@ -612,7 +571,7 @@ function LoginGateContent(props: { model: LoginGateProps; host: LoginGateElement
               {t("login.gatewaySettings")}
             </button>
           </footer>
-        </Show>
+        )}
       </div>
     </div>
   );

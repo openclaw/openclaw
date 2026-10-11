@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import MarkdownIt, { type Token } from "markdown-it";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Match, Show, Switch } from "solid-js";
 import { escapeRegExp } from "../../../src/shared/regexp.ts";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
@@ -127,54 +127,50 @@ export function CommandPaletteResult(props: {
   );
   return (
     <>
-      <Show
-        when={props.agent}
+      <Switch
         fallback={
-          <Show
-            when={props.item.pluginId}
-            keyed
-            fallback={
-              <span class="nav-item__icon" aria-hidden="true">
-                <Show
-                  when={props.item.id === "panel-custodian"}
-                  fallback={<Icon name={props.item.icon} />}
-                >
-                  <PaletteLitContent content={renderThemeBrandIcon()} />
-                </Show>
-              </span>
-            }
-          >
-            {(pluginId) => (
-              <PaletteLitContent
-                content={renderArtTile(pluginId, props.item.label, {
-                  iconUrl: props.pluginIconUrls?.[pluginId],
-                  onIconError: () => props.onPluginIconError?.(pluginId),
-                  className: "cmd-palette__plugin-icon",
-                })}
-              />
-            )}
-          </Show>
-        }
-      >
-        {(agent) => (
-          <span class="cmd-palette__avatar" aria-hidden="true">
-            <PaletteLitContent
-              content={renderAgentIdentityAvatar({
-                id: agent().id,
-                avatar: resolveAgentAvatarUrl(agent(), props.identity),
-                textAvatar: resolveAgentTextAvatar(agent(), props.identity),
-              })}
-            />
-            <Show when={owner()?.id}>
-              <span class="cmd-palette__owner">
-                <PaletteLitContent
-                  content={renderSessionOwnerAvatar({ ...owner()!, id: owner()!.id! })}
-                />
-              </span>
+          <span class="nav-item__icon" aria-hidden="true">
+            <Show
+              when={props.item.id === "panel-custodian"}
+              fallback={<Icon name={props.item.icon} />}
+            >
+              <PaletteLitContent content={renderThemeBrandIcon()} />
             </Show>
           </span>
-        )}
-      </Show>
+        }
+      >
+        <Match when={props.agent}>
+          {(agent) => (
+            <span class="cmd-palette__avatar" aria-hidden="true">
+              <PaletteLitContent
+                content={renderAgentIdentityAvatar({
+                  id: agent().id,
+                  avatar: resolveAgentAvatarUrl(agent(), props.identity),
+                  textAvatar: resolveAgentTextAvatar(agent(), props.identity),
+                })}
+              />
+              <Show when={owner()?.id}>
+                <span class="cmd-palette__owner">
+                  <PaletteLitContent
+                    content={renderSessionOwnerAvatar({ ...owner()!, id: owner()!.id! })}
+                  />
+                </span>
+              </Show>
+            </span>
+          )}
+        </Match>
+        <Match when={props.item.pluginId} keyed>
+          {(pluginId) => (
+            <PaletteLitContent
+              content={renderArtTile(pluginId, props.item.label, {
+                iconUrl: props.pluginIconUrls?.[pluginId],
+                onIconError: () => props.onPluginIconError?.(pluginId),
+                className: "cmd-palette__plugin-icon",
+              })}
+            />
+          )}
+        </Match>
+      </Switch>
       <span class="cmd-palette__item-copy">
         <span class="cmd-palette__item-heading">
           <span class="cmd-palette__item-title">
