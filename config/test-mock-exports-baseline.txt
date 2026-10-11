@@ -1458,7 +1458,6 @@
 ["extensions/slack/src/actions.read.test.ts","./client.js","df15149204c7335c81937ebf49d28e90b98197da9c1adbc57a1378f6a05b2547",1]
 ["extensions/slack/src/approval-handler.enterprise.test.ts","./send.js","31e15c31c96f51901983ef363809347db57db335446f915bbaaa1874a394a295",1]
 ["extensions/slack/src/approval-handler.runtime.test.ts","./send.js","31e15c31c96f51901983ef363809347db57db335446f915bbaaa1874a394a295",1]
-["extensions/slack/src/channel-type.test.ts","./client.js","79d0cbd9cc3fe2df6d68a0ef7b7bc3f94a2d9477b973e42d491bd2f46836b352",1]
 ["extensions/slack/src/channel.lazy-seams.test.ts","./scopes.js","2fcb60bcf97198cd97089e18c35fbc5401a54392ebc3d0b3b99174f5f712faab",1]
 ["extensions/slack/src/channel.test.ts","./send.js","bbf3016e18b396683a6f6c049135434d3a6132ed1383cddb48b5c749ada075c6",1]
 ["extensions/slack/src/client-delivery.upload.test.ts","openclaw/plugin-sdk/outbound-media","679a49601d1e7c38f0eff9b277724d89010cb4ae2886b6748ab34bebb7407e2b",1]

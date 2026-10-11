@@ -13,7 +13,6 @@ import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispa
 import type { GatewayRecoveryTypingParams } from "../../../gateway/server-instance-runtime.types.js";
 import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
-import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
@@ -21,17 +20,12 @@ import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
-import {
-  getGatewayAgentResult,
-  hasCommittedSourceReplyDeliveryEvidence,
-  hasMessagingToolDeliveryEvidence,
-  hasUnaccountedMessagingToolAggregateEvidence,
-  resolveExplicitFinalSourceReplyDeliveryEvidence,
-} from "../../embedded-agent-runner/delivery-evidence.js";
+import { getGatewayAgentResult } from "../../embedded-agent-runner/delivery-evidence.js";
 import { hasVisibleAgentPayload } from "../../embedded-agent-runner/message-visibility.js";
 import { hasVisibleCompletionResult } from "../../internal-event-contract.js";
 import { collectAgentInternalEventMedia, type AgentInternalEvent } from "../../internal-events.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
+import { hasMessagingToolDeliveryToSource } from "./subagent-announce-delivery-evidence.js";
 import {
   hasAnnounceSendEvidence,
   SourceOwnerChangedError,
@@ -48,6 +42,10 @@ import {
 import type { SubagentCompletionToolHandoffRegistration } from "./subagent-announce-handoff.js";
 import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
+
+export type { SourceDeliveryTarget } from "../../../infra/outbound/source-delivery-target-match.js";
+export { resolveMessagingToolDeliveryEvidence } from "./subagent-announce-delivery-evidence.js";
+export type { MessagingToolDeliveryResult } from "./subagent-announce-delivery-evidence.js";
 
 export async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
@@ -165,7 +163,6 @@ export async function runAnnounceAgentCall(params: {
 
 const FAILED_COMPLETION_NOTICE =
   "A delegated task failed before it could report a result. Please retry the task.";
-
 export function isGatewayAgentRunPending(response: unknown): boolean {
   return isNonTerminalAgentRunStatus(asOptionalObjectRecord(response)?.status);
 }
@@ -208,10 +205,10 @@ export function resolveRequesterRecoveryDelivery(
   return undefined;
 }
 
-export function resolvePrivateCompletionDeliveryResult(
+export async function resolvePrivateCompletionDeliveryResult(
   response: Record<string, unknown> | undefined,
   origin?: DeliveryContext,
-): SubagentAnnounceDeliveryResult {
+): Promise<SubagentAnnounceDeliveryResult> {
   const outcome = buildAgentRunTerminalOutcomeFromWaitResult(response);
   if (outcome?.reason === "cancelled" && outcome.stopReason !== "restart") {
     return {
@@ -243,7 +240,7 @@ export function resolvePrivateCompletionDeliveryResult(
     result &&
     result.meta?.yielded !== true &&
     result.meta?.continuationPending !== true &&
-    hasMessagingToolDeliveryToSource(result, origin, { requireFinalReply: true })
+    (await hasMessagingToolDeliveryToSource(result, origin, { requireFinalReply: true }))
   ) {
     delivery.requesterVisibleFinalDelivered = true;
   }
@@ -515,63 +512,4 @@ export async function deliverCompletionDirect(params: {
   } finally {
     await deliveryResultReported;
   }
-}
-
-export function hasMessagingToolDeliveryToSource(
-  result: {
-    didDeliverSourceReplyViaMessageTool?: unknown;
-    didSendViaMessagingTool?: unknown;
-    messagingToolSentTargets?: unknown;
-    messagingToolSourceReplyPayloads?: unknown;
-  },
-  deliveryTarget: Parameters<typeof sourceDeliveryTargetsMatch>[1],
-  options?: { requireFinalReply?: boolean },
-): boolean {
-  const targets = Array.isArray(result.messagingToolSentTargets)
-    ? result.messagingToolSentTargets
-    : [];
-  const sourceTargets = targets.filter((target) => {
-    if (
-      !target ||
-      typeof target !== "object" ||
-      Array.isArray(target) ||
-      !deliveryTarget.channel ||
-      !deliveryTarget.to
-    ) {
-      return false;
-    }
-    const record = target as Parameters<typeof sourceDeliveryTargetsMatch>[0];
-    // Older source receipts omit `to`; explicit off-target sends must never satisfy it.
-    const sourceTarget =
-      typeof record.to === "string" && record.to.trim()
-        ? record
-        : { ...record, to: deliveryTarget.to };
-    return sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget);
-  });
-  if (options?.requireFinalReply) {
-    const hasCommittedSourceDelivery =
-      hasCommittedSourceReplyDeliveryEvidence(result) ||
-      (hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0);
-    // Only current-source final markers count; another target's final cannot
-    // turn a source progress update into the owed requester reply.
-    return (
-      hasCommittedSourceDelivery &&
-      resolveExplicitFinalSourceReplyDeliveryEvidence({
-        messagingToolSentTargets: sourceTargets,
-        messagingToolSourceReplyPayloads: result.messagingToolSourceReplyPayloads,
-      }) !== false
-    );
-  }
-  if (
-    hasCommittedSourceReplyDeliveryEvidence(result) ||
-    hasUnaccountedMessagingToolAggregateEvidence({ ...result, didSendViaMessagingTool: false })
-  ) {
-    return true;
-  }
-
-  if (targets.length === 0 || !deliveryTarget.channel || !deliveryTarget.to) {
-    return hasMessagingToolDeliveryEvidence(result);
-  }
-
-  return hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0;
 }

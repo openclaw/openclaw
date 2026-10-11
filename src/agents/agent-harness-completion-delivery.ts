@@ -25,8 +25,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import {
-  getOwedHarnessCompletionTask,
   hasHarnessCompletionFinalReceipt,
+  getOwedHarnessCompletionTask,
   readAdmittedHarnessCompletionInput,
 } from "./agent-harness-completion-recovery.js";
 
