@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  createComposerContainer,
   createComposerProps as props,
   findComposerButton as button,
   renderComposerFixture as renderComposer,
@@ -172,7 +173,7 @@ function dictationPointer(type: "pointerdown" | "pointerup", pointerId: number):
 }
 
 function mountComposer(overrides: Parameters<typeof props>[0]) {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   document.body.append(container);
   const composerProps = props(overrides);
   const draw = () => render(renderChatComposer(composerProps), container);
@@ -220,7 +221,7 @@ describe("renderChatComposer controls", () => {
   it("shows the same microphone guidance while dictation waits for access", async () => {
     vi.useFakeTimers();
     openMicrophoneMock.mockReturnValue(new Promise(() => {}));
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     document.body.append(container);
     const composerProps = props({
       gatewayClient: {
@@ -578,7 +579,7 @@ describe("renderChatComposer controls", () => {
 
 describe("renderChatComposer status", () => {
   it("keeps every concurrent gateway question reachable", async () => {
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const onRequestUpdate = vi.fn();
     const composerProps = props({
       sessionKey: "queue-test",

@@ -44,6 +44,8 @@ const directory: UsersListResult = {
 suite.define(() => {
   it.each([
     { width: 1280, colorScheme: "light" as const, scale: 1, font: "var(--font-body)" },
+    { width: 1280, colorScheme: "dark" as const, scale: 1, font: "var(--font-body)" },
+    { width: 390, colorScheme: "light" as const, scale: 1.5, font: "Georgia, serif" },
     { width: 390, colorScheme: "dark" as const, scale: 1.5, font: "Georgia, serif" },
   ])("keeps mention avatars aligned across image outcomes at $width px", async (viewport) => {
     await suite.withPage(
@@ -107,6 +109,12 @@ suite.define(() => {
             .poll(() => references.locator('[data-avatar-state="pending"]').count())
             .toBe(2);
           const pending = await geometry();
+          await captureUiProof(
+            suite,
+            page,
+            "person-references",
+            `${viewport.width}-${viewport.colorScheme}-pending.png`,
+          );
           response.resolve();
           await references.locator('[data-avatar-state="loaded"]').waitFor();
           await references.locator('[data-avatar-state="failed"]').waitFor();
@@ -117,6 +125,12 @@ suite.define(() => {
             expect(Math.abs(offset)).toBeLessThanOrEqual(1);
           }
           expect(await references.allTextContents()).toEqual([label, label]);
+          await captureUiProof(
+            suite,
+            page,
+            "person-references",
+            `${viewport.width}-${viewport.colorScheme}-settled.png`,
+          );
         } finally {
           response.resolve();
         }

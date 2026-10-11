@@ -5,7 +5,7 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { page as agentsPage, type AgentsRouteData } from "./agents/route.ts";
-import type { DevicesRouteData } from "./devices/devices-page.ts";
+import type { DevicesRouteData } from "./devices/devices-page.tsx";
 import { page as devicesPage } from "./devices/route.ts";
 import {
   page as modelProvidersPage,
@@ -14,7 +14,7 @@ import {
 import type { PluginsRouteData } from "./plugins/route-data.ts";
 import { pages as pluginPages } from "./plugins/route.ts";
 import { pages as skillPages } from "./skills/route.ts";
-import type { SkillsRouteData } from "./skills/skills-page.ts";
+import type { SkillsRouteData } from "./skills/skills-page.tsx";
 import { page as usagePage } from "./usage/route.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
 

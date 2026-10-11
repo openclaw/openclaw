@@ -12,11 +12,6 @@ import {
   projectSessionEntryUsageUpdate,
   type SessionEntryUsageUpdate,
 } from "./session-entry-usage.js";
-import type {
-  SessionTranscriptTurnExpectedState,
-  SessionTranscriptTurnLifecyclePatch,
-} from "./session-transcript-turn-lifecycle.types.js";
-import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
@@ -60,12 +55,6 @@ type SessionEntryPatchStep = (
       kind: "ensure-identity";
       sessionId: string;
       creation: ReturnType<typeof buildSessionCreationStamp>;
-    }
-  | {
-      kind: "restart-admission";
-      sessionId: string;
-      expectedSessionState: SessionTranscriptTurnExpectedState;
-      patch: SessionTranscriptTurnLifecyclePatch;
     }
   | {
       kind: "pending-final-clear";
@@ -190,16 +179,6 @@ function reduceSessionEntryPatch(
       return projectAmbientTranscriptWatermark(entry, operation.watermark);
     case "compaction-accounting":
       return projectCompactionAccountingPatch(entry, operation.accounting);
-    case "restart-admission":
-      return sessionMatchesExpectedTranscriptTurn(
-        { entry },
-        {
-          expectedSessionId: operation.sessionId,
-          expectedSessionState: operation.expectedSessionState,
-        },
-      )
-        ? operation.patch
-        : null;
     case "pending-final-clear": {
       const recoveryRunId = normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
       const deliveries = entry.pendingFinalDelivery?.deliveries;

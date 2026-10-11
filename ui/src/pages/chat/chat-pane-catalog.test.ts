@@ -13,6 +13,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
@@ -111,7 +112,7 @@ describe("catalog transcript cache", () => {
     state.chatToolMessages = [
       { role: "toolResult", toolName: "read", content: "Unrelated live tool", toolCallId: "live" },
     ];
-    const container = document.body.appendChild(document.createElement("div"));
+    const container = document.body.appendChild(createApplicationContextProvider(context));
     const build = vi.spyOn(chatThreadBuild, "buildChatItems");
     const draw = () => {
       pane.render();

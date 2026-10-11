@@ -37,9 +37,12 @@ export type SessionActorHotState = {
   dependencySessionIds: string[];
   /** Includes the canonical turn, lifecycle, recovery, and pendingFinalDelivery fields. */
   entry: SessionEntry | undefined;
+  hasBoard: boolean;
   participants: SessionParticipantRecord[];
   members: SessionMember[];
   pendingInputs: Array<Omit<SessionPendingInputRow, "message_json">>;
+  /** Complete retry-key membership; outcome bodies stay in the worker. */
+  completionKeys: string[];
   transcript: {
     watermark: SessionTranscriptWatermark;
     version: SessionTranscriptContextVersion;

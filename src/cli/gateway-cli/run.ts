@@ -93,7 +93,6 @@ const gatewayLog = createSubsystemLogger("gateway");
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
-const GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS = 4;
 
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
 
@@ -213,22 +212,6 @@ async function loadGatewayRunShellEnvFallback(
   );
 }
 
-async function clearGatewayRunShellEnvFallback(
-  values: Readonly<Record<string, string>>,
-): Promise<void> {
-  const keys = Object.keys(values);
-  if (keys.length === 0) {
-    return;
-  }
-  for (const [key, value] of Object.entries(values)) {
-    if (process.env[key] === value) {
-      delete process.env[key];
-    }
-  }
-  const { clearShellEnvAppliedKeys } = await import("../../infra/shell-env.js");
-  clearShellEnvAppliedKeys(keys);
-}
-
 async function readGatewayStartupConfigWithShellEnv(params: {
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
 }): Promise<
@@ -236,42 +219,22 @@ async function readGatewayStartupConfigWithShellEnv(params: {
     lowerPrecedenceEnv: Readonly<Record<string, string>>;
   }
 > {
-  let lowerPrecedenceEnv: Record<string, string> = {};
-  let loadedPlanSignature: string | undefined;
-  try {
-    for (let readCount = 0; readCount < GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS; readCount += 1) {
-      const startupConfig = await readGatewayStartupConfig({
-        lowerPrecedenceEnv,
-        startupTrace: params.startupTrace,
-      });
-      const plan = await resolveGatewayRunShellEnvFallbackPlan(
-        startupConfig.snapshot.valid ? startupConfig.cfg : {},
-      );
-      const planSignature = JSON.stringify(plan);
-      if (!plan.enabled) {
-        if (Object.keys(lowerPrecedenceEnv).length === 0) {
-          return { ...startupConfig, lowerPrecedenceEnv };
-        }
-        await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
-        lowerPrecedenceEnv = {};
-        loadedPlanSignature = undefined;
-        continue;
-      }
-      if (loadedPlanSignature === planSignature) {
-        return { ...startupConfig, lowerPrecedenceEnv };
-      }
-      await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
-      lowerPrecedenceEnv = await loadGatewayRunShellEnvFallback(plan);
-      loadedPlanSignature = planSignature;
-    }
-  } catch (err) {
-    await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
-    throw err;
-  }
-  await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
-  throw new Error(
-    "Gateway shell environment fallback settings changed repeatedly during startup. Retry startup.",
+  const startupConfig = await readGatewayStartupConfig({
+    lowerPrecedenceEnv: {},
+    startupTrace: params.startupTrace,
+  });
+  const plan = await resolveGatewayRunShellEnvFallbackPlan(
+    startupConfig.snapshot.valid ? startupConfig.cfg : {},
   );
+  if (!plan.enabled) {
+    return { ...startupConfig, lowerPrecedenceEnv: {} };
+  }
+  // Startup uses one shell-env plan; edits during this read take effect on the next start.
+  const lowerPrecedenceEnv = await loadGatewayRunShellEnvFallback(plan);
+  return {
+    ...(await readGatewayStartupConfig({ lowerPrecedenceEnv, startupTrace: params.startupTrace })),
+    lowerPrecedenceEnv,
+  };
 }
 
 function isGatewayLockError(err: unknown): err is GatewayLockError {

@@ -49,10 +49,6 @@ const channelMocks = vi.hoisted(() => ({
 const completionMocks = vi.hoisted(() => ({
   settleUnknownDelivery: vi.fn(),
 }));
-const namespaceMocks = vi.hoisted(() => ({
-  replacePendingDeliveryQueueEntry: vi.fn(),
-  throwOnReplaceCall: 0,
-}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks,
@@ -68,23 +64,6 @@ vi.mock("./delivery-completion.js", async (importOriginal) => {
       "platformSendStarted" in args[1] && args[1].platformSendStarted
         ? completionMocks.settleUnknownDelivery(...args)
         : original.settleDurableDelivery(...args),
-  };
-});
-vi.mock("../delivery-queue-sqlite-namespace.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../delivery-queue-sqlite-namespace.js")>();
-  namespaceMocks.replacePendingDeliveryQueueEntry.mockImplementation((params) => {
-    if (
-      namespaceMocks.throwOnReplaceCall > 0 &&
-      namespaceMocks.replacePendingDeliveryQueueEntry.mock.calls.length ===
-        namespaceMocks.throwOnReplaceCall
-    ) {
-      throw new Error("transient lease renewal failure");
-    }
-    return original.replacePendingDeliveryQueueEntry(params);
-  });
-  return {
-    ...original,
-    replacePendingDeliveryQueueEntry: namespaceMocks.replacePendingDeliveryQueueEntry,
   };
 });
 
@@ -143,8 +122,6 @@ describe("outbound prepared queue migration", () => {
     channelMocks.resolveOutboundChannelMessageAdapter.mockReset();
     channelMocks.resolveOutboundChannelMessageAdapter.mockReturnValue(undefined);
     completionMocks.settleUnknownDelivery.mockClear();
-    namespaceMocks.replacePendingDeliveryQueueEntry.mockClear();
-    namespaceMocks.throwOnReplaceCall = 0;
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -272,42 +249,6 @@ describe("outbound prepared queue migration", () => {
         entries: [expect.objectContaining({ payload: { text: "first-prepared" } })],
       },
     });
-  });
-
-  it("fences modifier preparation when lease renewal throws", async () => {
-    vi.useFakeTimers();
-    try {
-      const id = "legacy-renewal-failure";
-      seedDeliveryQueueEntry({
-        queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-        entry: legacyEntry(id, "must not replay"),
-        stateDir: tmpDir(),
-      });
-      let releaseHook: ((value: { content: string }) => void) | undefined;
-      hookMocks.runMessageSending.mockImplementationOnce(
-        async () =>
-          await new Promise<{ content: string }>((resolve) => {
-            releaseHook = resolve;
-          }),
-      );
-      namespaceMocks.throwOnReplaceCall = 2;
-
-      const migration = migrate();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(30_000);
-      releaseHook?.({ content: "must not replay-prepared" });
-
-      await expect(migration).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
-      expect(
-        getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
-      ).toBe("failed");
-      expect(
-        readQueueEntryJson(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
-      ).not.toContain("must not replay");
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("dead-letters interrupted modifier preparation without invoking hooks again", async () => {

@@ -201,6 +201,7 @@ export function createSessionActorWorker(
             throw error;
           }
           const working = cloneSessionActorStoredState(before);
+          let commitPublication: unknown;
           const borrowed: AgentWorkerOperationContext = {
             ...context,
             open: () => opened,
@@ -211,6 +212,9 @@ export function createSessionActorWorker(
               return operation(opened);
             },
             admit(stage, publication) {
+              if (stage === "commit") {
+                commitPublication = publication;
+              }
               admit(stage, {
                 kind: "session-actor-admission",
                 snapshot: projectSessionActorHotState(working),
@@ -307,6 +311,7 @@ export function createSessionActorWorker(
             admit("commit", {
               kind: "session-actor-admission",
               snapshot: projectSessionActorHotState(working),
+              publication: turn ?? commitPublication,
               final: true,
             });
             return accepted;

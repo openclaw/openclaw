@@ -72,6 +72,7 @@ describe("shared control ownership", () => {
     expect(matchingFiles(/<resizable-divider\b/u)).toEqual([
       "app/app-shell-view.ts",
       "components/dock-layout-controller.ts",
+      "components/dock-layout-solid.ts",
       "pages/chat/chat-page-pane-render.ts",
       "pages/chat/components/chat-resizable-divider.ts",
     ]);

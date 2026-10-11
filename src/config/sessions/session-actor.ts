@@ -30,7 +30,8 @@ import type {
 import type { createSessionActorReplica } from "./session-actor-replica.js";
 
 type NativeAdmission = {
-  admission: Pick<SqliteWorkerOperationAdmission, "committed" | "settlement">;
+  admission: Pick<SqliteWorkerOperationAdmission, "committed" | "settlement"> &
+    Partial<Pick<SqliteWorkerOperationAdmission, "failure" | "failureSource">>;
   retained: RetainedWorkerTransactionAdmission;
 };
 
@@ -202,10 +203,10 @@ export function createSessionActor(params: {
         ) {
           throw new Error("Session actor admission belongs to another target");
         }
-        // SAFETY: The paired actor kernel supplies this full snapshot on its private admission port.
-        const snapshot = structuredClone(facts.snapshot) as SessionActorHotState;
+        // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
+        const snapshot = facts.snapshot as SessionActorHotState;
         authority.authorize(request.stage, structuredClone(snapshot), facts.publication);
-        observe?.(native, request.stage, structuredClone(snapshot), facts.final === true);
+        observe?.(native, request.stage, snapshot, facts.final === true);
       } else if (
         actorAdmissionSeen &&
         (request.stage === "commit" || (request.stage === "transaction" && facts !== undefined))
@@ -280,11 +281,11 @@ export function createSessionActor(params: {
         commandId: captured.commandId,
         error: errorFacts(error),
       });
-      const preserveFailure = (error: unknown): Outcome => {
+      const preserveFailure = (error: unknown, origin?: "response"): Outcome => {
         if (!committed) {
           return unknown(error);
         }
-        const failure = errorFacts(error);
+        const failure = { ...errorFacts(error), ...(origin ? { origin } : {}) };
         committed = {
           ...committed,
           failure: committed.failure
@@ -341,7 +342,7 @@ export function createSessionActor(params: {
                   // SAFETY: The paired native receipt owns the result type; the checks above match its command and postimage.
                   committed = structuredClone(evidence) as Extract<Outcome, { kind: "committed" }>;
                   if (!reply.ok) {
-                    preserveFailure(reply.error);
+                    preserveFailure(reply.error, "response");
                   } else if (reply.value.kind === "committed" && reply.value.failure) {
                     committed = { ...committed, failure: structuredClone(reply.value.failure) };
                   }
@@ -363,7 +364,14 @@ export function createSessionActor(params: {
                   (settled.kind === "not-entered" ||
                     native.admission.settlement?.kind === "completed")
                 ) {
-                  result = reply.value;
+                  const failure = native.admission.failure;
+                  result =
+                    native.admission.failureSource === "protocol" ||
+                    hasSqliteWorkerOutcomeUnknown(failure)
+                      ? unknown(failure)
+                      : failure === undefined
+                        ? reply.value
+                        : { kind: "rolled-back", error: errorFacts(failure) };
                 } else {
                   result = unknown(
                     reply.ok ? new Error("Unconfirmed actor settlement") : reply.error,

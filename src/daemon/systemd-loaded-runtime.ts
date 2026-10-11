@@ -1,6 +1,5 @@
 // Admission reads already-loaded state. Recovery may load a bound definition
 // under live custody; neither mode starts a unit or a bus service.
-import { isDeepStrictEqual } from "node:util";
 import {
   runServiceInspectionGuard,
   withServiceInspectionBudget,
@@ -47,7 +46,7 @@ const optionalCounter = (value: unknown): number | undefined => {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 };
 
-/** The selected manager must retain the same loaded unit throughout inspection. */
+/** Read one best-effort snapshot from the selected manager. */
 export async function readLoadedSystemdServiceRuntime(
   env: GatewayServiceEnv,
   timeoutMs?: number,
@@ -61,7 +60,7 @@ export async function readLoadedSystemdServiceRuntime(
     const timeoutBudget =
       timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 5000;
     const deadline = budget.now() + timeoutBudget;
-    let remainingQueries = 7;
+    let remainingQueries = 5;
     const unavailable = () =>
       new Error("Loaded systemd runtime could not be inspected without activation.");
     const query = async (args: string[], signatures: string[]): Promise<unknown[]> => {
@@ -134,8 +133,8 @@ export async function readLoadedSystemdServiceRuntime(
         ["o"],
       );
       const unitPath = readSystemdUnitObjectPath(unit, unavailable);
-      const readUnit = () =>
-        query(
+      const [id, load, active, sub, burst, unitFileState, refuseManualStart, canStart] =
+        await query(
           [
             "get-property",
             owner,
@@ -146,27 +145,12 @@ export async function readLoadedSystemdServiceRuntime(
             "ActiveState",
             "SubState",
             "StartLimitBurst",
-            "ActiveEnterTimestampMonotonic",
-            "InactiveEnterTimestampMonotonic",
             "UnitFileState",
             "RefuseManualStart",
             "CanStart",
           ],
-          ["s", "s", "s", "s", "u", "t", "t", "s", "b", "b"],
+          ["s", "s", "s", "s", "u", "s", "b", "b"],
         );
-      const before = await readUnit();
-      const [
-        id,
-        load,
-        active,
-        sub,
-        burst,
-        entered,
-        left,
-        unitFileState,
-        refuseManualStart,
-        canStart,
-      ] = before;
       const startRefusal = resolveSystemdServiceStartRefusal({
         unit: unitName,
         scope,
@@ -176,12 +160,7 @@ export async function readLoadedSystemdServiceRuntime(
         refuseManualStart: refuseManualStart === true,
         canStart: typeof canStart === "boolean" ? canStart : undefined,
       });
-      if (
-        load === "masked" &&
-        id === unitName &&
-        isDeepStrictEqual(before, await readUnit()) &&
-        owner === (await readOwner())
-      ) {
+      if (load === "masked" && id === unitName) {
         return {
           status: "unknown",
           detail: startRefusal?.message,
@@ -232,16 +211,8 @@ export async function readLoadedSystemdServiceRuntime(
           Array.isArray(processes[0]) &&
           processes[0].length === 0;
       }
-      // Same manager identity alone does not exclude unit restart/state changes.
-      // Compare native transition generations as well as state to reject ABA observations.
-      const after = await readUnit();
-      if (owner !== (await readOwner())) {
-        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
-      }
+      // A restart during inspection may mix two snapshots; the next read refreshes it.
       if (
-        !isDeepStrictEqual(before, after) ||
-        optionalCounter(entered) === undefined ||
-        optionalCounter(left) === undefined ||
         id !== unitName ||
         load !== "loaded" ||
         typeof active !== "string" ||

@@ -3,9 +3,9 @@ import {
   operatorScopeSatisfied,
   roleScopesAllow,
 } from "../../shared/operator-scope-compat.js";
-import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
-import { resolvePersonalGitHubOwner } from "../../state/user-github-connections.js";
-import type { PersonalGitHubAction } from "../github-personal-oauth.js";
+import { prepareUserProfileRolePolicyAuthority } from "../../state/user-channel-identity-operations.js";
+import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
+import type { PersonalGitHubAction, PersonalGitHubActionV2 } from "../github-personal-oauth.js";
 import { readGitHubPublicationSession } from "../github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "../github-publication-failure.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
@@ -123,7 +123,7 @@ export async function prepareGitHubPublicationOptionsRead(
   assertConnection();
   currentGitHubClient(options, "operator.sessions.read");
   const profile = profileReference
-    ? await prepareUserProfileRoleAuthority(profileReference)
+    ? await prepareUserProfileRolePolicyAuthority(profileReference)
     : undefined;
   assertConnection();
   if (profileReference && !profile) {
@@ -196,8 +196,59 @@ export async function prepareGitHubPublicationOptionsRead(
   };
 }
 
+/** Prepare canonical role facts off-thread; live checks consume the profile owner's revisions. */
+export async function preparePersonalGitHubActionV2(
+  options: Request,
+  scope: "operator.read" | "operator.write" = "operator.read",
+  callerSignal?: AbortSignal,
+): Promise<PersonalGitHubActionV2> {
+  const { client, context } = options;
+  const profileReference = client?.authenticatedUserProfile?.profileId;
+  const userId = client?.authenticatedUserId;
+  const access = client?.internal?.operatorAccessAuthority;
+  const signals = [options.signal, callerSignal, client?.connectionSignal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  const signal = AbortSignal.any(signals);
+  const assertConnection = () => {
+    signal.throwIfAborted();
+    if (
+      !client?.connId ||
+      client.connect?.role !== "operator" ||
+      isIneligiblePersonalGatewayCaller(client) ||
+      !context.getClientConnIds?.((current) => current === client).has(client.connId)
+    ) {
+      throw new Error("My GitHub requires a current authenticated human Gateway connection.");
+    }
+    if (
+      client.authenticatedUserProfile?.profileId !== profileReference ||
+      client.authenticatedUserId !== userId ||
+      client.internal?.operatorAccessAuthority !== access
+    ) {
+      throw new Error("My GitHub owner changed; retry from your current profile.");
+    }
+  };
+  assertConnection();
+  const profile = profileReference
+    ? await prepareUserProfileRolePolicyAuthority(profileReference)
+    : undefined;
+  assertConnection();
+  if (!profile) {
+    throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
+  }
+  const assertCurrent = () => {
+    assertConnection();
+    if (!profile.isCurrent()) {
+      throw new Error("My GitHub owner changed; retry from your current profile.");
+    }
+    currentGitHubClient(options, scope, profile);
+  };
+  assertCurrent();
+  return { owner: profile.profileId, signal, assertCurrent };
+}
+
 /** Authority stays in this direct connection closure; a profile or request id alone grants nothing. */
-export function preparePersonalGitHubAction(
+function preparePersonalGitHubAction(
   options: Request,
   scope: "operator.read" | "operator.write" = "operator.read",
   signal?: AbortSignal,
@@ -215,12 +266,19 @@ export function preparePersonalGitHubAction(
       throw new Error("My GitHub requires a current authenticated human Gateway connection.");
     }
     const profile = client.authenticatedUserProfile?.profileId;
-    const owner = profile ? resolvePersonalGitHubOwner(profile) : undefined;
-    if (!owner) {
+    if (!profile) {
       throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
     }
-    currentGitHubClient(options, scope, owner);
-    return owner;
+    const current = captureResidentUserProfileAccess(profile).assertCurrent();
+    if (current.merged_into) {
+      throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
+    }
+    currentGitHubClient(options, scope, {
+      profileId: current.id,
+      role: current.role ?? null,
+      githubLogin: current.githubLogin,
+    });
+    return current.id;
   };
   const owner = resolveOwner();
   return {

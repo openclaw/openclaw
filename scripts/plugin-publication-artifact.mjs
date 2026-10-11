@@ -41,7 +41,10 @@ const TAR_USTAR_MAGIC = Buffer.from("ustar\0", "ascii");
 const TAR_USTAR_VERSION = Buffer.from("00", "ascii");
 const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 512 * 1024 * 1024;
-const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
+// The publication manifest carries one inventory row per packed file, so it must
+// fit MAX_TAR_ENTRIES rows; bundled SDKs already exceed 14k files (~4.5 MiB).
+const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
+const MAX_PACKAGE_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_PLUGIN_MANIFEST_BYTES = 2 * 1024 * 1024;
 // Bundled SDKs can exceed 10k files; byte, path, and expansion caps remain authoritative.
 const MAX_TAR_ENTRIES = 20_000;
@@ -561,7 +564,7 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
     inventory.push(entry);
     onFile?.({ content, path: safePath });
     if (safePath === "package/package.json") {
-      if (content.length === 0 || content.length > MAX_MANIFEST_BYTES) {
+      if (content.length === 0 || content.length > MAX_PACKAGE_JSON_BYTES) {
         throw new Error(
           `Packed package.json size is outside the allowed range: ${content.length}.`,
         );

@@ -8,6 +8,7 @@ import { expect, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runtimeProcessDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
@@ -386,7 +387,11 @@ import { resolveBuildAllSteps, runBuildAllSteps } from ${JSON.stringify(pathToFi
 import { withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/dist-artifact-ownership.mts")).href)};
 await withDistArtifactOwnership(process.cwd(), async () => {
   const steps = resolveBuildAllSteps("full").filter(step =>
-    ["tsdown-unified", "write-unified-entry-dts"].includes(step.label));
+    ["tsdown", "write-unified-entry-dts"].includes(step.label)).map(step =>
+      step.label === "tsdown"
+        // This fixture materializes only the unified source graph.
+        ? { ...step, args: [...step.args, "--config", "tsdown.config.ts", "--filter", ${JSON.stringify(TSDOWN_UNIFIED_CONFIG_GROUP)}] }
+        : step);
   const result = await runBuildAllSteps("full", { steps });
   process.exitCode = result.exitCode;
 });

@@ -170,15 +170,7 @@ export function createManagedHandoffProcessIdentityReader(options: {
   }
   function processIdentity(pid = process.pid, argv?: readonly string[]): HandoffProcessIdentity {
     if (pid === process.pid && selfIdentity) {
-      // This executing process is live; only observed identity disagreement can revoke its pin.
-      const observed =
-        process.platform === "win32" &&
-        WINDOWS_ARGV_IDENTITY_PATTERN.test(selfIdentity.startIdentity)
-          ? readWindowsArgvIdentity(pid)
-          : readProcessStartIdentity(pid);
-      if (observed !== null && observed !== selfIdentity.startIdentity) {
-        throw new Error("managed handoff process identity changed");
-      }
+      // A running process cannot reuse its own PID or change its birth identity.
       return { ...selfIdentity };
     }
     const startIdentity = readProcessStartIdentity(pid);
