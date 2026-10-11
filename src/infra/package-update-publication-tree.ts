@@ -114,7 +114,7 @@ export async function copyPackagePublicationTree(
 export function createPackagePublicationTreeMatcher(
   descriptor: Pick<PackageActivationDescriptor, "candidate" | "previous" | "helperDigest">,
   onWarning: (message: string) => void,
-  privateCandidate: () => boolean,
+  privateCandidate: () => boolean = () => false,
 ) {
   let candidateWarningRecorded = false;
   const verified = new WeakMap<PackageIntegrityFingerprint, PackageIntegrityFingerprint>();
