@@ -30,6 +30,7 @@ export class SessionOwnerMenu {
   private readonly context;
   private readonly connection;
   private searchGeneration = 0;
+  private opened = false;
 
   constructor(host: ReactiveControllerHost & HTMLElement) {
     this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
@@ -49,7 +50,10 @@ export class SessionOwnerMenu {
   }
 
   readonly load = () => {
-    this.searchGeneration += 1;
+    if (this.opened) {
+      this.searchGeneration += 1;
+    }
+    this.opened = true;
     void this.directory?.load(true);
   };
 

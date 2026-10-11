@@ -20,8 +20,13 @@ const photo = {
 it("shares directory reads, resolves merged identities, and advertises only existing photos", async () => {
   const reply = createDeferred<UsersListResult>();
   const request = vi.fn(() => reply.promise);
-  const { gateway, publish } = createApplicationGateway();
-  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  const fixture = createApplicationGateway();
+  const { gateway } = fixture;
+  fixture.publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    client: createTestGatewayClient(request),
+  });
   const directory = profileDirectory(gateway);
   const first = directory.subscribe(vi.fn());
   const second = profileDirectory(gateway).subscribe(vi.fn());
@@ -48,16 +53,21 @@ it("shares directory reads, resolves merged identities, and advertises only exis
 it("retires directory facts and ignores pending replies when the connection is replaced", async () => {
   const reply = createDeferred<UsersListResult>();
   const request = vi.fn(() => reply.promise);
-  const { gateway, publish } = createApplicationGateway();
-  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  const fixture = createApplicationGateway();
+  const { gateway } = fixture;
+  fixture.publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    client: createTestGatewayClient(request),
+  });
   const directory = profileDirectory(gateway);
   const stop = directory.subscribe(vi.fn());
   const old = directory.load();
-  publish({ ...gateway.snapshot, phase: "offline" });
+  fixture.publish({ ...gateway.snapshot, phase: "offline" });
   reply.resolve({ profiles: [photo] });
   await old;
   expect(profileAvatarUrl(directory.get("photo"))).toBeUndefined();
-  publish({
+  fixture.publish({
     ...gateway.snapshot,
     phase: "connected",
     client: createTestGatewayClient(async () => ({ profiles: [{ ...photo, updatedAt: 8 }] })),

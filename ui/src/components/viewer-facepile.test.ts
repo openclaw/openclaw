@@ -487,7 +487,7 @@ it.each([false, true])(
       })),
     });
     const provider = document.createElement("div");
-    new ContextProvider(provider, {
+    void new ContextProvider(provider, {
       context: createContext<Pick<ApplicationContext, "gateway">>(applicationContext),
       initialValue: { gateway },
     });

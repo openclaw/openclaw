@@ -107,21 +107,19 @@ class ProfileDirectory {
     this.error = undefined;
     const request = scope.client
       .request<UsersListResult>("users.list", {})
-      .then(
-        (result) => {
-          this.synchronize();
-          if (this.connection.isCurrent(scope)) {
-            this.result = result;
-            this.profiles = new Map(result.profiles.map((profile) => [profile.id, profile]));
-          }
-        },
-        (error: unknown) => {
-          this.synchronize();
-          if (this.connection.isCurrent(scope)) {
-            this.error = error;
-          }
-        },
-      )
+      .then((result) => {
+        this.synchronize();
+        if (this.connection.isCurrent(scope)) {
+          this.profiles = new Map(result.profiles.map((profile) => [profile.id, profile]));
+          this.result = result;
+        }
+      })
+      .catch((error: unknown) => {
+        this.synchronize();
+        if (this.connection.isCurrent(scope)) {
+          this.error = error;
+        }
+      })
       .finally(() => {
         if (this.pending === request) {
           this.pending = undefined;

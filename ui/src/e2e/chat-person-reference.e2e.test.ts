@@ -397,6 +397,7 @@ suite.define(() => {
         } else {
           await gateway.resolveDeferred("users.list", { profiles: [] });
         }
+        await gateway.deferNext("users.list");
         await reference.focus();
         await expect.poll(async () => (await gateway.getRequests("users.list")).length).toBe(2);
         await gateway.resolveDeferred("users.list", directory);
