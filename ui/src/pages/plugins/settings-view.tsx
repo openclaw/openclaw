@@ -473,10 +473,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
           />
         </SettingsPage>
       ) : (
-        <>
-          <PluginNotices {...props} />
-          <PluginOverview {...props} />
-        </>
+        <PluginOverview {...props} />
       )}
     </>
   );
@@ -566,6 +563,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
         }
         panel={
           <>
+            <PluginNotices {...props} />
             {!props.inspection && !catalog() && !props.inspectionError ? (
               <SettingsLoadingSkeleton rows={2} carapace={true} />
             ) : null}

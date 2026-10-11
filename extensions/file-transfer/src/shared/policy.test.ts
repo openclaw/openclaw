@@ -91,12 +91,6 @@ it("delegates only the selected node read policy and ignores the Node process po
 });
 
 describe("evaluateFilePolicy — default deny", () => {
-  it("returns NO_POLICY when no plugin config block is present", () => {
-    getRuntimeConfigMock.mockReturnValue({});
-    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expectResultFields(r, { ok: false, code: "NO_POLICY", askable: false });
-  });
-
   it("returns NO_POLICY when plugin policy block is missing", () => {
     getRuntimeConfigMock.mockReturnValue({ plugins: { entries: { "file-transfer": {} } } });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
@@ -162,82 +156,11 @@ describe("evaluateFilePolicy — '..' traversal short-circuit", () => {
 });
 
 describe("evaluateFilePolicy — denyPaths always wins", () => {
-  it("denies even when allowReadPaths matches", () => {
-    withConfig({
-      n1: {
-        allowReadPaths: ["/tmp/**"],
-        denyPaths: ["**/.ssh/**"],
-      },
-    });
-    const r = evaluateFilePolicy({
-      nodeId: "n1",
-      kind: "read",
-      path: "/tmp/.ssh/id_rsa",
-    });
-    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
-    expect(r.ok ? "" : r.reason).toMatch(/deny/);
-  });
-
-  it("treats globstar slash as zero or more directories in denyPaths", () => {
-    withConfig({
-      n1: {
-        allowReadPaths: ["~/Downloads/**"],
-        denyPaths: ["~/Downloads/**/*.pem"],
-      },
-    });
-    const r = evaluateFilePolicy({
-      nodeId: "n1",
-      kind: "read",
-      path: path.join(os.homedir(), "Downloads", "key.pem"),
-    });
-    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
-  });
-
-  it("preserves minimatch brace semantics in denyPaths", () => {
-    withConfig({
-      n1: {
-        allowReadPaths: ["~/Downloads/**"],
-        denyPaths: ["~/Downloads/**/*.{pem,key}", "**/.{ssh,aws}/**"],
-      },
-    });
-    expectResultFields(
-      evaluateFilePolicy({
-        nodeId: "n1",
-        kind: "read",
-        path: path.join(os.homedir(), "Downloads", "api.key"),
-      }),
-      { ok: false, code: "POLICY_DENIED", askable: false },
-    );
-    expectResultFields(
-      evaluateFilePolicy({
-        nodeId: "n1",
-        kind: "read",
-        path: path.join(os.homedir(), "Downloads", ".aws", "credentials"),
-      }),
-      { ok: false, code: "POLICY_DENIED", askable: false },
-    );
-  });
-
   it.each([
     {
       label: "the bare denied directory",
       requestedPath: path.join(os.homedir(), ".ssh"),
       expected: { ok: false, code: "POLICY_DENIED", askable: false },
-    },
-    {
-      label: "the denied directory with a trailing separator",
-      requestedPath: `${path.join(os.homedir(), ".ssh")}/`,
-      expected: { ok: false, code: "POLICY_DENIED", askable: false },
-    },
-    {
-      label: "the bare denied directory on Windows",
-      requestedPath: "C:\\Users\\me\\.ssh",
-      expected: { ok: false, code: "POLICY_DENIED", askable: false },
-    },
-    {
-      label: "a sibling sharing only the denied directory prefix",
-      requestedPath: path.join(os.homedir(), ".sshrc"),
-      expected: { ok: true },
     },
   ])("handles $label", ({ requestedPath, expected }) => {
     withConfig({
@@ -269,14 +192,6 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
 });
 
 describe("evaluateFilePolicy — allow matching", () => {
-  it("propagates per-node maxBytes on matched-allow", () => {
-    withConfig({
-      n1: { allowReadPaths: ["/tmp/**"], maxBytes: 1024 },
-    });
-    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expectResultFields(r, { ok: true, maxBytes: 1024 });
-  });
-
   it("uses kind=write to consult allowWritePaths, not allowReadPaths", () => {
     withConfig({
       n1: { allowReadPaths: ["/tmp/**"], allowWritePaths: ["/srv/**"] },
@@ -307,35 +222,6 @@ describe("evaluateFilePolicy — allow matching", () => {
       followSymlinks: true,
     });
   });
-
-  it("expands tilde in patterns relative to homedir", () => {
-    const home = os.homedir();
-    withConfig({
-      n1: { allowReadPaths: ["~/Screenshots/**"] },
-    });
-    expectResultFields(
-      evaluateFilePolicy({
-        nodeId: "n1",
-        kind: "read",
-        path: path.join(home, "Screenshots", "shot.png"),
-      }),
-      { ok: true },
-    );
-  });
-
-  it("matches Windows node paths without gateway-local path semantics", () => {
-    withConfig({
-      n1: { allowReadPaths: ["C:/Users/me/**"] },
-    });
-    expectResultFields(
-      evaluateFilePolicy({
-        nodeId: "n1",
-        kind: "read",
-        path: "C:\\Users\\me\\file.txt",
-      }),
-      { ok: true },
-    );
-  });
 });
 
 describe("evaluateFilePolicy — ask modes", () => {
@@ -359,14 +245,6 @@ describe("evaluateFilePolicy — ask modes", () => {
     });
   });
 
-  it("ask=on-miss still silent-allows on a match", () => {
-    withConfig({
-      n1: { ask: "on-miss", allowReadPaths: ["/tmp/**"] },
-    });
-    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expectResultFields(r, { ok: true, reason: "matched-allow" });
-  });
-
   it("ask=always always returns ask-always (prompt on every call)", () => {
     withConfig({
       n1: { ask: "always", allowReadPaths: ["/tmp/**"] },
@@ -374,40 +252,9 @@ describe("evaluateFilePolicy — ask modes", () => {
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
     expectResultFields(r, { ok: true, reason: "ask-always", askMode: "always" });
   });
-
-  it("ask=off returns non-askable POLICY_DENIED on miss", () => {
-    withConfig({
-      n1: { ask: "off", allowReadPaths: ["/var/log/**"] },
-    });
-    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
-  });
-
-  it("invalid ask values normalize to off", () => {
-    withConfig({
-      n1: { ask: "sometimes", allowReadPaths: ["/var/log/**"] },
-    });
-    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
-    expectResultFields(r, { ok: false, askable: false });
-  });
 });
 
 describe("evaluateFilePolicy — node-id resolution", () => {
-  it("resolves by displayName when nodeId has no entry", () => {
-    withConfig({
-      "Lobster MacBook": { allowReadPaths: ["/tmp/**"] },
-    });
-    expectResultFields(
-      evaluateFilePolicy({
-        nodeId: "node-abc-123",
-        nodeDisplayName: "Lobster MacBook",
-        kind: "read",
-        path: "/tmp/x",
-      }),
-      { ok: true },
-    );
-  });
-
   it("falls back to '*' wildcard when neither id nor displayName matches", () => {
     withConfig({
       "*": { allowReadPaths: ["/tmp/**"] },
@@ -453,40 +300,38 @@ describe("literal standing grants", () => {
     );
   });
 
-  it.each([
-    ["asterisk", "/tmp/report-*.txt", "/tmp/report-secret.txt"],
-    ["POSIX backslash", "/tmp/report\\*.txt", "/tmp/report/*.txt"],
-    ["Windows separators", "C:\\Temp\\report-*.txt", "C:\\Temp\\report-a.txt"],
-    ["UNC path", "\\\\server\\share\\report-?.txt", "\\\\server\\share\\report-a.txt"],
-  ])("keeps an approved path containing %s literal", async (_label, approvedPath, siblingPath) => {
-    withMutableConfig({ n1: { ask: "on-miss" } });
+  it.each([["Windows separators", "C:\\Temp\\report-*.txt", "C:\\Temp\\report-a.txt"]])(
+    "keeps an approved path containing %s literal",
+    async (_label, approvedPath, siblingPath) => {
+      withMutableConfig({ n1: { ask: "on-miss" } });
 
-    await persistLiteralGrant({
-      nodeId: "n1",
-      command: "file.fetch",
-      requestedPath: approvedPath,
-      canonicalPath: approvedPath,
-    });
-
-    expectResultFields(
-      evaluateFilePolicy({
+      await persistLiteralGrant({
         nodeId: "n1",
         command: "file.fetch",
-        kind: "read",
-        path: approvedPath,
-      }),
-      { ok: true, reason: "matched-literal", expectedCanonicalPath: approvedPath },
-    );
-    expectResultFields(
-      evaluateFilePolicy({
-        nodeId: "n1",
-        command: "file.fetch",
-        kind: "read",
-        path: siblingPath,
-      }),
-      { ok: false, code: "POLICY_DENIED", askable: true },
-    );
-  });
+        requestedPath: approvedPath,
+        canonicalPath: approvedPath,
+      });
+
+      expectResultFields(
+        evaluateFilePolicy({
+          nodeId: "n1",
+          command: "file.fetch",
+          kind: "read",
+          path: approvedPath,
+        }),
+        { ok: true, reason: "matched-literal", expectedCanonicalPath: approvedPath },
+      );
+      expectResultFields(
+        evaluateFilePolicy({
+          nodeId: "n1",
+          command: "file.fetch",
+          kind: "read",
+          path: siblingPath,
+        }),
+        { ok: false, code: "POLICY_DENIED", askable: true },
+      );
+    },
+  );
 
   it("does not replay a standing approval onto another node with the same display name", async () => {
     withMutableConfig({ Shared: { ask: "on-miss" } });

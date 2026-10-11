@@ -16,7 +16,7 @@ import { pages as pluginPages } from "./plugins/route.ts";
 import { pages as skillPages } from "./skills/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.tsx";
 import { page as usagePage } from "./usage/route.ts";
-import type { UsageRouteData } from "./usage/usage-page.ts";
+import type { UsageRouteData } from "./usage/usage-page.tsx";
 
 const pluginsPage = pluginPages[0];
 const skillsPage = skillPages[0];

@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -10,15 +9,17 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
 import { loadChatRoute } from "../chat/route-loader.ts";
 import { DashboardsView } from "../dashboards/view.tsx";
-import { props, row } from "./session-activity-view.test-harness.ts";
-import { renderSessionActivityView } from "./session-activity-view.ts";
+import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
+import { renderSessionActivityView } from "./session-activity-view.tsx";
+
+const renderSessionActivityViewSolid = mountSolid(renderSessionActivityView);
 
 let container: HTMLDivElement;
 function show(input: Parameters<typeof props>[0] = {}, target = container) {
-  render(renderSessionActivityView(props(input)), target);
+  renderSessionActivityViewSolid(props(input), target);
 }
 
 beforeEach(() => {
@@ -60,6 +61,37 @@ describe("session activity semantics", () => {
     expect(
       container.querySelector(".activity-feed__identity .settings-status")?.textContent?.trim(),
     ).toBe(label);
+  });
+
+  it("refreshes presence age without replacing the selected person's disclosure", () => {
+    const now = Date.UTC(2026, 0, 1, 12);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const person = {
+      id: "person",
+      identity: { type: "profile" as const, id: "person" },
+      name: "Person",
+      watchedSessions: [],
+      entries: [{ ts: now, lastActivityAt: now, host: "Test device" }],
+    };
+    const input = props({
+      filters: { personId: "person", query: "", time: "7d" },
+      presenceViewers: [person],
+      presentationRevision: 1,
+    });
+    show(input);
+    const identity = container.querySelector(".activity-feed__identity");
+    const details = container.querySelector<HTMLDetailsElement>(
+      ".activity-feed__connection-details",
+    )!;
+    details.open = true;
+    expect(identity?.querySelector(".settings-status")?.textContent).toContain("Online · Active");
+
+    vi.mocked(Date.now).mockReturnValue(now + 120_000);
+    show({ ...input, presentationRevision: 2 });
+    expect(container.querySelector(".activity-feed__identity")).toBe(identity);
+    expect(identity?.querySelector(".settings-status")?.textContent).toContain("Online · Idle");
+    expect(container.querySelector(".activity-feed__connection-details")).toBe(details);
+    expect(details.open).toBe(true);
   });
 
   it("leaves the page main landmark to the app shell", () => {
@@ -323,9 +355,9 @@ describe("session activity semantics", () => {
       const surfaceContainer = document.createElement("div");
       document.body.append(surfaceContainer);
       if (surface === "activity") {
-        render(renderSessionActivityView(input), surfaceContainer);
+        renderSessionActivityViewSolid(input, surfaceContainer);
       } else {
-        mountSolid(
+        mountDashboards(
           () =>
             createComponent(DashboardsView, {
               data: {
