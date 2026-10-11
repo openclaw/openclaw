@@ -2,7 +2,12 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 
 export function normalizeTwitchChannel(channel: string): string {
   const trimmed = normalizeLowercaseStringOrEmpty(channel);
-  return trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
+  // Reply and durable targets carry the internal prefix (monitor.ts builds
+  // `twitch:channel:<name>`); Twitch itself only accepts the bare name.
+  const unprefixed = trimmed.startsWith("twitch:channel:")
+    ? trimmed.slice("twitch:channel:".length)
+    : trimmed;
+  return unprefixed.startsWith("#") ? unprefixed.slice(1) : unprefixed;
 }
 
 // Twurple expects the token without the IRC oauth: prefix.

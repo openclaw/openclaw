@@ -215,6 +215,30 @@ describe("outbound", () => {
       expect(assertResolvedTarget(result)).toBe("mychannel");
     });
 
+    it("should strip the internal twitch:channel: prefix from reply targets", () => {
+      // The monitor builds reply and durable targets as twitch:channel:<name>;
+      // without prefix stripping the prefixed form reaches Twitch unchanged.
+      const result = resolveTarget({
+        to: "twitch:channel:MyChannel",
+        mode: "explicit",
+        allowFrom: [],
+      });
+
+      expect(result.ok).toBe(true);
+      expect(assertResolvedTarget(result)).toBe("mychannel");
+    });
+
+    it("should match a prefixed target against an unprefixed allowlist entry", () => {
+      const result = resolveTarget({
+        to: "twitch:channel:allowed",
+        mode: "implicit",
+        allowFrom: ["#allowed"],
+      });
+
+      expect(result.ok).toBe(true);
+      expect(assertResolvedTarget(result)).toBe("allowed");
+    });
+
     it("should return target in implicit mode with wildcard allowlist", () => {
       const result = resolveTarget({
         to: "#AnyChannel",
