@@ -1,10 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import {
   loadCronRows,
@@ -12,15 +14,19 @@ import {
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { resolveApprovalOverGateway } from "../infra/approval-gateway-resolver.js";
 import type { ExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals-core.js";
 import { resolveExecApprovalRequestAllowedDecisions } from "../infra/exec-approvals-policy.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -36,6 +42,11 @@ import { getOperatorApproval, createContext } from "./server-methods/approval.te
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 
+const { msteamsPlugin } = await loadBundledPluginFacade<{ msteamsPlugin: ChannelPlugin }>({
+  pluginId: "msteams",
+  artifactBasename: "api.ts",
+});
+
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 beforeAll(async () => {
   state = await createOpenClawTestState({ label: "internal-approval-authority" });
@@ -47,6 +58,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
+  resetPluginRuntimeStateForTest();
 });
 afterAll(async () => state.cleanup());
 
@@ -140,6 +152,135 @@ function createFixture(
     },
   };
 }
+
+it.each([
+  "unchanged",
+  "sibling",
+  "account-disabled",
+  "channel-disabled",
+  "account-removed",
+] as const)("enforces real Teams account custody at Gateway settlement: %s", async (scenario) => {
+  const senderId = "00000000-0000-4000-8000-000000000001";
+  const accounts = {
+    support: { appId: "support-app", appPassword: "synthetic-support", allowFrom: [senderId] },
+    sales: { appId: "sales-app", appPassword: "synthetic-sales", allowFrom: [senderId] },
+  };
+  let cfg: OpenClawConfig = {
+    channels: {
+      msteams: { enabled: true, tenantId: "synthetic-tenant", allowFrom: [senderId], accounts },
+    },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "msteams", plugin: msteamsPlugin, source: "test" }]),
+  );
+  const fixture = createFixture();
+  fixture.context.getRuntimeConfig = () => cfg;
+  const record = fixture.exec.create(
+    {
+      command: "echo synthetic",
+      turnSourceChannel: "msteams",
+      turnSourceAccountId: "support",
+    },
+    60_000,
+    `teams-custody-${scenario}`,
+  );
+  const { decision } = await fixture.exec.register(record, 60_000);
+  const decisions: Array<string | null> = [];
+  void decision.then((value) => decisions.push(value));
+  const accountId = scenario === "sibling" ? "sales" : "support";
+  const submittedConfig = cfg;
+  let transaction = 0;
+  let revokedBeforeCommit = false;
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "transaction") {
+      transaction++;
+    }
+    // The first transaction reads the approval; the second commits its decision.
+    if (request.stage === "commit" && transaction === 2) {
+      if (scenario === "account-disabled") {
+        cfg = {
+          channels: {
+            msteams: {
+              enabled: true,
+              tenantId: "synthetic-tenant",
+              allowFrom: [senderId],
+              accounts: { ...accounts, support: { ...accounts.support, enabled: false } },
+            },
+          },
+        };
+        revokedBeforeCommit = true;
+      } else if (scenario === "channel-disabled" || scenario === "account-removed") {
+        cfg = {
+          channels: {
+            msteams: {
+              enabled: scenario !== "channel-disabled",
+              tenantId: "synthetic-tenant",
+              // Root approvers must not authorize a named account that no longer exists.
+              allowFrom: [senderId],
+              accounts: scenario === "account-removed" ? { sales: accounts.sales } : accounts,
+            },
+          },
+        };
+        revokedBeforeCommit = true;
+      }
+      if (revokedBeforeCommit) {
+        setRuntimeConfigSnapshot(cfg);
+      }
+    }
+    return admit(request, grant);
+  });
+  try {
+    // Both accounts authorize this actor before submission; only support owns the request.
+    expect(
+      msteamsPlugin.approvalCapability?.authorizeActorAction?.({
+        cfg,
+        accountId,
+        senderId,
+        action: "approve",
+        approvalKind: "exec",
+      })?.authorized,
+    ).toBe(true);
+    const resolution = resolveApprovalOverGateway({
+      cfg: submittedConfig,
+      approvalId: record.id,
+      approvalKind: "exec",
+      decision: "allow-once",
+      channel: "msteams",
+      accountId,
+      senderId,
+      gatewayRuntime: fixture.runtime.nativeApprovals,
+    });
+    if (scenario === "unchanged") {
+      await expect(resolution).resolves.toMatchObject({
+        applied: true,
+        approval: { status: "allowed", decision: "allow-once" },
+      });
+      await expect(decision).resolves.toBe("allow-once");
+      expect(
+        getOperatorApproval({ id: record.id, databaseOptions: fixture.databaseOptions }),
+      ).toMatchObject({
+        status: "allowed",
+        resolver: { kind: "channel", id: "msteams:support" },
+      });
+      expect(fixture.context.approvalEvents?.publishResolved).toHaveBeenCalledOnce();
+    } else {
+      const outcome = await resolution.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      expect(revokedBeforeCommit).toBe(scenario !== "sibling");
+      expect
+        .soft(getOperatorApproval({ id: record.id, databaseOptions: fixture.databaseOptions }))
+        .toMatchObject({ status: "pending", decision: null });
+      expect.soft(decisions).not.toContain("allow-once");
+      expect.soft(fixture.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
+      expect(outcome).toHaveProperty("error");
+    }
+  } finally {
+    await fixture.close();
+  }
+});
 
 it.each(["exec", "plugin"] as const)(
   "acknowledges a %s verdict before its channel notice completes",

@@ -3,16 +3,20 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { getEnvironmentData, setEnvironmentData, threadId } from "node:worker_threads";
+import { getEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasErrnoCode } from "./errno.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
+  SqliteDatabaseGenerationSlot,
+  SqliteDatabaseAdmissionRegistry,
+  createSqliteDatabaseAdmissionCursor,
+  type SqliteDatabaseAdmissionCursor,
+  SQLITE_DATABASE_GENERATION_LENGTH,
   readSqliteDatabaseAdmissions,
   activeSqliteDatabaseWriters as activeWriters,
   readSqliteDatabaseRecordWriteRevision as readWriteRevision,
   retireSqliteDatabaseWriter,
-  registerWriterCustody,
   ensureSqliteDatabaseWriter,
   publishSqliteDatabaseFact,
   isSqliteDatabaseAdmissionRetired as isRetired,
@@ -25,13 +29,17 @@ import {
   getSqliteNativeAdmissionFacts,
   hasSqliteNativeAdmissionOperation,
 } from "./sqlite-native-admission.js";
-import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import {
   isSoleDatabaseFileDescriptor,
   readDatabaseIdentityBirthtime,
 } from "./sqlite-worker-identity.js";
 
-export { readSqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
+export {
+  readSqliteDatabaseAdmissions,
+  createSqliteDatabaseAdmissionCursor,
+  type SqliteDatabaseAdmissionCursor,
+} from "./sqlite-database-admission-record.js";
 export type { SqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
 export { beginSqliteDatabaseAdmissionOperation } from "./sqlite-native-admission.js";
 
@@ -39,9 +47,9 @@ export type SqliteDatabaseAdmissionKey<T> = {
   name: string;
   read(this: void, value: unknown): T | undefined;
   schemaDependent?: boolean;
+  writer?: "host";
 };
 
-export type SqliteDatabaseAdmissionCursor = Map<string, string>;
 type Exchange = (
   admissions: SqliteDatabaseAdmissions,
   location?: string,
@@ -49,7 +57,7 @@ type Exchange = (
 ) => SqliteDatabaseAdmissions;
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissions"), () => ({
-  admissions: new Map<string, Admission>(),
+  registry: new SqliteDatabaseAdmissionRegistry(),
   connections: new WeakMap<DatabaseSync, Admission>(),
   openedIdentities: new WeakMap<DatabaseSync, string>(),
   unproven: new WeakSet<DatabaseSync>(),
@@ -62,7 +70,7 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   ddlRevisions: new WeakMap<DatabaseSync, number>(),
   schemaDirty: new WeakSet<DatabaseSync>(),
   misses: new WeakMap<Admission, Map<string, number>>(),
-  sent: new Map<string, string>(),
+  sent: createSqliteDatabaseAdmissionCursor(),
   exchange: new AsyncLocalStorage<Exchange>(),
   exchanging: false,
   publication: 0,
@@ -70,10 +78,6 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
 
 function identity(file: fs.BigIntStats): string {
   return `${file.dev}:${file.ino}:${readDatabaseIdentityBirthtime(file)}`;
-}
-
-function rememberEnvironment(): void {
-  setEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY, captureSqliteDatabaseAdmissions());
 }
 
 function exchange(location?: string, create?: boolean): void {
@@ -98,12 +102,14 @@ function retainDescriptor(location: string, descriptor: number, opened: fs.BigIn
     descriptor,
     descriptorOwner: 0,
     generationId: randomUUID(),
-    generation: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 6),
+    generation: new SharedArrayBuffer(
+      Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
+    ),
     writers: new Map(),
     facts: new Map(),
   };
-  state.admissions.set(record.identity, record);
-  rememberEnvironment();
+  state.registry.records.set(record.identity, record);
+  state.registry.publish(record);
   return record;
 }
 
@@ -114,7 +120,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
     return;
   }
   const key = identity(observed);
-  const previous = state.admissions.get(key);
+  const previous = state.registry.records.get(key);
   const retainedPrevious = previous && !isRetired(previous) ? previous : undefined;
   if (retainedPrevious) {
     const retained = fs.fstatSync(retainedPrevious.descriptor, { bigint: true });
@@ -141,7 +147,7 @@ function pathAdmission(location: string): Admission | undefined {
   exchange(location);
   try {
     retainSqliteDatabaseAdmissionLocation(location);
-    return state.admissions.get(identity(fs.statSync(location, { bigint: true })));
+    return state.registry.records.get(identity(fs.statSync(location, { bigint: true })));
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
@@ -236,7 +242,7 @@ export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: s
     return;
   }
   state.openedIdentities.set(database, observed);
-  const record = state.admissions.get(observed);
+  const record = state.registry.records.get(observed);
   if (record && !isRetired(record)) {
     // Existing admission is checked with fstat before the new native connection borrows it.
     retainSqliteDatabaseAdmissionLocation(location);
@@ -258,7 +264,7 @@ function admission(database: DatabaseSync, create = true): Admission | undefined
   if (!location || location === ":memory:") {
     return undefined;
   }
-  const record = create ? pathAdmission(location) : state.admissions.get(expected);
+  const record = create ? pathAdmission(location) : state.registry.records.get(expected);
   if (record && record.identity !== expected) {
     throw new Error("SQLite database changed identity before admission");
   }
@@ -277,10 +283,7 @@ export function getSqliteDatabaseAdmission<T>(
     return undefined;
   }
   const record = admission(database, options.existingOnly !== true);
-  if (!record) {
-    return undefined;
-  }
-  if (key.schemaDependent && hasForeignSchemaWriter(database, record)) {
+  if (!record || (key.schemaDependent && hasForeignSchemaWriter(database, record))) {
     return undefined;
   }
   const local =
@@ -289,7 +292,12 @@ export function getSqliteDatabaseAdmission<T>(
   if (
     local &&
     local.revision ===
-      Atomics.load(new Int32Array(record.generation), local.schemaDependent ? 0 : 1) &&
+      Atomics.load(
+        new Int32Array(record.generation),
+        local.schemaDependent
+          ? SqliteDatabaseGenerationSlot.schemaRevision
+          : SqliteDatabaseGenerationSlot.factRevision,
+      ) &&
     (!local.schemaDependent || local.ddlRevision === (state.ddlRevisions.get(database) ?? 0))
   ) {
     return key.read(local.value);
@@ -305,13 +313,34 @@ export function getSqliteDatabaseAdmission<T>(
   }
   let fact = record.facts.get(key.name);
   if (!fact || !valid(record, fact)) {
-    const revision = Atomics.load(new Int32Array(record.generation), 2);
+    if (key.writer === "host") {
+      if (
+        threadId === 0 ||
+        record.hostRevision ===
+          Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.hostRevision)
+      ) {
+        return undefined;
+      }
+      exchange(record.location);
+      fact = record.facts.get(key.name);
+      return fact && valid(record, fact) ? key.read(fact.value) : undefined;
+    }
+    const revision = Atomics.load(
+      new Int32Array(record.generation),
+      SqliteDatabaseGenerationSlot.publicationRevision,
+    );
     const misses = state.misses.get(record) ?? new Map<string, number>();
     state.misses.set(record, misses);
     if (misses.get(key.name) !== revision) {
       exchange(record.location);
       fact = record.facts.get(key.name);
-      misses.set(key.name, Atomics.load(new Int32Array(record.generation), 2));
+      misses.set(
+        key.name,
+        Atomics.load(
+          new Int32Array(record.generation),
+          SqliteDatabaseGenerationSlot.publicationRevision,
+        ),
+      );
     }
   }
   return fact && valid(record, fact) ? key.read(fact.value) : undefined;
@@ -331,13 +360,24 @@ export function getOrLoadSqliteDatabaseAdmissionForPath<T>(
     return cached;
   }
   const generation = record
-    ? Atomics.load(new Int32Array(record.generation), key.schemaDependent ? 0 : 1)
+    ? Atomics.load(
+        new Int32Array(record.generation),
+        key.schemaDependent
+          ? SqliteDatabaseGenerationSlot.schemaRevision
+          : SqliteDatabaseGenerationSlot.factRevision,
+      )
     : undefined;
   const value = load();
   if (record && generation !== undefined && value !== undefined) {
     if (
       identity(fs.statSync(location, { bigint: true })) !== record.identity ||
-      generation !== Atomics.load(new Int32Array(record.generation), key.schemaDependent ? 0 : 1)
+      generation !==
+        Atomics.load(
+          new Int32Array(record.generation),
+          key.schemaDependent
+            ? SqliteDatabaseGenerationSlot.schemaRevision
+            : SqliteDatabaseGenerationSlot.factRevision,
+        )
     ) {
       throw new Error("SQLite database changed while loading admission facts");
     }
@@ -357,12 +397,15 @@ function publishFact<T>(
   value: T,
   revision: number,
 ): void {
+  if (key.writer === "host" && threadId !== 0) {
+    throw new Error("SQLite host-owned admission facts require the host publisher");
+  }
   if (
     !publishSqliteDatabaseFact(record, key, value, revision, `${threadId}:${++state.publication}`)
   ) {
     return;
   }
-  rememberEnvironment();
+  state.registry.publish(record);
   exchange();
 }
 
@@ -398,7 +441,7 @@ export function prepareSqliteDatabaseWriter(database: DatabaseSync): Admission |
       return undefined;
     }
     ensureSqliteDatabaseWriter(record, () => {
-      rememberEnvironment();
+      state.registry.publish(record);
       exchange();
     });
   }
@@ -426,7 +469,7 @@ export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
   state.dataWriters.delete(database);
   state.localWriteRevisions.set(database, (state.localWriteRevisions.get(database) ?? 0) + 1);
   if (record) {
-    Atomics.add(new Int32Array(record.generation), 5, 1);
+    Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.writeRevision, 1);
     Atomics.sub(new Int32Array(record.writers.get(threadId)!.cell), 2, 1);
   }
 }
@@ -456,6 +499,24 @@ export function readSqliteDatabaseWriteTokenForPath(location: string): string | 
   return revision === undefined ? undefined : `${record.identity}:${revision}`;
 }
 
+/** The managed writer's next settlement advances its physical revision exactly once. */
+export function readSqliteDatabasePendingWriteToken(database: DatabaseSync): string | undefined {
+  if (
+    !database.isOpen ||
+    !database.isTransaction ||
+    !hasSqlitePostCommitScope(database) ||
+    state.suspended.has(database)
+  ) {
+    return undefined;
+  }
+  const record = state.dataWriters.get(database);
+  if (!record || isRetired(record)) {
+    return undefined;
+  }
+  const revision = readWriteRevision(record, 1, exchange);
+  return revision === undefined ? undefined : `${record.identity}:${(revision + 1) | 0}`;
+}
+
 /** TEMP-trigger owners already see their own writes and only need sibling settlement. */
 export function readSqliteDatabaseSiblingWriteRevision(database: DatabaseSync): number | undefined {
   const revision = readSqliteDatabaseWriteRevision(database);
@@ -469,7 +530,11 @@ export function finishSqliteDatabaseSchemaMutation(database: DatabaseSync): void
   if (record) {
     if (!database.isOpen) {
       // Close can follow a committed callback statement before its catalog was published.
-      Atomics.add(new Int32Array(record.generation), 0, 1);
+      Atomics.add(
+        new Int32Array(record.generation),
+        SqliteDatabaseGenerationSlot.schemaRevision,
+        1,
+      );
     }
     state.schemaWriters.delete(database);
     const custody = record.writers.get(threadId);
@@ -486,7 +551,7 @@ export function trackSqliteDatabaseAdmissionWorker(worker: {
 }): void {
   const id = worker.threadId;
   worker.once("exit", () => {
-    for (const record of state.admissions.values()) {
+    for (const record of state.registry.records.values()) {
       retireSqliteDatabaseWriter(record, id);
     }
   });
@@ -507,13 +572,25 @@ export function publishSqliteDatabaseAdmission<T>(
   if (!record || isRetired(record) || state.suspended.has(database)) {
     return;
   }
+  if (key.writer === "host" && threadId !== 0) {
+    throw new Error("SQLite host-owned admission facts require the host publisher");
+  }
   const revision =
     (key.schemaDependent ? options.schemaRevision : undefined) ??
-    Atomics.load(new Int32Array(record.generation), key.schemaDependent ? 0 : 1);
+    Atomics.load(
+      new Int32Array(record.generation),
+      key.schemaDependent
+        ? SqliteDatabaseGenerationSlot.schemaRevision
+        : SqliteDatabaseGenerationSlot.factRevision,
+    );
   if (
     key.schemaDependent &&
     (hasForeignSchemaWriter(database, record) ||
-      revision !== Atomics.load(new Int32Array(record.generation), 0))
+      revision !==
+        Atomics.load(
+          new Int32Array(record.generation),
+          SqliteDatabaseGenerationSlot.schemaRevision,
+        ))
   ) {
     return;
   }
@@ -555,7 +632,12 @@ export function publishSqliteDatabaseAdmission<T>(
         local.delete(key.name);
         if (
           staged.revision ===
-            Atomics.load(new Int32Array(record.generation), staged.schemaDependent ? 0 : 1) &&
+            Atomics.load(
+              new Int32Array(record.generation),
+              staged.schemaDependent
+                ? SqliteDatabaseGenerationSlot.schemaRevision
+                : SqliteDatabaseGenerationSlot.factRevision,
+            ) &&
           (!staged.schemaDependent ||
             staged.ddlRevision === (state.ddlRevisions.get(database) ?? 0))
         ) {
@@ -613,7 +695,11 @@ export function discardSqliteDatabaseTransactionAdmissions(database: DatabaseSyn
 export function publishSqliteDatabaseSchemaChange(database: DatabaseSync): void {
   const record = admission(database, false);
   if (record) {
-    const previous = Atomics.add(new Int32Array(record.generation), 0, 1);
+    const previous = Atomics.add(
+      new Int32Array(record.generation),
+      SqliteDatabaseGenerationSlot.schemaRevision,
+      1,
+    );
     const ddlRevision = state.ddlRevisions.get(database) ?? 0;
     for (const fact of state.local.get(database)?.values() ?? []) {
       if (fact.schemaDependent && fact.revision === previous && fact.ddlRevision === ddlRevision) {
@@ -631,8 +717,8 @@ export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
   const record = state.connections.get(database) ?? admission(database);
   if (record) {
     const cell = new Int32Array(record.generation);
-    Atomics.add(cell, 0, 1);
-    Atomics.add(cell, 1, 1);
+    Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);
+    Atomics.add(cell, SqliteDatabaseGenerationSlot.factRevision, 1);
     state.local.delete(database);
   }
 }
@@ -641,8 +727,8 @@ export function revokeSqliteDatabaseAdmissionsForPath(location: string): void {
   const record = pathAdmission(location);
   if (record) {
     const cell = new Int32Array(record.generation);
-    Atomics.add(cell, 0, 1);
-    Atomics.add(cell, 1, 1);
+    Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);
+    Atomics.add(cell, SqliteDatabaseGenerationSlot.factRevision, 1);
   }
 }
 
@@ -652,7 +738,7 @@ export function retireSqliteDatabaseAdmissionForPath(
   options: { requireSoleDescriptor?: boolean } = {},
 ): void {
   const observed = prepareSqliteDatabaseAdmission(location);
-  const record = observed ? state.admissions.get(observed) : undefined;
+  const record = observed ? state.registry.records.get(observed) : undefined;
   if (!record || isRetired(record)) {
     return;
   }
@@ -664,18 +750,20 @@ export function retireSqliteDatabaseAdmissionForPath(
     return;
   }
   const cell = new Int32Array(record.generation);
-  if (Atomics.compareExchange(cell, 3, 0, 1) === 0) {
-    Atomics.add(cell, 0, 1);
-    Atomics.add(cell, 1, 1);
+  if (Atomics.compareExchange(cell, SqliteDatabaseGenerationSlot.retired, 0, 1) === 0) {
+    Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);
+    Atomics.add(cell, SqliteDatabaseGenerationSlot.factRevision, 1);
     fs.closeSync(record.descriptor);
   }
-  state.admissions.delete(record.identity);
-  rememberEnvironment();
+  state.registry.records.delete(record.identity);
+  state.registry.publish(record);
 }
 
 export function getSqliteDatabaseSchemaRevision(database: DatabaseSync): number | undefined {
   const record = admission(database);
-  return record ? Atomics.load(new Int32Array(record.generation), 0) : undefined;
+  return record
+    ? Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.schemaRevision)
+    : undefined;
 }
 
 export function suspendSqliteDatabaseAdmission(database: DatabaseSync, suspended: boolean): void {
@@ -692,64 +780,14 @@ export function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boole
   return Boolean(record && fact && valid(record, fact));
 }
 
-export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCursor {
-  return new Map();
-}
-
 export function captureSqliteDatabaseAdmissions(
   cursor?: SqliteDatabaseAdmissionCursor,
 ): SqliteDatabaseAdmissions {
-  const result: SqliteDatabaseAdmissions = [];
-  for (const record of state.admissions.values()) {
-    if (isRetired(record)) {
-      state.admissions.delete(record.identity);
-      continue;
-    }
-    const facts = new Map([...record.facts].filter(([, fact]) => valid(record, fact)));
-    if (cursor) {
-      const cell = new Int32Array(record.generation);
-      // A reused inode starts a new custody generation even when its counters match.
-      const revision = `${record.generationId}:${Atomics.load(cell, 0)}:${Atomics.load(cell, 1)}:${Atomics.load(cell, 4)}:${[...record.writers.keys()].join(",")}:${[...facts.values()].map((fact) => fact.publication).join(",")}`;
-      if (cursor.get(record.identity) === revision) {
-        continue;
-      }
-      cursor.set(record.identity, revision);
-    }
-    result.push({ ...record, facts });
-  }
-  return result;
+  return state.registry.capture(cursor);
 }
 
 export function installSqliteDatabaseAdmissions(admissions: SqliteDatabaseAdmissions): void {
-  for (const incoming of admissions) {
-    if (incoming.descriptorOwner !== 0 || isRetired(incoming)) {
-      continue;
-    }
-    let record = state.admissions.get(incoming.identity);
-    if (record && isRetired(record)) {
-      state.admissions.delete(record.identity);
-      record = undefined;
-    }
-    if (!record) {
-      state.admissions.set(incoming.identity, incoming);
-      record = incoming;
-    } else if (record.generationId !== incoming.generationId) {
-      // Only the host creates a generation; unrelated revocation cells cannot certify its facts.
-      continue;
-    }
-    for (const [key, fact] of incoming.facts) {
-      if (valid(incoming, fact)) {
-        record.facts.set(key, fact);
-      }
-    }
-    for (const [writer, cell] of incoming.writers) {
-      if (!record.writers.has(writer)) {
-        record.writers.set(writer, cell);
-      }
-    }
-    registerWriterCustody(record);
-  }
-  rememberEnvironment();
+  state.registry.install(admissions);
 }
 
 export function withSqliteDatabaseAdmissionExchange<T>(

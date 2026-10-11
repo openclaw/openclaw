@@ -303,6 +303,12 @@ Gateway is then updated separately; the update receipt stays pending until both
 required runtimes are healthy. The bundled private worker is not a Node LaunchAgent,
 and absent node services or named profiles do not trigger legacy node lifecycle work.
 
+To install a local rebuild over a release app, package it with the release
+identity. A default debug package keeps separate permissions, default-profile
+preferences, and saved Gateway profiles, and raises login-keychain prompts for
+the release app's Keychain items. See
+[Replace an installed release app](/platforms/mac/dev-setup#replace-an-installed-release-app).
+
 ### Existing app-managed Node services
 
 For the default profile after onboarding, the app migrates its exact-version

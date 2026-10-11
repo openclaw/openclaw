@@ -116,6 +116,13 @@ Harnesses can adapt these hooks. The Codex app-server harness keeps OpenClaw plu
 
 ## Tool execution
 
+Tool arguments are validated against the tool's schema before execution. During
+argument recovery, `anyOf` and `oneOf` values already accepted by a branch keep
+their original value and type. For example, a string ID `"00123"` stays a string
+even when a sibling integer field needs conversion from `"2"` to `2`. Recovery
+tries branch conversions only when no branch accepts the original value; the
+complete schema still enforces constraints such as `oneOf` exclusivity.
+
 - Tool start/update/end events emit on the `tool` stream.
 - Tool results are sanitized for size and image payloads before logging/emitting.
 - Messaging tool sends are tracked to suppress duplicate assistant confirmations.
@@ -147,6 +154,13 @@ call, the built-in harness finishes already admitted tools and retries from thei
 recorded results. The unfinished call never executes. Recovery uses the existing
 bounded session retry budget and remains cancellable; refusals and inconsistent
 terminal responses do not qualify for this continuation.
+
+An empty `length` response also qualifies when it leaves no completed or pending
+reply. The built-in harness continues the existing transcript with its normally
+allowed tools, so it can finish work such as controlling a background `exec`
+process. This continuation preserves completed actions and uses the same retry
+budget. Partial answers and intentional silent cron results keep their existing
+handling; a confirmed context overflow still uses compaction.
 
 Auto-compaction emits `compaction` stream events and can trigger a retry. On retry, in-memory buffers and tool summaries reset to avoid duplicate output. See [Compaction](/concepts/compaction).
 

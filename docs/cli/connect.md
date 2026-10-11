@@ -21,11 +21,19 @@ On the Gateway host, use admin credentials to mint a single-use join URL:
 openclaw devices join-code
 ```
 
-The command prints the URL and a pasteable command:
+The command prints the URL and a pasteable command that installs a background
+node service and enables it to run agent sessions:
 
 ```bash
-npx openclaw connect https://gateway.example/j/<shortcode>
+npx -y openclaw connect https://gateway.example/j/<shortcode> --service --session-host
 ```
+
+Only use session hosting on a machine you trust as shared Gateway infrastructure.
+The printed command makes that consent explicit with `--session-host`; the node
+runtime's default remains non-hosting. See [Session hosting](/nodes/session-hosting).
+For a command-only node, omit `--session-host` and keep `--service`.
+The `-y` flag skips npm's package-install confirmation, not OpenClaw pairing or
+session-hosting consent.
 
 The shortcode has 128 bits of entropy, expires with the setup credential after
 about 10 minutes, and can be fetched exactly once. Mint another code if it
@@ -33,7 +41,7 @@ expires or has already been used.
 
 ## Connect in the foreground
 
-Paste the printed command on the machine you want to connect:
+To connect without installing a service, omit `--service` and `--session-host`:
 
 ```bash
 npx openclaw connect https://gateway.example/j/<shortcode>
@@ -127,9 +135,11 @@ npx openclaw connect https://gateway.example/j/<shortcode> --service
 OpenClaw completes the first authenticated connection before installing the
 service. The short-lived bootstrap token is never stored in the service command
 or node-host configuration; later starts use the durable paired-device token.
-When restarting against that saved endpoint, config credentials for a co-located
-Gateway do not override the paired token. Explicit `OPENCLAW_GATEWAY_TOKEN` or
-`OPENCLAW_GATEWAY_PASSWORD` environment credentials still take precedence.
+When restarting against that saved endpoint, ambient Gateway credentials from
+the environment or a co-located Gateway's config do not override the pairing.
+For an intentional shared-credential override, use `openclaw node run
+--auth-from-env` or `openclaw node install --auth-from-env --force`; see
+[node-host authentication](/cli/node#gateway-auth-for-node-host).
 Use [`openclaw node status`](/cli/node#service-background) to inspect the
 installed service.
 

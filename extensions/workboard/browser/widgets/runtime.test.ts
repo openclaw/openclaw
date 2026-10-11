@@ -1,13 +1,14 @@
 import "../test/dom.setup.ts";
 import type { ControlUiHost, ControlUiWidget } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { getWorkboardState } from "../lib/workboard/runtime.ts";
 import { createWorkboardCard } from "../lib/workboard/test/index-helpers.ts";
 import type { WorkboardCard } from "../lib/workboard/types.ts";
 import { workboardTestHost } from "../test/host.setup.ts";
 import { createViewContext } from "../test/host.ts";
-import { createWorkboardWidget } from "../widgets.ts";
+import { createWorkboardWidget } from "../widgets.tsx";
 import { acquireWidgetRuntime } from "./runtime.ts";
 
 const cards = [
@@ -76,6 +77,7 @@ function setup(
       ReturnType<ControlUiWidget["mount"]>,
       void
     >;
+    flush();
     const dispose = () => {
       abort.abort();
       mounted.dispose?.();
@@ -86,7 +88,10 @@ function setup(
       scopedRequest,
       signal: abort.signal,
       dispose,
-      setPresented: (presented: boolean) => mounted.update?.({ ...context, presented }),
+      setPresented: (presented: boolean) => {
+        mounted.update?.({ ...context, presented });
+        flush();
+      },
     };
   };
   return { fixture, request, mount };
@@ -117,6 +122,7 @@ it.each([false, true])(
       });
       fixture.connection.connected = false;
       fixture.notify();
+      flush();
     }
 
     for (const widget of widgets) {
@@ -131,6 +137,7 @@ it.each([false, true])(
 
     fixture.connection.connected = true;
     fixture.notify();
+    flush();
     for (const widget of widgets) {
       expect(widget.container.textContent).toContain("Loading Workboard");
     }

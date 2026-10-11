@@ -228,7 +228,10 @@ export type SessionCapability = {
   /** Advances for every publication, including pending facts outside state. */
   readonly revision: number;
   /** Memory-only roster presentation; never authority for mutations or live row observations. */
-  readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
+  readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached"> & {
+    /** Display-only profile admitted with these rows; never live RPC authority. */
+    profileId?: string | null;
+  };
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
   /** Initial routing hints only; cached agent discovery never grants live authority. */
