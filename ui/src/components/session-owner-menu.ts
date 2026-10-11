@@ -102,12 +102,13 @@ export class SessionOwnerMenu {
   }
 
   get snapshot() {
+    const directory = this.directory;
     return {
       ...this.ownerOptions(),
       searchGeneration: this.searchGeneration,
       connected: Boolean(this.connection.capture()),
-      loading: this.profiles.status === TaskStatus.PENDING,
-      error: this.profiles.status === TaskStatus.ERROR ? this.profiles.error : undefined,
+      loading: Boolean(directory?.loading),
+      error: directory?.error,
     };
   }
 
