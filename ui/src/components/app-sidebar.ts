@@ -123,8 +123,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     if (!this.connected || !context) {
       return false;
     }
-    if (this.navigationView === "pages" && this.navigationCatalog.dashboards?.loading !== false) {
-      return false;
+    if (this.navigationView === "pages") {
+      return this.navigationCatalog.dashboards?.loading === false;
     }
     const people = sidebarOnlineOrder(this).users;
     if (
