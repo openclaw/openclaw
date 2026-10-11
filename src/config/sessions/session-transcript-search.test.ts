@@ -303,6 +303,34 @@ describe("searchSessionTranscripts", () => {
     }
   });
 
+  it("ignores standalone punctuation and symbol words that the index never stores", async () => {
+    await appendUserMessage("deploy", "agent:main:deploy", "Rollback plan: deploy - staging");
+
+    for (const query of [
+      "deploy - staging",
+      "deploy & staging",
+      "deploy -> staging",
+      "deploy \u2192 staging",
+    ]) {
+      expect(
+        search(query).hits.map((hit) => hit.sessionId),
+        query,
+      ).toEqual(["deploy"]);
+    }
+    expect(search("deploy staging \u{1F680}").hits.map((hit) => hit.sessionId)).toEqual(["deploy"]);
+    const prefixHits = search("deploy stag -", { match: "prefix" }).hits;
+    expect(prefixHits.map((hit) => hit.sessionId)).toEqual(["deploy"]);
+    expect(search("deploy missing -").hits).toEqual([]);
+    expect(search("- &").hits).toEqual([]);
+  });
+
+  it("keeps symbol words that SQLite indexes as tokens", async () => {
+    await appendUserMessage("lobster", "agent:main:lobster", "deploy \u{1F99E}");
+    await appendUserMessage("plain", "agent:main:plain", "deploy plain");
+
+    expect(search("deploy \u{1F99E}").hits.map((hit) => hit.sessionId)).toEqual(["lobster"]);
+  });
+
   it("filters hits across 33,000 requested session keys", async () => {
     await appendUserMessage("session-1", "agent:main:main", "shared keyword payload");
     await appendUserMessage("session-2", "agent:main:other", "shared keyword payload");

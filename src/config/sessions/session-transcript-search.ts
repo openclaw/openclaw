@@ -91,9 +91,33 @@ export function isSessionTranscriptSearchCurrentSync(
   return result.found && result.value;
 }
 
+// unicode61 classifies with fixed Unicode 6.1 tables and indexes code points that 6.1 left
+// unassigned. Inside these ranges the current Unicode categories match those tables exactly,
+// so only symbols here are proven separators; anything outside may be a newer indexed symbol.
+const FTS_SEPARATOR_PROVEN_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x0000, 0x02ff],
+  [0x2000, 0x2065],
+  [0x2190, 0x22ff],
+  [0x1f600, 0x1f640],
+  [0x1f680, 0x1f6c5],
+];
+
+function isProvenFtsSeparator(char: string): boolean {
+  const codePoint = char.codePointAt(0) ?? 0;
+  return (
+    !/[\p{L}\p{N}\p{Co}\p{Cn}]/u.test(char) &&
+    FTS_SEPARATOR_PROVEN_RANGES.some(([low, high]) => codePoint >= low && codePoint <= high)
+  );
+}
+
+function isIndexedTerm(term: string): boolean {
+  return !Array.from(term).every(isProvenFtsSeparator);
+}
+
 function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
-  return query
-    .split(/\s+/u)
+  const terms = query.split(/\s+/u);
+  const indexed = terms.filter(isIndexedTerm);
+  return (indexed.length > 0 ? indexed : terms)
     .map(
       (token, index, tokens) =>
         `"${token.replaceAll('"', '""')}"${match === "prefix" && index === tokens.length - 1 ? "*" : ""}`,
