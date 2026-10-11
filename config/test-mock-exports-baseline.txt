@@ -3081,7 +3081,6 @@
 ["src/agents/session-slug.test.ts","../infra/secure-random.js","260719179bed45305f248432041d1d3a4b8e8871ee6338fcd1e2ddfcdf50a2c2",1]
 ["src/agents/session-suspension.test.ts","../config/sessions/session-accessor.js","0fad4f339cf1d69d3f908878cb798e56aae358b97172475a1df881593605b76e",1]
 ["src/agents/session-suspension.test.ts","./command/session.js","f59c2af49d21159b09e2f4e4be70cbafb78a7120d05602854d2f3477d5cb9bf1",1]
-["src/agents/sessions/exec.test.ts","../../infra/windows-encoding.js","0ecd3b0b9e3da64ef5ad9866fbd055fd03b214ef4e5ff3f8d0fafd2aec3ae988",1]
 ["src/agents/sessions/exec.test.ts","../../process/child-process.js","880d2c3b3bea26c04b2fdf0c9b0ebf9a383c4a0c17e9b393725657959a1f77cb",1]
 ["src/agents/sessions/exec.test.ts","../../process/exec-spawn.js","408f1b8e938ccf9a76f3fbdcc80abffb12a74c67255cb8415fa0ad981165e19c",1]
 ["src/agents/sessions/exec.test.ts","../../process/exec-termination.js","ff1aaa24f4ab36fcbd915957e1f42f1e5dc61de9bdebc2f6f820d75a46475084",1]

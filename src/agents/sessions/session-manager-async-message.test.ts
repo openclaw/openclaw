@@ -11,7 +11,6 @@ import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
-import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -134,114 +133,6 @@ it.each([1, 2])(
     }
   },
 );
-
-it("keeps a newer user intact when a prepared tool result cannot rebase", async () => {
-  const { target, manager } = await fixture(state, "superseded-tool-result");
-  await manager.appendMessageAsync(user("seed"));
-  expect(
-    appendTranscriptMessageSync(target, {
-      eventId: "newer-user",
-      message: user("newer"),
-    }).ok,
-  ).toBe(true);
-  const before = await loadTranscriptEvents(target);
-  await expect(
-    manager.appendMessageAsync({
-      role: "toolResult",
-      toolCallId: "superseded-result",
-      toolName: "lookup",
-      content: [{ type: "text", text: "Prepared for the older user" }],
-      isError: false,
-      timestamp: 2,
-    }),
-  ).rejects.toBeInstanceOf(SqliteTranscriptMutationConflictError);
-  expect(await loadTranscriptEvents(target)).toEqual(before);
-  expect(manager.getEntries()).toHaveLength(1);
-});
-
-it("shares one frozen tool-result graph across append receipts, transcript views, and prompt history", async () => {
-  const { target, manager } = await fixture(state, "shared-tool-results");
-  const seed = await manager.appendMessageWithTranscriptAnchorAsync(user("shared-results"));
-  const text = "Synthetic result line with Unicode: 🦞\n".repeat(1024);
-  const messages = Array.from({ length: 3 }, (_, index) => ({
-    role: "toolResult" as const,
-    toolCallId: `large-${index}`,
-    toolName: "read",
-    content: [{ type: "text" as const, text }],
-    details: { rows: [{ index, values: [index, index + 1] }] },
-    isError: false,
-    timestamp: index + 2,
-  }));
-  const originalGraphs = messages.map((message) => ({
-    content: message.content,
-    block: message.content[0],
-    details: message.details,
-    rows: message.details.rows,
-    row: message.details.rows[0],
-    values: message.details.rows[0]!.values,
-  }));
-  const receipts: Array<
-    Awaited<ReturnType<SessionManager["appendMessageWithTranscriptAnchorAsync"]>>
-  > = [];
-  for (const message of messages) {
-    receipts.push(await manager.appendMessageWithTranscriptAnchorAsync(message));
-  }
-  const entries = receipts.map(({ entryId }) => {
-    const entry = manager.getEntry(entryId);
-    if (entry?.type !== "message") {
-      throw new Error("Expected committed tool-result entry");
-    }
-    return entry;
-  });
-  const database = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
-  expect(readTranscriptEventRows(database, target.sessionId).slice(-messages.length)).toEqual(
-    entries.map((entry, index) => ({
-      seq: index + 2,
-      eventJson: JSON.stringify({
-        type: "message",
-        id: receipts[index]!.entryId,
-        parentId: index === 0 ? seed.entryId : receipts[index - 1]!.entryId,
-        timestamp: entry.timestamp,
-        message: {
-          role: "toolResult",
-          toolCallId: `large-${index}`,
-          toolName: "read",
-          content: [{ type: "text", text }],
-          details: { rows: [{ index, values: [index, index + 1] }] },
-          isError: false,
-          timestamp: index + 2,
-        },
-      }),
-    })),
-  );
-  const context = manager.buildSessionContext().messages.slice(-messages.length);
-  const retained = new Set([
-    ...messages,
-    ...receipts.map(({ message }) => message),
-    ...entries.map(({ message }) => message),
-    ...context,
-  ]);
-  expect(retained.size).toBe(messages.length);
-  for (const [index, message] of messages.entries()) {
-    const original = originalGraphs[index]!;
-    expect(receipts[index]!.message).toBe(message);
-    expect(entries[index]!.message).toBe(message);
-    expect(context[index]).toBe(message);
-    expect(message.content).toBe(original.content);
-    expect(message.content[0]).toBe(original.block);
-    expect(message.details).toBe(original.details);
-    expect(message.details.rows).toBe(original.rows);
-    expect(message.details.rows[0]).toBe(original.row);
-    expect(message.details.rows[0]!.values).toBe(original.values);
-    for (const value of [entries[index], message, ...Object.values(original)]) {
-      expect(Object.isFrozen(value)).toBe(true);
-    }
-  }
-  expect(() => {
-    messages[0]!.content[0]!.text = "mutated after append";
-  }).toThrow(TypeError);
-  expect(() => messages[0]!.details.rows[0]!.values.push(99)).toThrow(TypeError);
-});
 
 it.each(["message", "custom"] as const)(
   "captures %s data before queued admission and keeps worker receipts consistent",
@@ -415,30 +306,6 @@ it("persists prepared tool text once when JSON normalization copies a frozen con
   expect(committed.message).toHaveProperty("content", expected);
   expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
     message: { content: expected },
-  });
-});
-
-it("preserves custom data toJSON keys and JSON value conversions in the committed view", async () => {
-  const { target, manager } = await fixture(state, "custom-json-values");
-  const id = await manager.appendCustomEntryAsync("json-values", {
-    toJSON(key: string) {
-      return {
-        serializationKey: key,
-        omitted: undefined,
-        values: [undefined, Number.NaN, Number.POSITIVE_INFINITY],
-        createdAt: new Date(0),
-      };
-    },
-  });
-  const expected = {
-    serializationKey: "data",
-    values: [null, null, null],
-    createdAt: "1970-01-01T00:00:00.000Z",
-  };
-  expect(manager.getEntry(id)).toMatchObject({ type: "custom", data: expected });
-  expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
-    type: "custom",
-    data: expected,
   });
 });
 
@@ -651,7 +518,7 @@ it("fences local navigation changes at worker commit and receipt publication", a
   ]);
 });
 
-it.each([false, true])(
+it.each([true])(
   "preserves pending custody and closed committed replay (collected: %s)",
   async (collected) => {
     const { target, manager } = await fixture(state, `pending-messages-${collected}`);

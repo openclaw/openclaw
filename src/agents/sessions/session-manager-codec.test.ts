@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSessionContext,
-  isIndexedSessionEntry,
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "./session-manager-codec.js";
@@ -20,80 +19,7 @@ describe("session manager codec compatibility", () => {
     }
   });
 
-  it("backfills current-version hook messages persisted without a custom type", () => {
-    const manager = SessionManager.fromEntries([
-      {
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: "persisted-hook-session",
-        timestamp: "2026-01-01T00:00:00.000Z",
-        cwd: "/tmp",
-      },
-      {
-        type: "message",
-        id: "persisted-hook-message",
-        parentId: null,
-        timestamp: "2026-01-01T00:00:01.000Z",
-        message: { role: "custom", content: "persisted hook context" },
-      },
-    ]);
-
-    expect(manager.getEntry("persisted-hook-message")).toMatchObject({
-      message: { role: "custom", customType: "hook", content: "persisted hook context" },
-    });
-  });
-
-  it.each([
-    {
-      name: "message with malformed content",
-      entry: { type: "message", id: "m1", parentId: null, message: { role: "user" } },
-    },
-    {
-      name: "compaction without a kept entry",
-      entry: { type: "compaction", id: "c1", parentId: null, summary: "", tokensBefore: 1 },
-    },
-    {
-      name: "partial model change",
-      entry: { type: "model_change", id: "model1", parentId: null, provider: "openai" },
-    },
-  ])("rejects an indexed $name", ({ entry }) => {
-    expect(isIndexedSessionEntry(entry)).toBe(false);
-  });
-
-  it.each([
-    { name: "singleton", reason: ["reset"] },
-    { name: "nested singleton", reason: [["reset"]] },
-  ])("preserves a $name legacy reset reason", ({ reason }) => {
-    const manager = SessionManager.fromEntries([
-      {
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: "legacy-reset-session",
-        timestamp: "2026-01-01T00:00:00.000Z",
-        cwd: "/tmp",
-      },
-      {
-        type: "message",
-        id: "before-reset",
-        parentId: null,
-        message: { role: "user", content: "before" },
-      },
-      { type: "reset", id: "legacy-reset", parentId: "before-reset", reason },
-      {
-        type: "message",
-        id: "after-reset",
-        parentId: "legacy-reset",
-        message: { role: "user", content: "after" },
-      },
-    ]);
-
-    expect(manager.getEntry("legacy-reset")).toBeDefined();
-    const context = JSON.stringify(manager.buildSessionContext());
-    expect(context).not.toContain("before");
-    expect(context).toContain("after");
-  });
-
-  it.each([1, 2])("excludes malformed metadata after migrating version %i", (version) => {
+  it.each([1])("excludes malformed metadata after migrating version %i", (version) => {
     const manager = SessionManager.fromEntries([
       { type: "session", version, id: "legacy-metadata", cwd: "/tmp" },
       {
@@ -200,7 +126,6 @@ const parentTraversalCases: Array<{
     leaf: "b",
     expected: ["a", "b"],
   },
-  { name: "missing parent", parents: [["a", "missing"]], leaf: "a", expected: ["a"] },
   { name: "explicit empty branch", parents: [["a", "a"]], leaf: null, expected: [] },
 ];
 

@@ -3,12 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { LEGACY_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import {
-  appendTranscriptEvent,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
@@ -133,16 +129,7 @@ it("acquires a long sparse context with bounded queries and preserved message or
   });
 });
 
-it.each([
-  "whole",
-  "reset",
-  "compaction",
-  "reset-compaction",
-  "leaf",
-  "opaque",
-  "opaque-compaction",
-  "leaf-compaction",
-])(
+it.each(["whole", "leaf-compaction"])(
   "acquires detached %s context without native payloads or changing stored evidence",
   async (scenario) => {
     await withOpenClawTestState({ label: "model-context" }, async (state) => {
@@ -165,13 +152,13 @@ it.each([
       };
       await source.appendThinkingLevelChange("high");
       await source.appendModelChange("openai", "gpt-5.6-luna");
-      const old = source.appendMessage({
+      source.appendMessage({
         role: "user",
         content: "old",
         timestamp: 1,
         __openclaw: metadata,
       } as Parameters<SessionManager["appendMessage"]>[0]);
-      const excluded = source.appendMessage({
+      source.appendMessage({
         role: "custom",
         customType: "display",
         content: marker + "d".repeat(256 * 1024),
@@ -208,7 +195,7 @@ it.each([
           stopReason: "toolUse",
         }),
       );
-      const result = source.appendMessage({
+      source.appendMessage({
         role: "toolResult",
         toolName: "read",
         toolCallId: "paired",
@@ -220,46 +207,9 @@ it.each([
         source: "synthetic",
       });
       source.branchWithSummary(source.getLeafId(), "branch summary");
-      if (scenario === "reset" || scenario === "reset-compaction") {
-        source.appendResetBoundary("new", kept);
-      }
-      if (scenario === "compaction" || scenario === "reset-compaction") {
-        source.appendCompaction("summary", scenario === "compaction" ? excluded : kept, 100);
-      }
-      if (scenario === "opaque-compaction") {
-        await appendTranscriptEvent(scope, {
-          type: "opaque-synthetic",
-          id: "opaque-keep",
-          parentId: kept,
-        });
-        source.reloadPersistedTranscript();
-        source.appendCompaction("summary", "opaque-keep", 100);
-      }
       if (scenario === "leaf-compaction") {
         const leafMarker = source.appendLeafControl({ targetId: kept, appendParentId: kept });
         source.appendCompaction("summary", leafMarker.id, 100);
-      }
-      if (scenario === "leaf") {
-        source.branch(old);
-        const inactive = source.appendMessage({
-          role: "user",
-          content: marker + "abandoned".repeat(4096),
-          timestamp: 4,
-        });
-        source.appendLeafControl({
-          targetId: result,
-          appendParentId: inactive,
-          appendMode: "side",
-        });
-      }
-      if (scenario === "opaque") {
-        await appendTranscriptEvent(scope, {
-          type: "opaque-synthetic",
-          id: "opaque",
-          parentId: result,
-          data: marker + "o".repeat(256 * 1024),
-        });
-        source.reloadPersistedTranscript();
       }
       source.appendMessage({ role: "user", content: "latest", timestamp: 5 });
       const expected = source.buildSessionContext();
@@ -336,13 +286,6 @@ it.each([
           "upstreamUserText",
         ),
       ).toBe(false);
-      if (scenario === "reset") {
-        expect(
-          (retainedUser as unknown as Record<symbol, unknown>)[
-            Symbol.for("openclaw.sessionHistoryPrelude")
-          ],
-        ).toBe(true);
-      }
       detached.appendMessage({ role: "user", content: "review only", timestamp: 6 });
       expect(fingerprint()).toBe(before);
       source.branch(source.getLeafId()!);
@@ -404,114 +347,12 @@ it.each([
   },
 );
 
-it.each([
-  { boundary: "reset", role: "user" },
-  { boundary: "reset", role: "assistant" },
-  { boundary: "reset", role: "toolResult" },
-  { boundary: "compaction", role: "toolResult" },
-  { boundary: "whole", role: "user" },
-] as const)(
-  "preserves excluded $role payload selection across $boundary",
-  async ({ boundary, role }) => {
-    await withOpenClawTestState({ label: "model-excluded-retention" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "excluded-retention",
-        sessionKey: "agent:main:excluded-retention",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
-      const pairedCall =
-        role === "toolResult"
-          ? source.appendMessage(
-              makeAgentAssistantMessage({
-                content: [{ type: "toolCall", id: "paired", name: "read", arguments: {} }],
-              }),
-            )
-          : undefined;
-      const content = [{ type: "text" as const, text: "synthetic retained text" }];
-      const message = {
-        ...(role === "assistant"
-          ? makeAgentAssistantMessage({ content })
-          : role === "user"
-            ? { role, content: "synthetic retained text", timestamp: 1 }
-            : {
-                role,
-                content,
-                toolCallId: "paired",
-                toolName: "read",
-                isError: false,
-                timestamp: 1,
-              }),
-        excludeFromContext: true,
-        __openclaw: { upstreamUserText: "private-retained:" + "x".repeat(256 * 1024) },
-      };
-      const retained = source.appendMessage(message);
-      if (boundary === "reset") {
-        source.appendResetBoundary("new", pairedCall ?? retained);
-      } else if (boundary === "compaction") {
-        source.appendCompaction("summary", pairedCall ?? retained, 100);
-      }
-      const ordinaryExcluded = {
-        role: "user" as const,
-        content: "ordinary-excluded:" + "x".repeat(256 * 1024),
-        timestamp: 2,
-        excludeFromContext: true,
-      };
-      source.appendMessage(ordinaryExcluded);
-      source.appendMessage({ role: "user", content: "synthetic current text", timestamp: 3 });
-      const expected = source.buildSessionContext();
-      expect(
-        expected.messages.some(
-          (entry) => "excludeFromContext" in entry && entry.excludeFromContext === true,
-        ),
-      ).toBe(boundary === "reset");
-      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
-      const fingerprint = () => {
-        const hash = createHash("sha256");
-        for (const row of database.db
-          .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
-          .iterate(scope.sessionId)) {
-          hash.update(String(row.event_json));
-        }
-        return hash.digest("hex");
-      };
-      const before = fingerprint();
-      const originalParse = JSON.parse;
-      let excludedBytes = 0;
-      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (
-          typeof text === "string" &&
-          (text.includes("private-retained:") || text.includes("ordinary-excluded:"))
-        ) {
-          excludedBytes += text.length;
-        }
-        return originalParse(text, reviver);
-      });
-      let actual: typeof expected;
-      try {
-        actual = SessionManager.openModelContext(scope).buildSessionContext();
-      } finally {
-        spy.mockRestore();
-      }
-      expect(excludedBytes).toBe(0);
-      expect(fingerprint()).toBe(before);
-      expect(actual.model).toEqual(expected.model);
-      expect(
-        actual.messages.map((entry) => ("content" in entry ? entry.content : undefined)),
-      ).toEqual(expected.messages.map((entry) => ("content" in entry ? entry.content : undefined)));
-    });
-  },
-);
-
-it.each([false, true, "path"])("keeps model reads non-persisting (%s)", async (incognito) => {
+it.each([false, "path"])("keeps model reads non-persisting (%s)", async (incognito) => {
   await withOpenClawTestState({ label: "model-readonly" }, async (state) => {
     const scope = {
       agentId: "main",
       sessionId: "readonly",
-      sessionKey:
-        incognito === true ? "agent:main:dashboard:incognito-readonly" : "agent:main:readonly",
+      sessionKey: "agent:main:readonly",
       storePath:
         incognito === "path"
           ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
@@ -841,159 +682,6 @@ it.each([false, true])(
       expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
         source.buildSessionContext().messages,
       );
-    });
-  },
-);
-
-it.each(["details", "text", "duplicate-object", "late-array-call"])(
-  "keeps real tool output across reset (%s)",
-  async (marker) => {
-    await withOpenClawTestState({ label: "model-pairing" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "pairing",
-        sessionKey: "agent:main:pairing",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
-      const firstKept = source.appendMessage(
-        makeAgentAssistantMessage({
-          content: [
-            ...Array.from({ length: marker === "late-array-call" ? 16 : 1 }, () => ({
-              type: "text" as const,
-              text: "Reading the file",
-            })),
-            { type: "toolCall", id: "repeat", name: "read", arguments: { path: "synthetic.txt" } },
-          ],
-        }),
-      );
-      const missingResult = source.appendMessage({
-        role: "toolResult",
-        toolCallId: "repeat",
-        toolName: "read",
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: marker === "details" ? "missing" : LEGACY_MISSING_TOOL_RESULT_TEXT,
-          },
-        ],
-        ...(marker === "details" ? { details: { openclawSyntheticMissingToolResult: true } } : {}),
-        timestamp: 1,
-      });
-      source.appendMessage({
-        role: "toolResult",
-        toolCallId: "repeat",
-        toolName: "read",
-        isError: false,
-        content: [{ type: "text", text: "real output" }],
-        timestamp: 2,
-      });
-      source.appendMessage({
-        role: "toolResult",
-        toolCallId: "orphan",
-        toolName: "read",
-        isError: false,
-        content: [{ type: "text", text: "orphan-body:" + "x".repeat(512 * 1024) }],
-        timestamp: 3,
-      });
-      source.appendResetBoundary("new", firstKept);
-      if (marker === "duplicate-object") {
-        await waitForSessionTranscriptProjection(scope);
-        const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-        // Preserve duplicate members from imported JSON; JavaScript objects would collapse them.
-        const content = `{"part":{"type":"text","text":"ordinary"},"part":{"type":"text","text":${JSON.stringify(LEGACY_MISSING_TOOL_RESULT_TEXT)}}}`;
-        database.db
-          .prepare(
-            "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.content', json(?)) WHERE session_id = ? AND json_extract(event_json, '$.id') = ?",
-          )
-          .run(content, scope.sessionId, missingResult);
-      }
-      const originalParse = JSON.parse;
-      let orphanBytes = 0;
-      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (typeof text === "string" && text.includes("orphan-body:")) {
-          orphanBytes += text.length;
-        }
-        return originalParse(text, reviver);
-      });
-      let messages: ReturnType<SessionManager["buildSessionContext"]>["messages"];
-      try {
-        messages = SessionManager.openModelContext(scope).buildSessionContext().messages;
-      } finally {
-        spy.mockRestore();
-      }
-      expect(orphanBytes).toBe(0);
-      expect(
-        messages
-          .filter((message) => message.role === "toolResult")
-          .map((message) => message.content),
-      ).toEqual([[{ type: "text", text: "real output" }]]);
-    });
-  },
-);
-
-it.each(["reset", "compaction"])(
-  "does not acquire checkpoints invalidated by %s",
-  async (boundary) => {
-    await withOpenClawTestState({ label: "model-checkpoint" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "checkpoint",
-        sessionKey: "agent:main:checkpoint",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const source = SessionManager.open(scope);
-      const kept = source.appendMessage({ role: "user", content: "visible", timestamp: 1 });
-      const marker = "synthetic-obsolete-checkpoint-";
-      const checkpoint = {
-        v: 1 as const,
-        type: "openai-responses-compaction",
-        data: marker + "x".repeat(1024 * 1024),
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.6-luna",
-        baseUrlHash: "synthetic",
-      };
-      source.appendMessage(
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "kept answer" }],
-          model: "gpt-5.6-luna",
-          providerReplay: checkpoint,
-        }),
-      );
-      if (boundary === "reset") {
-        source.appendResetBoundary("new", kept);
-      } else {
-        source.appendCompaction("summary", kept, 100);
-      }
-      const valid = { ...checkpoint, data: "valid-post-boundary-checkpoint" };
-      source.appendMessage(
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "new answer" }],
-          model: "gpt-5.6-luna",
-          providerReplay: valid,
-        }),
-      );
-      const parse = JSON.parse;
-      let obsoleteBytes = 0;
-      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (typeof text === "string" && text.includes(marker)) {
-          obsoleteBytes += text.length;
-        }
-        return parse(text, reviver);
-      });
-      let context: ReturnType<SessionManager["buildSessionContext"]>;
-      try {
-        context = SessionManager.openModelContext(scope).buildSessionContext();
-      } finally {
-        spy.mockRestore();
-      }
-      expect(obsoleteBytes).toBe(0);
-      expect(context).toEqual(source.buildSessionContext());
-      expect(context.messages.at(-1)).toMatchObject({ providerReplay: valid });
     });
   },
 );

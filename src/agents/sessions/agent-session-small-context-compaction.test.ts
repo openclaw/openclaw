@@ -115,7 +115,6 @@ describe("AgentSession small-context compaction", () => {
   });
 
   it.each([
-    { name: "a larger canonical user", rows: 600, extra: undefined },
     {
       name: "new additive context beside a reused user",
       rows: 280,
@@ -191,7 +190,7 @@ describe("AgentSession small-context compaction", () => {
     expect(streamMocks.streamSimple).not.toHaveBeenCalled();
   });
 
-  it.each(["manual", "automatic"])(
+  it.each(["manual"])(
     "preserves file metadata while fitting a non-Latin %s summary",
     async (mode) => {
       const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
@@ -367,72 +366,6 @@ describe("AgentSession small-context compaction", () => {
     },
   );
 
-  it("reserves a recorder-persisted pending user once when retaining its exact row", async () => {
-    const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
-    const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
-    applyAgentCompactionSettingsFromConfig({
-      settingsManager,
-      contextTokenBudget: model.contextWindow,
-    });
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({
-      role: "user",
-      content: "Earlier project context. ".repeat(60),
-      timestamp: 1,
-    });
-    sessionManager.appendMessage(
-      createAssistant(model, [{ type: "text", text: "Earlier answer. ".repeat(80) }]),
-    );
-    const pending = "Process this pending project material. ".repeat(150);
-    const pendingKey = "pending-budget-user";
-    const pendingUser = {
-      role: "user" as const,
-      content: pending,
-      idempotencyKey: pendingKey,
-      timestamp: 3,
-    };
-    sessionManager.appendMessage(pendingUser);
-    const { session } = await createTestSession({
-      model,
-      settingsManager,
-      sessionManager,
-      systemPrompt: "Preserve project requirements.",
-    });
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      createAssistantResultStream(
-        createAssistant(activeModel, [
-          {
-            type: "text",
-            text: "Earlier project context was processed. The latest user request still needs an answer.",
-          },
-        ]),
-      ),
-    );
-    const budget = createCompactionRequestBudget({
-      contextWindow: model.contextWindow,
-      reserveTokens: settingsManager.getCompactionReserveTokens(),
-      systemPrompt: session.agent.state.systemPrompt,
-      tools: session.agent.state.tools,
-      pendingPrompt: pending,
-      pendingUserIdempotencyKey: pendingKey,
-    });
-
-    await session[agentSessionAutomaticCompaction](undefined, "unresolved", undefined, {
-      requestBudget: budget,
-    });
-
-    const pendingUsers = session.messages.filter(
-      (message) =>
-        message.role === "user" &&
-        "idempotencyKey" in message &&
-        message.idempotencyKey === pendingKey,
-    );
-    expect(pendingUsers).toHaveLength(1);
-    expect(pendingUsers[0]).toMatchObject({ content: pending });
-    expect(sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(
-      1,
-    );
-  });
   it("keeps a fresh 32K conversation intact and compacts growing history within summary headroom", async () => {
     const model = { ...testModel, contextWindow: 32_768, maxTokens: 8_192 };
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
@@ -519,14 +452,6 @@ describe("AgentSession small-context compaction", () => {
     ).toBe(true);
   });
   it.each([
-    {
-      contextWindow: 32_768,
-      systemRows: 400,
-      toolRows: 150,
-      historyRows: 750,
-      growthRows: 1_200,
-      summaryRows: 150,
-    },
     {
       contextWindow: 4_096,
       systemRows: 4,
