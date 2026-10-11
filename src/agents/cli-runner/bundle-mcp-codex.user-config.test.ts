@@ -14,6 +14,7 @@ vi.mock("../../infra/exec-approvals-store.js", () => ({
   loadExecApprovalsReadOnlyAsync: authMocks.loadExecApprovalsReadOnlyAsync,
 }));
 
+// mock-isolation: MCP projection consumes synthetic profile snapshots without reading host stores.
 vi.mock("../auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForRuntimeAsync: authMocks.loadAuthProfileStoreForRuntimeAsync,
 }));

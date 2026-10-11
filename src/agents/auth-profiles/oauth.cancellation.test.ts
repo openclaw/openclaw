@@ -16,6 +16,7 @@ vi.mock("./oauth-manager.js", () => ({
   }),
 }));
 
+// mock-isolation: Cancellation races use synthetic auth snapshots without reading host stores.
 vi.mock("./store-runtime.js", () => ({
   loadAuthProfileStoreForRuntimeAsync: authMocks.loadAuthProfileStoreForRuntimeAsync,
 }));

@@ -11,6 +11,7 @@ const authMocks = vi.hoisted(() => ({
   resolveMcpOAuthAccessToken: vi.fn(),
 }));
 
+// mock-isolation: Bearer projection uses synthetic profile snapshots without reading host stores.
 vi.mock("./auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForRuntimeAsync: authMocks.loadAuthProfileStoreForRuntimeAsync,
 }));
