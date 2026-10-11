@@ -243,20 +243,24 @@ describe("native link routing", () => {
     expect(bridge.messages).toEqual([]);
   });
 
-  it("defines the hovercard once across duplicate bootstrap module instances", async () => {
-    // Regression: the non-isolated jsdom lane evaluates the registration
-    // module once per sibling file against one persistent document, so stale
-    // bootstrap listeners fire alongside this file's own. Reproduce that order
-    // and require a single registry definition.
+  it("shares a working hovercard across duplicate bootstrap module instances", async () => {
+    // Shared jsdom files can leave two bootstrap instances on one document.
+    // Use the native registry so duplicate definitions reject without wrapping its owner.
+    const first = await import("../components/link-reader-hovercard-registration.ts");
     vi.resetModules();
-    await import("../components/link-reader-hovercard-registration.ts");
-    const define = vi.spyOn(customElements, "define");
-    await focusGitHubLink();
-    const hovercardDefines = define.mock.calls.filter(
-      ([tag]) => tag === "openclaw-link-reader-hovercard-provider",
+    const second = await import("../components/link-reader-hovercard-registration.ts");
+    await Promise.all([
+      first.linkReaderHovercardBootstrap.define(),
+      second.linkReaderHovercardBootstrap.define(),
+    ]);
+    const anchor = await focusGitHubLink();
+    const registered = customElements.get("openclaw-link-reader-hovercard-provider");
+    expect(registered).toBeDefined();
+    expect(anchor.parentElement?.constructor).toBe(registered);
+    expect(document.querySelectorAll(".link-reader-hovercard")).toHaveLength(1);
+    expect(document.querySelector(".link-reader-hovercard")?.textContent).toContain(
+      "Open links in a sidebar browser",
     );
-    expect(hovercardDefines).toHaveLength(1);
-    define.mockRestore();
   });
 
   it("closes an active GitHub hovercard after routing its link", async () => {

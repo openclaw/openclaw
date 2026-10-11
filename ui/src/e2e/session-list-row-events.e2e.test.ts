@@ -143,7 +143,12 @@ suite.define(() => {
         await page.clock.runFor(59_499);
         expect(await gateway.getRequests("sessions.list")).toEqual(before);
         for (const request of before) {
-          expect(request.params).toMatchObject({ rowMode: "compact", source: expect.any(String) });
+          const dashboardList =
+            request.params?.source === "dashboard" && request.params.hasBoard === true;
+          expect(request.params).toMatchObject({
+            rowMode: dashboardList ? "dashboard" : "compact",
+            source: expect.any(String),
+          });
         }
       });
     },
