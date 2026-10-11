@@ -71,14 +71,10 @@ export function retainSessionListForegroundWork(): () => void {
   };
 }
 
-export function canRunSessionListBackgroundWork(): boolean {
-  return foregroundCount === 0;
-}
-
 export async function yieldSessionListBackgroundWork(): Promise<void> {
   for (;;) {
     await yieldSessionListWork();
-    if (canRunSessionListBackgroundWork()) {
+    if (foregroundCount === 0) {
       return;
     }
     foregroundIdle ??= createDeferredCore();

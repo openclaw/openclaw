@@ -10,8 +10,8 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  canRunSessionListBackgroundWork,
   retainSessionListForegroundWork,
+  yieldSessionListBackgroundWork,
 } from "./session-projection-work.js";
 import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -448,7 +448,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
     } finally {
       projection.dispose();
       release();
-      expect(canRunSessionListBackgroundWork()).toBe(true);
+      await yieldSessionListBackgroundWork();
     }
   });
   // Vitest timeout cancels the waits; retain the fixture until its pages and state finish cleanup.
