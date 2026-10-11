@@ -142,6 +142,53 @@ describe("isSilentReplyPayloadText", () => {
     expect(isSilentReplyPayloadText(text)).toBe(true);
   });
 
+  it("returns true when leaked reasoning ends in NO_REPLY with a padded closing line (#165025)", () => {
+    const deliberation = [
+      "The runtime context confirms another continuation event -- same inbound (msg 24682, prior diagnosis message), and my reply already went out successfully (msg 24683).",
+      "There's no new user message after my reply. The pattern is the same as prior continuations: the runtime is replaying the same inbound event after my messages.",
+      "The correct move: NO_REPLY. The user already has my response. Adding more text would be noise.",
+      "NO_REPLY.",
+    ].join("\n\n");
+    expect(isSilentReplyPayloadText(`thinking:\n${deliberation}`)).toBe(true);
+  });
+
+  it("returns true when the final line wraps the silent intent in extra deliberation (#165025)", () => {
+    expect(
+      isSilentReplyPayloadText(
+        "think:\nI checked the logs, nothing to add. I will stay silent. NO_REPLY",
+      ),
+    ).toBe(true);
+    expect(isSilentReplyPayloadText("think:\nno need to reply here\nNO_REPLY")).toBe(true);
+    expect(isSilentReplyPayloadText("think:\nnothing more to add\nNO_REPLY")).toBe(true);
+    expect(
+      isSilentReplyPayloadText("think:\nNothing new came in. No need to reply.\nNO_REPLY"),
+    ).toBe(true);
+  });
+
+  it("returns true when the final token carries trailing punctuation (#165025)", () => {
+    expect(isSilentReplyPayloadText("think:\nI will stay quiet here. NO_REPLY.")).toBe(true);
+    expect(isSilentReplyPayloadText("think:\ninternal reasoning\nNO_REPLY!")).toBe(true);
+  });
+
+  it("keeps substantive answers that end with a padded silent intent deliverable", () => {
+    expect(
+      isSilentReplyPayloadText("think:\nHere is the actual answer. I will stay silent. NO_REPLY"),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "think:\nPlease use the attached draft. No need to reply.\nNO_REPLY",
+      ),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "think:\nThe moderator asked everyone to stay silent during the ceremony.\nNO_REPLY",
+      ),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText("think:\nThe correct sentinel here is NO_REPLY.\nNO_REPLY"),
+    ).toBe(false);
+  });
+
   it("keeps substantive replies that also contain a trailing NO_REPLY token", () => {
     expect(isSilentReplyPayloadText("Here is a helpful response.\n\nNO_REPLY")).toBe(false);
     expect(
