@@ -518,11 +518,11 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         <span role={props.error ? "alert" : "status"} title={props.error ?? undefined}>
           {props.error ?? (props.retrying ? t("common.refreshing") : undefined)}
         </span>
-        {Boolean(props.error || props.retrying) ? (
-          <button class="btn btn--sm" disabled={props.loading} onClick={props.onRetry}>
+        <Show when={Boolean(props.error || props.retrying)}>
+          <button class="btn btn--sm" disabled={props.loading} onClick={() => props.onRetry()}>
             {t("common.retry")}
           </button>
-        ) : undefined}
+        </Show>
       </div>
       <div class="activity-feed__main">
         {props.loading && !props.result ? renderActivityLoading() : undefined}
