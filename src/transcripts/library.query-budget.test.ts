@@ -22,6 +22,7 @@ import {
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
 import { readTranscriptLibraryStatus } from "./status.js";
+import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import {
   cursorScope,
   encodeCursor,
@@ -206,6 +207,7 @@ describe("transcript library SQLite query budgets", () => {
       await store.appendUtteranceForSession(later, { text: "Summarize this speech" });
       const db = database();
       seedExportBookkeeping(db);
+      const malformedSummaryColumns = deriveMeetingTranscriptSummaryColumns("{malformed");
       executeSqliteQuerySync(
         db,
         meetingTranscriptDb(db)
@@ -215,6 +217,7 @@ describe("transcript library SQLite query budgets", () => {
               session_id: target.sessionId,
               session_started_at: target.startedAt,
               summary_json: "{malformed",
+              overview: malformedSummaryColumns.overview,
               utterance_count: 0,
             })),
           ),
@@ -465,11 +468,12 @@ describe("transcript library SQLite query budgets", () => {
     };
     await store.writeSummary({ ...summary, transcript: [] }, target);
     const db = database();
+    const summaryJson = JSON.stringify(summary);
     executeSqliteQuerySync(
       db,
       meetingTranscriptDb(db)
         .updateTable("meeting_transcript_summaries")
-        .set({ summary_json: JSON.stringify(summary) })
+        .set({ summary_json: summaryJson, ...deriveMeetingTranscriptSummaryColumns(summaryJson) })
         .where("session_id", "=", target.sessionId)
         .where("session_started_at", "=", target.startedAt),
     );

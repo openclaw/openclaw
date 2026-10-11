@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
+  deriveMeetingTranscriptSessionColumns,
+  deriveMeetingTranscriptSummaryColumns,
+} from "../transcripts/store-columns.js";
+import {
   safeTranscriptPathSegment,
   transcriptSessionExportKey,
   transcriptSessionSelector,
@@ -50,6 +54,10 @@ export function insertMeetingTranscriptSnapshots(params: {
         }),
       });
       for (const snapshot of params.snapshots) {
+        const sourceJson = JSON.stringify(snapshot.session.source);
+        const metadataJson = snapshot.session.metadata
+          ? JSON.stringify(snapshot.session.metadata)
+          : null;
         executeSqliteQuerySync(
           database,
           db.insertInto("meeting_transcript_sessions").values({
@@ -60,11 +68,10 @@ export function insertMeetingTranscriptSnapshots(params: {
             session_slug: safeTranscriptPathSegment(snapshot.session.sessionId),
             provider_id: snapshot.session.source.providerId,
             title: snapshot.session.title ?? null,
-            source_json: JSON.stringify(snapshot.session.source),
+            source_json: sourceJson,
             stopped_at: snapshot.session.stoppedAt ?? null,
-            metadata_json: snapshot.session.metadata
-              ? JSON.stringify(snapshot.session.metadata)
-              : null,
+            metadata_json: metadataJson,
+            ...deriveMeetingTranscriptSessionColumns(sourceJson, metadataJson),
             export_manifest_json: "{}",
             export_pending_json: "[]",
             next_utterance_seq: snapshot.utteranceCount,
@@ -102,13 +109,15 @@ export function insertMeetingTranscriptSnapshots(params: {
           );
         }
         if (snapshot.summary !== undefined || snapshot.markdown !== undefined) {
+          const summaryJson = snapshot.summary ? JSON.stringify(snapshot.summary) : null;
           executeSqliteQuerySync(
             database,
             db.insertInto("meeting_transcript_summaries").values({
               session_id: snapshot.session.sessionId,
               session_started_at: snapshot.session.startedAt,
               generated_at: snapshot.summary?.generatedAt ?? null,
-              summary_json: snapshot.summary ? JSON.stringify(snapshot.summary) : null,
+              summary_json: summaryJson,
+              ...deriveMeetingTranscriptSummaryColumns(summaryJson),
               markdown: snapshot.markdown ?? null,
               utterance_count: snapshot.summary?.utteranceCount ?? snapshot.utteranceCount,
             }),

@@ -42,10 +42,45 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 18      | Original requesting authority retained with shared GitHub publication receipts                                                                                                                                                                                                                                                  | `v2026.9.6`         |
 | 19      | Durable original channel-owner authorization and revocation continuity                                                                                                                                                                                                                                                          | `v2026.9.7`         |
 | 20      | Cron receipt delivery-attempt fence prevents replay of ambiguous one-shot completions                                                                                                                                                                                                                                           | `v2026.10.1-beta.1` |
+| 21      | Derived meeting-transcript selectors, summary overview, and bounded delivery-retention columns                                                                                                                                                                                                                                  | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 21
+
+Schema 21 adds seven nullable text columns to `meeting_transcript_sessions`,
+`overview` to `meeting_transcript_summaries`, and the nullable
+`retention_id_prefix`, `retention_max_age_ms`, and `retention_max_entries` columns
+to `delivery_queue_entries`. JSON remains canonical. Every writer derives the
+columns in the same statement as its JSON; runtime filters and retention deletes
+use the columns without a JSON fallback. The
+[accepted design](https://github.com/openclaw/openclaw/issues/169254) covers this
+shared-state migration; the agent database is unchanged.
+
+The forward migration scans existing rows once inside the shared-state schema
+transaction. Transcript selectors, metadata agent IDs, and summary overviews
+become text only when the stored JSON value is a string; other values become
+`NULL`. Delivery retention columns are populated together only when the whole
+stored policy satisfies the previous SQL eligibility predicate, preserving
+historical classification. Missing or malformed policies leave all three
+columns `NULL`. Retention duration, count limits, and deletion ownership do not
+change. New indexes support selector equality and bounded-retention lookup;
+substring search remains a scan, and meeting URLs remain excluded from it.
+
+Startup and Doctor use the same migration. The existing
+[older-updater publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+still commits content and its marker together before publishing both schema
+versions. Reopening migrated content does not repeat the backfill. Older feature
+writers cannot maintain the new columns, so schema-20 builds must refuse the
+upgraded database. Do not lower either schema marker or remove derived columns.
+
+Create a verified, WAL-aware backup before upgrading. A failed migration rolls
+back its transaction. After migration commits, rollback requires restoring the
+complete pre-upgrade backup with its matching build; reinstalling an older
+package does not reverse the data migration. See
+[state schema 21 to 20 recovery](/reference/database-schemas/integrity-and-recovery#example-state-schema-21-to-20).
 
 ### State schema 20
 

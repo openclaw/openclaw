@@ -975,3 +975,16 @@ Follow [Downgrade](/install/updating#downgrade) for the managed rollback path,
 retained-originals limits, and restoring a verified pre-update backup. A complete
 recovery point includes the matching package, config, shared state, and every
 agent database. Keep writers stopped while activating restored state.
+
+### Example: state schema 21 to 20
+
+Schema 21 derives meeting-transcript selectors and bounded delivery-retention
+columns from canonical JSON. A schema-20 writer can change that JSON without
+updating the derived columns, so package-only downgrade is unsafe and older
+builds refuse the migrated database.
+
+Stop writers and restore the verified pre-migration backup together with its
+matching build. Keep the migrated database separately until recovery is verified;
+restoring the backup loses captures and delivery-state changes recorded after
+that backup and does not undo messages already sent. Never lower schema markers,
+drop the new columns, or copy individual tables between the two databases.

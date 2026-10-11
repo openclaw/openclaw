@@ -12,6 +12,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { stateWorkerRegistry } from "../../state/openclaw-state-worker-registry.js";
 import type { WorkerWriteOperationContext } from "../../state/worker-operation-registry.js";
+import { deriveDeliveryQueueRetentionColumns } from "../delivery-queue-retention-columns.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
@@ -206,9 +207,19 @@ describe("outbound producer claim worker", () => {
       await setImmediate();
       expect(settled).toBe(false);
       const expired = { ...entry, availableAt: Date.now() - 1 };
+      const entryJson = JSON.stringify(expired);
       db.prepare(
-        "UPDATE delivery_queue_entries SET entry_json = ? WHERE queue_name = ? AND id = ?",
-      ).run(JSON.stringify(expired), OUTBOUND_DELIVERY_QUEUE_NAME, id);
+        `UPDATE delivery_queue_entries SET entry_json = ?,
+          retention_id_prefix = @retention_id_prefix,
+          retention_max_age_ms = @retention_max_age_ms,
+          retention_max_entries = @retention_max_entries
+          WHERE queue_name = ? AND id = ?`,
+      ).run(
+        deriveDeliveryQueueRetentionColumns(id, entryJson),
+        entryJson,
+        OUTBOUND_DELIVERY_QUEUE_NAME,
+        id,
+      );
       db.exec("COMMIT");
       await expect(renewal).resolves.toBeUndefined();
       expect(await loadPendingDelivery(id, stateDir)).toEqual(expired);

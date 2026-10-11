@@ -1805,6 +1805,7 @@ describe("openclaw state database", () => {
       { kind: "state-consolidation-v13", path: fixture.databasePath },
       { kind: "creator-namespace-v14", path: fixture.databasePath },
       { kind: "conversation-binding-targets-v15", path: fixture.databasePath },
+      { kind: "predicate-columns-v21", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1820,6 +1821,7 @@ describe("openclaw state database", () => {
         "Retired legacy skill curator lifecycle and proposal origin-run tables",
         "Folded singleton state tables into config_machine_state (v12)",
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
+        "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
         "Removed redundant conversation binding target projections (v15)",
@@ -2120,6 +2122,7 @@ describe("openclaw state database", () => {
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "creator-namespace-v14", path: seeded.databasePath },
+      { kind: "predicate-columns-v21", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
