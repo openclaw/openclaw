@@ -7,6 +7,7 @@ import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
@@ -493,6 +494,7 @@ describe("worker turn execution", () => {
       const entered = createDeferred();
       const release = createDeferred();
       const open = SessionManager.openAsync.bind(SessionManager);
+      let placementSql: ReturnType<typeof observeHostDataSql> | undefined;
       const hydration = vi
         .spyOn(SessionManager, "openAsync")
         .mockImplementationOnce(async (...args) => {
@@ -509,10 +511,20 @@ describe("worker turn execution", () => {
           expect(manager.getPersistedEntries()).toEqual(before);
           entered.resolve();
           await release.promise;
+          if (change === "current") {
+            placementSql = observeHostDataSql();
+          }
           return manager;
         });
       const deliberateStop = new WorkerRunnerCapacityError();
       const acquireTurnCredential = vi.fn(async () => {
+        if (placementSql) {
+          expect(
+            placementSql.queries.filter((sql) => sql.includes("worker_session_placements")),
+          ).toEqual([]);
+          placementSql.restore();
+          placementSql = undefined;
+        }
         throw deliberateStop;
       });
       const startTunnel = vi.fn();
@@ -588,6 +600,7 @@ describe("worker turn execution", () => {
         release.resolve();
         await operation;
         hydration.mockRestore();
+        placementSql?.restore();
         input.preparedRunAdmission.close();
       }
     },

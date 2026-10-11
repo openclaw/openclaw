@@ -84,6 +84,7 @@ export function createManagedReloadSecretHandlers(options: {
   prepareRuntimeCandidate: PrepareRuntimeCandidate;
   tryPrepareRuntimeSecrets: TryPrepareRuntimeSecrets;
   applyHotReload: ReturnType<typeof createGatewayReloadHandlers>["applyHotReload"];
+  hasPendingModelRuntimeReload: () => boolean;
 }) {
   const { params, prepareRuntimeCandidate, tryPrepareRuntimeSecrets, applyHotReload } = options;
   const prepareRestartRuntimeConfig = (
@@ -114,6 +115,10 @@ export function createManagedReloadSecretHandlers(options: {
     transactionOwnership,
     sourceConfig,
   ) => {
+    if (options.hasPendingModelRuntimeReload()) {
+      await onHotReload(buildGatewayReloadPlan([]), nextConfig, transactionOwnership, sourceConfig);
+      return { rollback: async () => {} };
+    }
     for (;;) {
       await transactionOwnership.checkpoint();
       assertReloadPublicationCurrent(transactionOwnership.isCurrent(), false);
@@ -375,6 +380,7 @@ export function createManagedReloadSecretHandlers(options: {
       try {
         const publication: GatewayHotReloadPublication = {
           isCurrent: transactionOwnership.isCurrent,
+          hasNewerConfig: transactionOwnership.hasNewerConfig,
           checkpoint: transactionOwnership.checkpoint,
           assertInvokerOwned: transactionOwnership.assertInvokerOwned,
           ...(transactionOwnership.runtimeEnv
@@ -463,6 +469,7 @@ export function createManagedReloadSecretHandlers(options: {
         };
         if (
           isNoopGatewayReloadPlan(plan) &&
+          !options.hasPendingModelRuntimeReload() &&
           !doesReloadAffectProviderAuth(plan, previousRuntimeConfig, prepared.config)
         ) {
           // Neutral commits retain the prepared generation; model/auth changes

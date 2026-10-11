@@ -206,14 +206,47 @@ it("prepares bounded facts on one admitted source and refreshes after sibling an
       transcript: {
         sessionKey,
         entryIds: ["question"],
+        includeSession: true,
+        contextAuthority: true,
         contextValidation: { version: currentVersion },
         replayValidation: { allowInitial: false, expectedLifecycleRevision: "original" },
       },
     };
-    expect(read(replayRequest).transcript).toMatchObject({
-      contextValidated: true,
-      anchors: [{ entryId: "question" }],
-    });
+    const repeated = trackSqliteStatementExecutions(
+      database.db,
+      ["entry", "participants"],
+      (sql) =>
+        sql.includes('from "session_nodes"') && !sql.includes('"actor_')
+          ? "entry"
+          : sql.startsWith('select "session_key", "identity_namespace"')
+            ? "participants"
+            : null,
+    );
+    try {
+      expect(read(replayRequest).transcript).toMatchObject({
+        contextValidated: true,
+        session: { sessionId: "cohort", lifecycleRevision: "original" },
+        contextAuthority: { entry: { sessionId: "cohort", lifecycleRevision: "original" } },
+        anchors: [{ entryId: "question" }],
+      });
+      expect(repeated.counts.participants).toBe(0);
+      // The cohort loads its row once; anchors consume that same snapshot.
+      expect(repeated.counts.entry).toBeLessThanOrEqual(1);
+      writeSessionEntry(database, sessionKey, { ...entry, lifecycleRevision: "updated" });
+      expect(() => read(replayRequest)).toThrow("writer claim");
+      expect(
+        read({
+          ...replayRequest,
+          transcript: {
+            ...replayRequest.transcript!,
+            replayValidation: { allowInitial: false, expectedLifecycleRevision: "updated" },
+          },
+        }).transcript?.session?.lifecycleRevision,
+      ).toBe("updated");
+      writeSessionEntry(database, sessionKey, entry);
+    } finally {
+      repeated.restore();
+    }
     expect(
       read({
         ...replayRequest,

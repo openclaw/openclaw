@@ -167,7 +167,6 @@ export async function purgeDeletedAgentSessionEntries(
               preservation: sentPreservation,
               storePath: params.storePath,
             },
-            maintenanceRunBasis: preservation.subagentRunBasis,
           };
           const operation: Omit<
             Parameters<
