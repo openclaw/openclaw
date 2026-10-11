@@ -929,7 +929,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/gateway/talk/client-spoken-confirmation.test.ts",
     "src/gateway/talk/handlers/client-native-control.test.ts",
     "src/gateway/talk/handlers/native-consult-target.test.ts",
     "src/gateway/talk/handlers/target.test.ts",

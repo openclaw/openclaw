@@ -8,14 +8,12 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerCommand, SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
-import { withOpenClawAgentDatabaseRuntime } from "../../state/openclaw-agent-db.js";
 import {
   resolveExplicitIncognitoAgentSqliteTarget,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type {
   ContextEngineTurnOutboxStore,
   ContextEngineTurnOutboxWorkerOperations,
@@ -42,38 +40,22 @@ async function runContextEngineTurnOutboxCommand(
     env,
     path: resolveOpenClawAgentSqlitePath({ agentId: target.agentId, env, path: target.path }),
   };
-  // Retain the lifecycle before queuing so close cannot turn waiting work into a fresh open.
   const execution = captureOpenClawAgentDatabaseExecution(options);
-  const assertCurrent = () => execution.assertCurrent();
   try {
-    return await runOpenClawAgentWriteAdmission(
-      options,
-      () =>
-        withOpenClawAgentDatabaseRuntime(
-          options,
-          async ({ db }) => {
-            assertCurrent();
-            const worker =
-              await openOpenClawAgentSqliteWorkerStore<ContextEngineTurnOutboxWorkerOperations>(
-                options,
-                db,
-                {
-                  moduleUrl: resolveRuntimeWorkerUrl(
-                    runtimeProcessEntrypoints.contextEngineTurnOutbox,
-                  ),
-                  input: undefined,
-                },
-              );
-            try {
-              return await worker.execute(command, assertCurrent);
-            } finally {
-              await worker.close();
-            }
-          },
-          assertCurrent,
-        ),
-      true,
-    );
+    const worker =
+      await openOpenClawAgentSqliteWorkerStore<ContextEngineTurnOutboxWorkerOperations>(
+        options,
+        { execution },
+        {
+          moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.contextEngineTurnOutbox),
+          input: undefined,
+        },
+      );
+    try {
+      return await worker.execute(command, () => execution.assertCurrent());
+    } finally {
+      await worker.close();
+    }
   } finally {
     await execution.release();
   }

@@ -517,13 +517,11 @@ export function emitToolBlockedSecurityEvent(params: {
   paramsSummary?: DiagnosticToolParamsSummary;
 }): void {
   const policyId =
-    params.deniedReason === "client-voice-confirmation"
-      ? "talk-client-voice-confirmation"
-      : params.deniedReason === "tool-loop"
-        ? "tool-loop-detection"
-        : params.deniedReason === "plugin-approval"
-          ? "plugin-tool-approval"
-          : "plugin-before-tool-call";
+    params.deniedReason === "tool-loop"
+      ? "tool-loop-detection"
+      : params.deniedReason === "plugin-approval"
+        ? "plugin-tool-approval"
+        : "plugin-before-tool-call";
   emitTrustedSecurityEvent({
     category: "tool",
     action: "tool.execution.blocked",
