@@ -133,7 +133,9 @@ const mocks = vi.hoisted(() => ({
     typeof import("../../../talk/client-voice-session.js").createOrResumeClientVoiceSession
   >(async () => "voice-test"),
   ensureClientVoiceAgentSessionEntry: vi.fn(async () => "session-main"),
-  resolveClientVoiceAgentSessionId: vi.fn<() => string | undefined>(() => "session-main"),
+  resolveClientVoiceAgentSessionId: vi
+    .fn<() => Promise<string | undefined>>()
+    .mockResolvedValue("session-main"),
   assertClientVoiceSessionOpen: vi.fn(),
   registerClientVoiceConsultRun: vi.fn(
     ({ onRegistered }: { onRegistered?: (release: () => void) => void }) => {
@@ -3084,7 +3086,7 @@ describe("talk.client.create handler", () => {
     mocks.createOrResumeClientVoiceSession.mockImplementation(
       async (params: { voiceSessionId?: string }) => params.voiceSessionId ?? "voice-test",
     );
-    mocks.resolveClientVoiceAgentSessionId.mockReturnValue("session-main");
+    mocks.resolveClientVoiceAgentSessionId.mockResolvedValue("session-main");
     mocks.closeTalkClientGatewayControlSession.mockResolvedValue(false);
   });
 
@@ -3246,7 +3248,7 @@ describe("talk.client.create handler", () => {
     async (variant) => {
       const handoff = variant === "native handoff";
       if (handoff) {
-        mocks.resolveClientVoiceAgentSessionId.mockReturnValue(undefined);
+        mocks.resolveClientVoiceAgentSessionId.mockResolvedValue(undefined);
         mocks.resolveRealtimeVoiceAgentContextInstructions.mockResolvedValue(
           `${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}\n\nBounded profile context.`,
         );
@@ -3518,7 +3520,7 @@ describe("talk.client.create handler", () => {
         mocks.ensureClientVoiceAgentSessionEntry.mockRejectedValueOnce(new Error("store failed"));
       }
       if (failure === "startup") {
-        mocks.resolveClientVoiceAgentSessionId.mockReturnValue(undefined);
+        mocks.resolveClientVoiceAgentSessionId.mockResolvedValue(undefined);
       }
       const createBrowserSession = vi.fn(async (_input: unknown) => {
         if (failure === "startup") {
