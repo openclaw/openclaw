@@ -7,7 +7,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ReplyPayload } from "../types.js";
-import { withAgentTurnCompletion, type AgentTurnCompletion } from "./agent-runner-completion.js";
+import { withAgentTurnCompletion } from "./agent-runner-completion.js";
+import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
 import type {
   AgentTurnCompaction,
   AgentTurnExecutionResult,

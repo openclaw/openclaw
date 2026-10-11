@@ -11,7 +11,7 @@ import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../se
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import type { AgentTurnCompletion } from "./agent-runner-completion.js";
+import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
 import { refreshSessionEntryFromStore, resolveFallbackOriginModel } from "./agent-runner-core.js";
 import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";

@@ -379,6 +379,11 @@ vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/paths.js")>()),
   resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
 }));
+// These dispatch fixtures own storage through the patch adapter below; actor transport has its own suite.
+vi.mock("../../config/sessions/session-actor-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-actor-scope.js")>()),
+  withSessionActor: async () => undefined,
+}));
 vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntryReadOnlyInWorker: async (

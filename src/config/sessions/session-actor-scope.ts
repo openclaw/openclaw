@@ -99,7 +99,7 @@ export async function withSessionActor<T>(
     ...database,
     path: identity.canonicalPath,
   }).acquire(target, lifetime);
-  if ("kind" in actor && actor.kind === "not-actor-owned") {
+  if ("kind" in actor) {
     return undefined;
   }
   try {

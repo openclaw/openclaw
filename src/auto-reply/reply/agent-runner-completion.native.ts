@@ -14,7 +14,7 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import type { AgentTurnCompletion } from "./agent-runner-completion.js";
+import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
 
 /** Native incognito keeps its existing in-process entry owner until its worker cutover. */
 export async function withNativeIncognitoTurnCompletion<T>(

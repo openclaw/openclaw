@@ -10,6 +10,8 @@ import type { HarnessCompletionRecovery } from "../../config/sessions/restart-re
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
@@ -180,6 +182,50 @@ describe("pending-final delivery completion", () => {
         target: { sessionKey, storePath },
       }),
     ).resolves.toMatchObject({ transition: { kind: "rejected", reason: "stale_revision" } });
+  });
+
+  it("settles native incognito custody on its retained memory owner", async () => {
+    const nativePath = resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: tmpDir },
+    });
+    const scope = { sessionKey, storePath: nativePath };
+    const nativeCompletion = { ...completion, storePath: nativePath };
+    try {
+      await replaceSessionEntry(scope, {
+        sessionId: completion.sessionId,
+        incognito: true,
+        updatedAt: 1,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "private final",
+          createdAt: 1,
+          intentId: completion.intentId,
+          deliveries: [{ id: completion.deliveryId, state: "prepared" }],
+        },
+      });
+      await expect(
+        settlePendingFinalDelivery(nativeCompletion, "queued", ["prepared"]),
+      ).resolves.toEqual({ state: "queued" });
+      expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "queued" },
+      ]);
+      await expect(
+        settlePendingFinalDelivery(nativeCompletion, "delivered", ["queued"]),
+      ).resolves.toEqual({ state: "delivered" });
+      expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "delivered" },
+      ]);
+      await expect(
+        settlePendingFinalDelivery(nativeCompletion, "queued", ["prepared"]),
+      ).resolves.toEqual({ state: "stale" });
+      expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: completion.deliveryId, state: "delivered" },
+      ]);
+      await expect(fs.stat(nativePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await disposeOpenClawAgentDatabaseByPath(nativePath);
+    }
   });
 
   it("records queue custody without waking recovery", async () => {

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
   SessionActorAuthority,
-  SessionActorPendingFinalDelivery,
   SessionActorReceipt,
   SessionActorReducer,
 } from "../../config/sessions/session-actor-contract.js";
@@ -12,19 +11,9 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { logVerbose } from "../../globals.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { withNativeIncognitoTurnCompletion } from "./agent-runner-completion.native.js";
+import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
-
-type ReducerPreparation =
-  | SessionActorReducer
-  | ((entry: SessionEntry) => SessionActorReducer | undefined);
-
-export type AgentTurnCompletion = {
-  current(): SessionEntry;
-  refresh(): Promise<SessionEntry>;
-  patch(reducer: ReducerPreparation): void;
-  complete(pendingFinalDelivery?: SessionActorPendingFinalDelivery): Promise<SessionEntry>;
-};
 
 /** One retained terminal owner, including no-send and exceptional completion. */
 export async function withAgentTurnCompletion<T>(
@@ -64,7 +53,7 @@ export async function withAgentTurnCompletion<T>(
       sessionKey,
       writer,
       assertCurrent,
-      publish: params.publish,
+      publish: (entry) => params.publish(entry),
     },
     consume,
   );
@@ -90,7 +79,7 @@ export async function withAgentTurnCompletion<T>(
         },
       };
       let snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
-      const prepared: ReducerPreparation[] = [];
+      const prepared: Parameters<AgentTurnCompletion["patch"]>[0][] = [];
       let finished = false;
       const project = () => {
         let next = structuredClone(snapshot.entry!);

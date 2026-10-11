@@ -14,6 +14,8 @@ import type {
   ConversationRegistryScope,
   PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -23,7 +25,10 @@ import {
   runSessionActorCommand,
   withSessionActor,
 } from "../../config/sessions/session-actor-scope.js";
-import type { PendingFinalDeliverySettlementInput } from "../../config/sessions/session-pending-final-settlement.js";
+import {
+  projectPendingFinalDeliverySettlement,
+  type PendingFinalDeliverySettlementInput,
+} from "../../config/sessions/session-pending-final-settlement.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -166,44 +171,56 @@ export async function settlePendingFinalDelivery(
   }
   let refused = false;
   let preimage: SessionEntry | undefined;
+  const hasCurrentClaim = (entry: SessionEntry | undefined, previous = entry) =>
+    !claim ||
+    Boolean(
+      entry &&
+      previous &&
+      entry.sessionId === completion.sessionId &&
+      entry.pendingFinalDelivery?.intentId === completion.intentId &&
+      entry.pendingFinalDelivery.deliveries?.some(({ id }) => id === completion.deliveryId) &&
+      authority &&
+      authority.sessionKey === completion.sessionKey &&
+      (authority.storePath === undefined || authority.storePath === completion.storePath) &&
+      claim.requesterSessionKey === completion.sessionKey &&
+      claim.sessionId === completion.sessionId &&
+      authority.expectedSessionId === completion.sessionId &&
+      (authority.agentId === undefined || authority.agentId === claim.requesterAgentId) &&
+      (completion.agentId === undefined ||
+        normalizeAgentId(claim.requesterAgentId) === normalizeAgentId(completion.agentId)) &&
+      (authority.expectedLifecycleRevision === undefined ||
+        authority.expectedLifecycleRevision === entry.lifecycleRevision) &&
+      (authority.expectedWriterRunId === undefined ||
+        authority.expectedWriterRunId === entry.activeWriterRunId) &&
+      getOwedHarnessCompletionTask(claim, previous),
+    );
+  const evidence = claim
+    ? {
+        claim,
+        result: options.identifiedResult
+          ? {
+              channel: options.identifiedResult.channel,
+              target: options.identifiedResult.target,
+              platformMessageId: readPlatformMessageId(options.identifiedResult),
+            }
+          : undefined,
+      }
+    : undefined;
   const live: SessionActorAuthority = {
     assertCurrent() {},
     authorize(stage, facts) {
-      if (!claim) {
-        return;
-      }
       if (stage === "transaction" || !preimage) {
         preimage = facts.entry;
       }
-      const entry = facts.entry;
-      if (
-        !entry ||
-        !preimage ||
-        entry.sessionId !== completion.sessionId ||
-        entry.pendingFinalDelivery?.intentId !== completion.intentId ||
-        !entry.pendingFinalDelivery.deliveries?.some(({ id }) => id === completion.deliveryId) ||
-        !authority ||
-        authority.sessionKey !== completion.sessionKey ||
-        (authority.storePath !== undefined && authority.storePath !== completion.storePath) ||
-        claim.requesterSessionKey !== completion.sessionKey ||
-        claim.sessionId !== completion.sessionId ||
-        authority.expectedSessionId !== completion.sessionId ||
-        (authority.agentId !== undefined && authority.agentId !== claim.requesterAgentId) ||
-        (completion.agentId !== undefined &&
-          normalizeAgentId(claim.requesterAgentId) !== normalizeAgentId(completion.agentId)) ||
-        (authority.expectedLifecycleRevision !== undefined &&
-          authority.expectedLifecycleRevision !== entry.lifecycleRevision) ||
-        (authority.expectedWriterRunId !== undefined &&
-          authority.expectedWriterRunId !== entry.activeWriterRunId) ||
-        !getOwedHarnessCompletionTask(claim, preimage)
-      ) {
+      if (!hasCurrentClaim(facts.entry, preimage)) {
         refused = true;
         throw new Error("Pending final delivery authority was revoked");
       }
     },
   };
+  let actorOwned = false;
   await withSessionActor(scope, { assertCurrent() {}, assertReadable() {} }, async (actor) => {
-    const result = options.identifiedResult;
+    actorOwned = true;
     let outcome;
     try {
       outcome = await runSessionActorCommand(actor, live, (snapshot) =>
@@ -213,20 +230,7 @@ export async function settlePendingFinalDelivery(
             phaseId: randomUUID(),
             expected: snapshot?.version,
             settlement,
-            ...(claim
-              ? {
-                  evidence: {
-                    claim,
-                    result: result
-                      ? {
-                          channel: result.channel,
-                          target: result.target,
-                          platformMessageId: readPlatformMessageId(result),
-                        }
-                      : undefined,
-                  },
-                }
-              : {}),
+            ...(evidence ? { evidence } : {}),
           },
           live,
         ),
@@ -256,6 +260,53 @@ export async function settlePendingFinalDelivery(
       throw new Error(outcome.failure.message);
     }
   });
+  if (!actorOwned) {
+    // Native incognito retains its existing patch owner until its actor cutover.
+    const patchOptions = {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      preserveActivity: options.preserveActivity,
+      workerGuard: {},
+    };
+    if (claim) {
+      await patchSessionEntryCore(
+        scope,
+        (entry) => {
+          if (!hasCurrentClaim(entry)) {
+            return null;
+          }
+          const projected = projectPendingFinalDeliverySettlement(entry, settlement, evidence);
+          settled = projected.state;
+          wakeRecovery = projected.wakeRecovery;
+          return projected.patch;
+        },
+        patchOptions,
+      );
+    } else {
+      let committed = false;
+      const entry = await applySessionEntryOperation(
+        scope,
+        { kind: "pending-final-settle", settlement },
+        {
+          ...patchOptions,
+          onCommitted(current) {
+            const delivery = current.pendingFinalDelivery?.deliveries?.find(
+              ({ id }) => id === settlement.deliveryId,
+            );
+            if (!delivery) {
+              throw new Error("Pending final settlement omitted its committed delivery");
+            }
+            committed = true;
+            settled = delivery.state;
+            wakeRecovery = settled !== "queued" && current.abortedLastRun === true;
+          },
+        },
+      );
+      if (!committed && entry) {
+        settled = projectPendingFinalDeliverySettlement(entry, settlement).state;
+      }
+    }
+  }
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
       await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
