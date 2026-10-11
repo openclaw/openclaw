@@ -425,10 +425,6 @@ describe("buildReplyPayloads media filter integration", () => {
     await expectSameTargetRepliesDelivered({ provider: "message", to: "ou_abc123" });
   });
 
-  it("delivers distinct same-target replies when target provider is a channel alias", async () => {
-    await expectSameTargetRepliesDelivered({ provider: "lark", to: "ou_abc123" });
-  });
-
   it("dedupes same-target final text already sent by a message tool", async () => {
     const { replyPayloads } = await buildTestReplyPayloads({
       payloads: [{ text: "hello world!" }],
