@@ -55,6 +55,7 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   localWriteRevisions: new WeakMap<DatabaseSync, number>(),
   ddlRevisions: new WeakMap<DatabaseSync, number>(),
   schemaDirty: new WeakSet<DatabaseSync>(),
+  localSchemaRevisions: new Map<string, number>(),
   misses: new WeakMap<Admission, Map<string, number>>(),
   exchange: new AsyncLocalStorage<Exchange>(),
   exchanging: false,
@@ -227,12 +228,12 @@ export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: s
   if (!observed) {
     return;
   }
+  state.openedIdentities.set(database, observed);
   if (expected === undefined) {
     // Unhosted raw workers cannot prove which file SQLite created; never lend that handle's facts.
     state.unproven.add(database);
     return;
   }
-  state.openedIdentities.set(database, observed);
   const record = state.registry.records.get(observed);
   if (record && !isRetired(record)) {
     // Existing admission is checked with fstat before the new native connection borrows it.
@@ -559,6 +560,15 @@ export function publishSqliteDatabaseSchemaChange(database: DatabaseSync): void 
         fact.revision = previous + 1;
       }
     }
+  } else {
+    const fileIdentity = state.openedIdentities.get(database);
+    if (fileIdentity) {
+      // Unhosted threads still share committed schema changes between their own handles.
+      state.localSchemaRevisions.set(
+        fileIdentity,
+        (state.localSchemaRevisions.get(fileIdentity) ?? 0) + 1,
+      );
+    }
   }
   if (!database.isTransaction) {
     state.schemaDirty.delete(database);
@@ -591,6 +601,9 @@ export function retireSqliteDatabaseAdmissionForPath(
   options: { requireSoleDescriptor?: boolean } = {},
 ): void {
   const observed = prepareSqliteDatabaseAdmission(location);
+  if (observed) {
+    state.localSchemaRevisions.delete(observed);
+  }
   const record = observed ? state.registry.records.get(observed) : undefined;
   if (!record || isRetired(record)) {
     return;
@@ -614,9 +627,14 @@ export function retireSqliteDatabaseAdmissionForPath(
 
 export function getSqliteDatabaseSchemaRevision(database: DatabaseSync): number | undefined {
   const record = admission(database);
-  return record
-    ? Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.schemaRevision)
-    : undefined;
+  if (record) {
+    return Atomics.load(
+      new Int32Array(record.generation),
+      SqliteDatabaseGenerationSlot.schemaRevision,
+    );
+  }
+  const fileIdentity = state.openedIdentities.get(database);
+  return fileIdentity ? (state.localSchemaRevisions.get(fileIdentity) ?? 0) : undefined;
 }
 
 export function suspendSqliteDatabaseAdmission(database: DatabaseSync, suspended: boolean): void {

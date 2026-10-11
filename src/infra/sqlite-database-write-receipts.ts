@@ -288,7 +288,14 @@ export function createSqliteDatabaseWriteReceipts(owner: {
           const revision = record?.writeScopes.get(key);
           if (revision) {
             Atomics.add(new Int32Array(revision), 0, 1);
-          } else if (record) {
+          } else if (
+            record &&
+            record.writeScopes.size <
+              Atomics.load(
+                new Int32Array(record.generation),
+                SqliteDatabaseGenerationSlot.writeScopeCount,
+              )
+          ) {
             // Another isolate may have registered the key after this writer's snapshot.
             unscoped = true;
           }

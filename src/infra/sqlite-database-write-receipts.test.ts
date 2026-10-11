@@ -1,7 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import {
-  SQLITE_DATABASE_GENERATION_LENGTH,
   SqliteDatabaseGenerationSlot,
   type Admission,
 } from "./sqlite-database-admission-record.js";
@@ -17,7 +16,7 @@ it("invalidates a scope registered by another isolate during an accepted write",
     descriptorOwner: 0,
     generationId: "receipt-test",
     generation: new SharedArrayBuffer(
-      Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
+      Int32Array.BYTES_PER_ELEMENT * Object.keys(SqliteDatabaseGenerationSlot).length,
     ),
     facts: new Map(),
     writeScopes: new Map(),
@@ -30,11 +29,16 @@ it("invalidates a scope registered by another isolate during an accepted write",
     writer: () => worker,
     suspended: () => false,
     exchange: () => {},
-    publish: () => {},
+    publish: (record) => {
+      Atomics.store(
+        new Int32Array(record.generation),
+        SqliteDatabaseGenerationSlot.writeScopeCount,
+        record.writeScopes.size,
+      );
+    },
   });
   try {
     receipts.readSqliteDatabaseScopedWriteToken(reader, "existing");
-    Atomics.store(new Int32Array(host.generation), SqliteDatabaseGenerationSlot.writeScopeCount, 1);
     worker.writeScopes = new Map(host.writeScopes);
     let before: string | undefined;
     receipts.withSqliteDatabaseWriteScope(writer, ["late"], () => {
