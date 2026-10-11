@@ -177,6 +177,7 @@ describe("noteClaudeCliHealth", () => {
       noteClaudeCliHealth(defaultClaudeConfig, { workspaceDir, noteFn });
       const body = noteBody(noteFn);
       expect(body).toContain("Claude Code memory: 2 file(s)");
+      expect(body).toContain("Control UI Settings → Import Memory, or stop the Gateway and run");
       expect(body).toContain(
         `openclaw migrate claude --agent ${quote("main")} --from ${quote(memoryDir)}`,
       );

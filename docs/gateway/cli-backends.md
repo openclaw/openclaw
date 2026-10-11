@@ -299,28 +299,31 @@ of the workspace. To load Claude Code's memory again, opt out:
 ```
 
 The setting applies on the next turn without a Gateway restart. Claude Code
-stores the memory it loaded at the start of a session in that session's
-history, so a session that started while the memory was loaded keeps it when
-it resumes. Use `/reset` to start a clean session.
+records the memory it loaded in that session's history, so a session that
+started while the memory was loaded can still carry it when it resumes. Use
+`/reset` to start a clean session.
 
 To move existing Claude Code memory into OpenClaw:
 
 - **Auto memory:** `openclaw doctor` lists each `claude-cli` agent whose Claude
-  Code auto memory is no longer loaded and prints its import command:
+  Code auto memory is no longer loaded, with the folder that holds it. Import
+  it from **Settings** → **Import Memory** in the Control UI: choose the agent,
+  then select the collection named after that project folder. To import from a
+  terminal instead, stop the Gateway and run the command Doctor prints:
 
   ```bash
   openclaw migrate claude --agent <agent-id> --from ~/.claude/projects/<workspace-key>/memory
   ```
 
-  The import previews and backs up first, then copies only that workspace's
-  memory into `memory/imports/claude-code/`, where memory search indexes it.
-  The source files stay in place. The Doctor note stops once the workspace has
-  a Claude Code import. See [Import from coding assistants](/concepts/memory#import-from-coding-assistants).
+  Both paths copy only the memory you chose into
+  `memory/imports/claude-code/`, where memory search indexes it, and leave the
+  source files in place. The Doctor note stops once the workspace has a Claude
+  Code import. See [Import from coding assistants](/concepts/memory#import-from-coding-assistants)
+  and [`openclaw migrate`](/cli/migrate).
 
   When `~/.claude/settings.json` sets `autoMemoryDirectory`, Claude Code keeps
   its auto memory in that one directory instead. Doctor reports that directory,
-  and you import it from **Settings** → **Import Memory** in the Control UI,
-  where you choose the destination agent and the collections to copy.
+  and **Import Memory** lists it as its own collection.
 
 - **`~/.claude/CLAUDE.md`:** these rules apply to every Claude Code session on
   the host, so OpenClaw does not copy them automatically. Move the rules an
