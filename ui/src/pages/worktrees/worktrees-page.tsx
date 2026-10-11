@@ -1,5 +1,4 @@
 import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
-import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import { For, Show, createEffect, untrack } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { reclaimHubTabFocus, rememberHubTabFocus } from "../../components/hub-tabs-focus.ts";
@@ -28,23 +27,6 @@ import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { WorktreesModel } from "./worktrees-model.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "wa-tab-group": HTMLAttributes<WaTabGroup> & {
-        "prop:active": string;
-        activation: "manual";
-        "without-scroll-controls": boolean;
-      };
-      "wa-tab": HTMLAttributes<WaTab> & {
-        panel: string;
-        "prop:active"?: boolean;
-        "prop:tabIndex": number;
-      };
-    }
-  }
-}
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 

@@ -2,17 +2,6 @@ import { For } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SnapshotProfile } from "./cloud-worker-snapshot-rows.tsx";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
-        label: string;
-        "onModal-cancel"?: (event: Event) => void;
-      };
-    }
-  }
-}
-
 export function SnapshotBuildDialog(props: {
   profiles: SnapshotProfile[];
   profile: string;
