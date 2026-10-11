@@ -102,6 +102,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       return true;
     });
     let restoreClock: (() => void) | undefined;
+    const sourceMessageIds: string[] = [];
     try {
       for (const session of [scope, otherScope]) {
         const entry = { sessionId: session.sessionId, updatedAt: Date.now() };
@@ -114,6 +115,18 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
         async ({ dispatcherOptions, replyOptions }) => {
           await replyOptions?.onPartialReply?.({ text: "Final answer" });
           await answer?.flush();
+          const runId = `run-${sourceMessageIds.length}`;
+          replyOptions?.onAgentRunStart?.(runId);
+          const manager = SessionManager.open(scope, root);
+          sourceMessageIds.push(
+            manager.appendMessage({
+              ...makeAgentAssistantMessage({
+                content: [{ type: "text", text: "Final answer" }],
+              }),
+              __openclaw: { runId },
+            }),
+          );
+          manager.appendMessage({ role: "user", content: "Queued input", timestamp: Date.now() });
           await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
           await dispatcherOptions.deliver(
             { text: "Tool output must not become a final mirror" },
@@ -168,6 +181,9 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       ]);
       expect(await transcript.readVisibleSessionTranscriptMessageEntries(otherScope)).toEqual([]);
       expect(mirrors[0]?.idempotencyKey).not.toBe(mirrors[1]?.idempotencyKey);
+      expect(
+        mirrors.map(({ message }) => message.openclawDeliveryMirror?.sourceAssistantMessageId),
+      ).toEqual(sourceMessageIds);
       expect([...visible.values()]).toEqual(["Final answer", "Final answer"]);
       const finalHooks = emitTelegramMessageSentHooks.mock.calls.filter(
         ([event]) => event.content === "Final answer",

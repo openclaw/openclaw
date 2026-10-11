@@ -53,6 +53,7 @@ import type {
 } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import type { AgentMessage } from "./agent-core.js";
 import { withProjectedSessionTranscriptWriteLock } from "./session-transcript-lock-runtime.js";
@@ -226,6 +227,8 @@ export type SessionTranscriptAssistantMirrorAppendParams = SessionTranscriptRead
   expectedLifecycleRevision?: string;
   expectedWriterRunId?: string;
   idempotencyKey?: string;
+  /** Producing run for queued finals; correlation still requires matching stored text. */
+  sourceRunId?: string;
   mediaUrls?: string[];
   signal?: AbortSignal;
   text?: string;
@@ -396,6 +399,7 @@ export async function appendAssistantMirrorMessageByIdentity(
     ...(params.idempotencyKey !== undefined ? { idempotencyKey: params.idempotencyKey } : {}),
     text,
   });
+  const sourceRunId = params.sourceRunId;
   const scope = bindSessionTranscriptStoreScope(params, params.config);
   const binding = captureIncognitoSessionBinding(scope);
   return await withTranscriptWriteSequence(scope, async (locked) => {
@@ -441,6 +445,13 @@ export async function appendAssistantMirrorMessageByIdentity(
         if (isRecord(marker) && typeof marker.sourceAssistantMessageId === "string") {
           sourceAssistantMessageId = marker.sourceAssistantMessageId;
         }
+      } else if (sourceRunId) {
+        sourceAssistantMessageId = findEquivalentAssistantMessageInRun(
+          selectVisibleTranscriptEvents(await locked.readEvents()),
+          message,
+          params.config,
+          sourceRunId,
+        );
       } else {
         let events: readonly SessionTranscriptEvent[];
         if (binding) {
@@ -723,6 +734,46 @@ function findLatestEquivalentAssistantMessageId(
       record.id
       ? record.id
       : undefined;
+  }
+  return undefined;
+}
+
+function findEquivalentAssistantMessageInRun(
+  events: readonly SessionTranscriptEvent[],
+  message: SessionTranscriptAssistantMessage,
+  config: OpenClawConfig | undefined,
+  runId: string,
+): string | undefined {
+  const expectedText = extractAssistantMirrorComparableText(message, config);
+  if (!expectedText) {
+    return undefined;
+  }
+  const correlatedIds = new Set<string>();
+  for (const event of events) {
+    if (!isRecord(event) || !isRecord(event.message)) {
+      continue;
+    }
+    const marker = event.message.openclawDeliveryMirror;
+    if (isRecord(marker) && typeof marker.sourceAssistantMessageId === "string") {
+      correlatedIds.add(marker.sourceAssistantMessageId);
+    }
+  }
+  // Queued answers settle in delivery order, which need not be the transcript tail.
+  // Consume each stored occurrence once, including repeated text within one run.
+  for (const event of events) {
+    if (!isRecord(event) || !isAgentMessageRecord(event.message) || typeof event.id !== "string") {
+      continue;
+    }
+    const candidate = event.message;
+    if (
+      candidate.role === "assistant" &&
+      !isDeliveryMirrorAssistantMessage(candidate) &&
+      readSessionTranscriptRunId(candidate) === runId &&
+      !correlatedIds.has(event.id) &&
+      extractAssistantMirrorComparableText(candidate, config) === expectedText
+    ) {
+      return event.id;
+    }
   }
   return undefined;
 }

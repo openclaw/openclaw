@@ -95,6 +95,7 @@ export function createTelegramTranscriptMirror(turn: Turn, sequenceOwner: Turn =
       agentId,
       config: turn.cfg,
       idempotencyKey,
+      ...(turn.transcriptMirrorRunId ? { sourceRunId: turn.transcriptMirrorRunId } : {}),
       deliveryMirror: { kind: "channel-final", sourceMessageId: idempotencyKey },
       sessionId,
       sessionKey,

@@ -152,6 +152,9 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onSkip: (payload, info) => handleReplySkip(turn, payload, info),
           },
           replyOptions: {
+            onAgentRunStart: (runId) => {
+              turn.transcriptMirrorRunId = runId;
+            },
             ...(context.ctxPayload.CommandSource === "native"
               ? { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const } }
               : {}),
