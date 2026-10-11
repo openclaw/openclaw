@@ -14,7 +14,7 @@ import {
   type AgentIdentity,
 } from "../identity-avatar-view.ts";
 import "../theme-brand-icon.ts";
-import { BrandIcon } from "./icon.tsx";
+import { Icon } from "./icon.tsx";
 import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
 import "../../styles/identity-avatar.css";
 
@@ -110,7 +110,7 @@ function SystemAgentAvatar(props: { name?: string; class?: string; branding: The
             "aria-hidden": "true",
           })}
         >
-          <BrandIcon name="mark" />
+          <Icon name="mark" />
         </Show>
       </span>
     </Show>
