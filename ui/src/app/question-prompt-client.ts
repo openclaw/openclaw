@@ -4,6 +4,21 @@ import {
   type GatewayProtocolRequestOptions,
 } from "@openclaw/gateway-client/browser";
 import type { QuestionResolvedEvent } from "@openclaw/gateway-protocol";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
+
+/** Ingress owner attribution does not grant the verified-user question alternative. */
+export function canUseQuestionPrompts(
+  snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">,
+): boolean {
+  return (
+    !isRemoteControlUiIngress() ||
+    canCallGatewayMethod(snapshot, "question.list", "operator.questions", {
+      requireAdvertisement: false,
+    })
+  );
+}
 
 export type QuestionClient = {
   request: (

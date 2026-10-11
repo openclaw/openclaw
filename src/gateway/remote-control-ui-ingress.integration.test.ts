@@ -1,4 +1,5 @@
 import { on, once } from "node:events";
+import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -6,6 +7,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import {
@@ -15,11 +17,17 @@ import {
   type DeviceIdentity,
 } from "../infra/device-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { saveMediaBuffer } from "../media/store.js";
 import {
   GatewayControlUiIngressError,
   type GatewayControlUiIngressFactoryV1,
   type GatewayControlUiIngressV1,
 } from "../plugins/gateway-ingress.types.js";
+import { uploadUserBackground } from "../state/user-background.js";
+import {
+  ensureCanonicalGatewayOwnerProfile,
+  setCanonicalUserProfileAvatar,
+} from "../state/user-profile-writes.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -38,6 +46,8 @@ import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import { createGatewayWsTestRequestContext } from "./server/ws-connection.test-helpers.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
 vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
@@ -53,12 +63,18 @@ const FRAME_ANCESTORS = [
 ];
 const SHARED_TOKEN = "remote-control-ui-integration-shared-token";
 const SCOPES = ["operator.read", "operator.write"] as const;
+const OWNER_SESSION_KEY = "agent:main:ingress-owner-chat";
+const PNG_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGO4E2DzHwAF3AJov2Ds8QAAAABJRU5ErkJggg==",
+  "base64",
+);
 const CLIENT = {
   id: "openclaw-control-ui",
   version: "dev",
   platform: "browser",
   mode: "webchat",
 } as const;
+let connectionSequence = 0;
 
 type IngressFrame = {
   type: string;
@@ -116,7 +132,10 @@ async function connect(peer: Peer, options: ConnectOptions): Promise<IngressFram
   if (!nonce) {
     throw new Error("Missing device challenge nonce");
   }
-  const client = options.owner ? { ...CLIENT, id: "cli", mode: "cli" } : CLIENT;
+  const client = {
+    ...(options.owner ? { ...CLIENT, id: "cli", mode: "cli" } : CLIENT),
+    instanceId: `ingress-browser-${++connectionSequence}`,
+  };
   const role = options.role ?? "operator";
   const signedAt = Date.now();
   const identity = options.identity;
@@ -134,7 +153,7 @@ async function connect(peer: Peer, options: ConnectOptions): Promise<IngressFram
         nonce,
       })
     : undefined;
-  return await request(peer, "connect", {
+  const hello = await request(peer, "connect", {
     minProtocol: PROTOCOL_VERSION,
     maxProtocol: PROTOCOL_VERSION,
     client,
@@ -156,12 +175,30 @@ async function connect(peer: Peer, options: ConnectOptions): Promise<IngressFram
         }
       : {}),
   });
+  if (hello.ok && !options.owner) {
+    expect(hello).toMatchObject({
+      payload: {
+        snapshot: {
+          presence: expect.arrayContaining([
+            expect.objectContaining({
+              instanceId: client.instanceId,
+              user: expect.objectContaining({ id: "gateway-owner" }),
+            }),
+          ]),
+        },
+      },
+    });
+  }
+  return hello;
 }
 
 function expectHello(frame: IngressFrame, method: string, scopes: readonly string[]): string {
   expect(frame).toMatchObject({
     ok: true,
-    payload: { type: "hello-ok", auth: { method, role: "operator", scopes } },
+    payload: {
+      type: "hello-ok",
+      auth: { method, role: "operator", scopes },
+    },
   });
   const token = frame.payload?.auth?.deviceToken;
   if (!token) {
@@ -193,6 +230,48 @@ async function expectReadWriteWithoutAdmin(peer: Peer, trigger: string) {
   });
 }
 
+async function expectOwnerReadAccess(peer: Peer) {
+  expect(await request(peer, "users.self", {})).toMatchObject({
+    ok: true,
+    payload: { profile: { id: "gateway-owner" } },
+  });
+  const listed = await request(peer, "sessions.list", {
+    ownerId: "gateway-owner",
+    source: "sidebar",
+    rowMode: "compact",
+    limit: 20,
+  });
+  expect(listed.error).toBeUndefined();
+  expect(listed).toMatchObject({
+    ok: true,
+    payload: {
+      sessions: expect.arrayContaining([
+        expect.objectContaining({ key: OWNER_SESSION_KEY, displayName: "Owner ingress chat" }),
+      ]),
+    },
+  });
+}
+
+async function expectIngressDenials(peer: Peer) {
+  // Owner attribution never grants the question/approval/pairing scope families.
+  expect(await request(peer, "question.list", {})).toMatchObject({
+    ok: false,
+    error: {
+      code: "FORBIDDEN",
+      message: "Session-scoped access requires a verified user profile.",
+    },
+  });
+  for (const [method, scope] of [
+    ["exec.approval.list", "operator.approvals"],
+    ["device.pair.list", "operator.pairing"],
+  ]) {
+    expect(await request(peer, method!, {})).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: `missing scope: ${scope}` },
+    });
+  }
+}
+
 describe("remote Control UI ingress production composition", () => {
   let state: OpenClawTestState;
   let ingress: GatewayControlUiIngressV1 | undefined;
@@ -200,6 +279,9 @@ describe("remote Control UI ingress production composition", () => {
   let config: OpenClawConfig;
   let auth: ResolvedGatewayAuth;
   let gatewayContext: GatewayRequestContext;
+  let projection: SessionRowProjection | undefined;
+  let backgroundPath: string;
+  let assistantMediaPath: string;
   let http: ReturnType<typeof createGatewayHttpRequestHandler> | undefined;
   const hostLifetime = new AbortController();
   const serviceLifetime = new AbortController();
@@ -236,7 +318,14 @@ describe("remote Control UI ingress production composition", () => {
       ),
     );
     await state.writeText("ui/assets/app.js", 'document.body.dataset.ready = "remote-ui";');
+    await fs.writeFile(path.join(state.workspaceDir, "favicon.png"), PNG_BYTES);
+    const assistantMedia = await state.writeText("media/ingress-chat.txt", "Ingress chat media\n");
+    assistantMediaPath = `/claw/__openclaw__/assistant-media?source=${encodeURIComponent(assistantMedia)}`;
     config = {
+      agents: {
+        defaults: { workspace: state.workspaceDir },
+        entries: { main: { identity: { avatar: "favicon.png" } } },
+      },
       gateway: {
         auth: { mode: "token", token: SHARED_TOKEN },
         publicOrigin: "https://direct.example.test",
@@ -244,19 +333,54 @@ describe("remote Control UI ingress production composition", () => {
       },
       mcp: { apps: { sandboxOrigin: "https://direct-sandbox.example.test" } },
       skills: { load: { watch: false } },
+      plugins: { enabled: false },
     };
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config, config);
+    await ensureCanonicalGatewayOwnerProfile("Synthetic owner");
+    await setCanonicalUserProfileAvatar("gateway-owner", PNG_BYTES, "image/png");
+    const background = await uploadUserBackground("gateway-owner", {
+      expectedAssetId: null,
+      expectedPreference: null,
+      imageBase64: PNG_BYTES.toString("base64"),
+    });
+    if (background.status !== "ok" || !background.asset) {
+      throw new Error("Synthetic owner background was not uploaded");
+    }
+    backgroundPath = `/claw/__openclaw__/users/background/${background.asset.assetId}`;
+    const channelAvatar = await saveMediaBuffer(PNG_BYTES, "image/png", "inbound");
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: OWNER_SESSION_KEY },
+      {
+        sessionId: "synthetic-owner-chat",
+        updatedAt: Date.now(),
+        label: "Owner ingress chat",
+        spawnedCwd: state.workspaceDir,
+        createdActor: { type: "human", source: "profile", id: "gateway-owner" },
+        visibility: "shared",
+        delivery: {
+          kind: "external",
+          route: { channel: "discord", target: { to: "user:synthetic" } },
+          context: { channel: "discord", to: "user:synthetic" },
+          origin: { provider: "discord", to: "user:synthetic", avatar: channelAvatar.path },
+        },
+      },
+    );
+    projection = await createSessionRowProjection({ cfg: config, modelCatalog: [] });
     auth = { mode: "token", token: SHARED_TOKEN, allowTailscale: false };
     const logger = createSubsystemLogger("test/remote-control-ui-ingress");
-    const requestContext = {
-      ...createGatewayWsTestRequestContext(),
-      getRuntimeConfig: () => config,
-      logGateway: logger,
-      broadcastVoiceWakeChanged: () => {},
-      getMcpAppSandboxPort: () => 443,
-      isConnectionActive: (connId: string) => Boolean(clients.getByConnectionId(connId)),
-    };
+    const requestContext = bindSessionRowProjection(
+      {
+        ...createGatewayWsTestRequestContext(),
+        getRuntimeConfig: () => config,
+        logGateway: logger,
+        broadcastVoiceWakeChanged: () => {},
+        forgetConnectionAncestors: () => {},
+        getMcpAppSandboxPort: () => 443,
+        isConnectionActive: (connId: string) => Boolean(clients.getByConnectionId(connId)),
+      },
+      () => projection,
+    );
     Object.assign(requestContext, { resolveGatewayContext: () => requestContext });
     gatewayContext = requestContext as never;
     const preauthConnectionBudget = createPreauthConnectionBudget(8);
@@ -296,11 +420,12 @@ describe("remote Control UI ingress production composition", () => {
       resolvedAuth: auth,
       getResolvedAuth: () => auth,
       getRuntimeConfig: () => config,
+      getGatewayRequestContext: () => requestContext as never,
       handleHooksRequest: async () => false,
     });
     listener = await reserveTestPortListener({
       offsets: [0],
-      createListener: () => createServer(),
+      createListener: () => createServer((req, res) => void http!(req, res)),
     });
     const handleUpgrade = attachGatewayUpgradeHandler({
       httpServer: listener.listener,
@@ -337,6 +462,7 @@ describe("remote Control UI ingress production composition", () => {
       wss.close(() => resolve());
     });
     http?.dispose();
+    projection?.dispose();
     await listener?.releaseListener();
     await listener?.claim.release();
     await state?.cleanup();
@@ -402,6 +528,89 @@ describe("remote Control UI ingress production composition", () => {
     };
   }
 
+  async function readRemote(pathAndQuery: string, token?: string) {
+    return (
+      await ingress!.request({
+        surface: "control-ui",
+        method: "GET",
+        pathAndQuery,
+        headers: [
+          ["sec-fetch-mode", "cors"],
+          ["sec-fetch-site", "same-origin"],
+          ...(token ? [["authorization", `Bearer ${token}`] as const] : []),
+        ],
+        signal: grantLifetime.signal,
+      })
+    ).response;
+  }
+
+  it("serves read-only UI config, images and chat media under the grant without opening general APIs", async () => {
+    const iconKey = encodeURIComponent(OWNER_SESSION_KEY);
+    const imagePaths = [
+      "/claw/avatar/main",
+      "/claw/api/users/gateway-owner/avatar",
+      `/claw/__openclaw__/workspace-icon/${iconKey}`,
+      `/claw/__openclaw__/channel-avatar/${iconKey}`,
+      backgroundPath,
+    ];
+    const directOrigin = `http://127.0.0.1:${listener.claim.port}`;
+    for (const pathname of imagePaths) {
+      const remote = await readRemote(pathname);
+      expect(remote.status, pathname).toBe(200);
+      const remoteBytes = Buffer.from(await remote.arrayBuffer());
+      expect(remote.headers.get("content-type")).toBe(
+        pathname === backgroundPath ? "image/jpeg" : "image/png",
+      );
+      const direct = await fetch(`${directOrigin}${pathname}`, {
+        headers: { Authorization: `Bearer ${SHARED_TOKEN}` },
+      });
+      expect(direct.status, pathname).toBe(200);
+      expect(Buffer.from(await direct.arrayBuffer())).toEqual(remoteBytes);
+      if (pathname !== backgroundPath) {
+        expect(remoteBytes).toEqual(PNG_BYTES);
+      }
+    }
+    const configPath = "/claw/control-ui-config.json";
+    const remoteConfig = await readRemote(configPath);
+    expect(remoteConfig.status).toBe(200);
+    expect(await remoteConfig.json()).toMatchObject({
+      basePath: "/claw",
+      assistantAgentId: "main",
+      assistantAvatar: expect.stringContaining("/claw/avatar/main"),
+    });
+    const directConfig = await fetch(`${directOrigin}${configPath}`, {
+      headers: { Authorization: `Bearer ${SHARED_TOKEN}` },
+    });
+    expect(directConfig.status).toBe(200);
+    expect(await directConfig.json()).toMatchObject({
+      basePath: "/claw",
+      assistantAgentId: "main",
+    });
+    for (const pathname of [configPath, imagePaths[2]!]) {
+      const unauthenticated = await fetch(`${directOrigin}${pathname}`);
+      expect(unauthenticated.status).toBe(401);
+      await unauthenticated.body?.cancel();
+    }
+    const metadata = await readRemote(`${assistantMediaPath}&meta=1`);
+    expect(metadata.status).toBe(200);
+    const media = (await metadata.json()) as { available: boolean; mediaTicket: string };
+    expect(media.available).toBe(true);
+    expect(media.mediaTicket).toMatch(/^v1\./);
+    const ticketedPath = `${assistantMediaPath}&mediaTicket=${encodeURIComponent(media.mediaTicket)}`;
+    for (const response of [
+      await readRemote(ticketedPath),
+      await fetch(`${directOrigin}${ticketedPath}`),
+    ]) {
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("Ingress chat media\n");
+    }
+    for (const pathname of ["/api/sessions", "/v1/models", "/claw/__openclaw__/unknown"]) {
+      const response = await readRemote(pathname);
+      expect(response.status, pathname).toBe(404);
+      await response.body?.cancel();
+    }
+  });
+
   it("auto-approves a fresh browser and uses its ordinary capped token remotely and directly", async () => {
     for (const [pathname, expected] of [
       ["/claw/", "Remote UI fixture"],
@@ -429,6 +638,8 @@ describe("remote Control UI ingress production composition", () => {
     const deviceToken = await usePeer(await openRemote(), async (peer) => {
       const hello = await connect(peer, { identity, scopes: [] });
       const token = expectHello(hello, "remote-ingress", SCOPES);
+      await expectOwnerReadAccess(peer);
+      await expectIngressDenials(peer);
       expect(hello.payload?.controlUiUrl).toBe(`${PUBLIC_ORIGIN}/claw`);
       const preview = await request(peer, "canvas.document.preview", {
         html: "<p>Ingress preview</p>",
@@ -458,6 +669,22 @@ describe("remote Control UI ingress production composition", () => {
         SCOPES,
       );
       await expectReadWriteWithoutAdmin(peer, "returning browser");
+      await expectOwnerReadAccess(peer);
+      await expectIngressDenials(peer);
+      for (const pathname of [
+        "/claw/control-ui-config.json",
+        `/claw/__openclaw__/workspace-icon/${encodeURIComponent(OWNER_SESSION_KEY)}`,
+      ]) {
+        const response = await readRemote(pathname, deviceToken);
+        expect(response.status, pathname).toBe(200);
+        await response.body?.cancel();
+      }
+      const directIcon = await fetch(
+        `http://127.0.0.1:${listener.claim.port}/claw/__openclaw__/workspace-icon/${encodeURIComponent(OWNER_SESSION_KEY)}`,
+        { headers: { Authorization: `Bearer ${deviceToken}` } },
+      );
+      expect(directIcon.status).toBe(403);
+      await directIcon.body?.cancel();
     });
     await usePeer(await openRemote(), async (peer) => {
       // The embedded UI reconnects with its stored token and no explicit scopes.
@@ -467,6 +694,7 @@ describe("remote Control UI ingress production composition", () => {
         SCOPES,
       );
       await expectReadWriteWithoutAdmin(peer, "returning embedded browser");
+      await expectOwnerReadAccess(peer);
     });
     await usePeer(await openRemote(), async (peer) => {
       expectHello(await connect(peer, { identity }), "remote-ingress", SCOPES);
@@ -478,6 +706,15 @@ describe("remote Control UI ingress production composition", () => {
         SCOPES,
       );
       await expectReadWriteWithoutAdmin(peer, "direct browser");
+      await expectOwnerReadAccess(peer);
+    });
+    await usePeer(await openDirect(), async (peer) => {
+      expectHello(
+        await connect(peer, { identity, auth: { token: SHARED_TOKEN }, scopes: [...SCOPES] }),
+        "token",
+        SCOPES,
+      );
+      await expectOwnerReadAccess(peer);
     });
     await usePeer(await openDirect(), async (peer) => {
       expect(
@@ -512,6 +749,9 @@ describe("remote Control UI ingress production composition", () => {
         }),
       ).toMatchObject({ ok: true });
     });
+    const revokedConfig = await readRemote("/claw/control-ui-config.json", deviceToken);
+    expect(revokedConfig.status).toBe(401);
+    await revokedConfig.body?.cancel();
     for (const direct of [false, true]) {
       await usePeer(await (direct ? openDirect() : openRemote()), async (connection) => {
         const denied = await connect(connection, {

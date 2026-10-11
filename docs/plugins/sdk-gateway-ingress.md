@@ -137,6 +137,13 @@ one credential-free same-key recovery attempt. The shared-credential login gate,
 Gateway URL and secret controls, and service-worker registration are disabled;
 connection errors and retry remain available.
 
+Ingress connections retain the same shared-owner profile and actor as a browser
+using the Gateway's token or password, including device-token reconnects. Owner
+attribution does not expand the handle's scopes. Questions require either the
+separate `operator.questions` scope or a verified personal identity with eligible
+session access; the shared owner is not a personal identity. The embedded UI
+therefore skips question requests under its read/write ceiling.
+
 Hello advertises the handle's public origin, and board, Canvas, and MCP App
 sandbox responses use its sandbox origin. Internal plugin-tab paths remain
 relative to the selected Gateway so their read-cookie paths and registered
@@ -175,7 +182,14 @@ token, scope, and revocation checks remain authoritative. The scope ceiling perm
 pairing, and Talk secrets remain outside this capability.
 
 The HTTP surface permits Control UI documents, assets, configuration and media
-resources, declared plugin panels, and a bounded liveness response. It refuses
+resources, declared plugin panels, and a bounded liveness response. Startup
+configuration and read-only UI resources can use the live plugin grant without a
+browser device token. Presented tokens still undergo ordinary verification and
+revocation checks. Avatar, workspace icon, and private owner-background reads
+retain their existing resource handlers; owner-only session images recognize the
+locally approved ingress owner without granting admin scope. Media tickets and
+resource-specific policy remain required where the direct listener requires them.
+The surface refuses
 general APIs, webhooks, `/v1`, standalone MCP, worker and node transfers, and
 undeclared plugin routes. Service workers and local browser bootstrap recovery
 are blocked. The sandbox surface serves only its dedicated shell and declared

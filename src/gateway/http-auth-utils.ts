@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
@@ -182,6 +183,9 @@ function resolveControlUiReadOperatorScopes(
   deviceScopes: string[] | undefined,
   authenticatedRequest?: Pick<AuthorizedGatewayHttpRequest, "operatorRolePolicy">,
 ): string[] {
+  if (authMethod === "remote-ingress") {
+    return [...(getRemoteControlUiIngressContext(req)?.operatorScopeCeiling ?? [])];
+  }
   if (authMethod === "device-token") {
     return applyHttpOperatorRoleScopeCeiling(deviceScopes ?? [], authenticatedRequest);
   }
@@ -337,10 +341,20 @@ export async function authorizeControlUiReadRequestOrReply(
     );
   }
   const token = resolveControlUiReadAuthToken(params.req, params.allowQueryToken);
-  const { authResult, authGeneration, deviceOperatorScopes } = await checkHttpOperatorCredentials(
-    { ...params, cfg, auth, token, rateLimiter: token ? params.rateLimiter : undefined },
-    authorizeControlUiReadHttpGatewayConnect,
-  );
+  const remoteIngress = getRemoteControlUiIngressContext(params.req);
+  assertRemoteControlUiGatewayAuth(remoteIngress, auth, cfg);
+  // Startup fetches have no device token yet. The plugin authenticates every forwarded read.
+  // Presented credentials still take normal verification, including revocation and shared-secret denial.
+  const { authResult, authGeneration, deviceOperatorScopes }: HttpOperatorCredentialResult =
+    remoteIngress && !token
+      ? {
+          authResult: { ok: true, method: "remote-ingress" },
+          authGeneration: resolveSharedGatewaySessionGeneration(auth, params.trustedProxies),
+        }
+      : await checkHttpOperatorCredentials(
+          { ...params, cfg, auth, token, rateLimiter: token ? params.rateLimiter : undefined },
+          authorizeControlUiReadHttpGatewayConnect,
+        );
   if (!authResult.ok) {
     if (params.replyOnFailure !== false) {
       sendGatewayAuthFailure(params.res, authResult);
@@ -399,7 +413,6 @@ export async function authorizeControlUiReadRequestOrReply(
     hasCurrentClientAuthority,
   );
   if (authMethod === "device-token" && token) {
-    const remoteIngress = getRemoteControlUiIngressContext(params.req);
     const verifyCurrentDeviceToken = () =>
       verifyHttpOperatorDeviceToken(
         token,
@@ -441,7 +454,8 @@ export async function authorizeControlUiReadRequestOrReply(
 
 /**
  * Session byte routes cannot apply the client-specific `sessions.list` filter.
- * Require its read scope plus admin, whose owner view is not narrowed by that filter.
+ * Require its read scope plus an unfiltered owner view. Locally approved ingress
+ * grants retain that view without acquiring admin scope.
  */
 export async function authorizeControlUiSessionOwnerReadRequestOrReply(
   params: Omit<ControlUiReadAuthParams, "allowQueryToken" | "requiredOperatorMethod">,
@@ -450,7 +464,12 @@ export async function authorizeControlUiSessionOwnerReadRequestOrReply(
     ...params,
     requiredOperatorMethod: "sessions.list",
   });
-  if (!requestAuth || requestAuth.operatorScopes.includes(ADMIN_SCOPE)) {
+  if (
+    !requestAuth ||
+    requestAuth.operatorScopes.includes(ADMIN_SCOPE) ||
+    (getRemoteControlUiIngressContext(params.req) &&
+      requestAuth.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID)
+  ) {
     return requestAuth;
   }
   sendJson(params.res, 403, {

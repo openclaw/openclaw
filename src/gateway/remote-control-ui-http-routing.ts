@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-bootstrap-contract.js";
+import { matchesControlUiBootstrapConfigPath } from "./control-ui-bootstrap-contract.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
 import { listControlUiPluginTabAuthGrants } from "./control-ui-plugin-tabs.js";
 import {
@@ -14,6 +14,7 @@ import {
   isControlUiVersionedPublicAsset,
 } from "./control-ui-root-assets.js";
 import { classifyControlUiRequest, isControlUiPluginManagerRequest } from "./control-ui-routing.js";
+import { parseControlUiUserBackgroundPath } from "./control-ui-user-background-route.js";
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
@@ -112,6 +113,7 @@ export function resolveRemoteControlUiHttpRoute(
   }
   if (
     parseControlUiUserAvatarPath(pathname, basePath).matched ||
+    parseControlUiUserBackgroundPath(pathname, basePath).matched ||
     (
       [
         "agentAvatar",
@@ -128,6 +130,9 @@ export function resolveRemoteControlUiHttpRoute(
     return "resource";
   }
   if (isControlUiPluginManagerRequest({ basePath, pathname, method: req.method })) {
+    return "document";
+  }
+  if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
     return "document";
   }
   const registry = getPluginRegistryForContext();
@@ -170,7 +175,6 @@ export function resolveRemoteControlUiHttpRoute(
   }
   const asset = relative.slice(1);
   if (
-    relative === CONTROL_UI_BOOTSTRAP_CONFIG_PATH ||
     relative.startsWith("/assets/") ||
     isControlUiRootPublicAsset(asset) ||
     isControlUiVersionedPublicAsset(asset)
