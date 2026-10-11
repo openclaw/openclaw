@@ -324,7 +324,11 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     if (params.method === "chat.send" && !sessionPolicy) {
       const cfg = params.context.getRuntimeConfig();
       if (!assertChatRoutingCurrent) {
-        const routing = captureSessionMutationRouting(cfg);
+        const routing = captureSessionMutationRouting(
+          cfg,
+          undefined,
+          resolveDirectSessionTargets(params.method, requestParams),
+        );
         assertChatRoutingCurrent = () => routing(params.context.getRuntimeConfig());
       }
       assertChatRoutingCurrent();

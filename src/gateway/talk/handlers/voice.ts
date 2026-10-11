@@ -131,6 +131,7 @@ function resolveVoiceCaller(options: GatewayRequestHandlerOptions, target: TalkV
   const assertRoutingCurrent = captureSessionMutationRouting(
     context.getRuntimeConfig(),
     () => new Error("Talk session storage target changed; retry the request"),
+    [session.sessionTarget],
   );
   return {
     kind: "browser" as const,

@@ -2017,6 +2017,7 @@ describe("gateway hot reload model state", () => {
           };
         },
         applyHotReload: handlers.applyHotReload,
+        hasPendingModelRuntimeReload: handlers.hasPendingModelRuntimeReload,
       });
       // This unit scenario injects a stable config owner; lease custody has separate integration proof.
       const ownership: Parameters<typeof managed.onHotReload>[2] = {
@@ -2126,6 +2127,7 @@ describe("gateway hot reload model state", () => {
           expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
         }),
         applyHotReload: handlers.applyHotReload,
+        hasPendingModelRuntimeReload: handlers.hasPendingModelRuntimeReload,
       });
       const readIntervals = async () =>
         (await loadCronJobsStore(cronState.storePath)).jobs
@@ -2404,6 +2406,67 @@ registerGatewayTargetedServiceReloadTests({
 });
 
 describe("gateway hot reload superseded tail recovery", () => {
+  it.each(["agent removal", "model-neutral edit", "same config"] as const)(
+    "recovers a superseded model build through the newer %s without a restart",
+    async (successor) => {
+      const initialConfig: OpenClawConfig = {
+        agents: { entries: { main: {}, retiring: {} } },
+      };
+      const firstConfig: OpenClawConfig = {
+        agents: { entries: { main: {}, retiring: {}, added: {} } },
+      };
+      const nextConfig: OpenClawConfig =
+        successor === "agent removal"
+          ? { agents: { entries: { main: {}, added: {} } } }
+          : successor === "model-neutral edit"
+            ? { ...firstConfig, logging: { level: "debug" } }
+            : firstConfig;
+      activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
+      const writer = createDirectConfigWriteFixture(initialConfig);
+      const entered = createDeferred();
+      const release = createDeferred();
+      hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        throw new Error("Agent database resources are closing: retiring/openclaw-agent.sqlite");
+      });
+      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+      const reloader = startManagedGatewayConfigReloader({
+        initialConfig,
+        readSnapshot: writer.readSnapshot,
+        subscribeToWrites: writer.subscribeToWrites,
+        requestRecoveryRestart,
+      });
+      await reloader.ready;
+      const write = (config: OpenClawConfig, revision: number) =>
+        publishConfigWrite(
+          writer.ref.current!,
+          createConfigWriteNotification(config, `write-${revision}`, revision, "runtime", "source"),
+        );
+      let first: Promise<RuntimeConfigWriteApplicationStatus> | undefined;
+      let next: Promise<RuntimeConfigWriteApplicationStatus> | undefined;
+      try {
+        first = write(firstConfig, 1);
+        await awaitGateBeforeSettlement(entered.promise, first, "model build must start");
+        next = write(nextConfig, 2);
+        release.resolve();
+        await expect(first).resolves.toBe("superseded");
+        await expect(next).resolves.toBe("applied");
+        expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenLastCalledWith(
+          nextConfig,
+          expect.anything(),
+        );
+        expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledTimes(2);
+        expect(hoisted.refreshContextWindowCache).toHaveBeenLastCalledWith(nextConfig);
+        expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await reloader.stop();
+        await Promise.allSettled([first, next]);
+      }
+    },
+  );
+
   it("rearms detached stale-tail recovery against an already accepted config", async () => {
     vi.useFakeTimers();
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));

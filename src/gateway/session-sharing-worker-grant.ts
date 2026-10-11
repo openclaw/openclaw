@@ -69,7 +69,7 @@ export async function prepareSessionSharingWorkerGrant(params: {
   if (params.transactionSource && (!params.transactionFacts || targets.length !== 1)) {
     throw changed();
   }
-  const assertRouting = captureSessionMutationRouting(params.sourceConfig, changed);
+  const assertRouting = captureSessionMutationRouting(params.sourceConfig, changed, targets);
   const talkAgentId = params.sourceConfig.talk?.agentId;
   let active = true;
   const releases: Array<{ release: () => void | Promise<void> }> = [];

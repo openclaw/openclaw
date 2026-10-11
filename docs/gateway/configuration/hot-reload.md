@@ -29,6 +29,11 @@ config was saved but could not be applied, including when reload is `off`, the
 method returns `UNAVAILABLE` with recovery guidance instead of reporting the
 agent change as ready. Inspect `config.get` before retrying a saved mutation.
 
+Agent-only edits retain session admission and active runtimes for unchanged agents.
+Overlapping agent edits can supersede an earlier model-runtime refresh. If that
+refresh fails, the newer config retries the unfinished preparation without
+requiring a Gateway restart, including when the newer edit does not change models.
+
 If a busy state store temporarily refuses the reload's lifecycle lease, the
 Gateway keeps the change pending and retries automatically with increasing backoff,
 up to one final attempt after the five-second backoff. The previous runtime stays

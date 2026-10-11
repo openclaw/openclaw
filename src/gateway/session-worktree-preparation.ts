@@ -176,7 +176,9 @@ async function prepareSpawnParentWorktreeSource(
       `Spawn parent ${sourceKind} changed; retry from its current session`,
     );
   };
-  const assertRouting = captureSessionMutationRouting(parent.cfg, refuse);
+  const assertRouting = captureSessionMutationRouting(parent.cfg, refuse, [
+    { sessionKey: parent.canonicalKey, agentId },
+  ]);
   const metadata = captureSessionEntryMetadataRead({
     agentId,
     sessionKey: parent.canonicalKey,

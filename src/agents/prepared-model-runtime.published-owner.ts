@@ -71,7 +71,9 @@ export function retainPublishedModelRuntimeOwner(
 
 type PublishedModelRuntimeContext = {
   captureLifetime(): () => void;
-  getPendingReplacement(): PreparedModelRuntimeReplacement | undefined;
+  getPendingReplacement(
+    input?: PreparedModelRuntimeInput,
+  ): PreparedModelRuntimeReplacement | undefined;
   owners: Map<string, PreparedModelRuntimeOwner>;
 };
 
@@ -92,11 +94,11 @@ export async function loadPreparedModelRuntimeOwner<T>(
   });
   for (;;) {
     assertLifetime();
-    const replacement = context.getPendingReplacement();
+    const replacement = context.getPendingReplacement(input);
     if (replacement) {
       assertPreparedModelRuntimeAdmissionCanWait();
       await replacement.promise;
-      if (context.getPendingReplacement()) {
+      if (context.getPendingReplacement(input)) {
         continue;
       }
       input = rebindInputToCommittedConfiguredOwner(context.owners, input);
@@ -109,12 +111,12 @@ export async function loadPreparedModelRuntimeOwner<T>(
         throw error;
       }
     }
-    if (context.getPendingReplacement()) {
+    if (context.getPendingReplacement(input)) {
       continue;
     }
     assertLifetime();
     const activated = await activateStandalone(input);
-    if (context.getPendingReplacement()) {
+    if (context.getPendingReplacement(input)) {
       continue;
     }
     try {
@@ -154,7 +156,8 @@ async function projectPublishedModelRuntimeOwner<T>(
   project: (owner: PreparedModelRuntimeOwner, snapshot: PreparedModelRuntimeSnapshot) => T,
 ): Promise<T> {
   const assertLifetime = context.captureLifetime();
-  const replacement = context.getPendingReplacement();
+  const input = normalizePreparedModelRuntimeInput(rawInput);
+  const replacement = context.getPendingReplacement(input);
   if (replacement) {
     // Individual owners may finish before a multi-owner publication commits. The lifecycle gate
     // makes the generation visible atomically only after every owner and auth mutation is ready.
@@ -163,7 +166,6 @@ async function projectPublishedModelRuntimeOwner<T>(
     assertLifetime();
     return await projectPublishedModelRuntimeOwner(rawInput, context, project);
   }
-  const input = normalizePreparedModelRuntimeInput(rawInput);
   const existing = resolvePublishedOwner(context.owners, input, {
     allowConfiguredWorkspaceFallback:
       rawInput.workspaceDir === undefined ||

@@ -11,20 +11,15 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
-import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/io.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewayRestartPolicy } from "../infra/restart.js";
 import { PluginRuntimeApplicationError, getPluginRuntimeGeneration } from "../plugins/lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { diffConfigPaths } from "./config-diff.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
-import {
-  doesReloadAffectProviderAuth,
-  reloadPlanNeedsRecovery,
-  shouldRefreshContextWindowCache,
-} from "./config-reload-recovery.js";
+import { reloadPlanNeedsRecovery } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
 import { commitHookTransformMappingReload } from "./hooks-mapping.js";
 import { resolveHooksConfig } from "./hooks.js";
@@ -62,6 +57,7 @@ const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
   const myGeneration = nextGatewayReloadGeneration();
+  const modelRuntimeReload = mrReload.createGatewayModelRuntimeReload();
   const restartRecoveryAvailable =
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
 
@@ -99,14 +95,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const state = params.getState();
     const nextState = { ...state };
     const candidateEnv = publication?.runtimeEnv ?? process.env;
-    const committedConfig = getRuntimeConfig();
-    const committedSourceConfig = projectConfigOntoRuntimeSourceSnapshot(committedConfig);
-    const refreshModelRuntime = doesReloadAffectProviderAuth(plan, committedConfig, nextConfig);
-    const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds([
-      ...plan.changedPaths,
-      ...diffConfigPaths(committedConfig, nextConfig),
-    ]);
-    const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
+    const modelRuntime = modelRuntimeReload.prepare(plan, getRuntimeConfig(), nextConfig);
     const refreshModelRuntimeSnapshots = (
       config: OpenClawConfig,
       isPublicationCurrent?: () => boolean,
@@ -114,7 +103,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
         mrReload.refreshModelRuntimeAfterHotReload({
           config,
-          agentIds: modelRuntimeAgentIds,
+          agentIds: modelRuntime.agentIds,
           pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
           ...(isPublicationCurrent ? { isPublicationCurrent } : {}),
         }),
@@ -227,7 +216,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
           "prepared model runtime owner is stale before plugin replacement",
-          { waitForReplacement: true, ...modelRuntimeRefreshScope },
+          { waitForReplacement: true, ...modelRuntime.scope },
         );
         drain.release();
       };
@@ -299,11 +288,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
-        if (refreshModelRuntime) {
+        if (modelRuntime.required) {
           // Retire model/auth inputs together so requests cannot mix generations.
           preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
             "prepared model runtime owner is stale before config publication",
-            { waitForReplacement: true, ...modelRuntimeRefreshScope },
+            { waitForReplacement: true, ...modelRuntime.scope },
           );
         } else {
           advancePreparedModelRuntimeConfig(nextConfig);
@@ -642,14 +631,30 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
-      if (refreshModelRuntime) {
+      if (modelRuntime.required) {
         await mrReload.pruneRemovedProviderModelCatalogs(
-          committedSourceConfig,
+          modelRuntime.sourceConfig,
           publication?.sourceConfig ?? nextConfig,
         );
         await refreshModelRuntimeSnapshots(nextConfig);
+        modelRuntime.complete();
       }
     } catch (err) {
+      if (
+        publication?.isCurrent() === false &&
+        !isRestartRetryStopped() &&
+        !plan.pluginLifecycle &&
+        !plan.disposeMcpRuntimes &&
+        !plan.restartGmailWatcher &&
+        channelReloadTargets().size === 0
+      ) {
+        // The successor rebuilds stale owners even when its own edit is model-neutral.
+        modelRuntime.defer();
+        params.logReload.warn(
+          `prepared model runtime reload superseded: ${formatErrorMessage(err)}; rebuilding with the newer config`,
+        );
+        throw createReloadCancellationError(true);
+      }
       scheduleRecoveryRestart("prepared model runtime reload", err);
       return "applied-restart-required";
     } finally {
@@ -718,7 +723,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       scheduleRecoveryRestart,
     });
 
-    if (shouldRefreshContextWindowCache(plan)) {
+    if (modelRuntime.refreshContextWindows) {
       try {
         await refreshContextWindowCache(nextConfig);
       } catch (err) {
@@ -737,6 +742,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   return {
     ...restartCoordinator,
     applyHotReload,
+    hasPendingModelRuntimeReload: modelRuntimeReload.hasPending,
     getDeferredChannelReloads,
   };
 }

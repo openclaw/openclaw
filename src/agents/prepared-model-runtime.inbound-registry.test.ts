@@ -35,6 +35,7 @@ import {
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
   rejectPendingPreparedModelRuntimeReplacement,
+  type PreparedModelRuntimeLease,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
@@ -397,6 +398,55 @@ describe("prepared reply dispatch runtime", () => {
       }
     },
   );
+
+  it("keeps unaffected dispatch and run admission available when a scoped replacement fails", async () => {
+    mocks.configuredAgentIds = ["default", "worker"];
+    const input = fixture.agentInput("default", {});
+    await refreshPreparedModelRuntimeSnapshots(input.config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const original = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    const gate = markPreparedModelRuntimeSnapshotsStale("worker agent reload", {
+      waitForReplacement: true,
+      agentIds: new Set(["worker"]),
+    });
+    const leases: PreparedModelRuntimeLease[] = [];
+    const reading = Promise.all([
+      loadPublishedGatewayReplyDispatchRuntime({
+        agentId: "default",
+        onRuntimeLease: (lease) => leases.push(lease),
+      }),
+      prepareModelRuntimeSnapshot(input),
+      acquireAgentRunPreparedModelRuntime(input, { catalogMode: "static" }).then((lease) => {
+        leases.push(lease);
+        return lease;
+      }),
+    ]);
+    const observed = reading.catch((error: unknown) => error);
+    try {
+      // Join the same healthy demand preflight while the other agent's reload remains pending.
+      await ensureGatewayPreparedModelRuntimeReady({ agentId: "default" });
+      rejectPendingPreparedModelRuntimeReplacement(gate, new Error("worker database is closing"));
+      const [dispatch, snapshot, lease] = await reading;
+      expect(dispatch).toMatchObject({
+        agentId: "default",
+        pluginGeneration: original?.pluginGeneration,
+      });
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(lease.snapshot.isCurrent()).toBe(true);
+      await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).resolves.toBe(
+        original,
+      );
+      await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).rejects.toThrow(
+        "was not published for worker",
+      );
+    } finally {
+      rejectPendingPreparedModelRuntimeReplacement(gate, new Error("test cleanup"));
+      await observed;
+      await Promise.all(leases.map((lease) => lease[Symbol.asyncDispose]()));
+    }
+  });
 
   it("keeps a rejected auth refresh projection unavailable without affecting siblings", async () => {
     mocks.configuredAgentIds = ["default", "worker"];

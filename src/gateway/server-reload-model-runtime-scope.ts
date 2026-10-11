@@ -3,9 +3,48 @@ import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { normalizeProviderMapKeys } from "../agents/models-config.merge.js";
 import { pruneRemovedProviderPluginModelCatalogs } from "../agents/plugin-model-catalog.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { diffConfigPaths } from "./config-diff.js";
+import type { GatewayReloadPlan } from "./config-reload-plan.js";
+import {
+  doesReloadAffectProviderAuth,
+  shouldRefreshContextWindowCache,
+} from "./config-reload-recovery.js";
+
+/** Retains unfinished model preparation across superseding config publications. */
+export function createGatewayModelRuntimeReload() {
+  let pending: { config: OpenClawConfig; sourceConfig: OpenClawConfig } | undefined;
+  return {
+    hasPending: () => pending !== undefined,
+    prepare(plan: GatewayReloadPlan, previousConfig: OpenClawConfig, nextConfig: OpenClawConfig) {
+      const baseline = pending ?? {
+        config: previousConfig,
+        sourceConfig: projectConfigOntoRuntimeSourceSnapshot(previousConfig),
+      };
+      const agentIds = resolveReloadAgentIds([
+        ...plan.changedPaths,
+        ...diffConfigPaths(baseline.config, nextConfig),
+      ]);
+      return {
+        required:
+          pending !== undefined || doesReloadAffectProviderAuth(plan, previousConfig, nextConfig),
+        refreshContextWindows: pending !== undefined || shouldRefreshContextWindowCache(plan),
+        agentIds,
+        scope: agentIds ? { agentIds } : {},
+        sourceConfig: baseline.sourceConfig,
+        complete: () => {
+          pending = undefined;
+        },
+        defer: () => {
+          pending ??= baseline;
+        },
+      };
+    },
+  };
+}
 
 /** Returns affected agent ids when every meaningful reload path is agent-entry-local. */
 export function resolveReloadAgentIds(

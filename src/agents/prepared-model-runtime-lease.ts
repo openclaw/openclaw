@@ -48,7 +48,9 @@ type PreparedModelRuntimeLeaseContext = {
   retainedGatewayRunOwners: PreparedModelRuntimeOwnerRetention;
   getBuildTimeoutMs(): number;
   getGatewayLifecycleActive(): boolean;
-  getPendingReplacement(): PreparedModelRuntimeReplacement | undefined;
+  getPendingReplacement(
+    input?: PreparedModelRuntimeInput,
+  ): PreparedModelRuntimeReplacement | undefined;
 };
 
 function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeLeaseContext) {
@@ -126,7 +128,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     assertAdmission();
     // Replacement owns publication from synchronous staling through atomic generation commit.
     // Dynamic work arriving inside that window must retry after the new owners become visible.
-    const replacement = context.getPendingReplacement();
+    const replacement = context.getPendingReplacement(input);
     const currentOwner = context.owners.get(key);
     const configuredCatalog = resolveConfiguredOwner(context.owners, input)?.pluginGeneration
       ?.remoteCatalog;
@@ -158,7 +160,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       lastExternalPublication = replacement.promise;
       assertPreparedModelRuntimeAdmissionCanWait();
       await racePromiseWithAbortSignal(replacement.promise, options.abortSignal);
-      if (context.getPendingReplacement()) {
+      if (context.getPendingReplacement(input)) {
         continue;
       }
       assertAdmission();
@@ -396,14 +398,17 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         supersededPublication = error;
         continue;
       }
-      if (context.getPendingReplacement() && isPreparedModelRuntimePluginLifecycleFailure(error)) {
+      if (
+        context.getPendingReplacement(input) &&
+        isPreparedModelRuntimePluginLifecycleFailure(error)
+      ) {
         continue;
       }
       throw error;
     }
     const published = context.owners.get(key);
     if (
-      context.getPendingReplacement() ||
+      context.getPendingReplacement(input) ||
       !published ||
       published.snapshot !== snapshot ||
       published.needsRefresh ||

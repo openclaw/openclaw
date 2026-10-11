@@ -174,6 +174,7 @@ async function createReload(
       expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
     }),
     applyHotReload,
+    hasPendingModelRuntimeReload: () => false,
   });
   const ownership: GatewayConfigReloadTransactionOwnership = {
     isCurrent: () => true,
