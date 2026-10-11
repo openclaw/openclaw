@@ -1028,29 +1028,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/gateway/worker-environments/placement-move-intent.ts",
-    [
-      {
-        tier: "W",
-        operations: ["readWorkerPlacementMovesReadOnly"],
-        evidence:
-          "placement-lifecycle.worker.ts, placement-turn-claims.worker.ts and placement-read-projection.ts call the batch reader in workers. Native getPlacementMove uses another reader.",
-      },
-      {
-        tier: "W",
-        operations: [
-          "deleteExactMove",
-          "requireExactAttachedEnvironment",
-          "createPlacementMoveOps.completeSourceToLocal",
-          "createPlacementMoveOps.beginPlacementMove",
-          "createPlacementMoveOps.recordPlacementMoveError",
-        ],
-        evidence:
-          "Only placement-lifecycle.worker.ts invokes move mutations; placement-store.ts retains only the native getPlacementMove getter for final effect guards.",
-      },
-    ],
-  ],
-  [
     "src/gateway/worker-environments/placement-drain.ts",
     [
       {
@@ -1075,17 +1052,6 @@ const reviewedOperations = new Map([
         operations: ["assertSessionWorkspaceUnreserved"],
         evidence:
           "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/worker-environments/placement-read-projection.ts",
-    [
-      {
-        tier: "T1",
-        operations: ["readWorkerPlacementMoveAuthorityInDatabase"],
-        evidence:
-          "placement-store.readCurrentMoveAuthority serves native move-abandon, move-service recovery, and pending-result guards. Retained until native/SDK and foreign-writer revocation is fully owned at the next Plugin SDK major. Other projection operations remain worker-only.",
       },
     ],
   ],
@@ -2075,6 +2041,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.

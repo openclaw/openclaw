@@ -651,7 +651,9 @@ process.stdin.pipe(child.stdin);
                     });
                   }
                   expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-                  expect(placements.getPlacementMove(identity.sessionId)).toBeUndefined();
+                  expect(
+                    await placements.getPlacementMoveAsync(identity.sessionId),
+                  ).toBeUndefined();
                 } else {
                   const reconciling = await placements.startReconcile({
                     sessionId: active.sessionId,
@@ -761,9 +763,9 @@ process.stdin.pipe(child.stdin);
                       mode === "policy-activated" ? "reconciling" : "requested",
                     );
                     if (mode === "policy-activated") {
-                      expect(placements.getPlacementMove(identity.sessionId)?.lastError).toContain(
-                        "required worker profile policy",
-                      );
+                      expect(
+                        (await placements.getPlacementMoveAsync(identity.sessionId))?.lastError,
+                      ).toContain("required worker profile policy");
                     }
                   }
                 }
