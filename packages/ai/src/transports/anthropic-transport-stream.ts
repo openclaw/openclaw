@@ -20,6 +20,7 @@ import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import {
   isAnthropicReplayRejection,
   suppressAnthropicCompaction,
+  type AnthropicCompactionBlock,
 } from "./anthropic-compaction-replay.js";
 import { buildAnthropicRequest, prepareAnthropicRequest } from "./anthropic-messages.js";
 import {
@@ -43,9 +44,9 @@ import {
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
-  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   readResponseTextSnippet,
   resolveModelHeaderSentinels,
+  streamFragmentError,
 } from "./transport-utils.js";
 
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -152,10 +153,7 @@ function parseAnthropicSseEventData(data: string): Record<string, unknown> {
   try {
     return JSON.parse(data) as Record<string, unknown>;
   } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause: error });
-    }
-    throw error;
+    throw streamFragmentError(error);
   }
 }
 
@@ -376,7 +374,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       const refusalBuffer = usesClaudeStreamingRefusalContract(model)
         ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
         : undefined;
-      let usedCompactionReplay = false;
+      let replayedCompaction: AnthropicCompactionBlock | undefined;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -400,7 +398,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           !isOAuthToken && supportsAnthropicServerSideFallback(model),
           claudeCodeVersion,
         );
-        usedCompactionReplay = builtParams.usedCompactionReplay;
+        replayedCompaction = builtParams.replayedCompaction;
         const { params, headers } = await prepareAnthropicRequest(
           builtParams.params,
           model,
@@ -445,8 +443,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             } else {
               output.content = output.content.filter((block) => block.type !== "toolCall");
             }
-            if (usedCompactionReplay && isAnthropicReplayRejection(output)) {
-              suppressAnthropicCompaction(output, model, options);
+            if (replayedCompaction && isAnthropicReplayRejection(output)) {
+              suppressAnthropicCompaction(output, model, options, replayedCompaction);
             }
             for (const block of output.content) {
               delete (block as AnthropicStreamBlock).index;

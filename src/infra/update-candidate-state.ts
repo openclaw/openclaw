@@ -20,7 +20,7 @@ import {
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { hasNodeErrorCode, normalizeWindowsPathPreservingCase } from "./path-guards.js";
+import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   retainSnapshotWork,
@@ -61,6 +61,7 @@ import { withStateInspectionCleanup } from "./update-candidate-state.process.js"
 import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
+  updateStateDatabaseExists,
 } from "./update-candidate-state.sizes.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
@@ -131,18 +132,6 @@ export function updateStateSchemaVersionsMatch(
   );
 }
 
-async function fileExists(file: string): Promise<boolean> {
-  try {
-    await fs.access(file);
-    return true;
-  } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 const UpdateCandidateStateInventorySchema = z
   .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
   .transform((entries) => new Map(entries));
@@ -190,6 +179,7 @@ function collectRegisteredPaths(
       resolveOpenClawStateDirForDatabasePath(shared),
       source,
       typeof agentId === "string" && agentId.length > 0 ? { role: "agent", agentId } : undefined,
+      stored,
     );
     return { stored, source };
   });
@@ -332,7 +322,7 @@ export async function readUpdateCandidateStateInventoryInProcess(
       warnings: plugins.warnings,
     };
   };
-  if (await fileExists(shared)) {
+  if (await updateStateDatabaseExists(shared)) {
     return withStateDatabaseSnapshot(
       shared,
       async (location) => {
@@ -379,7 +369,7 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   input.onProgress?.({ phase: "shared database discovery", path: shared });
   const files = await collectStateDatabasePaths(input);
-  if (!(await fileExists(shared))) {
+  if (!(await updateStateDatabaseExists(shared))) {
     return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
   }
   const sharedVersion = await withStateDatabaseSnapshot(
@@ -401,6 +391,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
     inspectionPlan?: UpdateStateSchemaInspectionPlan;
     stagingRoot?: string;
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
+    preserveSourceArtifacts?: boolean;
   },
 ): Promise<UpdateStateSchemaVersion[]> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
@@ -425,14 +416,18 @@ export async function readUpdateStateSchemaVersionsInProcess(
       path: file,
     });
     // Missing stores stay explicit so creation is checked and loss blocks rollback.
-    if (!(await fileExists(file))) {
+    if (!(await updateStateDatabaseExists(file))) {
       inspected.set(identity, { userVersion: null });
       continue;
     }
     if (file !== shared) {
-      // Reuse the native WAL-aware owner inside this child, avoiding both agent
-      // payload copies and a nested worker with a separate cleanup lifetime.
-      const { userVersion } = await inspectSqliteSchemaHeaderInProcess(file);
+      // This child owns source access and any artifact-preserving copy.
+      const { userVersion } = await inspectSqliteSchemaHeaderInProcess(
+        file,
+        input.stagingRoot,
+        undefined,
+        input.preserveSourceArtifacts,
+      );
       inspected.set(identity, { userVersion });
       continue;
     }
@@ -443,6 +438,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
         (location) => readSharedDatabaseVersion(location, shared, files),
         input.stagingRoot,
         input.onProgress,
+        input.preserveSourceArtifacts,
       ),
     );
   }
@@ -456,7 +452,7 @@ async function discoverLegacyUpdateStateSchemaInspection(
   params.signal?.throwIfAborted();
   const shared = path.resolve(params.input.stateDir, "state", "openclaw.sqlite");
   const files = await collectStateDatabasePaths(params.input);
-  if (!(await fileExists(shared))) {
+  if (!(await updateStateDatabaseExists(shared))) {
     return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
   }
   const stagingRoot = await createSqliteSnapshotStagingDirectory(
@@ -547,6 +543,7 @@ export async function readUpdateStateSchemaVersions({
   nodeRunner = process.execPath,
   timeoutMs,
   signal: callerSignal,
+  onInventory,
   ...input
 }: StateInput & {
   // Omit only before activation; null forbids falling back after an uncertain swap.
@@ -554,6 +551,8 @@ export async function readUpdateStateSchemaVersions({
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  preserveSourceArtifacts?: boolean;
+  onInventory?: (files: ReadonlyMap<string, StateDatabaseDiscovery>) => void;
 }): Promise<UpdateStateSchemaVersion[]> {
   if (root === null) {
     throw new Error("The active installation root is unknown; state inspection is unsafe.");
@@ -590,6 +589,7 @@ export async function readUpdateStateSchemaVersions({
     const discovery = legacyWorker
       ? await discoverLegacyUpdateStateSchemaInspection({ ...discoveryParams, input })
       : parseUpdateStateInspectionWorker(discoveryResult, UpdateStateSchemaInspectionPlanSchema);
+    onInventory?.(new Map(discovery.files));
     const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
     // Legacy workers recopy the shared database and may inspect every raw alias.
     // Current workers reuse the discovered shared version and inspect each remaining identity once.
@@ -650,7 +650,7 @@ export async function snapshotUpdateCandidateState(
       );
     }
     const file = discovery.spellings[0];
-    if (!(await fileExists(file))) {
+    if (!(await updateStateDatabaseExists(file))) {
       inspected.set(identity, { userVersion: null });
       continue;
     }

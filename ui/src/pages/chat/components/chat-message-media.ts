@@ -707,6 +707,12 @@ export function schedulePairingQrExpiryRefresh(
   );
 }
 
+export function omittedMediaReason(sizeBytes: number | undefined): string {
+  return sizeBytes === undefined
+    ? t("chat.attachments.omittedFromHistory")
+    : t("chat.attachments.omittedFromHistoryWithSize", { size: formatBytes(sizeBytes) });
+}
+
 // Reply previews and completed-run actions describe the media the bubble renders.
 export function extractMessageMediaText(
   message: unknown,
@@ -721,13 +727,7 @@ export function extractMessageMediaText(
       if (item.type !== "omitted_media") {
         return [];
       }
-      const reason =
-        item.media.sizeBytes === undefined
-          ? t("chat.attachments.omittedFromHistory")
-          : t("chat.attachments.omittedFromHistoryWithSize", {
-              size: formatBytes(item.media.sizeBytes),
-            });
-      return [`${t("chat.attachments.image")} · ${reason}`];
+      return [`${t("chat.attachments.image")} · ${omittedMediaReason(item.media.sizeBytes)}`];
     }),
     ...attachments.map(
       (item) => item.attachment.label.trim() || t("chat.attachments.attachedFile"),

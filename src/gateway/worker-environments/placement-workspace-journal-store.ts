@@ -52,7 +52,6 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
     assertCurrent?: () => void,
     preparation?: SqliteWorkerInputPreparation,
   ): Promise<WorkspaceJournalReceipt> {
-    let published = false;
     const readReceipt = (facts: unknown) =>
       isWorkspaceJournalReceipt(facts) && facts.type === command.type ? facts : undefined;
     const mutation = createPlacementWorkerMutation({
@@ -78,6 +77,7 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
               stagePlacementWorkspaceJournalWorkerPublication(
                 context.admission.identity,
                 owner.sessionId,
+                command.type === "placementJournals.begin",
               ),
             );
           }
@@ -92,10 +92,7 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
         };
       },
       publish(receipt) {
-        if (!published) {
-          published = true;
-          sessionChanges.emitBatch(receipt.changes);
-        }
+        sessionChanges.emitBatch(receipt.changes);
       },
     });
     try {

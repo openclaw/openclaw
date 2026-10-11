@@ -4,10 +4,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { readOpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import * as nativeExecution from "../../state/openclaw-agent-execution-native.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -46,12 +47,14 @@ export function createFixture(sessionIds = ["first", "second"], agentId = "main"
 export function observeReclamationWorkers(onSpawn?: (worker: Worker) => void) {
   const spawned: Worker[] = [];
   const create = archiveWorker.createSqliteTranscriptArchiveWorker;
-  vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-    const worker = create(data);
-    spawned.push(worker);
-    onSpawn?.(worker);
-    return worker;
-  });
+  vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation(
+    (data, nativeLocations) => {
+      const worker = create(data, nativeLocations);
+      spawned.push(worker);
+      onSpawn?.(worker);
+      return worker;
+    },
+  );
   return spawned;
 }
 
@@ -120,25 +123,21 @@ export function observeNativeGenerationRetirement(databasePath: string) {
 export function observeReclamationLeaseReceipts(database: { agentId: string; path: string }) {
   let admittedLeaseId = readOpenClawAgentDatabaseWorkerLeaseReceipt(database.path).leaseId;
   let reclamationLeaseId: string | undefined;
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        admit(request, grant);
-        const facts = request.facts;
-        if (
-          request.stage === "prepare" &&
-          isRecord(facts) &&
-          facts.kind === "shared-owner" &&
-          isRecord(facts.lease) &&
-          facts.lease.path === database.path &&
-          facts.lease.agentId === database.agentId &&
-          typeof facts.lease.leaseId === "string"
-        ) {
-          admittedLeaseId = facts.lease.leaseId;
-        }
-      }, attachment),
-  );
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    const facts = request.facts;
+    if (
+      request.stage === "prepare" &&
+      isRecord(facts) &&
+      facts.kind === "shared-owner" &&
+      isRecord(facts.lease) &&
+      facts.lease.path === database.path &&
+      facts.lease.agentId === database.agentId &&
+      typeof facts.lease.leaseId === "string"
+    ) {
+      admittedLeaseId = facts.lease.leaseId;
+    }
+  });
   return {
     onSpawn: (worker: Worker) => {
       worker.on("message", (message: SqliteReclamationWorkerMessage) => {

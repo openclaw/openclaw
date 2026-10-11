@@ -6,6 +6,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -67,24 +68,13 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
       lastUsedAt: Date.now(),
       ownerKey: `connection:${client.connId}`,
     });
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, options) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "diagnostic.register") {
-                  recordingEntered.resolve();
-                  await releaseRecording.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-    );
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "diagnostic.register") {
+        recordingEntered.resolve();
+        await releaseRecording.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     const dispatchOptions = {
       client,
       context: kernel.gatewayRequestContext,

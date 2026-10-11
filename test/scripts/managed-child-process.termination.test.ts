@@ -24,6 +24,7 @@ function createChild() {
     exitCode: { get: () => exitCode },
     stdout: { value: null, writable: true },
     stderr: { value: null, writable: true },
+    stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
   });
   return {
     child,

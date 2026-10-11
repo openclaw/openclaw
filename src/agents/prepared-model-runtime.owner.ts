@@ -424,6 +424,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     agentBuildCompletions: Map<string, Promise<void>>;
     buildTimeoutMs: number | undefined;
     includeCredentialProviders?: boolean;
+    providerDiscoveryTimeoutMs?: number;
     isPublicationCurrent?: () => boolean;
     isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
     isOwnerPublished?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
@@ -573,6 +574,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
                 }
               : undefined,
             params.acquisitionSignal,
+            params.providerDiscoveryTimeoutMs,
           );
           for (const candidate of currentGroup) {
             if (params.registerEntriesAfterBuildStart === true) {
@@ -663,6 +665,7 @@ export async function publishModelRuntimeSnapshot(
   catalogMode: PreparedModelRuntimeCatalogMode = existing?.catalogMode ?? "live",
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
+  providerDiscoveryTimeoutMs?: number,
 ): Promise<PreparedModelRuntimeSnapshot> {
   const key = ownerKey(input);
   const owner = prepareModelRuntimeOwner(input, provenance, catalogMode, existing);
@@ -681,6 +684,7 @@ export async function publishModelRuntimeSnapshot(
       registerEntriesAfterBuildStart: true,
       selectPluginGeneration: () => reusablePluginGeneration,
       pluginMetadataSnapshot,
+      providerDiscoveryTimeoutMs,
     },
     {
       published: (isGenerationCurrent) => {

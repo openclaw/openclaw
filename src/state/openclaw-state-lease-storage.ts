@@ -1,9 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { computeBackoff } from "../infra/backoff.js";
-import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -70,21 +70,24 @@ export function withLeaseWriteTransaction<T>(
   operation: (db: DatabaseSync) => T,
   busyTimeoutMs = 0,
 ): T {
+  const transactionOptions = {
+    operationLabel,
+    busyTimeoutMs,
+    beginLockFailureReporting: busyTimeoutMs === 0 ? "suppress" : undefined,
+  } satisfies SqliteTransactionOptions;
   if (database.schemaPolicy === "existing") {
     return runExistingOpenClawStateWriteTransaction(
       ({ db }) => operation(db),
       database.options ?? {},
-      { operationLabel, busyTimeoutMs, schemaSql: leaseSchema },
+      { ...transactionOptions, schemaSql: leaseSchema },
     );
   }
-  const stateDatabase = openOpenClawStateDatabase(database.options);
-  const run = () =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => operation(db),
-      { ...database.options, database: stateDatabase },
-      { operationLabel, busyTimeoutMs },
-    );
-  return runWithSqliteBusyTimeout(stateDatabase.db, busyTimeoutMs, run);
+  const stateDatabase = database.options?.database ?? openOpenClawStateDatabase(database.options);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => operation(db),
+    { ...database.options, database: stateDatabase },
+    transactionOptions,
+  );
 }
 
 export const STATE_LEASE_WRITE_BACKOFF = {

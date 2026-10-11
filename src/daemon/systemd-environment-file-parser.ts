@@ -21,12 +21,8 @@ function decodeSystemdEnvironmentFileValue(rawValue: string) {
       if (whitespace) {
         continue;
       }
-      if (char === "'") {
-        state = "single-quoted";
-        continue;
-      }
-      if (char === '"') {
-        state = "double-quoted";
+      if (char === "'" || char === '"') {
+        state = char === "'" ? "single-quoted" : "double-quoted";
         continue;
       }
       if (char === "\\") {
@@ -51,25 +47,11 @@ function decodeSystemdEnvironmentFileValue(rawValue: string) {
       decoded += char;
       continue;
     }
-    if (state === "unquoted-escape") {
-      state = "unquoted";
-      literalDollar ||= char === "$";
-      decoded += char;
-      continue;
-    }
-    if (state === "single-quoted") {
-      if (char === "'") {
+    if (state === "single-quoted" || state === "double-quoted") {
+      const quote = state === "single-quoted" ? "'" : '"';
+      if (char === quote) {
         state = "pre";
-      } else {
-        literalDollar ||= char === "$";
-        decoded += char;
-      }
-      continue;
-    }
-    if (state === "double-quoted") {
-      if (char === '"') {
-        state = "pre";
-      } else if (char === "\\") {
+      } else if (state === "double-quoted" && char === "\\") {
         state = "double-quoted-escape";
       } else {
         literalDollar ||= char === "$";
@@ -77,13 +59,13 @@ function decodeSystemdEnvironmentFileValue(rawValue: string) {
       }
       continue;
     }
-    state = "double-quoted";
-    if (['"', "\\", "`", "$"].includes(char)) {
-      literalDollar ||= char === "$";
-      decoded += char;
-    } else {
-      decoded += `\\${char}`;
+    const doubleQuoted: boolean = state === "double-quoted-escape";
+    state = doubleQuoted ? "double-quoted" : "unquoted";
+    if (doubleQuoted && !['"', "\\", "`", "$"].includes(char)) {
+      decoded += "\\";
     }
+    literalDollar ||= char === "$";
+    decoded += char;
   }
   if (state === "unquoted" && trailingWhitespaceStart !== undefined) {
     decoded = decoded.slice(0, trailingWhitespaceStart);

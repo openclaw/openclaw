@@ -81,11 +81,12 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   const getSessionEntry = vi.fn(
     (params: { sessionKey: string }) => sessionStore[params.sessionKey],
   );
-  const patchSessionEntry = vi.fn(
+  const prepareSessionEntryPatch = vi.fn(
     async (params: {
       sessionKey: string;
       fallbackEntry?: Record<string, unknown>;
-      update: (
+      authority: { kind: "host"; assertCurrent: () => void };
+      prepare: (
         entry: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
     }) => {
@@ -93,7 +94,8 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       if (!existing) {
         return null;
       }
-      const patch = await params.update({ ...existing });
+      const patch = await params.prepare({ ...existing });
+      params.authority.assertCurrent();
       if (!patch) {
         return existing;
       }
@@ -111,7 +113,7 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       session: {
         resolveStorePath: vi.fn(() => testTempPath("sessions.json")),
         getSessionEntry,
-        patchSessionEntry,
+        prepareSessionEntryPatch,
       },
       runEmbeddedAgent,
     },
@@ -210,11 +212,49 @@ describe("realtime voice agent consult runtime", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "waits for run registration and releases it after cancellation=%s",
+    async (cancelled) => {
+      const { runtime, runEmbeddedAgent } = createAgentRuntime();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      const cleanup = vi.fn();
+      const consult = runConsult({
+        agentRuntime: runtime as never,
+        sessionKey: "voice:registration",
+        runIdPrefix: "voice-registration",
+        args: { question: "Do work" },
+        abortSignal: controller.signal,
+        onRunStarted: async () => {
+          entered.resolve();
+          await release.promise;
+          return { cleanup };
+        },
+      });
+      await entered.promise;
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+      if (cancelled) {
+        controller.abort(new Error("voice session closed during registration"));
+      }
+      release.resolve();
+      if (cancelled) {
+        await expect(consult).rejects.toThrow("voice session closed during registration");
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      } else {
+        await expect(consult).resolves.toEqual({ text: "Speak this." });
+        expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      }
+      expect(cleanup).toHaveBeenCalledOnce();
+    },
+  );
+
   it("binds GPT-Live delegated runs to spoken confirmation until completion", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
     const started = createDeferred();
     const release = createDeferred();
-    const voiceSessionId = createOrResumeClientVoiceSession({
+    const voiceSessionId = await createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey: "agent:main:main",
       origin: "client",
@@ -263,9 +303,9 @@ describe("realtime voice agent consult runtime", () => {
       args: { question: "Ship it" },
       surface: "a browser Talk session",
       userLabel: "User",
-      onRunStarted: (startedRun) => {
+      onRunStarted: async (startedRun) => {
         runId = startedRun.runId;
-        registerClientVoiceConsultRun({
+        await registerClientVoiceConsultRun({
           agentId: "main",
           sessionKey: "agent:main:main",
           voiceSessionId,
@@ -401,7 +441,7 @@ describe("realtime voice agent consult runtime", () => {
       }),
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
     expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -431,7 +471,7 @@ describe("realtime voice agent consult runtime", () => {
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
     expect(forkSessionEntryFromParent).not.toHaveBeenCalled();
     expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -504,7 +544,7 @@ describe("realtime voice agent consult runtime", () => {
       'Session "voice:archive-race" is archived. Restore it before starting new work.',
     );
     expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -663,7 +703,7 @@ describe("realtime voice agent consult runtime", () => {
         sessionKey: "agent:main:subagent:google-meet:meet-1",
       }),
     );
-    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
     const forkedEntry = sessionStore["agent:main:subagent:google-meet:meet-1"];
     if (!forkedEntry) {
       throw new Error("Expected forked consult session entry");
@@ -739,7 +779,7 @@ describe("realtime voice agent consult runtime", () => {
     expect(warn).toHaveBeenCalledWith(
       "[talk] Parent context is too large to fork (150000/100000 tokens); starting with isolated context instead.",
     );
-    expect(runtime.session.patchSessionEntry).toHaveBeenCalled();
+    expect(runtime.session.prepareSessionEntryPatch).toHaveBeenCalled();
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expectNonEmptyString(call.sessionId);
     expect(call.sessionFile).toBeUndefined();

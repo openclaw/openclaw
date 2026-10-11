@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -56,17 +57,13 @@ it.each(["fresh", "replay"])(
         assertCurrent.mockClear();
       }
       let commitSeen = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            if (request.stage === "commit") {
-              commitSeen = true;
-              live = false;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === "commit") {
+          commitSeen = true;
+          live = false;
+        }
+        callback(request, grant);
+      });
       if (mode === "fresh") {
         await expect(persist()).rejects.toThrow("original input authority closed");
         expect(commitSeen).toBe(true);

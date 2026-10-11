@@ -28,7 +28,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { getSystemErrorMap } from "node:util";
-import { build, type BuildOptions } from "esbuild";
+import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -180,7 +180,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.69.0"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.73.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -289,7 +289,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
         `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
         "  fi",
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.69.0}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.73.0}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -333,7 +333,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.69.0");
+  console.log("crabbox 0.73.0");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -952,9 +952,11 @@ if (entry === ${JSON.stringify(implementationPath)}) {
           scripts: { "crabbox:run": "node scripts/crabbox-wrapper.mjs run" },
         }),
       );
+      // Match the repository policy: pnpm run must not reconcile borrowed dependencies.
+      writeFileSync(path.join(producer, "pnpm-workspace.yaml"), "verifyDepsBeforeRun: false\n");
       writeFileSync(
         path.join(producer, ".gitignore"),
-        "scripts/\nnode_modules/\npackage.json\npnpm-lock.yaml\n.crabbox/\n",
+        "scripts/\nnode_modules/\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\n.crabbox/\n",
       );
       writeFileSync(path.join(producer, "fixture.txt"), "original source\n");
       git("init", "-q", "-b", "main");
@@ -1634,17 +1636,47 @@ afterAll(() => {
 describe("scripts/crabbox-wrapper", () => {
   beforeAll(async () => {
     mkdirSync(path.dirname(bundledWrapperPath), { recursive: true });
-    const bundleOptions = {
+    const wrapperEntry = path.join(repoRoot, "scripts/crabbox-wrapper.mts");
+    const stubNamespace = "crabbox-wrapper-fixture";
+    // Routing fixtures substitute only the capsule producer; real-Git fixtures retain it.
+    const producerStub = path.join(
+      makeTempDir(tempDirs, "openclaw-source-owner-stub-"),
+      "producer.mjs",
+    );
+    writeFileSync(
+      producerStub,
+      String.raw`
+      import fs from "node:fs";
+      import path from "node:path";
+      export function prepareCrabboxSourceCapsule({syncRoot, base}) {
+        fs.mkdirSync(syncRoot, {recursive:true});
+        const directory = fs.mkdtempSync(path.join(syncRoot,"openclaw-crabbox-sync-"));
+        const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
+        fs.writeFileSync(path.join(directory,bundlePath), "fixture capsule");
+        return {directory,bundlePath,staging:{admitted(){},settled(){},preserved(){},hold(){}},sourceSha:"d".repeat(40),baseSha:base === "origin/main" ? process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123" : base,tree:"e".repeat(40),carrier:"f".repeat(40),digest:"a".repeat(64),cleanup(){fs.rmSync(directory,{recursive:true,force:true});}};
+      }
+    `,
+    );
+    const setupEntryName = `crabbox-setup-test-${process.pid}`;
+    const setupOutput = path.join(path.dirname(realBundledWrapperPath), `${setupEntryName}.mjs`);
+    // Share the dependency graph while preserving each fixture's lazy imports.
+    const result = await build({
       bundle: true,
-      // Preserve lazy imports so each fixture loads only the operation's runtime graph.
       splitting: true,
-      entryPoints: [path.join(repoRoot, "scripts/crabbox-wrapper.mts")],
+      entryPoints: {
+        [path.basename(realBundledWrapperPath, ".mjs")]: wrapperEntry,
+        [path.basename(bundledWrapperPath, ".mjs")]: stubNamespace,
+        [setupEntryName]: path.join(repoRoot, "scripts/crabbox-setup.mts"),
+      },
+      outdir: path.dirname(bundledWrapperPath),
+      entryNames: "[name]",
+      chunkNames: `crabbox-wrapper-test-${process.pid}-[name]-[hash]`,
+      outExtension: { ".js": ".mjs" },
+      metafile: true,
       format: "esm",
       logLevel: "silent",
       platform: "node",
       target: "node22",
-      // Keep the Windows worker and native dependency resolution at their source owner.
-      // Relocating this module into a fixture would relocate its import.meta.url too.
       plugins: [
         {
           name: "canonical-state-schemas",
@@ -1664,10 +1696,29 @@ describe("scripts/crabbox-wrapper", () => {
         {
           name: "managed-child-source-owner",
           setup(builder) {
+            // Keep Windows worker and native dependency resolution at their source owner.
             builder.onResolve({ filter: /lib\/managed-child-process\.mts$/ }, (args) => ({
               path: pathToFileURL(path.resolve(args.resolveDir, args.path)).href,
               external: true,
             }));
+          },
+        },
+        {
+          name: "source-capsule-fixture",
+          setup(builder) {
+            builder.onResolve({ filter: /^crabbox-wrapper-fixture$/ }, () => ({
+              path: wrapperEntry,
+              namespace: stubNamespace,
+            }));
+            builder.onLoad({ filter: /./, namespace: stubNamespace }, () => ({
+              contents: readFileSync(wrapperEntry, "utf8"),
+              loader: "ts",
+              resolveDir: path.dirname(wrapperEntry),
+            }));
+            builder.onResolve(
+              { filter: /crabbox-source-capsule\.mts$/, namespace: stubNamespace },
+              () => ({ path: producerStub }),
+            );
           },
         },
       ],
@@ -1675,44 +1726,21 @@ describe("scripts/crabbox-wrapper", () => {
       banner: {
         js: 'import { createRequire as createBundleRequire } from "node:module"; const require = createBundleRequire(import.meta.url);',
       },
-    } satisfies BuildOptions;
-    const buildFixture = async (outfile: string, options: BuildOptions = {}) => {
-      const result = await build({
-        ...bundleOptions,
-        ...options,
-        outdir: path.dirname(outfile),
-        entryNames: options.entryNames ?? path.basename(outfile, ".mjs"),
-        chunkNames: `crabbox-wrapper-test-${process.pid}-[name]-[hash]`,
-        outExtension: { ".js": ".mjs" },
-        metafile: true,
-      });
-      const outputs = Object.keys(result.metafile.outputs).map((output) => path.resolve(output));
-      for (const output of outputs) {
-        bundledOutputPaths.add(output);
-      }
-      return outputs;
-    };
-    const setupEntryName = `crabbox-setup-test-${process.pid}`;
-    const setupOutput = path.join(path.dirname(realBundledWrapperPath), `${setupEntryName}.mjs`);
-    // Both real entry points share the managed-binary dependency graph.
-    const realOutputs = await buildFixture(realBundledWrapperPath, {
-      entryPoints: {
-        [path.basename(realBundledWrapperPath, ".mjs")]: path.join(
-          repoRoot,
-          "scripts/crabbox-wrapper.mts",
-        ),
-        [setupEntryName]: path.join(repoRoot, "scripts/crabbox-setup.mts"),
-      },
-      entryNames: "[name]",
     });
-    realWrapperOutputPaths = realOutputs.filter((output) => output !== setupOutput);
+    const outputs = Object.keys(result.metafile.outputs).map((output) => path.resolve(output));
+    for (const output of outputs) {
+      bundledOutputPaths.add(output);
+    }
+    realWrapperOutputPaths = outputs.filter(
+      (output) => output !== setupOutput && output !== bundledWrapperPath,
+    );
     bundledSetupPath = path.join(
       makeTempDir(tempDirs, "openclaw-crabbox-setup-"),
       "openclaw/scripts/crabbox-setup.mjs",
     );
     mkdirSync(path.dirname(bundledSetupPath), { recursive: true });
-    for (const output of realOutputs) {
-      if (output !== realBundledWrapperPath) {
+    for (const output of outputs) {
+      if (output !== realBundledWrapperPath && output !== bundledWrapperPath) {
         copyFileSync(
           output,
           output === setupOutput
@@ -1721,39 +1749,6 @@ describe("scripts/crabbox-wrapper", () => {
         );
       }
     }
-    // Argument routing tests isolate source preparation; the real-Git fixture below
-    // executes the unmocked producer and generated receiver together.
-    const producerStub = path.join(
-      makeTempDir(tempDirs, "openclaw-source-owner-stub-"),
-      "producer.mjs",
-    );
-    writeFileSync(
-      producerStub,
-      String.raw`
-      import fs from "node:fs";
-      import path from "node:path";
-      export function prepareCrabboxSourceCapsule({syncRoot, base}) {
-        fs.mkdirSync(syncRoot, {recursive:true});
-        const directory = fs.mkdtempSync(path.join(syncRoot,"openclaw-crabbox-sync-"));
-        const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
-        fs.writeFileSync(path.join(directory,bundlePath), "fixture capsule");
-        return {directory,bundlePath,staging:{admitted(){},settled(){},preserved(){},hold(){}},sourceSha:"d".repeat(40),baseSha:base === "origin/main" ? process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123" : base,tree:"e".repeat(40),carrier:"f".repeat(40),digest:"a".repeat(64),cleanup(){fs.rmSync(directory,{recursive:true,force:true});}};
-      }
-    `,
-    );
-    await buildFixture(bundledWrapperPath, {
-      plugins: [
-        ...bundleOptions.plugins,
-        {
-          name: "source-capsule-fixture",
-          setup(builder) {
-            builder.onResolve({ filter: /crabbox-source-capsule\.mts$/ }, () => ({
-              path: producerStub,
-            }));
-          },
-        },
-      ],
-    });
   });
 
   it("prepares the supported executable for later workflow steps", () => {
@@ -1791,7 +1786,7 @@ describe("scripts/crabbox-wrapper", () => {
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
-      const managed = path.join(stateDir, "tools/crabbox/0.69.0", `${platform}-${arch}`, "crabbox");
+      const managed = path.join(stateDir, "tools/crabbox/0.73.0", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
       // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
@@ -1817,7 +1812,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       const result = runDefaultWrapper(["run", "--provider", provider, "--", "true"], options);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain(`version=0.69.0 provider=${provider}`);
+      expect(result.stderr).toContain(`version=0.73.0 provider=${provider}`);
       expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
       expect(calls[0]).toEqual(["--version"]);
@@ -2583,7 +2578,7 @@ describe("scripts/crabbox-wrapper", () => {
       const env = testHomeEnv(home);
       if (customState) {
         env.XDG_STATE_HOME = path.join(home, "selected state");
-        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.69.0";
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.73.0";
         const legacyKey = path.join(
           testCrabboxConfigDir(home),
           "testboxes",
@@ -2607,16 +2602,16 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it.each([
-    { id: "tbx_default", createKey: true, state: "", version: "0.69.0", selectedKey: false },
-    { id: "tbx_selected", createKey: true, state: "state", version: "0.69.0", selectedKey: true },
-    { id: "blue-hermit", createKey: false, state: "", version: "0.69.0", selectedKey: false },
+    { id: "tbx_default", createKey: true, state: "", version: "0.73.0", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.73.0", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.73.0", selectedKey: false },
     ...(process.platform === "win32"
       ? [
           {
             id: "tbx_namespaced",
             createKey: true,
             state: "namespaced",
-            version: "0.69.0",
+            version: "0.73.0",
             selectedKey: true,
           },
         ]
@@ -2677,7 +2672,7 @@ describe("scripts/crabbox-wrapper", () => {
         env: {
           ...testHomeEnv(home),
           XDG_STATE_HOME: stateRoot,
-          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.69.0",
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.73.0",
         },
       },
     );
@@ -2686,7 +2681,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
-  it.each([{ version: "0.69.0", stateDirectory: "state " }])(
+  it.each([{ version: "0.73.0", stateDirectory: "state " }])(
     "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
     ({ version, stateDirectory }) => {
       const home = invocationLogTempDirs.make("openclaw-crabbox-home-");

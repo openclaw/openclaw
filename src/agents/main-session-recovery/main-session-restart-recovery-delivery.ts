@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -64,36 +65,62 @@ type RestartRecoveryDeliveryScope = MainSessionRecoveryStoreTarget & {
 };
 
 /** Recheck the owning recovery, not a remembered route, at each delivery boundary. */
-export function isRestartRecoveryDeliveryCurrent(params: RestartRecoveryDeliveryScope): boolean {
-  if (
-    params.shouldContinue?.() === false ||
-    getAgentEventLifecycleGeneration() !== params.lifecycleGeneration
-  ) {
-    return false;
-  }
-  const current = loadSessionEntryReadOnly(params);
-  return (
-    current?.sessionId === params.sessionId &&
-    current.abortedLastRun !== true &&
-    current.restartRecoveryDeliveryRunId === params.recoveryRunId &&
-    // A retained route is not permission for an automatic resumption notice.
-    current.restartRecoverySourceReplyDeliveryMode !== "message_tool_only" &&
-    deliveryContextKey(
-      resolveRestartRecoveryDeliveryContext({
-        cfg: params.cfg,
-        entry: current,
-        sessionKey: params.sessionKey,
-      }),
-    ) === deliveryContextKey(params.deliveryContext)
-  );
+export function captureRestartRecoveryDeliveryCurrent(
+  input: RestartRecoveryDeliveryScope,
+): (cfg?: OpenClawConfig) => boolean {
+  const params = { ...input, deliveryContext: { ...input.deliveryContext } };
+  const source = captureIncognitoSessionSource(params);
+  const claim =
+    source && !("kind" in source)
+      ? source.actor.sessions.captureCurrent(params.sessionKey)
+      : undefined;
+  return (cfg = params.cfg) => {
+    if (
+      params.shouldContinue?.() === false ||
+      getAgentEventLifecycleGeneration() !== params.lifecycleGeneration
+    ) {
+      return false;
+    }
+    if (source && "kind" in source) {
+      source.assertCurrent();
+      return false;
+    }
+    source?.admissionSignal?.throwIfAborted();
+    claim?.assertCurrent();
+    const facts = source?.actor.sessions.readSteering(params.sessionKey);
+    const current = source
+      ? facts && {
+          ...facts,
+          restartRecoveryDeliveryContext:
+            facts.pendingFinalDeliveryContext ?? facts.restartRecoveryDeliveryContext,
+        }
+      : loadSessionEntryReadOnly(params);
+    return (
+      current?.sessionId === params.sessionId &&
+      current.abortedLastRun !== true &&
+      current.restartRecoveryDeliveryRunId === params.recoveryRunId &&
+      // A retained route is not permission for an automatic resumption notice.
+      current.restartRecoverySourceReplyDeliveryMode !== "message_tool_only" &&
+      deliveryContextKey(
+        resolveRestartRecoveryDeliveryContext({
+          cfg,
+          entry: current,
+          sessionKey: params.sessionKey,
+        }),
+      ) === deliveryContextKey(params.deliveryContext)
+    );
+  };
 }
 
 export async function announceRestartRecoveryResumption(
-  params: RestartRecoveryDeliveryScope & { gatewayRuntime: GatewayRecoveryRuntime },
+  params: RestartRecoveryDeliveryScope & {
+    gatewayRuntime: GatewayRecoveryRuntime;
+    isCurrent?: (cfg?: OpenClawConfig) => boolean;
+  },
 ): Promise<void> {
-  const isCurrent = (cfg: OpenClawConfig) => isRestartRecoveryDeliveryCurrent({ ...params, cfg });
+  const isCurrent = params.isCurrent ?? captureRestartRecoveryDeliveryCurrent(params);
   try {
-    if (!isRestartRecoveryDeliveryCurrent(params)) {
+    if (!isCurrent()) {
       return;
     }
     await params.gatewayRuntime.sendRecoveryNotice({

@@ -13,7 +13,6 @@ import {
   readWorkerEnvironmentPrunePage,
 } from "../gateway/worker-environments/store-row-codec.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { readAgentDeletionJournalAuthorityInDatabase } from "./agent-deletion-journal-authority.worker.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import type {
   OpenClawStateReadCommand,
@@ -30,7 +29,6 @@ export function readStateRegistryCommand(
         | "workerEnvironments.snapshot"
         | "workerEnvironments.pruneCandidates"
         | "agentDeletionJournal.status"
-        | "agentDeletionJournal.authority"
         | "worktrees.cleanupState"
         | "worktrees.list"
         | "sandboxRegistry.list"
@@ -61,12 +59,6 @@ export function readStateRegistryCommand(
     return {
       type: command.type,
       status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
-    };
-  }
-  if (command.type === "agentDeletionJournal.authority") {
-    return {
-      type: command.type,
-      authority: readAgentDeletionJournalAuthorityInDatabase(db, command.agentId),
     };
   }
   if (command.type === "sandboxRegistry.list") {

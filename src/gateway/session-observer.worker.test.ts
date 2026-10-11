@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
@@ -7,9 +8,11 @@ import {
 } from "../../test/helpers/promise.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import * as entryFacts from "../config/sessions/session-entry-read-facts.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -37,23 +40,30 @@ import * as sessionReads from "./session-utils-store-lookup.js";
 
 const key = "agent:main:session-1";
 
-function interceptNextEntryRead(afterRead: () => void | Promise<void>) {
+function interceptNextEntryRead(storePath: string, afterRead: () => void | Promise<void>) {
+  // Exercise the worker's in-flight read, even when the preceding observation warmed the key.
+  sessionChanges.invalidate({
+    agentId: "main",
+    storePath,
+    sessionKey: key,
+    factsInvalidated: true,
+  });
   const createReaders = historyReaders.createSessionHistoryWorkerReaders;
-  let intercepted = false;
+  const intercepted = vi.fn(afterRead);
   vi.spyOn(historyReaders, "createSessionHistoryWorkerReaders").mockImplementation((runRequest) => {
     const readers = createReaders(runRequest);
     return {
       ...readers,
       readExactEntries: async (...args) => {
         const result = await readers.readExactEntries(...args);
-        if (!intercepted) {
-          intercepted = true;
-          await afterRead();
+        if (intercepted.mock.calls.length === 0) {
+          await intercepted();
         }
         return result;
       },
     };
   });
+  return intercepted;
 }
 
 async function withObserver(
@@ -62,6 +72,7 @@ async function withObserver(
     broadcast: ReturnType<typeof vi.fn>;
     persisted: ReturnType<typeof vi.fn>;
     peer: DatabaseSync;
+    storePath: string;
     replaceStore: () => Promise<void>;
     rewriteLifecycle: () => void;
     rewriteLifecycleWithoutPublication: () => void;
@@ -107,6 +118,7 @@ async function withObserver(
         broadcast,
         persisted,
         peer,
+        storePath: database.path,
         rewriteLifecycle: () => {
           writeSessionEntry(database, key, {
             sessionId: "session-id",
@@ -165,11 +177,13 @@ async function withObserver(
 it("moves observer admission, publication, terminal and companion reads off the caller and observes foreign resets", async () => {
   await withObserver(
     async ({ observer, broadcast, peer, resetLifecycle, advanceClock }) => {
+      // This case proves the cold-worker fallback; warm reads intentionally skip dispatch.
+      vi.spyOn(entryFacts, "readRetainedSessionEntryFacts").mockReturnValue(undefined);
       const start = event({ stream: "lifecycle", data: { phase: "start" } });
       let inventories = 0;
       let entries = 0;
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+      vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
         const result = await run(...args);
         if (
           result.ok &&
@@ -253,24 +267,32 @@ it.for(["rewrite", "native rewrite", "close"] as const)(
   "refuses a companion snapshot when its read owner changes before consumption (%s)",
   async (change) => {
     await withObserver(
-      async ({ observer, rewriteLifecycle, rewriteLifecycleWithoutPublication, closeDatabase }) => {
+      async ({
+        observer,
+        storePath,
+        rewriteLifecycle,
+        rewriteLifecycleWithoutPublication,
+        closeDatabase,
+      }) => {
         await observer.handleEventAsync(
           event({ stream: "item", data: { kind: "preamble", progressText: "Previous lifecycle" } }),
         );
         let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
-        interceptNextEntryRead(() => {
+        const runExternalClose = AsyncLocalStorage.snapshot();
+        const intercepted = interceptNextEntryRead(storePath, () => {
           if (change === "rewrite") {
             rewriteLifecycle();
           } else if (change === "native rewrite") {
             rewriteLifecycleWithoutPublication();
           } else {
-            closing = closeDatabase();
+            closing = runExternalClose(closeDatabase);
           }
         });
         try {
           await expect(observer.getCompanionSnapshotAsync(key, "main")).rejects.toThrow(
             /changed|revoked|closed|current|admission/i,
           );
+          expect(intercepted).toHaveBeenCalledOnce();
         } finally {
           await closing;
         }
@@ -319,10 +341,10 @@ it("keeps queued preambles and terminal events behind awaited start admission", 
 });
 
 it("fences an already returned row immediately when reset notification arrives", async () => {
-  await withObserver(async ({ observer, broadcast, rewriteLifecycle }) => {
+  await withObserver(async ({ observer, broadcast, storePath, rewriteLifecycle }) => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    interceptNextEntryRead(async () => {
+    interceptNextEntryRead(storePath, async () => {
       entered.resolve();
       await release.promise;
     });
@@ -419,7 +441,7 @@ it("joins the worker-backed persistence of a synchronously admitted digest", asy
 it("fences a context-reduced dormant read before it can retire a reset successor", async ({
   signal,
 }) => {
-  await withObserver(async ({ observer, watch, enableModel, rewriteLifecycle }) => {
+  await withObserver(async ({ observer, storePath, watch, enableModel, rewriteLifecycle }) => {
     await observer.handleEventAsync(
       event({ stream: "item", data: { kind: "preamble", progressText: "Retained work" } }),
     );
@@ -428,7 +450,7 @@ it("fences a context-reduced dormant read before it can retire a reset successor
     watch(true);
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    interceptNextEntryRead(async () => {
+    interceptNextEntryRead(storePath, async () => {
       entered.resolve();
       await release.promise;
     });

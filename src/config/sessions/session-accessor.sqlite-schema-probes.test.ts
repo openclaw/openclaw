@@ -3,8 +3,10 @@ import { constants } from "node:sqlite";
 import { afterEach, expect, it, vi, describe } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
-import { openSqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
+import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
@@ -12,10 +14,11 @@ import {
 } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveInternalSessionEffectsIdentity } from "./internal-session-key.js";
 import { listSessionEntriesCore, listSessionEntriesReadOnly } from "./session-accessor.js";
@@ -28,7 +31,7 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { replaceSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import * as identityPublication from "./session-accessor.sqlite-identity.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import {
@@ -37,12 +40,18 @@ import {
   type SessionProbeOperations,
 } from "./session-accessor.sqlite-schema-probes.test-support.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
+import {
+  markCanonicalSessionValidationPending,
+  readCanonicalSessionMainKey,
+  setCanonicalSqliteSessionMainKey,
+} from "./session-canonical-key.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 it("publishes native writes into a warm cache without new generation probes", () => {
@@ -99,23 +108,63 @@ it("publishes native writes into a warm cache without new generation probes", ()
   }
 });
 
-it("bounds schema and freshness probes across admitted session reader entry points", async () => {
+it("refreshes admitted session readers after worker commits without schema or freshness probes", async () => {
   const options = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("session-schema-probes-") },
   };
   const writer = openOpenClawAgentDatabase(options);
-  writeSessionEntry(writer, "agent:main:probe", { sessionId: "probe", updatedAt: 1 });
   const reader = openOpenClawAgentDatabaseReadOnly(options);
   if (!reader.found) {
     throw new Error("Session probe reader is missing");
   }
-  const worker = await openSqliteWorkerStore<SessionProbeOperations>({
-    moduleUrl: new URL("./session-accessor.sqlite-schema-probes.test-support.ts", import.meta.url),
-    databasePath: writer.path,
-    input: undefined,
-  });
+  const broker = new SqliteWorkerBroker();
   try {
+    const worker = await broker.open<SessionProbeOperations>({
+      moduleUrl: new URL(
+        "./session-accessor.sqlite-schema-probes.test-support.ts",
+        import.meta.url,
+      ),
+      databasePath: writer.path,
+      input: undefined,
+    });
+    if (!worker) {
+      throw new Error("Session probe worker is unavailable");
+    }
+    const lookupDatabase = openOpenClawAgentDatabase({
+      ...options,
+      path: path.join(path.dirname(writer.path), "lookup-traffic.sqlite"),
+    });
+    expect(readCanonicalSessionMainKey(lookupDatabase)).toBe("main");
+    expect(
+      await worker.execute({ type: "mainKeyLookupTraffic", input: { path: lookupDatabase.path } }),
+    ).toEqual({
+      mainKeys: ["main", "main", "main"],
+      lookupMessages: 0,
+      workerPublishRefused: true,
+    });
+    const raced = await broker.runOperation(
+      worker,
+      (scope) => scope.execute({ type: "mainKey", input: { yieldAfterRead: true } }),
+      undefined,
+      undefined,
+      () => ({
+        nativeLocations: [writer.path],
+        admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+          setCanonicalSqliteSessionMainKey(writer, "configured-during-read");
+          writer.db.exec("CREATE TABLE main_key_race_unrelated (value TEXT)");
+          admitSqliteSchema(writer.db);
+          grant();
+        }),
+      }),
+    );
+    const afterRace = await worker.execute({ type: "mainKey", input: undefined });
+    expect({ raced, afterRace }).toEqual({
+      raced: { mainKey: "configured-during-read", statements: 1 },
+      afterRace: { mainKey: "configured-during-read", statements: 0 },
+    });
+    setCanonicalSqliteSessionMainKey(writer, "main");
+    writeSessionEntry(writer, "agent:main:probe", { sessionId: "probe", updatedAt: 1 });
     const borrowed = withOpenClawAgentDatabaseReadOnly(measureSessionSchemaProbes, options);
     if (!borrowed.found) {
       throw new Error("Session probe borrowed reader is missing");
@@ -123,7 +172,7 @@ it("bounds schema and freshness probes across admitted session reader entry poin
     const results = {
       writer: measureSessionSchemaProbes(writer),
       readOnly: measureSessionSchemaProbes(reader.database),
-      snapshot: runSqlitePinnedReadSnapshotSync(reader.database.db, () =>
+      snapshot: runSqliteReadSnapshotSync(reader.database.db, () =>
         measureSessionSchemaProbes(reader.database),
       ),
       borrowed: borrowed.value,
@@ -134,8 +183,63 @@ it("bounds schema and freshness probes across admitted session reader entry poin
       expect(result.admitted).toBe(true);
       expect(result.schemaVersion).toBe(0);
       expect(result.userVersion).toBe(0);
-      expect(result.dataVersion).toBeLessThanOrEqual(100);
+      expect(result.dataVersion).toBe(0);
     }
+    const writes = observeHostDataSql();
+    try {
+      await replaceSessionEntry(
+        { ...options, storePath: writer.path, sessionKey: "agent:main:probe" },
+        { sessionId: "probe", updatedAt: 1, label: "worker-committed" },
+      );
+      expect(
+        writes.queries.filter((sql) => /^(?:INSERT|UPDATE|DELETE)\b/iu.test(sql.trim())),
+      ).toEqual([]);
+    } finally {
+      writes.restore();
+    }
+    const refreshed = [
+      measureSessionSchemaProbes(writer, "worker-committed"),
+      measureSessionSchemaProbes(reader.database, "worker-committed"),
+      await worker.execute({ type: "read", input: { label: "worker-committed" } }),
+    ];
+    for (const result of refreshed.flatMap(Object.values)) {
+      expect(result).toMatchObject({
+        admitted: true,
+        schemaVersion: 0,
+        userVersion: 0,
+        dataVersion: 0,
+      });
+    }
+    expect(readCanonicalSessionMainKey(writer)).toBe("main");
+    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+      mainKey: "main",
+      statements: 0,
+    });
+    runOpenClawAgentWriteTransaction((database) => {
+      setCanonicalSqliteSessionMainKey(database, "intermediate");
+      setCanonicalSqliteSessionMainKey(database, "configured");
+      expect(readCanonicalSessionMainKey(database)).toBe("configured");
+      expect(readCanonicalSessionMainKey(reader.database)).toBe("main");
+    }, options);
+    expect(readCanonicalSessionMainKey(reader.database)).toBe("configured");
+    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+      mainKey: "configured",
+      statements: 0,
+    });
+    expect(() =>
+      runOpenClawAgentWriteTransaction((database) => {
+        setCanonicalSqliteSessionMainKey(database, "abandoned");
+        expect(readCanonicalSessionMainKey(database)).toBe("abandoned");
+        throw new Error("rollback main key");
+      }, options),
+    ).toThrow("rollback main key");
+    expect((await worker.execute({ type: "mainKey", input: undefined })).mainKey).toBe(
+      "configured",
+    );
+    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+      mainKey: "configured",
+      statements: 0,
+    });
     // Exercise both native execution paths with statements retained before observation.
     const probeGroups = [
       ["schema_version", "user_version", "data_version"].map((name) =>
@@ -204,7 +308,7 @@ it("bounds schema and freshness probes across admitted session reader entry poin
       expect(read()?.label).toBe("current");
     }
   } finally {
-    await worker.close();
+    await broker.close();
     reader.database.close();
   }
 });
@@ -382,10 +486,10 @@ describe.each([
 it("retains unrelated canonical-key errors for an empty selection", () => {
   const { database, read } = fixture(listSessionEntriesReadOnly);
   read();
-  // Raw DML after validation must not disappear behind an unrelated selection.
+  // Explicitly pending repair rows must not disappear behind an unrelated selection.
   database.db
     .prepare(
-      "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at) VALUES(?, ?, ?, ?)",
+      "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES(?, ?, ?, ?, 1)",
     )
     .run(
       "AGENT:MAIN:UNRELATED",
@@ -393,6 +497,7 @@ it("retains unrelated canonical-key errors for an empty selection", () => {
       JSON.stringify({ sessionId: "unrelated", updatedAt: 1 }),
       1,
     );
+  markCanonicalSessionValidationPending(database, ["AGENT:MAIN:UNRELATED"]);
   expect(() => read([])).toThrow("non-canonical persisted row");
 });
 
@@ -414,6 +519,7 @@ it("validates unrelated warm delivery aliases before selecting listing keys", ()
   database.db
     .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
     .run(JSON.stringify(entry), legacyKey);
+  markCanonicalSessionValidationPending(database, [legacyKey]);
   expect(() => read(["agent:main:a"])).toThrow(
     `non-canonical persisted row resolves to session key ${canonicalKey}`,
   );

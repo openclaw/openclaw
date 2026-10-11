@@ -25,6 +25,7 @@ describe("source-wide embedding publication ownership", () => {
     const manager = await fixture.getFreshManager(
       fixture.createConfig({
         provider: "batch-wide-test",
+        model: "embeddinggemma",
         batchEnabled: true,
         cacheEnabled: true,
         vectorEnabled: false,
@@ -32,6 +33,9 @@ describe("source-wide embedding publication ownership", () => {
       "cli",
     );
     await manager.sync({ reason: "cli", force: true });
+    expect(fixture.provider.providerRuntimeBatchCalls.flat()).toContain(
+      "title: none | text: Shared alpha beta source.",
+    );
     fixture.provider.providerRuntimeBatchCalls = [];
     const sharedVectors: number[][] = [];
     // oxlint-disable-next-line typescript/unbound-method -- Invoked with the actual database owner.

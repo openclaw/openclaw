@@ -1,10 +1,15 @@
+import type { ViteUserConfig } from "vitest/config";
+import { controlUiSolidPlugin } from "../../ui/vite.config.ts";
 import { gatewayDatabaseWorkerTestFiles } from "./vitest.gateway-server-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-export function createGatewayDatabaseWorkersVitestConfig(env?: Record<string, string | undefined>) {
-  return createScopedVitestConfig(gatewayDatabaseWorkerTestFiles, {
+export function createGatewayDatabaseWorkersVitestConfig(
+  env?: Record<string, string | undefined>,
+): ViteUserConfig {
+  const config = createScopedVitestConfig(gatewayDatabaseWorkerTestFiles, {
     dir: ".",
     env,
+    environment: "node",
     fileParallelism: true,
     intersectIncludeFile: true,
     isolate: false,
@@ -13,6 +18,10 @@ export function createGatewayDatabaseWorkersVitestConfig(env?: Record<string, st
     pool: "forks",
     useNonIsolatedRunner: true,
   });
+  return {
+    ...config,
+    plugins: [...(config.plugins ?? []), controlUiSolidPlugin()],
+  };
 }
 
 export default createGatewayDatabaseWorkersVitestConfig();

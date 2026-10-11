@@ -45,20 +45,15 @@ const TELEGRAM_RAW_UPDATE_ALWAYS_REDACT_KEYS = new Set([
 ]);
 const TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS = new Set(["message_id", "update_id"]);
 
-function shouldRedactTelegramRawUpdateValue(key: string, parentKey: string | undefined): boolean {
-  if (TELEGRAM_RAW_UPDATE_ALWAYS_REDACT_KEYS.has(key)) {
-    return true;
-  }
-  if (TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS.has(key)) {
-    return false;
-  }
-  return parentKey !== undefined && (key === "id" || key.endsWith("_id") || key.endsWith("_ids"));
-}
-
 export function formatTelegramRawUpdateForLog(update: unknown): string {
   const seen = new WeakSet<object>();
   const transform = (value: unknown, key = "", parentKey?: string): unknown => {
-    if (shouldRedactTelegramRawUpdateValue(key, parentKey)) {
+    if (
+      TELEGRAM_RAW_UPDATE_ALWAYS_REDACT_KEYS.has(key) ||
+      (!TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS.has(key) &&
+        parentKey !== undefined &&
+        (key === "id" || key.endsWith("_id") || key.endsWith("_ids")))
+    ) {
       return REDACTED_TELEGRAM_FIELD;
     }
     if (typeof value === "string") {

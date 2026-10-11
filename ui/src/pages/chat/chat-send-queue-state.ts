@@ -265,6 +265,9 @@ export function finishChatDeliveryAdmission(
   const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
   if (
     chatSendHoldReason(host, route, false, current.agentId) ||
+    chatOutboxOwner(host).admissions.has(
+      resolveUiConversationIdentity(host, queueSessionKey, current.agentId),
+    ) ||
     (options?.routingSessionKey && !routeVisible(current.agentId)) ||
     (!sendsDuringActiveRun &&
       routeVisible(current.agentId) &&
@@ -344,6 +347,10 @@ export function settleQueuedChatSendFailure(
   const error = activeLeafChanged
     ? t("chat.sendErrors.activeLeafChanged")
     : formatConnectError(err);
+  const reportFailure = (message = error, display?: { inline?: boolean }) => {
+    surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, message, display);
+    recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error: message });
+  };
   // A review can hold an already-dispatched request. Its later failure cannot
   // restore passive retry authority, even after the provider pause has cleared.
   if (readQueuedMessageById(host, id)?.sendState === "held") {
@@ -354,8 +361,7 @@ export function settleQueuedChatSendFailure(
     if (!restoreRejectedChatDelivery(host, prepared, options)) {
       setState("failed", error);
     }
-    surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
-    recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
+    reportFailure();
     return "failed";
   }
   if (err instanceof GatewayProtocolRequestTimeoutError && err.requestSent) {
@@ -409,15 +415,7 @@ export function settleQueuedChatSendFailure(
           sendState: safelyRejected ? "failed" : "unconfirmed",
         }));
       }
-      surfaceChatDeliveryFailure(
-        host,
-        sessionKey,
-        prepared.agentId,
-        restore ? error : OFFLINE_QUEUE_STORAGE_ERROR,
-      );
-      recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, {
-        error: restore ? error : OFFLINE_QUEUE_STORAGE_ERROR,
-      });
+      reportFailure(restore ? error : OFFLINE_QUEUE_STORAGE_ERROR);
       return restore ? "failed" : "pending";
     }
     const waiting = updateQueuedMessage(host, id, (item) => ({
@@ -435,10 +433,7 @@ export function settleQueuedChatSendFailure(
           sendState: "failed",
         }));
       }
-      surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
-      recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, {
-        error: OFFLINE_QUEUE_STORAGE_ERROR,
-      });
+      reportFailure(OFFLINE_QUEUE_STORAGE_ERROR);
       return restore ? "failed" : "pending";
     }
     if (visibleSessionMatches(host, sessionKey, prepared.agentId)) {
@@ -468,10 +463,7 @@ export function settleQueuedChatSendFailure(
   if (visibleSessionMatches(host, sessionKey, prepared.agentId) && activeLeafChanged) {
     void Promise.all([loadChatHistory(host), loadChatBranches(host)]);
   }
-  surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error, {
-    inline: storageMode === "durable" && !restoreCommand,
-  });
-  recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
+  reportFailure(error, { inline: storageMode === "durable" && !restoreCommand });
   return "failed";
 }
 
@@ -568,22 +560,21 @@ export async function prepareQueuedChatPayload(
 ): Promise<ChatQueueItem | QueuedChatSendResult> {
   const id = queued.id;
   const connectionIsCurrent = captureChatConnectionOwner(host);
-  const original = queued;
-  const sessionKey = original.sessionKey ?? queuedSessionKey;
+  const sessionKey = queued.sessionKey ?? queuedSessionKey;
   const ownerIsCurrent = captureOutboxPayloadOwner(
     host,
-    resolveUiConversationIdentity(host, sessionKey, original.agentId),
+    resolveUiConversationIdentity(host, sessionKey, queued.agentId),
   );
-  const payload = await prepareOutboxPayload(host, { ...original, sessionKey });
+  const payload = await prepareOutboxPayload(host, { ...queued, sessionKey });
   const current = readQueuedMessageById(host, id);
   if (
     !connectionIsCurrent() ||
     !ownerIsCurrent() ||
     !current ||
-    !sameQueuedDeliveryVersion(current, original) ||
+    !sameQueuedDeliveryVersion(current, queued) ||
     isQueuedMessageBeingEdited(host, id)
   ) {
-    if (payload.status === "ready" && !original.attachmentPayload) {
+    if (payload.status === "ready" && !queued.attachmentPayload) {
       retireOutboxPayload(payload.update);
     }
     return "pending";
@@ -591,22 +582,22 @@ export async function prepareQueuedChatPayload(
   if (payload.status === "failed") {
     const failed = failOutboxPayload(current, payload.reason);
     updateQueuedMessage(host, id, () => failed);
-    surfaceChatDeliveryFailure(host, sessionKey, original.agentId, failed.sendError);
+    surfaceChatDeliveryFailure(host, sessionKey, queued.agentId, failed.sendError);
     return "failed";
   }
-  const hydrated = { ...original, ...payload.update };
+  const hydrated = { ...queued, ...payload.update };
   if (
-    hydrated.attachmentPayload?.key !== original.attachmentPayload?.key &&
+    hydrated.attachmentPayload?.key !== queued.attachmentPayload?.key &&
     hydrated.sendState === "unconfirmed"
   ) {
     updateQueuedMessage(host, id, () => hydrated);
     return "pending";
   }
   if (
-    (!original.attachmentPayload || original.attachmentStorageError) &&
+    (!queued.attachmentPayload || queued.attachmentStorageError) &&
     !updateQueuedMessage(host, id, () => hydrated)
   ) {
-    if (!original.attachmentPayload) {
+    if (!queued.attachmentPayload) {
       retireOutboxPayload(payload.update);
     }
     return "pending";

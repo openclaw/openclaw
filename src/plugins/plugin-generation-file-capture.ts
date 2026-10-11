@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  createRootFileCopyBatchSync,
+  type RootFileCopyBatchSync,
+} from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
@@ -71,7 +75,7 @@ export function createPluginGenerationFileCapture({
 }) {
   const { inputs, pendingInputs, additions } = sourceCapture;
   const ancestors = new Set<string>();
-  const copy = (source: string, target: string) => {
+  const copy = (source: string, target: string, copyFile: RootFileCopyBatchSync["copyFile"]) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target) {
       return;
@@ -153,7 +157,7 @@ export function createPluginGenerationFileCapture({
             sourceLinks.defer(path.join(input, name), inputBoundary, path.join(source, name))
           )
         ) {
-          copy(path.join(source, name), path.join(target, name));
+          copy(path.join(source, name), path.join(target, name), copyFile);
         }
       }
       ancestors.delete(real);
@@ -186,18 +190,17 @@ export function createPluginGenerationFileCapture({
           sizeBytes: retainedInput.sizeBytes,
           sourceIdentity: pluginSourceInputIdentity(stat),
         };
-      } else if (captured) {
-        // A second filename for a prefetched entry retains its first bytes and source identity.
-        copiedContent = copyPluginSourceFile(captured, directory, target, {
-          hashCopiedContent: true,
-          preserveSourceMode: true,
-        });
       } else {
-        copiedContent = copyPluginSourceFile(real, inputBoundary, target, {
-          hashCopiedContent: true,
-        });
+        // A second filename for a prefetched entry retains its first bytes and source identity.
+        copiedContent = copyPluginSourceFile(
+          captured ?? real,
+          captured ? directory : inputBoundary,
+          target,
+          { hashCopiedContent: true, copyFile, ...(captured ? { preserveSourceMode: true } : {}) },
+        );
         const identity = pluginSourceInputIdentity(stat);
         if (
+          !captured &&
           copiedContent &&
           copiedContent.sourceIdentity !== identity &&
           !pluginSourceIdentityChangedOnlyByCtime(identity, copiedContent.sourceIdentity)
@@ -231,5 +234,8 @@ export function createPluginGenerationFileCapture({
       throw new Error(`Plugin build input is not a regular file: ${source}`);
     }
   };
-  return copy;
+  return (source: string, target: string) => {
+    using batch = createRootFileCopyBatchSync();
+    return copy(source, target, batch.copyFile.bind(batch));
+  };
 }

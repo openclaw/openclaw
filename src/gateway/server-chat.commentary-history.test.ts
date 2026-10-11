@@ -355,9 +355,10 @@ it.each([
       expect(renderedText(state)).toBe(
         [
           "Original prompt",
+          ...(includeSteer && steerFirst ? ["Steer prompt"] : []),
           "Saved A.",
+          ...(includeSteer && !steerFirst ? ["Steer prompt"] : []),
           ...(tail === "[" ? [] : [tail]),
-          ...(includeSteer ? ["Steer prompt"] : []),
         ].join("\n"),
       );
       if (persistTail) {
@@ -400,7 +401,13 @@ it.each([
         },
       });
       expect(renderedText(state)).toBe(
-        ["Original prompt", "Saved A.", tail, ...(includeSteer ? ["Steer prompt"] : [])].join("\n"),
+        [
+          "Original prompt",
+          ...(includeSteer && steerFirst ? ["Steer prompt"] : []),
+          "Saved A.",
+          ...(includeSteer && !steerFirst ? ["Steer prompt"] : []),
+          tail,
+        ].join("\n"),
       );
       if (canvas) {
         const widget = expect.objectContaining({

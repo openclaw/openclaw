@@ -17,8 +17,12 @@ import {
   createSubagentRunRecord,
   configureMockSubagentRegistryPersistence,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
+import type {
+  PreparedSubagentRunsRead,
+  PreparedSubagentSessionsRead,
+} from "./subagent-registry-read-snapshot.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -253,6 +257,54 @@ it("prepares durable grandchildren through live-only parents and refuses changed
   });
 });
 
+it("shares immutable live topology until a registry mutation and still fences relevant changes", async () => {
+  await withPersistedReads(async () => {
+    const entry = retainedRun();
+    subagentRuns.set(entry.runId, entry);
+    const prepared: PreparedSubagentSessionsRead[] = [];
+    const prepare = async () => {
+      const read = await prepareSubagentRunsSnapshotForSessions(subagentRuns, [
+        entry.requesterSessionKey,
+      ]);
+      prepared.push(read);
+      return read;
+    };
+    try {
+      const first = await prepare();
+      const second = await prepare();
+      expect(second.basis.liveTopology).toBe(first.basis.liveTopology);
+      expect(Object.isFrozen(first.basis.liveTopology)).toBe(true);
+      expect(Object.isFrozen(first.basis.liveTopology[0])).toBe(true);
+
+      const unrelated = {
+        ...entry,
+        runId: "unrelated",
+        requesterSessionKey: "agent:other:main",
+        childSessionKey: "agent:other:subagent:child",
+      };
+      subagentRuns.set(unrelated.runId, unrelated);
+      expect(first.consume((runs) => [...runs.keys()])).toEqual({
+        ready: true,
+        value: [entry.runId],
+      });
+      const third = await prepare();
+      expect(third.basis.liveTopology).not.toBe(first.basis.liveTopology);
+      expect(first.basis.liveTopology).toEqual([
+        { childSessionKey: entry.childSessionKey, requesterSessionKey: entry.requesterSessionKey },
+      ]);
+
+      subagentRuns.set(entry.runId, { ...entry, childSessionKey: "agent:main:subagent:moved" });
+      expect(first.consume(() => "stale")).toEqual({ ready: false });
+      subagentRuns.delete(entry.runId);
+      expect((await prepare()).consume((runs) => runs.size)).toEqual({ ready: true, value: 0 });
+    } finally {
+      prepared.forEach((read) => read.dispose());
+      subagentRuns.delete(entry.runId);
+      subagentRuns.delete("unrelated");
+    }
+  });
+});
+
 it.each(["unrelated", "relevant"] as const)(
   "handles a committed %s publication after durable descendant preparation",
   async (kind) => {
@@ -422,7 +474,12 @@ it("returns revoked maintenance facts without rereading during publication churn
     try {
       const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(new Map());
       try {
-        expect(() => prepared.capture()).toThrow("maintenance facts changed");
+        expect(() => prepared.capture()).toThrow(
+          expect.objectContaining({
+            name: "SqliteSessionMutationConflictError",
+            operationLabel: "session maintenance",
+          }),
+        );
         expect(reads).toHaveBeenCalledTimes(1);
       } finally {
         prepared.dispose();
@@ -453,7 +510,12 @@ it.each(["named", "full"] as const)(
 
         const completed = { ...payloadOnly, cleanupCompletedAt: Date.now() };
         persistRegistryFixture(new Map([[entry.runId, completed]]), changedRunIds);
-        expect(() => prepared.capture()).toThrow("maintenance facts changed");
+        expect(() => prepared.capture()).toThrow(
+          expect.objectContaining({
+            name: "SqliteSessionMutationConflictError",
+            operationLabel: "session maintenance",
+          }),
+        );
       } finally {
         prepared.dispose();
       }

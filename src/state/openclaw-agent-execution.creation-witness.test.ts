@@ -24,7 +24,7 @@ import {
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import {
   agentCreationWitnessTempDirs as tempDirs,
   createAgentCreationWitnessFixture as fixture,
@@ -52,6 +52,20 @@ function source(
       });
     },
   };
+}
+
+function transcriptPublication(sessionKey: string, sessionId: string) {
+  return [
+    expect.objectContaining({
+      domain: "session-transcript-context",
+      facts: new Map([
+        [
+          sessionKey,
+          { kind: "postimage", value: expect.objectContaining({ sessionKey, sessionId }) },
+        ],
+      ]),
+    }),
+  ];
 }
 
 it("exposes a prepared generation only after registration publication and keeps its borrower live", async () => {
@@ -157,7 +171,11 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     type: "session.transcript.initialize" as const,
     input: { sessionKey, sessionId: "alias-session" },
   };
-  const existingTranscript = { kind: "session-transcript-initialized", sessionKey };
+  const existingTranscript = {
+    kind: "session-transcript-initialized",
+    sessionKey,
+    transcriptPublication: undefined,
+  };
   try {
     await creator.prepare(source());
     const registry = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
@@ -167,6 +185,7 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
       {
         ...existingTranscript,
         placeholder: { sessionId: "alias-session" },
+        transcriptPublication: transcriptPublication(sessionKey, "alias-session"),
       },
     );
     await expect(sibling.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
@@ -228,6 +247,7 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
       ).resolves.toEqual({
         ...existingTranscript,
         placeholder: { sessionId: "alias-session" },
+        transcriptPublication: transcriptPublication(sessionKey, "alias-session"),
       });
     } finally {
       await replacement.release();
@@ -305,6 +325,10 @@ it.each(["child-first", "parent-first"] as const)(
         kind: "session-transcript-initialized",
         sessionKey: "agent:main:maintenance-borrow",
         placeholder: { sessionId: "retained-session" },
+        transcriptPublication: transcriptPublication(
+          "agent:main:maintenance-borrow",
+          "retained-session",
+        ),
       });
       expect(parentBorrower.fileIdentity).toEqual(identity);
       await parent.close();
@@ -377,6 +401,7 @@ it.each(["missing", "schema-missing"] as const)(
             kind: "session-transcript-initialized",
             sessionKey,
             placeholder: { sessionId },
+            transcriptPublication: transcriptPublication(sessionKey, sessionId),
           });
         }),
       );
@@ -792,6 +817,10 @@ it("keeps another captured borrower live after a caller-specific native open ref
       kind: "session-transcript-initialized",
       sessionKey: "agent:main:after-open-refusal",
       placeholder: { sessionId: "retained-borrower" },
+      transcriptPublication: transcriptPublication(
+        "agent:main:after-open-refusal",
+        "retained-borrower",
+      ),
     });
     expect(readDatabasePathIdentitySync(options.path)).toEqual(physical);
   } finally {
@@ -981,6 +1010,7 @@ it("retains canonical borrowers and rejects the changed alias before caller cont
       kind: "session-transcript-initialized",
       sessionKey: "agent:main:retarget-proof",
       placeholder: { sessionId: "original-session" },
+      transcriptPublication: transcriptPublication("agent:main:retarget-proof", "original-session"),
     });
     expect(canonical.fileIdentity).toEqual(receipt);
     await closeOpenClawAgentDatabaseByPathAsync(aliased.path, options.agentId);

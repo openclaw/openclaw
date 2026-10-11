@@ -164,20 +164,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStoreEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
-  loadSessionStore: vi.fn(() => ({})),
-  readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
-  resolveSessionStoreEntry: vi.fn(
-    (params: {
-      store: Record<string, Record<string, unknown>>;
-      sessionKey: string;
-    }): { existing: Record<string, unknown> | undefined } => ({
-      existing:
-        params.store[params.sessionKey] ??
-        sessionStoreMocks.entriesBySessionKey.get(params.sessionKey) ??
-        sessionStoreMocks.currentEntry,
-    }),
-  ),
   updateSessionStoreEntry: vi.fn(
     async (params: {
       update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
@@ -418,7 +405,8 @@ vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importO
     ) => {
       let wrote = false;
       const result = await sessionStoreMocks.updateSessionEntry(scope, (entry) => {
-        const patch = reduceSessionEntryPatch(operation, { sessionId: "", updatedAt: 0, ...entry });
+        const currentEntry = { sessionId: "", updatedAt: 0, ...entry };
+        const patch = reduceSessionEntryPatch(operation, currentEntry, currentEntry);
         wrote = patch !== null;
         return patch;
       });

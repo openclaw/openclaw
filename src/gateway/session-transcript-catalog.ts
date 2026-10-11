@@ -9,12 +9,10 @@ import { z } from "zod";
 import type { SessionCatalogTranscriptItem } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
-import {
-  assertCapturedSessionEntryReadSource,
-  resolveSessionEntry,
-} from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import { readSessionTranscriptHistoryEventPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";

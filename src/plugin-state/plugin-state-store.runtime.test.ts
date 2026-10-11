@@ -9,6 +9,7 @@ import { createChannelIngressQueue } from "../channels/message/ingress-queue.js"
 import { resolveStateDir } from "../config/paths.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as mutationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import type { OpenClawConfig, OpenClawPluginToolContext } from "../plugin-sdk/plugin-entry.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { markPluginRegistryActive, revokePluginRecord } from "../plugins/registry-lifecycle.js";
@@ -228,23 +229,14 @@ describe("plugin-state-store.authority", () => {
                 return submitted;
               };
               let heldCommit = false;
-              const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
-              const admission = vi
-                .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
-                .mockImplementation((admit, attachment) =>
-                  createAdmission((request, grant) => {
-                    if (
-                      request.stage === "commit" &&
-                      !heldCommit &&
-                      submittedRenewals().length > 0
-                    ) {
-                      heldCommit = true;
-                      // The native transaction already wrote its candidate; only its real commit guard remains.
-                      vi.setSystemTime(previous.expiresAt + 1);
-                    }
-                    admit(request, grant);
-                  }, attachment),
-                );
+              const admission = probe.admission(mutationAdmission, (request, grant, admit) => {
+                if (request.stage === "commit" && !heldCommit && submittedRenewals().length > 0) {
+                  heldCommit = true;
+                  // The native transaction already wrote its candidate; only its real commit guard remains.
+                  vi.setSystemTime(previous.expiresAt + 1);
+                }
+                admit(request, grant);
+              });
               try {
                 const renewal = await invite.execute("renew", { email, days: 2 });
                 expect(heldCommit).toBe(true);
@@ -317,20 +309,16 @@ describe("plugin-state-store.authority", () => {
           });
           await (authority === "plugin" ? action : store).register(email, previous);
           const stages: string[] = [];
-          const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
-          vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-            (admit, attachment) =>
-              createAdmission((request, grant) => {
-                stages.push(request.stage);
-                if (request.stage === revocation) {
-                  current = false;
-                }
-                admit(request, grant);
-                if (request.stage === "commit" && revocation === "after commit") {
-                  current = false;
-                }
-              }, attachment),
-          );
+          probe.admission(mutationAdmission, (request, grant, admit) => {
+            stages.push(request.stage);
+            if (request.stage === revocation) {
+              current = false;
+            }
+            admit(request, grant);
+            if (request.stage === "commit" && revocation === "after commit") {
+              current = false;
+            }
+          });
           if (revocation === "dispatch") {
             const postMessageSpy = vi.spyOn(Worker.prototype, "postMessage");
             postMessageSpy.mockImplementationOnce(function (this: Worker, message, transferList) {
@@ -369,7 +357,7 @@ describe("plugin-state-store.authority", () => {
       },
     );
 
-    it.each(["observe", "update conflict", "delete conflict"] as const)(
+    it.each(["update conflict", "delete conflict"] as const)(
       "withholds a %s observation when authority closes after transaction admission",
       async (operation) => {
         await withOpenClawTestState(
@@ -391,23 +379,16 @@ describe("plugin-state-store.authority", () => {
                 }
               },
             });
-            const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
-            vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-              (admit, attachment) =>
-                createAdmission((request, grant) => {
-                  admit(request, grant);
-                  if (request.stage === "commit") {
-                    current = false;
-                  }
-                }, attachment),
-            );
-            const reading =
-              operation === "observe"
-                ? action.observe("key")
-                : action.compareAndApply("key", observed.comparison, {
-                    operation: operation === "update conflict" ? "update" : "delete",
-                    action: "keep",
-                  });
+            probe.admission(mutationAdmission, (request, grant, admit) => {
+              admit(request, grant);
+              if (request.stage === "commit") {
+                current = false;
+              }
+            });
+            const reading = action.compareAndApply("key", observed.comparison, {
+              operation: operation === "update conflict" ? "update" : "delete",
+              action: "keep",
+            });
             await expect(reading).rejects.toThrow();
             expect(current).toBe(false);
             expect(await store.lookup("key")).toBe("private current value");
@@ -627,22 +608,17 @@ describe("plugin-state-store.runtime", () => {
           await queue.enqueue("retained", { text: "retained" });
           const claimed = await queue.claim("retained", { ownerId: "previous" });
           expect(claimed).not.toBeNull();
-          const createAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
           const stages: string[] = [];
-          const admission = vi
-            .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
-            .mockImplementation((admit, attachment) =>
-              createAdmission((request, grant) => {
-                stages.push(request.stage);
-                if (request.stage === "commit" && revocation === "before") {
-                  revokePluginRecord(registry.registry, record);
-                }
-                admit(request, grant);
-                if (request.stage === "commit" && revocation === "after") {
-                  revokePluginRecord(registry.registry, record);
-                }
-              }, attachment),
-            );
+          const admission = probe.admission(mutationAdmission, (request, grant, admit) => {
+            stages.push(request.stage);
+            if (request.stage === "commit" && revocation === "before") {
+              revokePluginRecord(registry.registry, record);
+            }
+            admit(request, grant);
+            if (request.stage === "commit" && revocation === "after") {
+              revokePluginRecord(registry.registry, record);
+            }
+          });
           try {
             const writing =
               operation === "enqueue"

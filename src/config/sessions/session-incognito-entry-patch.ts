@@ -5,14 +5,17 @@ import type {
   SessionEntryPatchCommitObserver,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import { publishIncognitoSessionEntry } from "./session-incognito-binding.js";
 import type { IncognitoEntryPatchResult } from "./session-incognito-entry-patch-contract.js";
 import {
+  acceptSessionSourceValidation,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type SessionSourceAssertion,
 } from "./session-source-authority.js";
+import type { InternalSessionEntry } from "./types.js";
 
 /** Preparation retains its original actor; the worker rereads the exact rows at commit. */
 export function patchIncognitoSessionEntry(params: {
@@ -26,6 +29,7 @@ export function patchIncognitoSessionEntry(params: {
   source?: SessionSourceAssertion;
   prepare(snapshot: SqliteLifecycleTargetSnapshot): Promise<SessionEntryPatchCommit | undefined>;
   onCommitted?: SessionEntryPatchCommitObserver;
+  onCommittedSource?: (source: CapturedSessionEntryReadSource, entry: InternalSessionEntry) => void;
 }): Promise<IncognitoEntryPatchResult> {
   const { actor, sessionKey } = params;
   const selection = structuredClone(params.selection);
@@ -94,17 +98,26 @@ export function patchIncognitoSessionEntry(params: {
                 } else {
                   params.onCommitted?.(entry);
                 }
+                params.onCommittedSource?.(
+                  {
+                    agentId: actor.agentId,
+                    path: actor.path,
+                    databaseIdentity: actor.identity.incarnation,
+                  },
+                  structuredClone(result.entry),
+                );
               } finally {
                 publishIncognitoSessionEntry(actor, sessionKey, prepared[0]?.entry, result.entry);
               }
             }
           },
           undefined,
-          (refusedSource) => {
+          (refusedSource, validation) => {
             if (refusedSource) {
               source.checks[refusedSource.index]?.refuse(refusedSource.facts);
               throw new Error("Session source refusal omitted its prepared assertion");
             }
+            acceptSessionSourceValidation(source, validation);
             params.assertCommitAllowed?.();
             source.assertCurrent();
           },

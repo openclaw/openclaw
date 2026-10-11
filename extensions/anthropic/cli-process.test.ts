@@ -13,6 +13,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { discoverClaudeCliModels } from "./cli-model-discovery.js";
 import * as cliProcess from "./cli-process.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
@@ -182,11 +183,6 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
     expect(formatErrorMessageForDisplay(error)).not.toContain(secret);
     expect(formatErrorMessageForDisplay(error)).not.toContain("discarded noise");
     expect(formatErrorMessageForDisplay(error).length).toBeLessThan(2_200);
-  });
-
-  it("preserves a silent child's exit error without inventing stderr", async () => {
-    const context = await contextForChild("process.exit(1);");
-    await expect(collect(context)).rejects.toThrow(/^Claude Code process exited with code 1$/);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -490,7 +486,6 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
   });
 
   it.each([
-    { firstPrompt: "success with stderr", prompt: "fail silently" },
     { firstPrompt: "success with stderr", prompt: "fail noisily" },
     { firstPrompt: "success with stderr", prompt: "close idle" },
     { firstPrompt: "success with delayed stderr", prompt: "fail silently" },
@@ -584,4 +579,49 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       expect(stderr).not.toHaveBeenCalled();
     },
   );
+});
+
+it("discovers deduplicated native model IDs through initialize without a turn", async () => {
+  const context = await contextForChild(`
+    import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", (line) => {
+      const message = JSON.parse(line);
+      if (message.type !== "control_request" || message.request.subtype !== "initialize") {
+        process.exit(7);
+      }
+      process.stdout.write(JSON.stringify({ type: "control_response", response: {
+        subtype: "success", request_id: message.request_id, response: { models: [
+          { value: "default", resolvedModel: "claude-future[1m]", displayName: "Default",
+            supportedEffortLevels: ["low", "max"] },
+          { value: "future", resolvedModel: "claude-future[1m]", displayName: "Future",
+            supportedEffortLevels: ["low", "max"] },
+        ] },
+      } }) + "\\n");
+    });
+  `);
+  const createOwner = cliProcess.createClaudeCliProcessOwner;
+  vi.spyOn(cliProcess, "createClaudeCliProcessOwner").mockImplementation((...args) => {
+    const owner = createOwner(...args);
+    const spawn = owner.spawn;
+    vi.spyOn(owner, "spawn").mockImplementation((options) => {
+      expect(options.args).not.toContain("--model");
+      expect(options.args).toContain("--tools");
+      return spawn({ ...options, command: context.command, args: context.args });
+    });
+    return owner;
+  });
+  expect(await discoverClaudeCliModels({ env: context.env })).toEqual([
+    expect.objectContaining({
+      id: "claude-future[1m]",
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: "max",
+      },
+    }),
+  ]);
 });

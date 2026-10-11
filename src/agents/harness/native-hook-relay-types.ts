@@ -158,6 +158,7 @@ export type InvokeNativeHookRelayParams = {
 };
 
 export type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
+  signal?: AbortSignal;
   registrationTimeoutMs?: number;
   stateDbPath?: string;
   timeoutMs?: number;

@@ -11,7 +11,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -22,7 +22,7 @@ import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import * as artifactPlanning from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
 import type { SessionEntry } from "./types.js";
 

@@ -7,10 +7,10 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   ensureSessionEntrySync,
-  replaceTranscriptEvents,
   rewindSessionToMessage,
   switchSessionBranch,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,

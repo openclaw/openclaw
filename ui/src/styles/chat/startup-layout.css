@@ -102,6 +102,15 @@
   background: transparent;
 }
 
+/* Embedded transcripts size against their pane, not the desktop viewport.
+   Avatar-free threads need only a small reading inset at narrow widths. */
+@container chat-conversation (max-width: 560px) {
+  .chat-thread--direct {
+    --chat-thread-gutter: 12px;
+    --chat-thread-side-inset: 0px;
+  }
+}
+
 /* Keep short-pane insets with their defaults: shared CSS chunks can load the
    startup sheet after composer styles when navigating from New Session. */
 @container chat-conversation (max-height: 320px) {
@@ -152,6 +161,19 @@
   min-width: 0;
   min-height: 0;
   max-height: var(--chat-footer-max-height);
+}
+
+.creation-composer {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  max-height: var(--chat-footer-max-height, 60%);
+}
+
+.creation-composer > .callout {
+  margin-inline: var(--chat-composer-side-inset, 16px);
 }
 
 /* The fade stays inside the transcript viewport; footer controls never cover it. */
@@ -351,26 +373,20 @@
 }
 
 .chat-pane__header-leading,
-.chat-pane__header-center,
 .chat-pane__header-trailing {
   display: flex;
   min-width: 0;
   align-items: center;
-}
-
-.chat-pane__header-leading,
-.chat-pane__header-trailing {
   gap: 8px;
 }
 
-.chat-pane__header-center {
-  position: relative;
-  justify-self: center;
-}
-
 .chat-pane__header-trailing {
+  flex-wrap: wrap;
   flex-shrink: 0;
+  justify-content: flex-end;
+  max-width: 100%;
   margin-left: auto;
+  row-gap: 0;
   justify-self: end;
 }
 

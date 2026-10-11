@@ -1269,7 +1269,7 @@ describe("ollama plugin", () => {
     if (!wrapped) {
       throw new Error("expected Ollama OpenAI-compatible stream wrapper");
     }
-    await wrapped({} as never, {} as never, { onPayload });
+    await wrapped({} as never, { messages: [] }, { onPayload });
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(onPayload).toHaveBeenCalledOnce();
   });

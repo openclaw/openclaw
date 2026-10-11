@@ -10,6 +10,7 @@ import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-tra
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { readSessionProgressCard } from "../session-cards/progress-card-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -191,17 +192,12 @@ it.each(["transaction", "commit"] as const)(
         message: "Card authority revoked",
       });
       let current = true;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          create((request, grant) => {
-            if (request.stage === stage) {
-              current = false;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(admission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          current = false;
+        }
+        admit(request, grant);
+      });
       try {
         await expect(
           progressCardStore.put(sessionKey, {

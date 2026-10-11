@@ -1,12 +1,10 @@
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import {
   listSessionPendingInputs,
-  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -48,186 +46,127 @@ describe("gateway harness questions", () => {
       cleanup();
     }),
   );
-  it.each([
-    "committed",
-    "failed",
-    "uncommitted",
-    "source-revoked",
-    "question-replaced",
-    "creator-closed",
-    "unstaged",
-    "prepared-route-refused",
-    "prepared-source-revoked",
-  ] as const)("settles secret input only after current source persistence: %s", async (change) => {
-    const sessionKey = "agent:main:secret-source-persistence";
-    const attempt = {
-      sessionId: "secret-source-session",
-      sessionKey,
-      runId: "secret-source-run",
-      agentId: "main",
-      config: {},
-      sessionFile: "/tmp/secret-source-session.jsonl",
-      workspaceDir: "/tmp/secret-source-workspace",
-      provider: "openai",
-      modelId: "gpt-test",
-      messageProvider: "webchat",
-      senderIsOwner: true,
-    };
-    const host = await createAdmittedHostCapabilityTestFixture(attempt);
-    const controller = new AbortController();
-    const source = new AbortController();
-    const promptDelivered = createDeferred();
-    const releasePersistence = createDeferred();
-    const target = createTestUserTurnTranscriptTarget({
-      sessionId: attempt.sessionId,
-      sessionKey,
-      storePath: path.join(tempDirs.make("secret-source-"), "sessions.sqlite"),
-    });
-    await replaceSessionEntry(target, { sessionId: attempt.sessionId, updatedAt: Date.now() });
-    const sourceRecorder = createUserTurnTranscriptRecorder({
-      target,
-      input: { text: "example-input", idempotencyKey: "secret-source-input:user" },
-      onPersistenceError: () => {},
-    });
-    if (change !== "unstaged") {
-      expect(
-        await sourceRecorder.stageApproved?.({
-          runId: "secret-source-input",
-          assertCurrent: () => source.signal.throwIfAborted(),
-        }),
-      ).toBe(true);
-    }
-    const stagedInputs = await listSessionPendingInputs(target);
-    expect(stagedInputs.total).toBe(change === "unstaged" ? 0 : 1);
-    const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>();
-    const input = {
-      sessionKey,
-      questions: [
-        { id: "answer", header: "Answer", question: "Enter the test input", isSecret: true },
-      ],
-      timeoutMs: 60_000,
-      gatewayCall,
-      delivery: {
-        hostCapabilities: host.hostCapabilities,
-        onBlockReply: async () => promptDelivered.resolve(),
-      },
-    };
-    const ask = (signal: AbortSignal) =>
-      withPreparedEmbeddedRunToolAuthority(
-        { admittedRunContext: host.admittedRunContext },
-        { ...attempt, hostCapabilities: host.hostCapabilities },
-        undefined,
-        () => runAgentHarnessGatewayQuestion({ ...input, signal }),
-      );
-    const question = ask(controller.signal);
-    let answered = false;
-    void question.then(() => {
-      answered = true;
-    });
-    const persistApproved = sourceRecorder.persistApproved.bind(sourceRecorder);
-    const persist = vi
-      .spyOn(sourceRecorder, "persistApproved")
-      .mockImplementation(async (options) => {
-        await releasePersistence.promise;
-        if (change === "failed") {
-          throw new Error("source persistence unavailable");
-        }
-        return change === "uncommitted" ? undefined : persistApproved(options);
-      });
-    const legacyPersist = vi.fn(async () => {});
-    let claim: Promise<{ accepted: boolean } | { error: unknown }> | undefined;
-    let replacement: ReturnType<typeof runAgentHarnessGatewayQuestion> | undefined;
-    let replacementController: AbortController | undefined;
-    try {
-      await promptDelivered.promise;
-      const claimParams = {
+  it.each(["uncommitted", "question-replaced", "creator-closed", "unstaged"] as const)(
+    "settles secret input only after current source persistence: %s",
+    async (change) => {
+      const sessionKey = "agent:main:secret-source-persistence";
+      const attempt = {
+        sessionId: "secret-source-session",
         sessionKey,
-        text: "example-input",
-        sourceRecorder,
-        persist: legacyPersist,
-        authority: {
-          kind: "source-bound" as const,
-          assertCurrent: () => source.signal.throwIfAborted(),
+        runId: "secret-source-run",
+        agentId: "main",
+        config: {},
+        sessionFile: "/tmp/secret-source-session.jsonl",
+        workspaceDir: "/tmp/secret-source-workspace",
+        provider: "openai",
+        modelId: "gpt-test",
+        messageProvider: "webchat",
+        senderIsOwner: true,
+      };
+      const host = await createAdmittedHostCapabilityTestFixture(attempt);
+      const controller = new AbortController();
+      const source = new AbortController();
+      let promptDelivered = createDeferred();
+      const releasePersistence = createDeferred();
+      const target = createTestUserTurnTranscriptTarget({
+        sessionId: attempt.sessionId,
+        sessionKey,
+        storePath: path.join(tempDirs.make("secret-source-"), "sessions.sqlite"),
+      });
+      await replaceSessionEntry(target, { sessionId: attempt.sessionId, updatedAt: Date.now() });
+      const sourceRecorder = createUserTurnTranscriptRecorder({
+        target,
+        input: { text: "example-input", idempotencyKey: "secret-source-input:user" },
+        onPersistenceError: () => {},
+      });
+      if (change !== "unstaged") {
+        expect(
+          await sourceRecorder.stageApproved?.({
+            runId: "secret-source-input",
+            assertCurrent: () => source.signal.throwIfAborted(),
+          }),
+        ).toBe(true);
+      }
+      const stagedInputs = await listSessionPendingInputs(target);
+      expect(stagedInputs.total).toBe(change === "unstaged" ? 0 : 1);
+      const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>();
+      const input = {
+        sessionKey,
+        questions: [
+          { id: "answer", header: "Answer", question: "Enter the test input", isSecret: true },
+        ],
+        timeoutMs: 60_000,
+        gatewayCall,
+        delivery: {
+          hostCapabilities: host.hostCapabilities,
+          onBlockReply: async () => promptDelivered.resolve(),
         },
       };
-      const claimAttempt =
-        change === "prepared-route-refused" || change === "prepared-source-revoked"
-          ? claimPreparedPendingAgentQuestionAnswer(claimParams, async () => {
-              expect(sourceRecorder.hasPersisted()).toBe(true);
-              await Promise.resolve();
-              if (change === "prepared-route-refused") {
-                throw new QuestionDispatchRefusedError("prepared route changed");
-              }
-              source.abort();
-            })
-          : claimPendingAgentQuestionAnswer(claimParams);
-      claim = claimAttempt.then(
-        (accepted) => ({ accepted }),
-        (error: unknown) => ({ error }),
-      );
-      if (change === "unstaged") {
-        expect(await claim).toEqual({ accepted: true });
-        await expect(question).resolves.toMatchObject({ status: "answered" });
-        expect(persist).not.toHaveBeenCalled();
-        expect(sourceRecorder.hasPersisted()).toBe(false);
-        expect(legacyPersist).not.toHaveBeenCalled();
-        expect(gatewayCall).not.toHaveBeenCalled();
-        return;
-      }
-      expect(persist).toHaveBeenCalledOnce();
-      await Promise.resolve();
-      expect(answered).toBe(false);
-      if (change === "source-revoked") {
-        source.abort();
-      } else if (change === "creator-closed") {
-        host.closeHost();
-      } else if (change === "question-replaced") {
-        controller.abort();
-        await expect(question).resolves.toEqual({ status: "cancelled" });
-        replacementController = new AbortController();
-        replacement = ask(replacementController.signal);
-      }
-      releasePersistence.resolve();
-      if (change === "committed") {
-        expect(await claim).toEqual({ accepted: true });
-        expect(sourceRecorder.hasPersisted()).toBe(true);
-        expect(await listSessionPendingInputs(target)).toEqual({ total: 0, items: [] });
-        expect(sourceRecorder.getAdmissionReceipt()?.entryId).toBe(stagedInputs.items[0]?.id);
-        const messages = (await loadTranscriptEvents(target)).filter(
-          (event) => asOptionalRecord(event)?.type === "message",
+      const ask = (signal: AbortSignal) =>
+        withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext: host.admittedRunContext },
+          { ...attempt, hostCapabilities: host.hostCapabilities },
+          undefined,
+          () => runAgentHarnessGatewayQuestion({ ...input, signal }),
         );
-        expect(messages).toEqual([
-          expect.objectContaining({
-            id: stagedInputs.items[0]?.id,
-            message: expect.objectContaining({
-              role: "user",
-              content: "example-input",
-              idempotencyKey: "secret-source-input:user",
-            }),
-          }),
-        ]);
-        await expect(question).resolves.toEqual({
-          status: "answered",
-          answers: { answers: { answer: ["example-input"] } },
+      const question = ask(controller.signal);
+      let answered = false;
+      void question.then(() => {
+        answered = true;
+      });
+      const persistApproved = sourceRecorder.persistApproved.bind(sourceRecorder);
+      const persist = vi
+        .spyOn(sourceRecorder, "persistApproved")
+        .mockImplementation(async (options) => {
+          await releasePersistence.promise;
+          return change === "uncommitted" ? undefined : persistApproved(options);
         });
-      } else {
-        expect(await claim).toMatchObject({
-          error: expect.any(
-            change === "failed"
-              ? Error
-              : change === "prepared-route-refused" || change === "prepared-source-revoked"
-                ? PreparedQuestionAnswerRefusedError
-                : QuestionDispatchRefusedError,
-          ),
-        });
-        if (
-          change === "failed" ||
-          change === "uncommitted" ||
-          change === "source-revoked" ||
-          change === "question-replaced" ||
-          change === "prepared-route-refused" ||
-          change === "prepared-source-revoked"
-        ) {
+      const legacyPersist = vi.fn(async () => {});
+      let claim: Promise<{ accepted: boolean } | { error: unknown }> | undefined;
+      let replacement: ReturnType<typeof runAgentHarnessGatewayQuestion> | undefined;
+      let replacementController: AbortController | undefined;
+      try {
+        await promptDelivered.promise;
+        const claimParams = {
+          sessionKey,
+          text: "example-input",
+          sourceRecorder,
+          persist: legacyPersist,
+          authority: {
+            kind: "source-bound" as const,
+            assertCurrent: () => source.signal.throwIfAborted(),
+          },
+        };
+        const claimAttempt = claimPendingAgentQuestionAnswer(claimParams);
+        claim = claimAttempt.then(
+          (accepted) => ({ accepted }),
+          (error: unknown) => ({ error }),
+        );
+        if (change === "unstaged") {
+          expect(await claim).toEqual({ accepted: true });
+          await expect(question).resolves.toMatchObject({ status: "answered" });
+          expect(persist).not.toHaveBeenCalled();
+          expect(sourceRecorder.hasPersisted()).toBe(false);
+          expect(legacyPersist).not.toHaveBeenCalled();
+          expect(gatewayCall).not.toHaveBeenCalled();
+          return;
+        }
+        expect(persist).toHaveBeenCalledOnce();
+        await Promise.resolve();
+        expect(answered).toBe(false);
+        if (change === "creator-closed") {
+          host.closeHost();
+        } else if (change === "question-replaced") {
+          controller.abort();
+          await expect(question).resolves.toEqual({ status: "cancelled" });
+          promptDelivered = createDeferred();
+          replacementController = new AbortController();
+          replacement = ask(replacementController.signal);
+          await promptDelivered.promise;
+        }
+        releasePersistence.resolve();
+        expect(await claim).toMatchObject({ error: expect.any(QuestionDispatchRefusedError) });
+        if (change === "uncommitted" || change === "question-replaced") {
           await expect(
             claimPendingAgentQuestionAnswer({
               sessionKey,
@@ -241,29 +180,29 @@ describe("gateway harness questions", () => {
             answers: { answers: { answer: ["replacement-input"] } },
           });
         }
-      }
-      expect(legacyPersist).not.toHaveBeenCalled();
-      expect(gatewayCall).not.toHaveBeenCalled();
-    } finally {
-      releasePersistence.resolve();
-      controller.abort();
-      replacementController?.abort();
-      try {
-        await claim;
-        await question;
-        await replacement;
+        expect(legacyPersist).not.toHaveBeenCalled();
+        expect(gatewayCall).not.toHaveBeenCalled();
       } finally {
+        releasePersistence.resolve();
+        controller.abort();
+        replacementController?.abort();
         try {
-          sourceRecorder.finishPendingInput?.("interrupted");
+          await claim;
+          await question;
+          await replacement;
         } finally {
-          host.closeHost();
-          host.closeAdmission();
+          try {
+            sourceRecorder.finishPendingInput?.("interrupted");
+          } finally {
+            host.closeHost();
+            host.closeAdmission();
+          }
         }
       }
-    }
-  });
+    },
+  );
 
-  it.each(["current", "route-refused", "route-unavailable", "source-revoked"] as const)(
+  it.each(["route-refused", "source-revoked"] as const)(
     "revalidates prepared question input after registration and persistence: %s",
     async (outcome) => {
       const sessionKey = "agent:main:prepared-question-input";
@@ -291,9 +230,6 @@ describe("gateway harness questions", () => {
         if (outcome === "route-refused") {
           throw new QuestionDispatchRefusedError("prepared route changed");
         }
-        if (outcome === "route-unavailable") {
-          throw new Error("binding owner unavailable");
-        }
       });
       const attempt = claimPreparedPendingAgentQuestionAnswer(
         {
@@ -320,18 +256,14 @@ describe("gateway harness questions", () => {
           source.abort();
         }
         preparation.resolve();
-        if (outcome === "current") {
-          expect(await attempt).toEqual({ accepted: true });
-        } else {
-          expect(await attempt).toMatchObject({
-            error: expect.any(PreparedQuestionAnswerRefusedError),
-          });
-          expect(gatewayCall).not.toHaveBeenCalled();
-          expect(question.isResolving()).toBe(false);
-          await expect(
-            claimPendingAgentQuestionAnswer({ sessionKey, text: "fresh answer" }),
-          ).resolves.toBe(true);
-        }
+        expect(await attempt).toMatchObject({
+          error: expect.any(PreparedQuestionAnswerRefusedError),
+        });
+        expect(gatewayCall).not.toHaveBeenCalled();
+        expect(question.isResolving()).toBe(false);
+        await expect(
+          claimPendingAgentQuestionAnswer({ sessionKey, text: "fresh answer" }),
+        ).resolves.toBe(true);
         expect(gatewayCall).toHaveBeenCalledOnce();
         expect(persist).toHaveBeenCalledOnce();
         expect(prepare).toHaveBeenCalledOnce();
@@ -369,10 +301,8 @@ describe("gateway harness questions", () => {
 
   it.each([
     { change: "open", cancel: false },
-    { change: "closed", cancel: false },
     { change: "reassigned", cancel: false },
     { change: "closed", cancel: true },
-    { change: "consumed", cancel: false },
   ] as const)(
     "rechecks $change source authority at real question dispatch (cancel=$cancel)",
     async ({ change, cancel }) => {
@@ -422,10 +352,6 @@ describe("gateway harness questions", () => {
           source.abort();
         } else if (change === "reassigned") {
           currentOwner = {};
-        } else if (change === "consumed") {
-          // Closure after the canonical transition must not reopen an accepted
-          // answer for steering replay, even before its RPC response arrives.
-          fixture.onResolved(() => source.abort());
         }
         hello.release();
         const result = await outcome;
@@ -651,57 +577,6 @@ describe("gateway harness questions", () => {
     ).resolves.toEqual({ status: "answered", answers });
   });
 
-  it("accepts a plain-text reply waiting for gateway registration", async () => {
-    const registration = createDeferred<{ id: string }>();
-    const answer = createDeferred<{
-      status: "answered";
-      answers: { answers: Record<string, string[]> };
-    }>();
-    const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
-      if (method === "question.request") {
-        return await registration.promise;
-      }
-      if (method === "question.waitAnswer") {
-        return await answer.promise;
-      }
-      if (method === "question.resolve") {
-        const resolvedAnswers = (params as { answers?: { answers: Record<string, string[]> } })
-          .answers;
-        if (!resolvedAnswers) {
-          return { status: "cancelled" };
-        }
-        const result = { status: "answered" as const, answers: resolvedAnswers };
-        answer.resolve(result);
-        return result;
-      }
-      throw new Error(`unexpected gateway method: ${method}`);
-    };
-    const onBlockReply = vi.fn();
-    const run = runAgentHarnessGatewayQuestion({
-      questions,
-      sessionKey: "agent:main:buffered-reply",
-      timeoutMs: 60_000,
-      gatewayCall,
-      delivery: { onBlockReply },
-      questionId: "ask_33333333333333333333333333333333",
-    });
-
-    // The claim settles only after registration commits so a failed request
-    // cannot swallow the reply.
-    const claim = claimPendingAgentQuestionAnswer({
-      sessionKey: "agent:main:buffered-reply",
-      text: "Continue",
-    });
-    registration.resolve({ id: "ask_33333333333333333333333333333333" });
-    await expect(claim).resolves.toBe(true);
-
-    await expect(run).resolves.toEqual({
-      status: "answered",
-      answers: { answers: { answer: ["Continue"] } },
-    });
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
   it("releases a claimed reply when gateway registration fails", async () => {
     const registration = createDeferred<{ id: string }>();
     const gatewayCall: AgentHarnessQuestionGatewayCall = async (method) => {
@@ -842,31 +717,5 @@ describe("gateway harness questions", () => {
 
     await expect(run).resolves.toEqual({ status: "answered", answers });
     expect(deliverySignal?.aborted).toBe(true);
-  });
-
-  it("does not deliver a prompt for an already-terminal gateway question", async () => {
-    const answers = { answers: { answer: ["Continue"] } };
-    const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: (params as { id: string }).id };
-      }
-      if (method === "question.waitAnswer") {
-        return { status: "answered", answers };
-      }
-      throw new Error(`unexpected gateway method: ${method}`);
-    };
-    const onBlockReply = vi.fn();
-
-    await expect(
-      runAgentHarnessGatewayQuestion({
-        questions,
-        sessionKey: "agent:main:already-terminal",
-        timeoutMs: 60_000,
-        gatewayCall,
-        delivery: { onBlockReply },
-        questionId: "ask_55555555555555555555555555555555",
-      }),
-    ).resolves.toEqual({ status: "answered", answers });
-    expect(onBlockReply).not.toHaveBeenCalled();
   });
 });

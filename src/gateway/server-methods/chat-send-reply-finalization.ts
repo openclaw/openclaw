@@ -5,7 +5,6 @@ import { readAssistantDisplayContent } from "../../shared/assistant-display-cont
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import { formatForLog } from "../ws-log.js";
 import {
   combineNonStreamingReplyParts,
   extractAssistantDisplayText,
@@ -158,6 +157,7 @@ export async function finalizeChatSendDispatchedReplies(
       },
     });
     broadcastChatFinal({
+      terminalEntry: params.terminalEntry,
       context,
       runId: clientRunId,
       sessionKey,
@@ -187,7 +187,14 @@ export async function finalizeChatSendDispatchedReplies(
   const { authorizeDelivery, captureMediaScope } = createChatSendReplyFinalizationAuthority(
     params,
     rawFinalPayloads,
-    () => broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId }),
+    () =>
+      broadcastChatFinal({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        terminalEntry: params.terminalEntry,
+      }),
   );
   if (!authorizeDelivery("finalization")) {
     return;
@@ -255,13 +262,14 @@ export async function finalizeChatSendDispatchedReplies(
       : sourceSession;
   const { storePath: latestStorePath, entry: latestEntry } = resolvedTranscriptSession;
   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-  let managedMediaPrepareFailed = false;
   const {
     payloads: finalPayloads,
     inputs: finalInputs,
     mediaMessage,
     assistantContent,
     persistedAssistantContent,
+    broadcastContent: broadcastAssistantContent,
+    managedMediaPrepareFailed,
   } = await prepareWebchatReplyMediaForDisplay({
     scope: mediaScope,
     storePath: sourceSession.storePath,
@@ -270,16 +278,7 @@ export async function finalizeChatSendDispatchedReplies(
     abortSignal: params.abortSignal,
     includeSensitiveMedia: false,
     includeSensitiveDisplay: true,
-    onLocalAudioAccessDenied: (err) => {
-      context.logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
-    },
-    onManagedMediaPrepareError: (message) => {
-      managedMediaPrepareFailed = true;
-      context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
-    },
-    onSensitiveDisplayPrepareError: (message) => {
-      context.logGateway.warn(`webchat sensitive display skipped attachment: ${message}`);
-    },
+    logGateway: context.logGateway,
   });
   const ttsSupplementMarker = finalPayloads
     .map((payload) => buildMediaOnlyTtsSupplementTranscriptMarker(payload))
@@ -287,11 +286,6 @@ export async function finalizeChatSendDispatchedReplies(
   const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
     ? persistedAssistantContent
     : undefined;
-  const broadcastAssistantContent = hasAssistantDisplayMediaContent(assistantContent)
-    ? assistantContent
-    : hasAssistantDisplayMediaContent(mediaMessage?.content)
-      ? mediaMessage?.content
-      : assistantContent;
   const displayReply =
     extractAssistantDisplayText(assistantContent) ??
     buildTranscriptReplyTextFromInputs(finalInputs);
@@ -387,6 +381,7 @@ export async function finalizeChatSendDispatchedReplies(
     emitFirstAssistantServerTiming();
   }
   broadcastChatTerminal({
+    terminalEntry: params.terminalEntry,
     context,
     runId: clientRunId,
     sessionKey,
