@@ -115,6 +115,60 @@ describe("litellm image generation provider", () => {
     expect(form.get("image")).toBeInstanceOf(Blob);
   });
 
+  it("omits n on single-image edits so LiteLLM defaults it to 1", async () => {
+    postMultipartRequestMock.mockImplementation(pngResponse);
+
+    await generate({
+      prompt: "refine the hero",
+      inputImages: [
+        {
+          buffer: Buffer.from("fake-input"),
+          mimeType: "image/png",
+        },
+      ],
+    });
+
+    const form = mockObjectArg(postMultipartRequestMock).body as FormData;
+    // Some backends (e.g. Gemini image models) reject an explicit n=1 on
+    // /v1/images/edits; the default count must not send n.
+    expect(form.has("n")).toBe(false);
+  });
+
+  it("sends n only for multi-image edits", async () => {
+    postMultipartRequestMock.mockImplementation(pngResponse);
+
+    await generate({
+      prompt: "two variants of the hero",
+      count: 2,
+      inputImages: [
+        {
+          buffer: Buffer.from("fake-input"),
+          mimeType: "image/png",
+        },
+      ],
+    });
+
+    const form = mockObjectArg(postMultipartRequestMock).body as FormData;
+    expect(form.get("n")).toBe("2");
+  });
+
+  it("omits n on single-image generation requests", async () => {
+    postJsonRequestMock.mockImplementation(pngResponse);
+
+    await generate({
+      model: "gpt-image-2",
+      prompt: "a single cube",
+    });
+
+    const body = mockObjectArg(postJsonRequestMock).body as Record<string, unknown>;
+    expect(body.n).toBeUndefined();
+    expect(body).toEqual({
+      model: "gpt-image-2",
+      prompt: "a single cube",
+      size: "1024x1024",
+    });
+  });
+
   it("sends multiple reference images as repeated image[] parts", async () => {
     postMultipartRequestMock.mockImplementation(pngResponse);
 
