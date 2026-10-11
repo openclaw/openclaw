@@ -9,7 +9,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -902,7 +902,8 @@ describe("initSessionState thread forking", () => {
       },
     });
     sessionForkMocks.forkSessionFromParent.mockResolvedValueOnce(undefined);
-    const promptState = getEmbeddedSessionPromptState(threadSessionKey);
+    using original = retainEmbeddedSessionPromptState(threadSessionKey);
+    const promptState = original.state;
     promptState.toolResults.frozen.add("retained-tool-result");
     enqueueFollowupRun(
       threadSessionKey,
@@ -940,7 +941,8 @@ describe("initSessionState thread forking", () => {
         sessionId: "tombstoned-thread-session",
         mainRestartRecovery: { tombstone: { reason: "old transcript exhausted" } },
       });
-      expect(getEmbeddedSessionPromptState(threadSessionKey)).toBe(promptState);
+      using retained = retainEmbeddedSessionPromptState(threadSessionKey);
+      expect(retained.state).toBe(promptState);
       expect(promptState.toolResults.frozen).toContain("retained-tool-result");
       expect(getFollowupQueueDepth(threadSessionKey)).toBe(1);
       expect(peekSystemEvents(threadSessionKey)).toEqual(["retained event"]);

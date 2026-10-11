@@ -81,8 +81,8 @@ export function registerRunEntryFailureTests(state: {
               );
               const spy = vi
                 .spyOn(options.assistantErrorTranscript, "settle")
-                .mockImplementation(async (...args) => {
-                  await settle(...args);
+                .mockImplementation((...args) => {
+                  settle(...args);
                   admission.close();
                 });
               restoreCleanup = () => spy.mockRestore();

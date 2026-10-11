@@ -17,7 +17,6 @@ import {
   persistCompactionBoundaryWithSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
-import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { projectInFlightRunSnapshot } from "../gateway/chat-inflight-snapshot.js";
 import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "../gateway/server-chat.agent-events.test-helpers.js";
@@ -685,7 +684,7 @@ describe("append-only assistant errors with deferred display", () => {
         timestamp: 2,
       }),
     );
-    await owner.settle(false);
+    owner.settle(false);
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const messages = SessionManager.open(target).buildSessionContext().messages;
@@ -738,7 +737,7 @@ describe("append-only assistant errors with deferred display", () => {
     });
     owner.clear();
     manager.appendMessage(assistantText("Recovered"));
-    await owner.settle(false);
+    owner.settle(false);
     expect(SessionManager.open(target).buildSessionContext().messages).toMatchObject([
       {
         role: "assistant",
@@ -769,8 +768,8 @@ describe("append-only assistant errors with deferred display", () => {
     failed.usage = { ...failed.usage, output: 7, totalTokens: 7 };
     manager.appendMessage(failed);
     manager.appendMessage(makeTextToolResult("call-terminal", "read", "Result", false, 1));
-    await owner.settle(true);
-    await owner.settle(true);
+    owner.settle(true);
+    owner.settle(true);
     const messages = SessionManager.open(target).buildSessionContext().messages;
     expect(messages).toMatchObject([
       {

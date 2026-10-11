@@ -27,7 +27,7 @@ import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.j
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
 
@@ -637,13 +637,15 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("keeps #99495 historical bytes stable across attempts sharing session state", () => {
-    const state = getEmbeddedSessionPromptState("session-99495").toolResults;
+    using firstLease = retainEmbeddedSessionPromptState("session-99495");
+    const state = firstLease.state.toolResults;
     const history = [
       makeToolResult("a".repeat(4_000), "history_1"),
       makeToolResult("b".repeat(4_000), "history_2"),
     ];
     const first = truncateOversizedToolResultsInMessages(history, 128_000, 5_000, 20_000, state);
-    const secondAttemptState = getEmbeddedSessionPromptState("session-99495").toolResults;
+    using secondLease = retainEmbeddedSessionPromptState("session-99495");
+    const secondAttemptState = secondLease.state.toolResults;
     const second = truncateOversizedToolResultsInMessages(
       [...history, makeToolResult("c".repeat(12_000), "current")],
       128_000,
@@ -658,7 +660,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
 
   it("reclaims #99495 state from canonical compaction, not filtered projections", async () => {
     const sessionId = "session-99495-reclamation";
-    const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+    using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+    const state = promptStateLease.state.toolResults;
     const removed = makeToolResult("removed".repeat(100_000), "removed_after_compaction");
     const retained = makeToolResult("retained".repeat(100_000), "retained_after_compaction");
     const projected = truncateOversizedToolResultsInMessages(
@@ -732,7 +735,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("shrinks #99495 frozen bytes monotonically only under a tighter hard cap", () => {
-    const state = getEmbeddedSessionPromptState("session-99495-shrink").toolResults;
+    using promptStateLease = retainEmbeddedSessionPromptState("session-99495-shrink");
+    const state = promptStateLease.state.toolResults;
     const history = [
       makeToolResult("a".repeat(8_000), "history_1"),
       makeToolResult("b".repeat(8_000), "history_2"),

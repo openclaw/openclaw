@@ -135,14 +135,18 @@ function responseFor(
     ];
   } else {
     const items: Array<Record<string, unknown>> = tool
-      ? calls.map((call) => ({
-          type: "function_call",
-          id: `fc_${call.id}`,
-          call_id: call.id,
-          name: call.name,
-          arguments: call.arguments,
-          ...(failure ? { async: true } : {}),
-        }))
+      ? calls.map((call) =>
+          Object.assign(
+            {
+              type: "function_call",
+              id: `fc_${call.id}`,
+              call_id: call.id,
+              name: call.name,
+              arguments: call.arguments,
+            },
+            failure ? { async: true } : {},
+          ),
+        )
       : [
           {
             type: "message",

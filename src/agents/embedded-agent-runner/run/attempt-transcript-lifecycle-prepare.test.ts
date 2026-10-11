@@ -552,7 +552,7 @@ describe("admitted lazy session writer", () => {
           ).toHaveLength(2);
           return async () => {
             await promptState[Symbol.asyncDispose]();
-            await owner.settle(true);
+            owner.settle(true);
             expect(
               SessionManager.open(target)
                 .getBranch()

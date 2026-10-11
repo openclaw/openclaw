@@ -33,7 +33,7 @@ import { serializeCacheTtlToolResultProjections } from "../cache-ttl-checkpoint.
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   persistToolResultProjections,
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
@@ -769,7 +769,8 @@ describe("tool-result projection persistence at dispatch", () => {
 
   it("writes one marker for unchanged requests and another for a new frozen batch", async () => {
     const { session: activeSession, sessionManager: manager } = await createTestSession();
-    const sessionPromptState = getEmbeddedSessionPromptState(toolProjectionSessionId);
+    using promptStateLease = retainEmbeddedSessionPromptState(toolProjectionSessionId);
+    const sessionPromptState = promptStateLease.state;
     const projectionState = sessionPromptState.toolResults;
     const requests: Context["messages"][] = [];
     activeSession.agent.streamFn = (model, context) => {

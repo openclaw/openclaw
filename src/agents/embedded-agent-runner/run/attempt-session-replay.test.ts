@@ -64,7 +64,7 @@ function expectCapturedCurrentUserPrefix(
       message: {
         ...current.message,
         __openclaw: {
-          ...(isRecord(current.message.__openclaw) ? current.message.__openclaw : {}),
+          ...(isRecord(current.message["__openclaw"]) ? current.message["__openclaw"] : {}),
           modelPromptProjection: { version: 1, text: fixture.attempt.prompt },
         },
       },

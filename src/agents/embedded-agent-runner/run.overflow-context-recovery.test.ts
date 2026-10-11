@@ -27,7 +27,7 @@ import { recoverEmbeddedRunOverflow } from "./run/overflow-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "./session-prompt-state.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
@@ -371,8 +371,10 @@ describe("recoverEmbeddedRunOverflow", () => {
     "truncates the active projection after mixed preflight compaction (successor=%s)",
     async (adoptsSuccessor) => {
       let sessionId = "session-1";
-      getEmbeddedSessionPromptState(sessionId).toolResults.frozen.add("predecessor-only");
-      const successorProjection = getEmbeddedSessionPromptState("rotated-session").toolResults;
+      using predecessor = retainEmbeddedSessionPromptState(sessionId);
+      using successor = retainEmbeddedSessionPromptState("rotated-session");
+      predecessor.state.toolResults.frozen.add("predecessor-only");
+      const successorProjection = successor.state.toolResults;
       successorProjection.frozen.add("successor-only");
       mocks.truncateOversizedToolResults.mockReturnValueOnce({
         truncated: true,

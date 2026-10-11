@@ -431,7 +431,10 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
       }
       expect(session.getLastAssistantText()).toBe("Recovered using saved result.");
       expect(requests[1]?.messages.filter((message) => message.role === "assistant")).toMatchObject(
-        [{ stopReason: "toolUse", content: [{ type: "toolCall", id: "settled-1|fc_settled" }] }],
+        [
+          { stopReason: "toolUse", content: [{ type: "toolCall", id: "settled-1|fc_settled" }] },
+          { stopReason: "error", content: [], errorCode: "incomplete_tool_call" },
+        ],
       );
       expect(
         requests[1]?.messages.filter((message) => message.role === "toolResult"),
