@@ -26,6 +26,7 @@ import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
   fingerprintPreparedModelWorkerRequest,
@@ -62,10 +63,6 @@ import {
   scopeSyntheticAuthProviderRefs,
 } from "./prepared-model-runtime.synthetic-auth.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
-
-// Parent probes, queued requests and admitted provider discovery are bounded independently.
-// Native plugin admission belongs to the worker generation, outside its refresh deadline.
-export const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;

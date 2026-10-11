@@ -112,6 +112,7 @@ Harnesses can adapt these hooks. The Codex app-server harness keeps OpenClaw plu
   reasoning, tools, and terminal events remain separate boundaries.
 - Block streaming can emit partial replies on `text_end` or `message_end`.
 - Reasoning streaming can be a separate stream or block replies.
+- Serialized XML tool calls, including GLM `arg_key` payloads and `invoke`/`parameter` blocks, are hidden from streamed and final replies. Ambiguous tag prefixes wait for more text; completed literal explanations and Markdown code examples remain visible. Hiding a shadow copy does not execute it again.
 - See [Streaming](/concepts/streaming) for chunking and block reply behavior.
 
 ## Tool execution

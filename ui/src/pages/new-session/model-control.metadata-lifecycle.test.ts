@@ -580,7 +580,7 @@ describe("new-session model metadata lifecycle", () => {
     control.reset();
   });
 
-  it("retires a control immediately and gives its remount a fresh result after pending work finishes", async () => {
+  it("retires a control immediately and gives its remount a fresh result", async () => {
     const models: ModelCatalogEntry[] = [
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
     ];
@@ -595,7 +595,7 @@ describe("new-session model metadata lifecycle", () => {
     request.mockResolvedValueOnce({ models });
     const remountedControl = new NewSessionModelControl(() => undefined);
     remountedControl.load(context, "main", true);
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
     pending.resolve({ models: [] });
 
     await vi.waitFor(() => {

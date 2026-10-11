@@ -66,6 +66,9 @@ in use; retaining the original descriptor prevents that inode from being reused
 for a replacement file. This descriptor holds identity custody; it is separate
 from SQLite's native connection descriptor.
 
+Synchronous admission exchanges carry the requested physical database's facts and
+custody, including a retained file whose original pathname now points elsewhere.
+
 Quarantine guards retain their indexed durable row lookup by target pathname.
 A separate inspection process can admit a file before the Gateway's verifier
 confirms corruption and records quarantine. The inspecting process must observe
@@ -530,10 +533,10 @@ completes. Nonempty and unknown-coverage receipts still publish immediately afte
 COMMIT.
 
 Plugin-state observations and comparisons read the current row in the existing
-worker. Native binding deletion and compensation use compound receipts, so a
-host cache cannot cover every writer. Comparing the stored row keeps lease
-cleanup and conflict retries current after those transactions. Callers receive
-independent decoded values; same-value sets retain their age and TTL refresh
+worker. Native binding deletion and compensation use compound receipts and
+invalidate affected keys so prepared ownership dependencies expire. Comparing
+the stored row keeps lease cleanup and conflict retries current after those
+transactions. Callers receive independent decoded values; same-value sets retain their age and TTL refresh
 behavior. Stored formats, schemas, update migrations, and SDK signatures are
 unchanged.
 
