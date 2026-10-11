@@ -320,7 +320,6 @@ src/agents/worktrees/eviction.runtime.ts
 src/agents/worktrees/filesystem-apfs.native.ts
 src/agents/worktrees/filesystem-backend.ts
 src/agents/worktrees/filesystem-native.ts
-src/agents/worktrees/filesystem-refs.native.ts
 src/agents/worktrees/gc-dependencies.ts
 src/agents/worktrees/gc-fingerprint.runtime.ts
 src/agents/worktrees/git-lock.ts
@@ -619,6 +618,7 @@ src/config/sessions/session-entry-snapshot-values.ts
 src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
 src/config/sessions/transcript-append-parent.ts
+src/config/sessions/session-entry-window.types.ts
 src/config/sessions/types.ts
 src/config/sessions/session-history-worker-errors.ts
 src/acp/runtime/session-meta-worker-mutation.ts
@@ -1557,7 +1557,6 @@ src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
 src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
-src/process/supervisor/service-child-windows-job-native.ts
 src/process/windows-command-line.ts
 src/process/windows-command.ts
 src/proxy-capture/child-transport.ts

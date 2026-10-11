@@ -39,8 +39,12 @@ const isInt32 = (value: unknown): value is number =>
   Number.isInteger(value) &&
   value >= -0x80000000 &&
   value <= 0x7fffffff;
-const optionalCounter = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+const optionalCounter = (value: unknown): number | undefined => {
+  if (typeof value === "bigint") {
+    return value >= 0n && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : undefined;
+  }
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+};
 
 /** Read one best-effort snapshot from the selected manager. */
 export async function readLoadedSystemdServiceRuntime(
