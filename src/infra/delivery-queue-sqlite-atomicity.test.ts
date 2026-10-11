@@ -1,12 +1,18 @@
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  prepareDeliveryQueueTerminalEntry,
+  terminalizePendingDeliveryQueueEntryInDatabase,
+  updateDeliveryQueueEntryInDatabase,
+} from "./delivery-queue-sqlite.kernel.js";
 import {
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntry,
-  terminalizePendingDeliveryQueueEntry,
-} from "./delivery-queue-sqlite.js";
-import { updateDeliveryQueueEntryInDatabase } from "./delivery-queue-sqlite.kernel.js";
-import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
+  seedDeliveryQueueEntry,
+} from "./delivery-queue-sqlite.test-support.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import { installDeliveryQueueTmpDirHooks } from "./outbound/delivery-queue.test-helpers.js";
 import {
@@ -15,6 +21,7 @@ import {
   releaseSessionDeliveryClaim,
 } from "./session-delivery-queue-storage.js";
 import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
+import { createSqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
 
 describe("delivery queue SQLite update atomicity", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
@@ -32,9 +39,11 @@ describe("delivery queue SQLite update atomicity", () => {
     id: string,
     update: (entry: DeliveryQueueEntryState) => DeliveryQueueEntryState,
   ) =>
-    runOpenClawStateWriteTransaction(
-      (database) => updateDeliveryQueueEntryInDatabase(database, queueName, id, update),
-      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+    updateDeliveryQueueEntryInDatabase(
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+      queueName,
+      id,
+      update,
     );
 
   it("preserves an independently committed terminal outcome", () => {
@@ -47,7 +56,10 @@ describe("delivery queue SQLite update atomicity", () => {
       throw new Error("test invariant: seeded delivery must be pending");
     }
     expect(
-      terminalizePendingDeliveryQueueEntry({ queueName, id, entry: pending, stateDir }),
+      terminalizePendingDeliveryQueueEntryInDatabase(
+        openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+        prepareDeliveryQueueTerminalEntry({ queueName, id, entry: pending }),
+      ),
     ).toEqual({ status: "terminalized", retained: true });
     expect(getDeliveryQueueEntryStatus(queueName, id, stateDir)).toBe("failed");
 
@@ -63,22 +75,36 @@ describe("delivery queue SQLite update atomicity", () => {
     const stateDir = tmpDir();
     const id = "race-terminalize";
     enqueueRetained(stateDir, id);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 
     expect(() =>
       runUpdate(stateDir, id, (entry) => {
-        terminalizePendingDeliveryQueueEntry({
-          queueName,
-          id,
-          entry,
-          stateDir,
-        });
+        // A concurrent writer on its own committed connection settles the row
+        // between the update's pending read and its write.
+        using rawWriter = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+        const writer: OpenClawStateDatabase = {
+          db: rawWriter,
+          path: resolveOpenClawStateSqlitePath(env),
+          walMaintenance: {
+            checkpoint: () => false,
+            stop: async () => {},
+            close: () => false,
+            reclaimFreePages: createSqliteWalReclamationResult,
+          },
+        };
+        expect(
+          terminalizePendingDeliveryQueueEntryInDatabase(
+            writer,
+            prepareDeliveryQueueTerminalEntry({ queueName, id, entry }),
+          ),
+        ).toEqual({ status: "terminalized", retained: true });
         return { ...entry, retryCount: 999, lastError: "stale" };
       }),
     ).toThrow(new RegExp(`No pending test-update-atomicity delivery queue entry ${id}`));
 
-    const loaded = loadDeliveryQueueEntry(queueName, id, stateDir);
-    expect(loaded?.retryCount).toBe(0);
-    expect(loaded?.lastError).toBeUndefined();
+    // The independently committed terminal outcome survives the rejected update.
+    expect(getDeliveryQueueEntryStatus(queueName, id, stateDir)).toBe("failed");
+    expect(loadDeliveryQueueEntry(queueName, id, stateDir)).toBeNull();
   });
 
   it("keeps a committed session delivery terminal across a real caller update", async () => {
