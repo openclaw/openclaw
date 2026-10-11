@@ -221,7 +221,9 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
     try {
       runWithAiTransportHost(host, () => cleanupRegisteredSessionResources(sessionId, host));
     } catch (error) {
-      throw new AggregateError([error], "Failed to cleanup runtime session resources");
+      throw new AggregateError([error], "Failed to cleanup runtime session resources", {
+        cause: error,
+      });
     }
   }
 
