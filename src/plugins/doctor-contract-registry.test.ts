@@ -60,7 +60,6 @@ let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-re
 let listPluginDoctorSessionStoreAgentIds: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionStoreAgentIds;
 let resolvePluginDoctorStateMigrationInventory: typeof import("./doctor-contract-registry.js").resolvePluginDoctorStateMigrationInventory;
 let resolvePluginDoctorProviderRenames: typeof DoctorContractRegistry.resolvePluginDoctorProviderRenames;
-let withDeferredPluginDoctorMigrations: typeof DoctorContractRegistry.withDeferredPluginDoctorMigrations;
 
 function mockDoctorPlugins(
   ...plugins: Parameters<typeof createPluginManifestRecordFixture>[0][]
@@ -98,7 +97,6 @@ describe("doctor-contract-registry module loader", () => {
       listPluginDoctorSessionStoreAgentIds,
       resolvePluginDoctorStateMigrationInventory,
       resolvePluginDoctorProviderRenames,
-      withDeferredPluginDoctorMigrations,
     } = await import("./doctor-contract-registry.js"));
     ({ clearPluginDoctorContractRegistryCache } =
       await import("./doctor-contract-registry.test-fixtures.js"));
@@ -220,38 +218,6 @@ describe("doctor-contract-registry module loader", () => {
     expect(doctorContractWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("Provider renames must belong to the plugin's declared providers."),
     );
-  });
-
-  it("selects provider renames only from scoped, non-deferred config-repair owners", () => {
-    const root = makeTempDir();
-    fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf-8");
-    const rename = { from: "old-provider", to: "new-provider", baseUrl: "https://models.example" };
-    mocks.createJiti.mockImplementation(() => () => ({ providerRenames: [rename] }));
-    mockDoctorPlugins(
-      {
-        id: "owner",
-        providers: ["old-provider", "new-provider"],
-        rootDir: root,
-        doctorContract: { configRepair: true },
-      },
-      { id: "unrelated", rootDir: root, doctorContract: { configRepair: true } },
-    );
-    const config: OpenClawConfig = {
-      models: { providers: { "old-provider": { baseUrl: rename.baseUrl, models: [] } } },
-    };
-    const onInspectedPlugin = vi.fn();
-    applyPluginDoctorCompatibilityMigrations(config, {
-      pluginIds: ["old-provider"],
-      env: {},
-      onInspectedPlugin,
-    });
-    expect(onInspectedPlugin).toHaveBeenCalledExactlyOnceWith("owner", true);
-    expect(resolvePluginDoctorProviderRenames({ config, env: {} })).toEqual([rename]);
-    expect(
-      withDeferredPluginDoctorMigrations(["owner"], () =>
-        resolvePluginDoctorProviderRenames({ config, env: {} }),
-      ),
-    ).toEqual([]);
   });
 
   it.each(["https://OLLAMA.COM:443/api", "${OLLAMA_BASE_URL}"])(

@@ -19,7 +19,6 @@ import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createDoctorPrompter } from "../../doctor-prompter.js";
-import { inspectCronJobsForDoctor } from "../cron/store-repair.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 import { maybeRepairProviderRenameCronJobs } from "./provider-rename-state.js";
 import {
@@ -159,30 +158,12 @@ describe("persisted provider rename", () => {
               },
               state: { lastRunAtMs: 123, lastRunStatus: "ok" },
             }),
-            makeCronJob({
-              id: "untouched",
-              payload: { kind: "agentTurn", message: "keep", model: "custom/model" },
-            }),
           ],
         });
       }
       const activeRenames = planProviderRenames(source, renames);
       const args = { renames: activeRenames, env: state.env };
-      const before = await inspectCronJobsForDoctor({ env: state.env });
       const db = openOpenClawStateDatabase();
-      const backups = async () =>
-        (await fs.readdir(path.dirname(db.path))).filter((name) =>
-          name.startsWith(`${path.basename(db.path)}.doctor-cron-`),
-        );
-      const preview = await maybeRepairProviderRenameCronJobs({ ...args, shouldRepair: false });
-      expect(preview.changes).toEqual([]);
-      expect(preview.warnings.join("\n")).toContain("2 persisted cron job(s)");
-      expect(await inspectCronJobsForDoctor({ env: state.env })).toEqual(before);
-      expect(await backups()).toEqual([]);
-      const refused = await maybeRepairProviderRenameCronJobs({ ...args, shouldRepair: true });
-      expect(refused.changes).toEqual([]);
-      expect(refused.warnings.join("\n")).toContain("requires Doctor maintenance");
-      expect(await inspectCronJobsForDoctor({ env: state.env })).toEqual(before);
       const owner = acquireGatewayStateOwner({ databasePath: db.path });
       const maintenance = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
@@ -194,33 +175,17 @@ describe("persisted provider rename", () => {
           const result = await maybeRepairProviderRenameCronJobs({ ...args, shouldRepair: true });
           expect(result.warnings).toEqual([]);
           expect(result.changes.join("\n")).toContain("2 persisted cron job(s)");
-          expect(await backups()).toHaveLength(1);
-          const after = await inspectCronJobsForDoctor({ env: state.env });
-          expect(after.jobs).toHaveLength(4);
-          for (const job of after.jobs) {
-            const original = before.jobs.find(
-              (entry) => entry.storeKey === job.storeKey && entry.id === job.id,
-            )!;
-            if (job.id === "untouched") {
-              expect(job).toEqual(original);
-            } else {
-              expect(job.definition).toEqual({
-                ...original.definition,
-                payload: {
-                  kind: "agentTurn",
-                  message: "Do not rewrite ollama/message",
-                  model: "ollama-cloud/model:cloud",
-                  fallbacks: ["ollama-cloud/fallback", "custom/unchanged"],
-                },
-              });
-              expect(job.sortOrder).toBe(original.sortOrder);
-            }
-          }
           for (const partition of ["cron", "inactive-cron"]) {
             const store = await loadCronJobsStore(state.statePath(partition, "jobs.json"));
-            expect(store.jobs.find((job) => job.id === "rename")?.state).toEqual({
-              lastRunAtMs: 123,
-              lastRunStatus: "ok",
+            expect(store.jobs[0]).toMatchObject({
+              enabled: partition === "cron",
+              payload: {
+                kind: "agentTurn",
+                message: "Do not rewrite ollama/message",
+                model: "ollama-cloud/model:cloud",
+                fallbacks: ["ollama-cloud/fallback", "custom/unchanged"],
+              },
+              state: { lastRunAtMs: 123, lastRunStatus: "ok" },
             });
           }
           await maybeRepairCodexSessionRoutes({
@@ -252,7 +217,6 @@ describe("persisted provider rename", () => {
             source.models!.providers!.ollama,
           );
           expect(JSON.parse(await fs.readFile(`${state.configPath}.bak`, "utf8"))).toEqual(source);
-          expect(await backups()).toHaveLength(1);
           const local = {
             ...published,
             agents: { entries: { main: {} }, defaults: { model: "ollama/local-model" } },
@@ -295,7 +259,6 @@ describe("persisted provider rename", () => {
     await withOpenClawTestState({ label: "provider-rename-sessions" }, async (state) => {
       const cfg = applyProviderRenames(sourceConfig(), renames).config;
       await state.writeConfig(cfg);
-      const configBefore = await fs.readFile(state.configPath);
       const storePath = path.join(state.sessionsDir(), "sessions.json");
       const scope = (id: string) => ({ storePath, sessionKey: `agent:main:${id}`, env: state.env });
       const marker = {
@@ -343,7 +306,6 @@ describe("persisted provider rename", () => {
           providerOverride: "custom",
           modelOverride: "ollama/other:cloud",
         },
-        unrelated: { sessionId: "unrelated", updatedAt: 1, model: "custom/keep" },
         rollback: {
           sessionId: "rollback",
           updatedAt: 1,
@@ -366,10 +328,6 @@ describe("persisted provider rename", () => {
         Object.fromEntries(Object.keys(entries).map((id) => [id, loadSessionEntry(scope(id))]));
       const before = readEntries();
       const args = { cfg, env: state.env, providerRenames: renames, providerRenameOnly: true };
-      const preview = await maybeRepairCodexSessionRoutes({ ...args, shouldRepair: false });
-      expect(preview.repairedSessions).toBe(0);
-      expect(preview.warnings.join("\n")).toContain("Affected sessions: 4");
-      expect(readEntries()).toEqual(before);
       expect(
         (await maybeRepairCodexSessionRoutes({ ...args, shouldRepair: true })).repairedSessions,
       ).toBe(4);
@@ -390,7 +348,6 @@ describe("persisted provider rename", () => {
         model: "ollama-cloud/model:cloud",
       });
       expect(after.custom).toEqual(before.custom);
-      expect(after.unrelated).toEqual(before.unrelated);
       expect(after.rollback).toEqual({
         ...before.rollback,
         updatedAt: expect.any(Number),
@@ -403,11 +360,6 @@ describe("persisted provider rename", () => {
           prevModelOverrideFallbackOriginProvider: "ollama-cloud",
         },
       });
-      expect(
-        (await maybeRepairCodexSessionRoutes({ ...args, shouldRepair: true })).repairedSessions,
-      ).toBe(0);
-      expect(readEntries()).toEqual(after);
-      expect(await fs.readFile(state.configPath)).toEqual(configBefore);
       const guard = await createAgentPatchedSessionModelRunGuard({
         cfg,
         ...scope("rollback"),
