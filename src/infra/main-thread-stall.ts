@@ -113,6 +113,6 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       dropped = 0;
       return { stalls, dropped: omitted };
     },
-    stop: observer.stop,
+    stop: () => observer.stop(),
   };
 }

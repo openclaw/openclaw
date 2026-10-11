@@ -171,6 +171,10 @@ process suspension can also produce an unattributed delay. Reporting is bounded
 to eight pending stalls, with an omitted count if that limit is exceeded. This
 requires neither an inspector connection nor a sampling profiler.
 
+Detailed attribution of asynchronous continuations requires Node's `async_hooks`
+callback boundaries. Bun currently reports explicit synchronous task scopes and
+otherwise retains unattributed delay warnings.
+
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
 whole-process CPU timing, including worker and native threads. Phase CPU can
 include concurrent work outside that phase; it is not exclusive attribution.
