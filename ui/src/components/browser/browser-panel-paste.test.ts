@@ -313,8 +313,10 @@ describe("Browser panel text and touch input", () => {
       if (outcome === "new click") {
         expect(request.mock.calls.map(([, params]) => params)).toMatchObject([
           { body: { kind: "clickCoords" } },
+          { path: "/annotations", body: { action: "state", targetId: "form-tab" } },
           { body: { kind: "insertText", text: "for the clicked field" } },
           { body: { kind: "clickCoords" } },
+          { path: "/annotations", body: { action: "state", targetId: "form-tab" } },
         ]);
       }
     },
@@ -348,7 +350,9 @@ describe("Browser panel text and touch input", () => {
       expect(request.mock.calls.map(([, params]) => params)).toMatchObject([
         ...(pendingText ? [{ body: { kind: "insertText", text: "previous field" } }] : []),
         { body: { kind: "clickCoords" } },
+        { path: "/annotations", body: { action: "state", targetId: "form-tab" } },
         { body: { kind: "clickCoords" } },
+        { path: "/annotations", body: { action: "state", targetId: "form-tab" } },
         { body: { kind: "press", key: "a" } },
       ]);
     },
@@ -368,10 +372,12 @@ describe("Browser panel text and touch input", () => {
     await vi.advanceTimersByTimeAsync(0);
     input.dispatchEvent(paste("correct field"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request.mock.calls[2]?.[1]).toMatchObject({
-      body: { kind: "insertText", text: "correct field" },
-    });
+    expect(request.mock.calls.map(([, params]) => params)).toMatchObject([
+      { body: { kind: "clickCoords" } },
+      { body: { kind: "clickCoords" } },
+      { path: "/annotations", body: { action: "state", targetId: "form-tab" } },
+      { body: { kind: "insertText", text: "correct field" } },
+    ]);
   });
 
   it.each(["empty", "files", "disconnected", "stale view", "captured view"])(

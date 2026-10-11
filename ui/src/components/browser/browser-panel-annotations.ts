@@ -3,18 +3,40 @@ import type {
   BrowserAnnotationControlChange,
   BrowserAnnotationState,
 } from "openclaw/plugin-sdk/browser-annotations";
+import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
 import { t } from "../../i18n/index.ts";
 import {
   captureBrowserScreenshot,
   fetchBrowserScreenshotDataUrl,
+  type BrowserPanelTab,
   type BrowserRequestClient,
 } from "./browser-client.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type {
+  BrowserPanelControllerHost,
+  BrowserPanelOperationOwnership,
+} from "./browser-panel-operation-ownership.ts";
 import {
   browserPanelRemotePoint,
   dispatchCompositedBrowserAnnotation,
   loadBrowserPanelImage,
+  type BrowserPanelView,
 } from "./browser-panel-surface.ts";
+
+interface BrowserPanelAnnotationHost {
+  readonly host: Pick<
+    BrowserPanelControllerHost,
+    "renderRoot" | "requestUpdate" | "resourceBasePath" | "authToken"
+  >;
+  readonly operations: Pick<BrowserPanelOperationOwnership, "captureClient" | "epoch" | "isLive">;
+  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
+  readonly activeTargetId: string | null;
+  readonly evaluateUnavailable: boolean;
+  readonly view: BrowserPanelView | null;
+  readonly tabs: BrowserPanelTab[];
+  setState(key: "errorText" | "noticeText", value: string | null): void;
+  refreshView(targetId: string): Promise<void>;
+  reportError(error: unknown): void;
+}
 
 /** Session-owned projection of the page API. Page callbacks never send chat messages. */
 export class BrowserPanelAnnotations {
@@ -22,7 +44,7 @@ export class BrowserPanelAnnotations {
   busy = false;
   private generation = 0;
 
-  constructor(private readonly controller: BrowserPanelController) {}
+  constructor(private readonly controller: BrowserPanelAnnotationHost) {}
 
   reset(): void {
     this.generation += 1;
