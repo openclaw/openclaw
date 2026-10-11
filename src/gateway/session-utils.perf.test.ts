@@ -13,7 +13,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -119,7 +118,7 @@ describe("session list resolver cache", () => {
                       identity: { name: "Refreshed owner" },
                       fastModeDefault: true,
                     };
-                    sessionChanges.emit({ all: true, scope: "config" });
+                    setRuntimeConfigSnapshot(cfg);
                     identityDuringPause = resolveAgentIdentity(cfg, ownerId)?.name;
                     resolve();
                   });

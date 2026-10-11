@@ -9,6 +9,10 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+} from "../config/runtime-snapshot.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
@@ -156,15 +160,12 @@ type AgentRosterFactsBatch = {
 };
 
 let activeAgentRosterFactsBatch: AgentRosterFactsBatch | undefined;
-const immutableAgentRosterFacts = new WeakMap<OpenClawConfig, AgentRosterFacts>();
+const agentRosterFacts = new WeakMap<
+  OpenClawConfig,
+  { publication: ReturnType<typeof getRuntimeConfigSnapshotMetadata>; facts: AgentRosterFacts }
+>();
 
-/**
- * Runs a read-only callback with batch-scoped roster memoization.
- *
- * Runtime discovery calls the owner helpers for every configured model. Keep
- * their derived facts on this exact config. Mutable callers discard the batch
- * before returning; immutable captures retain facts for their own lifetime.
- */
+/** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
 export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: () => T): T {
   const parent = activeAgentRosterFactsBatch;
   activeAgentRosterFactsBatch =
@@ -180,15 +181,17 @@ function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined
   if (activeAgentRosterFactsBatch?.config === cfg) {
     return activeAgentRosterFactsBatch.facts;
   }
-  if (!isDeeplyFrozenPlainData(cfg)) {
+  const publication =
+    cfg === getRuntimeConfigSnapshot() ? getRuntimeConfigSnapshotMetadata() : null;
+  if (publication === null && !isDeeplyFrozenPlainData(cfg)) {
     return undefined;
   }
-  let cached = immutableAgentRosterFacts.get(cfg);
-  if (!cached) {
-    cached = {};
-    immutableAgentRosterFacts.set(cfg, cached);
+  let cached = agentRosterFacts.get(cfg);
+  if (!cached || cached.publication !== publication) {
+    cached = { publication, facts: {} };
+    agentRosterFacts.set(cfg, cached);
   }
-  return cached;
+  return cached.facts;
 }
 
 /** Converts either supported roster representation into the canonical keyed shape. */
