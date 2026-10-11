@@ -383,30 +383,35 @@ export function ensureTranscriptSessionRoot(
           }
         }
       }
-      executeSqliteQuerySync<unknown>(
-        database.db,
-        actor?.window
-          ? db
-              .updateTable("session_windows")
-              .set({ updated_at: updatedAt })
-              .where("session_id", "=", scope.sessionId)
-          : db
-              .insertInto("session_windows")
-              .values({
-                session_id: scope.sessionId,
-                session_key: scope.sessionKey,
-                previous_session_id: null,
-                reason: null,
-                session_scope: "conversation",
-                created_at: updatedAt,
+      if (actor?.window) {
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .updateTable("session_windows")
+            .set({ updated_at: updatedAt })
+            .where("session_id", "=", scope.sessionId),
+        );
+      } else {
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .insertInto("session_windows")
+            .values({
+              session_id: scope.sessionId,
+              session_key: scope.sessionKey,
+              previous_session_id: null,
+              reason: null,
+              session_scope: "conversation",
+              created_at: updatedAt,
+              updated_at: updatedAt,
+            })
+            .onConflict((conflict) =>
+              conflict.column("session_id").doUpdateSet({
                 updated_at: updatedAt,
-              })
-              .onConflict((conflict) =>
-                conflict.column("session_id").doUpdateSet({
-                  updated_at: updatedAt,
-                }),
-              ),
-      );
+              }),
+            ),
+        );
+      }
       if (actor?.window) {
         actor.window.updated_at = updatedAt;
       }

@@ -35,7 +35,7 @@ import {
 import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type {
   SessionActorHotState,
   SessionActorOutcome,

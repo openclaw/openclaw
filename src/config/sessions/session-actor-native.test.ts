@@ -333,7 +333,7 @@ it("retains unrelated session replicas through native entry, sharing, participan
       ];
       for (const mutate of mutations) {
         await sibling.read(authority);
-        await mutate();
+        await Promise.resolve(mutate());
         expect(actor.snapshot(authority)).toEqual(retained);
         expect(sibling.snapshot(authority)).toBeUndefined();
       }
