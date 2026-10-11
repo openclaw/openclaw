@@ -231,7 +231,7 @@ describe("unpublished state database acquisition", () => {
       vi.spyOn(fs, "statSync").mockImplementation((...args) => {
         const result = stat(...args);
         if (
-          process.platform === "linux" &&
+          (process.platform === "linux" || process.platform === "android") &&
           result &&
           args[0] === params.pathname &&
           "ctimeNs" in result
@@ -258,7 +258,7 @@ describe("unpublished state database acquisition", () => {
       try {
         const after = fs.statSync(params.pathname, { bigint: true });
         expect([after.dev, after.ino]).toEqual([before.dev, before.ino]);
-        if (process.platform === "linux") {
+        if (process.platform === "linux" || process.platform === "android") {
           expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
         }
         expect(acquired.db.prepare("PRAGMA index_info(idx_payload)").all()).toEqual([

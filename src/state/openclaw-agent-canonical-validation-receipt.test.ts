@@ -38,7 +38,7 @@ it.each(["legacy-birthtime", "missing-column"] as const)(
           .prepare("UPDATE session_key_contract SET canonical_ready = ? WHERE id = 1")
           .run(JSON.stringify([1, "main", `${file.dev}:${file.ino}`, birthtime]));
         expect(hasPersistedOpenClawAgentCanonicalValidation(database)).toBe(
-          process.platform !== "linux" || birthtime === "0",
+          (process.platform !== "linux" && process.platform !== "android") || birthtime === "0",
         );
       } else {
         expect(hasPersistedOpenClawAgentCanonicalValidation(database)).toBe(false);
