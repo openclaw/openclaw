@@ -26,8 +26,9 @@ export function registerGatewaySupersededReloadTests({
   describe("gateway hot reload superseded tail recovery", () => {
     it.each([
       { name: "superseded publication", superseded: true, cancelled: true },
-      { name: "current publication", superseded: false, cancelled: false },
+      { name: "replaced models with current config", superseded: false, cancelled: true },
       { name: "failed superseded publication", superseded: true, cancelled: false },
+      { name: "failed current publication", superseded: false, cancelled: false },
     ])("preserves the recovery distinction for a $name", async ({ superseded, cancelled }) => {
       const setState = vi.fn();
       const handlers = createGatewayReloadHandlers({ setState });
@@ -41,7 +42,7 @@ export function registerGatewaySupersededReloadTests({
       let current = true;
       refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
         current = !superseded;
-        throw cancelled || !superseded
+        throw cancelled
           ? new PreparedModelRuntimePublicationSupersededError("publication replaced")
           : new Error("catalog build failed");
       });
