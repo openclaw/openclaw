@@ -273,7 +273,33 @@ export async function drainPendingPrefs(
             "committedBatch" in result
               ? (result.committedBatch ?? dispatchedBatch)
               : dispatchedBatch;
-          const lastSeen = readConfirmedPrefs(sync, sync.pendingScope) ?? {};
+          let lastSeen = readConfirmedPrefs(sync, sync.pendingScope) ?? {};
+          if (
+            navigationReceipt &&
+            capturedClient &&
+            profileId &&
+            sync.pendingPrefs &&
+            Object.hasOwn(sync.pendingPrefs, "sidebarEntries") &&
+            lastSeen.navigationConfirmation?.sidebarEntries !==
+              lastSeenAtDispatch.navigationConfirmation?.sidebarEntries &&
+            !prefValuesEqual(lastSeen.sidebarEntries, committedBatch.sidebarEntries)
+          ) {
+            // Reconnect hydration can publish the pre-write pins while replay is in flight.
+            invalidateUserPreferences(capturedClient);
+            await refreshProfileAppearancePrefs({
+              client: capturedClient,
+              profileId,
+              scope: gatewayScope,
+              configObject: writer.state.configSnapshot?.config,
+              onApplied: () => undefined,
+              isCurrent: profileIsCurrent,
+            }).catch(() => false);
+            if (!isCurrent() || !profileIsCurrent()) {
+              return;
+            }
+            sync.reconcilePersistedPendingPrefs();
+            lastSeen = readConfirmedPrefs(sync, sync.pendingScope) ?? {};
+          }
           const profilePrefs = useProfile
             ? resolveProfileAppearancePrefs(
                 writer.state.client?.gatewayUrl ?? "",
