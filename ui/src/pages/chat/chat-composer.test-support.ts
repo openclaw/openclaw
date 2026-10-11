@@ -45,8 +45,7 @@ export function renderComposerFixture(overrides: Partial<ComposerProps> = {}) {
 }
 
 export function createComposerContainer() {
-  // SAFETY: Disconnected composer fixtures only read Gateway and agent selection; MCP discovery is unavailable.
-  return createApplicationContextProvider({
+  const context: Pick<ApplicationContext, "gateway" | "agentSelection"> = {
     gateway: createApplicationGateway().gateway,
     agentSelection: {
       state: { selectedId: "main", scopeId: "main" },
@@ -55,7 +54,9 @@ export function createComposerContainer() {
       setScope: () => {},
       subscribe: () => () => {},
     },
-  } as ApplicationContext);
+  };
+  // SAFETY: Disconnected composer fixtures only read Gateway and agent selection; MCP discovery is unavailable.
+  return createApplicationContextProvider(context as ApplicationContext);
 }
 
 export function findComposerButton(container: Element, label: string): HTMLButtonElement {
