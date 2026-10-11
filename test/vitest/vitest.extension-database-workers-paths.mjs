@@ -178,6 +178,12 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/commands.native-subagent-retention.test.ts",
   "extensions/codex/src/command-handler-scope.worker.test.ts",
   "extensions/codex/src/commands.test.ts",
+  // Async command auth reaches the host-owned shared-state broker.
+  "extensions/codex/src/command-account.test.ts",
+  "extensions/codex/src/command-plugins-runtime.test.ts",
+  "extensions/codex/src/command-rpc.test.ts",
+  "extensions/codex/src/commands.detach.test.ts",
+  "extensions/codex/src/supervision-tools.test.ts",
   "extensions/codex/src/session-catalog-adoption.test.ts",
   "extensions/codex/src/session-catalog-adoption-recovery.test.ts",
   "extensions/codex/index-services.test.ts",
