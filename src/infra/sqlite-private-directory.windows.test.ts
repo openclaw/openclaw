@@ -91,6 +91,23 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
     }
   });
 
+  it("creates private directories and files beyond the Win32 path limit", () => {
+    let parent = tempDirs.make("openclaw-sqlite-private-long-");
+    while (parent.length < 280) {
+      parent = path.join(parent, "p".repeat(40));
+    }
+    fsSync.mkdirSync(parent, { recursive: true });
+    const directory = createPrivateSqliteTempDirectorySync(parent, "long-");
+    expect(directory.length).toBeGreaterThan(260);
+    const file = createPrivateWindowsFile(path.join(directory, "private.sqlite"));
+    try {
+      fsSync.writeSync(file.fd, "long");
+    } finally {
+      file.close();
+    }
+    expect(fsSync.readFileSync(path.join(directory, "private.sqlite"), "utf8")).toBe("long");
+  });
+
   it("protects a new file before its published-name descriptor opens and preserves an existing winner", () => {
     const directory = tempDirs.make("openclaw-private-file-");
     const file = path.join(directory, "private.sqlite");
