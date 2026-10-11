@@ -19,11 +19,6 @@ import { buildCopilotDynamicHeaders } from "../providers/github-copilot-headers.
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { createOpenAIProviderClient } from "../providers/openai-provider-client.js";
 import { toOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
-import {
-  clearPendingCommentaryText,
-  tagUnresolvedTextAsCommentary,
-  type PendingCommentaryTags,
-} from "../utils/assistant-text-phase.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   createFirstStreamEventAbortController,
@@ -315,7 +310,6 @@ export function streamOpenAICompletionsRequest(
   const { eventStream, stream } = createWritableTransportEventStream();
   void (async () => {
     const output: MutableAssistantOutput = createAssistantOutput(model);
-    const provisionalCommentaryTags: PendingCommentaryTags = new Map();
     let discardCandidate = false;
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
@@ -461,7 +455,6 @@ export function streamOpenAICompletionsRequest(
               ? {
                   mode: "direct" as const,
                   beforeContentBlock: directEvents.beforeContentBlock,
-                  provisionalCommentaryTags,
                 }
               : { mode: "managed" as const }),
             signal: discardCandidate ? undefined : options?.signal,
@@ -505,8 +498,6 @@ export function streamOpenAICompletionsRequest(
         error,
         cleanup: () => {
           finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
-          clearPendingCommentaryText(provisionalCommentaryTags);
-          tagUnresolvedTextAsCommentary(output);
           if (mode === "direct") {
             for (const block of output.content) {
               delete (block as { index?: number }).index;

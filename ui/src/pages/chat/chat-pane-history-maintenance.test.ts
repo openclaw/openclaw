@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -91,7 +92,9 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     });
     // Finish initial anchoring before exercising maintenance above the end.
     renderRows(rows);
-    await Promise.resolve();
+    flush();
+    vi.advanceTimersToNextFrame();
+    flush();
     expect(container.scrollTop).toBe(800);
     container.dispatchEvent(new Event("scroll"));
     renderRows(rows);
