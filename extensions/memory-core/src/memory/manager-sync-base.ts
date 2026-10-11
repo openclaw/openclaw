@@ -8,14 +8,12 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import {
-  loadSqliteVecExtension,
-  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
-  type MemorySessionSyncTarget,
-  type MemorySource,
-  type MemoryWorkspaceFiles,
-  type MemorySyncParams,
-  type MemorySyncProgressUpdate,
+import type {
+  MemorySessionSyncTarget,
+  MemorySource,
+  MemoryWorkspaceFiles,
+  MemorySyncParams,
+  MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
@@ -39,7 +37,6 @@ import {
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
-import { requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 
@@ -507,7 +504,7 @@ export abstract class MemoryManagerSyncBase {
   }
 
   protected resetVectorState(vectorIndexComplete: boolean): void {
-    // Shadow publication replaces index rows, not this handle's loaded extension.
+    // Shadow publication replaces index rows, not the worker's loaded extension.
     const extensionLoaded = vectorIndexComplete && this.vector.available === true;
     this.database.vectorReady = extensionLoaded ? Promise.resolve(true) : null;
     if (!extensionLoaded) {
@@ -577,11 +574,6 @@ export abstract class MemoryManagerSyncBase {
   }
 
   private async loadVectorExtension(): Promise<boolean> {
-    if (this.vector.available === true && this.hasVectorRebuildMarker()) {
-      this.markConfiguredSourcesForFullReindex();
-      return false;
-    }
-    // Child KNN proves capability, but this connection still needs its own extension setup.
     if (this.vector.available === false) {
       return false;
     }
@@ -593,36 +585,25 @@ export abstract class MemoryManagerSyncBase {
       const resolvedPath = this.vector.extensionPath?.trim()
         ? resolveUserPath(this.vector.extensionPath)
         : undefined;
-      const loaded = await loadSqliteVecExtension({ db: this.db, extensionPath: resolvedPath });
-      if (!loaded.ok) {
-        throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+      const database = this.database;
+      const loaded = await database.prepareVector(resolvedPath, () => {
+        if (this.closed || database.closed || !database.db.isOpen) {
+          throw new Error("Memory database owner closed before vector preparation");
+        }
+      });
+      if (!loaded) {
+        throw new Error("Memory vector preparation did not complete");
       }
       this.vector.extensionPath = loaded.extensionPath;
       this.vector.available = true;
-      if (this.hasVectorRebuildMarker()) {
+      if (["incomplete", "unverified"].includes(database.facts.vectorState.state)) {
         // A skipped vector write/delete can leave both missing and extra rows.
         // Refuse partial KNN results and let the normal shadow reindex rebuild all
         // configured sources before this manager treats vectors as ready.
         this.markConfiguredSourcesForFullReindex();
         return false;
       }
-      const database = this.database;
-      if (
-        !database.readOnly &&
-        (await database.updateIndexStructure(
-          {
-            type: "vector.retireLegacy",
-            input: {
-              state: {
-                vector: this.vector,
-                fts: this.fts,
-                extensionPath: this.vector.extensionPath,
-              },
-            },
-          },
-          () => this.assertDatabaseMutationCurrent(database),
-        ))
-      ) {
+      if (loaded.retiredLegacy) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
         this.dirty = true;
@@ -636,18 +617,6 @@ export abstract class MemoryManagerSyncBase {
       log.warn(`sqlite-vec unavailable: ${message}`);
       return false;
     }
-  }
-
-  private hasVectorRebuildMarker(): boolean {
-    if (!this.database.hasIndex) {
-      return false;
-    }
-    return requiresMemoryVectorRebuild({
-      db: this.db,
-      vectorTable: VECTOR_TABLE,
-      metaVectorDims: this.readMeta()?.vectorDims,
-      hasSemanticChunks: this.hasSemanticChunks(),
-    });
   }
 
   protected markConfiguredSourcesForFullReindex(): void {

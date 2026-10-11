@@ -22,19 +22,10 @@ import {
   resolveClosedResetInterval,
   type ClosedResetInterval,
 } from "./session-accessor.sqlite-reset-window.js";
+import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
-
-export function isVisibleHistoryNonMessageEvent(event: Record<string, unknown>): boolean {
-  return (
-    event.type === "reset" ||
-    event.type === "compaction" ||
-    (event.type === "custom_message" &&
-      event.display === true &&
-      event.customType !== OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE)
-  );
-}
 
 /** Select display slots without loading custom content or details into history metadata. */
 export function isVisibleHistoryNonMessageEventSql(

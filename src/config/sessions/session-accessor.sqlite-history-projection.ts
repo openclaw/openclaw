@@ -9,7 +9,6 @@ import {
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import { readTranscriptDisplaySource } from "./session-accessor.sqlite-display-position.js";
 import {
-  isVisibleHistoryNonMessageEvent,
   isVisibleHistoryNonMessageEventSql,
   historyNavigationValidSql,
 } from "./session-accessor.sqlite-history-interval.js";
@@ -23,6 +22,7 @@ import {
   resolveTranscriptBoundaryWindow,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
+import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 

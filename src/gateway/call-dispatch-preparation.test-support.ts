@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { callGateway } from "./call.js";
 import type { GatewayClientRequestOptions } from "./client.js";
@@ -15,10 +16,46 @@ export function registerGatewayCallDispatchPreparationTests(
       ) => Promise<unknown>,
     ) => void;
     setStop: (stop: () => Promise<void>) => void;
+    setFeatures: (methods: string[], capabilities: string[]) => void;
     hello: () => void;
     close: (code: number, reason: string) => void;
   },
 ): void {
+  it.each([
+    {
+      method: "secrets.resolve",
+      requiredMethods: ["secrets.resolve"],
+      requiredCapabilities: undefined,
+      error:
+        /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
+    },
+    {
+      method: "gateway.restart.request",
+      requiredMethods: undefined,
+      requiredCapabilities: ["gateway-restart-target-safe-v1"],
+      error:
+        /does not support required capability "gateway-restart-target-safe-v1".*update or restart the active gateway/i,
+    },
+  ])("requires supported features before calling $method", async ({ error, ...options }) => {
+    const harness = setup();
+    harness.setFeatures(["health"], []);
+    await expect(harness.call(options)).rejects.toThrow(error);
+  });
+
+  it("does not send an API key to a Gateway without owner-bound auth writes", async () => {
+    const harness = setup();
+    harness.setFeatures(["models.authSetApiKey"], [GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING]);
+    await expect(
+      harness.call({
+        method: "models.authSetApiKey",
+        params: { provider: "fixture", apiKey: "synthetic-api-key", expectedOwnerId: "owner" },
+        requiredMethods: ["models.authSetApiKey"],
+        requiredCapabilities: [GATEWAY_SERVER_CAPS.MODELS_AUTH_SET_API_KEY_OWNER],
+      }),
+    ).rejects.toThrow(/models-auth-set-api-key-owner-v1.*update or restart the active gateway/i);
+    expect(harness.request()).toBeNull();
+  });
+
   it("does not dispatch a request when its hello observer aborts the connection", async () => {
     const harness = setup();
     const controller = new AbortController();

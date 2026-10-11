@@ -390,6 +390,7 @@ export function createSessionCapabilityFixture(
   return {
     captureConnectionScope: () => null,
     isConnectionScopeCurrent: () => false,
+    subscribe: () => () => undefined,
     deletionState: () => undefined,
     think: () => undefined,
     settingsPreview: () => undefined,

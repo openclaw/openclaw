@@ -200,7 +200,7 @@ const cases: Array<{
         { type: "text", text: "joined" },
       ]),
       message("analysis", "root", "not the headline", { role: "assistant", phase: "commentary" }),
-      message("answer", "analysis", " final\n  answer ", {
+      message("answer", "analysis", "## **final**\n  [answer](https://example.com) ", {
         role: "assistant",
         phase: "final_answer",
       }),

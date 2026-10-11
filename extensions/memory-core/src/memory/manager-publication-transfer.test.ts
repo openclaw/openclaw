@@ -62,7 +62,7 @@ async function createOwner() {
 function fixtureWriter(owner: MemoryIndexDatabase): DatabaseSync {
   let writer = fixtureWriters.get(owner);
   if (!writer) {
-    writer = new DatabaseSync(owner.db.location()!);
+    writer = sqliteRuntime.openNodeSqliteDatabase(owner.db.location()!);
     writer.exec("PRAGMA busy_timeout = 5000");
     fixtureWriters.set(owner, writer);
   }
@@ -143,7 +143,6 @@ describe("bounded memory publication transfer", () => {
     const db = new DatabaseSync(filename);
     try {
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-      db.exec("CREATE TABLE chunks_vec (id TEXT)");
       const sql = vi.spyOn(db, "exec");
       const reads = vi.spyOn(db, "prepare");
       const bind = () =>
@@ -151,21 +150,19 @@ describe("bounded memory publication transfer", () => {
           { kind: "agent" },
           { databasePath: filename, database: db, admit: () => undefined },
         );
+      const scalar = bind();
       const state = {
         vector: { enabled: false, available: false },
         fts: { enabled: false, available: false },
       };
-      const scalar = bind();
-      expect(scalar.execute({ type: "vector.retireLegacy", input: { state } })).toMatchObject({
-        ok: true,
-        value: true,
-      });
       expect(
         scalar.execute({
-          type: "vector.retireLegacy",
-          input: { state: { ...state, extensionPath: path.join(filename, "missing-vec") } },
+          type: "index.writeMetadata",
+          input: { provider: "none", model: "fts-only", chunkTokens: 400, chunkOverlap: 80 },
         }),
-      ).toEqual({ ok: true, value: false });
+      ).toMatchObject({
+        ok: true,
+      });
       expect(
         reads.mock.calls.filter(([statement]) =>
           /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)$/u.test(statement),
@@ -185,10 +182,6 @@ describe("bounded memory publication transfer", () => {
       expect(
         sql.mock.calls.filter(([statement]) => /memory_publication_input/u.test(statement)),
       ).toEqual([]);
-      expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'chunks_vec'").all()).toEqual(
-        [],
-      );
-
       const staged = bind();
       const input = replacement("staged text survives scalar cleanup");
       const { chunks, embeddings: _embeddings, ...header } = input;
