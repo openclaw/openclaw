@@ -25,7 +25,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
 import { createGitHubPublicationExecutionEffects } from "./github-publication-execution-effects.js";
-import { assertReadableSharedGitHubPublication } from "./github-publication-store.js";
+import { assertReadableSharedGitHubPublication } from "./github-publication-receipt.js";
 import {
   checkRepositoryGitHubPublication as checked,
   listRepositoryGitHubPublicationsInDatabase,
@@ -79,7 +79,7 @@ export function readRepositoryGitHubPublicationBranch(
   return readRepositoryGitHubPublicationBranchInDatabase(openOpenClawStateDatabase().db, input);
 }
 
-function readRepositoryGitHubPublicationBranchInDatabase(
+export function readRepositoryGitHubPublicationBranchInDatabase(
   db: OpenClawStateDatabase["db"],
   input: {
     workspaceId: string;
@@ -169,7 +169,7 @@ export function insertRepositoryGitHubPublication(
   );
 }
 
-function insertRepositoryGitHubPublicationInDatabase(
+export function insertRepositoryGitHubPublicationInDatabase(
   database: OpenClawStateDatabase,
   row: RepositoryGitHubPublicationRow,
   assertCurrent: () => void,
@@ -249,7 +249,7 @@ export function bindRepositoryGitHubPublicationCheckpoint(
   );
 }
 
-function bindRepositoryGitHubPublicationCheckpointInDatabase(
+export function bindRepositoryGitHubPublicationCheckpointInDatabase(
   database: OpenClawStateDatabase,
   row: RepositoryGitHubPublicationRow,
   checkpoint: Pick<RepositoryGitHubPublicationRow, (typeof checkpointColumns)[number]>,
@@ -304,7 +304,7 @@ export function failRepositoryGitHubPublicationPreparation(
   );
 }
 
-function failRepositoryGitHubPublicationPreparationInDatabase(
+export function failRepositoryGitHubPublicationPreparationInDatabase(
   database: OpenClawStateDatabase,
   row: RepositoryGitHubPublicationRow,
   nextAction: string,
@@ -336,7 +336,7 @@ function failRepositoryGitHubPublicationPreparationInDatabase(
   return changed(db, updated);
 }
 
-function writeRepositoryGitHubPublicationInDatabase(
+export function writeRepositoryGitHubPublicationInDatabase(
   database: OpenClawStateDatabase,
   row: RepositoryGitHubPublicationRow,
   instanceId: string,
@@ -395,7 +395,7 @@ function writeRepositoryGitHubPublicationInDatabase(
   return changed(db, updated);
 }
 
-function claimRepositoryGitHubPublicationInDatabase(
+export function claimRepositoryGitHubPublicationInDatabase(
   database: OpenClawStateDatabase,
   row: RepositoryGitHubPublicationRow,
   instanceId: string,
@@ -481,6 +481,69 @@ export function claimRepositoryGitHubPublication(
   };
 }
 
+export function markRepositoryGitHubPublicationReportedInDatabase(
+  database: OpenClawStateDatabase,
+  requestId: string,
+): RepositoryGitHubPublicationRow | undefined {
+  if (!tableExists(database.db, table)) {
+    return undefined;
+  }
+  const { db } = database;
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .updateTable(table)
+      .set({ reported_at_ms: Date.now() })
+      .where("request_id", "=", requestId)
+      .where("status", "in", ["published", "failed"])
+      .returningAll(),
+  );
+  if (row) {
+    githubPublicationReceipts.stageRow(db, "repository", row);
+  }
+  return row;
+}
+
+export function failStaleRepositoryGitHubPublicationInDatabase(
+  database: OpenClawStateDatabase,
+  row: RepositoryGitHubPublicationRow,
+  sessionIsCurrent: () => boolean,
+): RepositoryGitHubPublicationRow | undefined {
+  const { db } = database;
+  const current = readRepositoryGitHubPublicationInDatabase(db, row.request_id);
+  if (
+    !current ||
+    terminalRepositoryGitHubPublication(current) ||
+    current.request_digest !== row.request_digest ||
+    sessionIsCurrent()
+  ) {
+    return undefined;
+  }
+  // Retention preserves the original effects, not authority to publish after
+  // archive/reset. Clearing the execution also fences awaited response writers.
+  const updated = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .updateTable(table)
+      .set({
+        status: "failed",
+        error_code: "session_changed",
+        next_action:
+          "Review any recorded GitHub effects, then request publication from a current session.",
+        execution_id: null,
+        gateway_instance_id: null,
+        updated_at_ms: Date.now(),
+      })
+      .where("request_id", "=", row.request_id)
+      .where("request_digest", "=", row.request_digest)
+      .returningAll(),
+  );
+  if (updated) {
+    return changed(db, updated);
+  }
+  return undefined;
+}
+
 export function deferRepositoryGitHubPublicationClaims(requestIds: readonly string[]): void {
   if (requestIds.length) {
     runOpenClawStateWriteTransaction(
@@ -491,7 +554,7 @@ export function deferRepositoryGitHubPublicationClaims(requestIds: readonly stri
   }
 }
 
-function deferRepositoryGitHubPublicationClaimsInDatabase(
+export function deferRepositoryGitHubPublicationClaimsInDatabase(
   database: OpenClawStateDatabase,
   requestIds: readonly string[],
 ): RepositoryGitHubPublicationRow[] {
@@ -531,46 +594,3 @@ export function terminalRepositoryGitHubPublication(
 export type RepositoryGitHubPublicationExecution = ReturnType<
   typeof claimRepositoryGitHubPublication
 >;
-
-export function failStaleRepositoryGitHubPublication(
-  row: RepositoryGitHubPublicationRow,
-  sessionIsCurrent: () => boolean,
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const current = readRepositoryGitHubPublication(row.request_id);
-      if (
-        !current ||
-        terminalRepositoryGitHubPublication(current) ||
-        current.request_digest !== row.request_digest ||
-        sessionIsCurrent()
-      ) {
-        return;
-      }
-      // Retention preserves the original effects, not authority to publish after
-      // archive/reset. Clearing the execution also fences awaited response writers.
-      const updated = executeSqliteQueryTakeFirstSync(
-        db,
-        query(db)
-          .updateTable(table)
-          .set({
-            status: "failed",
-            error_code: "session_changed",
-            next_action:
-              "Review any recorded GitHub effects, then request publication from a current session.",
-            execution_id: null,
-            gateway_instance_id: null,
-            updated_at_ms: Date.now(),
-          })
-          .where("request_id", "=", row.request_id)
-          .where("request_digest", "=", row.request_digest)
-          .returningAll(),
-      );
-      if (updated) {
-        changed(db, updated);
-      }
-    },
-    undefined,
-    { operationLabel: "github-repository-publication.retire" },
-  );
-}

@@ -92,7 +92,7 @@ describe("login refresh ownership", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(probe).toHaveBeenCalledTimes(2);
     expect(probe).toHaveBeenCalledWith(
-      window.location.href,
+      new URL("/index.html", window.location.href).href,
       expect.objectContaining({
         method: "HEAD",
         cache: "no-store",

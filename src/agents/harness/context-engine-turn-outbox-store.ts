@@ -7,7 +7,11 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerCommand, SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
+import {
+  resolveExplicitIncognitoAgentSqliteTarget,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import type {
@@ -26,6 +30,9 @@ async function runContextEngineTurnOutboxCommand(
   target: { agentId: string; path: string },
   command: OutboxCommand,
 ): Promise<unknown> {
+  if (resolveExplicitIncognitoAgentSqliteTarget(target.path, { agentId: target.agentId })) {
+    throw new IncognitoSessionMissingError();
+  }
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = {

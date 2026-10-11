@@ -164,14 +164,19 @@ describe("DockLayoutController open intent", () => {
 
 describe("DockLayoutController inline columns", () => {
   it.each([
-    { dock: "right", reserved: { bottom: "0px", right: "520px" } },
-    { dock: "bottom", reserved: { bottom: "320px", right: "0px" } },
+    { dock: "right", hostKind: "element", reserved: { bottom: "0px", right: "520px" } },
+    { dock: "bottom", hostKind: "element", reserved: { bottom: "320px", right: "0px" } },
+    { dock: "right", hostKind: "controller", reserved: { bottom: "0px", right: "520px" } },
+    { dock: "bottom", hostKind: "controller", reserved: { bottom: "320px", right: "0px" } },
   ] as const)(
-    "lets only the standalone $dock dock own the viewport reservation",
-    ({ dock, reserved }) => {
+    "lets only the standalone $dock dock own the viewport reservation with an embedded $hostKind",
+    ({ dock, hostKind, reserved }) => {
       const layout = createLayout("right");
       layout.save({ open: true, dock, height: 320, width: 520 });
-      const embeddedHost = createEmbeddedControllerHost();
+      const embeddedHost =
+        hostKind === "controller"
+          ? { ...createControllerHost(), embedded: true }
+          : createEmbeddedControllerHost();
       // Both instances of one panel share its layout store and reservation properties.
       const options = { layout, reservationPrefix: "test-shared", isAvailable: () => true };
       const standalone = new DockLayoutController(createControllerHost(), options);

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import * as exec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -23,6 +23,16 @@ import {
 import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import { resolveUpdateInstallSurface } from "./update-runner-install-surface.js";
 import { createGatewayUpdateCheck } from "./update-startup.js";
+
+const runHostCommandBuffered = exec.runCommandBuffered;
+beforeEach(() => {
+  vi.spyOn(exec, "runCommandBuffered").mockImplementation((argv, options) =>
+    argv[0] === "pacman" || argv[0] === "/usr/sbin/pkg"
+      ? Promise.resolve(pkgQueryResult())
+      : runHostCommandBuffered(argv, options),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
 
 async function writeGlobalPackageJson(packageRoot: string, version: string): Promise<void> {
   await fs.writeFile(
@@ -379,16 +389,12 @@ describe("pnpm isolated global install discovery", () => {
         timeoutMs: 1000,
         pkgRoot,
       });
-      if (!probeSucceeds && process.platform === "freebsd") {
-        await expect(resolution).rejects.toMatchObject({ reason: "pkg-ownership-unavailable" });
-      } else {
-        await expect(resolution).resolves.toEqual({
-          manager: "pnpm",
-          command: pnpmCommand,
-          globalRoot: probeSucceeds ? defaultPnpmRoot : null,
-          packageRoot: probeSucceeds ? path.join(defaultPnpmRoot, "openclaw") : null,
-        });
-      }
+      await expect(resolution).resolves.toEqual({
+        manager: "pnpm",
+        command: pnpmCommand,
+        globalRoot: probeSucceeds ? defaultPnpmRoot : null,
+        packageRoot: probeSucceeds ? path.join(defaultPnpmRoot, "openclaw") : null,
+      });
       expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([[pnpmCommand, "root", "-g"]]);
     });
   });
@@ -585,11 +591,12 @@ describe("custom Bun global installation ownership", () => {
 describe("FreeBSD package-manager admission", () => {
   afterEach(() => vi.restoreAllMocks());
   it.each(["unknown database", "exhausted budget"])(
-    "ends optional cleanup after %s without another pkg probe",
+    "keeps inconclusive ownership best effort within the cleanup budget: %s",
     async (failure) => {
       await withTestDir({ prefix: "openclaw-pkg-cleanup-budget-" }, async (base) => {
         await fs.mkdir(path.join(base, ".openclaw-first"));
         await fs.mkdir(path.join(base, ".openclaw-second"));
+        const entries = await fs.readdir(base);
         const now = Date.now();
         const clock = vi.spyOn(Date, "now").mockReturnValue(now);
         const query = vi.spyOn(exec, "runCommandBuffered").mockImplementation(async () => {
@@ -601,10 +608,10 @@ describe("FreeBSD package-manager admission", () => {
         await withMockedPlatform("freebsd", async () => {
           await expect(
             cleanupGlobalRenameDirs({ globalRoot: base, packageName: "openclaw" }),
-          ).resolves.toEqual({ removed: [] });
+          ).resolves.toEqual({ removed: failure === "unknown database" ? entries : [] });
         });
-        expect(query).toHaveBeenCalledTimes(1);
-        expect(await fs.readdir(base)).toHaveLength(2);
+        expect(query).toHaveBeenCalledTimes(failure === "unknown database" ? 2 : 1);
+        expect(await fs.readdir(base)).toHaveLength(failure === "unknown database" ? 0 : 2);
       });
     },
   );

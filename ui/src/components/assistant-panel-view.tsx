@@ -16,7 +16,7 @@ export function AssistantPanelView(props: {
     props.revision();
     return props.controller;
   };
-  const resizer = () => state().dockLayout.resizerProps;
+  const resizer = () => state().dockLayout.resizer;
   const visible = () => state().available && state().dockLayout.open;
   const dock = () => state().dockLayout.dock;
   const session = () => {

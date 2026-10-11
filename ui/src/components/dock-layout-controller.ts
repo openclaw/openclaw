@@ -10,7 +10,8 @@ import "./resizable-divider.ts";
 
 type DockLayoutHost = ReactiveControllerHost & {
   readonly isConnected: boolean;
-  readonly elementHost?: HTMLElement;
+  readonly embedded?: boolean;
+  hasAttribute?(name: string): boolean;
 };
 
 type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
@@ -167,9 +168,28 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     return this.dock === "bottom" ? window.innerHeight : window.innerWidth;
   }
 
-  get resizerProps() {
+  renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
+    const resizer = this.resizer;
+    if (!resizer) {
+      return nothing;
+    }
+    return html`<resizable-divider
+      class="${classPrefix}-resizer ${classPrefix}-resizer--${this.dock}"
+      .orientation=${resizer.orientation}
+      .label=${label}
+      .splitRatio=${resizer.splitRatio}
+      .minRatio=${resizer.minRatio}
+      .maxRatio=${resizer.maxRatio}
+      .measureRatio=${resizer.measureRatio}
+      .measureSize=${resizer.measureSize}
+      @resize=${(event: CustomEvent<{ splitRatio: number }>) => this.resize(event)}
+      @resize-end=${() => this.persist()}
+    ></resizable-divider>`;
+  }
+
+  get resizer() {
     if (this.isFullscreen() || this.dock === "main") {
-      return undefined;
+      return null;
     }
     const horizontal = this.dock === "bottom";
     const size = this.size();
@@ -186,25 +206,6 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     };
   }
 
-  renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
-    const props = this.resizerProps;
-    if (!props) {
-      return nothing;
-    }
-    return html`<resizable-divider
-      class="${classPrefix}-resizer ${classPrefix}-resizer--${this.dock}"
-      .orientation=${props.orientation}
-      .label=${label}
-      .splitRatio=${props.splitRatio}
-      .minRatio=${props.minRatio}
-      .maxRatio=${props.maxRatio}
-      .measureRatio=${props.measureRatio}
-      .measureSize=${props.measureSize}
-      @resize=${(event: CustomEvent<{ splitRatio: number }>) => this.resize(event)}
-      @resize-end=${() => this.persist()}
-    ></resizable-divider>`;
-  }
-
   private clearReservation(): void {
     if (!this.reservesViewport()) {
       return;
@@ -218,12 +219,8 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   // and inline hosts are laid out by their parent, and the standalone dock of the same
   // panel can be open at the same time, so they neither reserve nor clear its properties.
   private reservesViewport(): boolean {
-    return (
-      !this.isFullscreen() &&
-      !(this.host instanceof HTMLElement ? this.host : this.host.elementHost)?.hasAttribute(
-        "embedded",
-      )
-    );
+    const embedded = this.host.embedded ?? this.host.hasAttribute?.("embedded") ?? false;
+    return !this.isFullscreen() && !embedded;
   }
 
   private isFullscreen(): boolean {

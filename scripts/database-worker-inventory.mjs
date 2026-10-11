@@ -598,6 +598,36 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/gateway/github-publication-store.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "listSharedGitHubPublicationsInDatabase",
+          "markSharedGitHubPublicationReportedInDatabase",
+          "assertSharedGitHubPublicationClaimInDatabase",
+          "bindAcceptedGitHubPublicationClaimSnapshotInDatabase",
+        ],
+        evidence:
+          "List is called by state/github-publication.read.worker.ts and github-publication-defer.kernel.ts whose selector only runs in state/github-publication.worker.ts. Report/snapshot are called only by that mutation worker; claim assertion by its snapshot kernel and state/github-publication-request.worker.ts. Native store adapters remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/github-repository-publication-store.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "markRepositoryGitHubPublicationReportedInDatabase",
+          "failStaleRepositoryGitHubPublicationInDatabase",
+        ],
+        evidence:
+          "Only state/github-publication.worker.ts repositoryMutation report/retire calls these kernels. Native stale-request and reporting adapters retain their separate SQL and T1 classification.",
+      },
+    ],
+  ],
+  [
     "src/gateway/operator-approval-store.kernel.ts",
     [
       {
@@ -1079,6 +1109,15 @@ const reviewedOperations = new Map([
   [
     "src/gateway/github-personal-publication-store.ts",
     [
+      {
+        tier: "W",
+        operations: [
+          "requirePersonalGitHubPublicationConfirmationInDatabase",
+          "markPersonalGitHubPublicationReportedInDatabase",
+        ],
+        evidence:
+          "Only state/github-publication.worker.ts personalMutation restart/report calls these kernels. Native confirmation and reporting adapters retain their separate SQL and existing classification.",
+      },
       {
         tier: "T2",
         operations: ["requirePersonalGitHubPublicationConfirmation"],
@@ -2323,6 +2362,7 @@ const workerModules = new Set([
 
   "src/state/backup-run-records.kernel.ts", // Backup record writes are called only by the shared-state worker runtime.
   "src/state/github-personal-publication-lifecycle.ts", // Receipt SQL runs in shared-state worker dispatch; host helper enqueues commands.
+  "src/state/github-publication-source.kernel.ts", // Only github-publication-source.worker.ts:63,80; its reader is instantiated by openclaw-state.worker.ts:234.
   "src/state/openclaw-state-lease-worker.ts", // Lease transaction dispatch is called only by the shared-state worker backend.
   "src/state/openclaw-state-worker-runtime.ts",
   "src/state/session-repository-workspaces.kernel.ts", // SQL callers are shared-state workspace dispatch and the state read worker.

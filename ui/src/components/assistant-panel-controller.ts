@@ -82,9 +82,6 @@ export class AssistantPanelController {
   get updateComplete() {
     return this.element.updateComplete;
   }
-  get elementHost() {
-    return this.element;
-  }
   requestUpdate() {
     this.controllerHost.requestUpdate();
   }
