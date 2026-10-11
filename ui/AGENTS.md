@@ -5,10 +5,10 @@ This directory owns Control UI-specific guidance that should not live in the rep
 ## Solid migration
 
 For Lit 3/Web Awesome ports and new Solid 2 components or projections, follow the
-[Control UI Solid playbook](../.agents/skills/control-ui-solid/SKILL.md) and the
+[Solid skill](../.agents/skills/solid/SKILL.md) and the
 assigned migration work order. It owns conversion, lifecycle, interop, and proof
-guidance. The state-ownership rules below still apply; the browser-floor change
-and removal of Lit-specific guidance belong to the cutover.
+guidance. The state-ownership rules below still apply. The browser floor is in place;
+the Lit-specific guidance below goes with the final Lit sweep.
 
 ## State Ownership And Async Results
 

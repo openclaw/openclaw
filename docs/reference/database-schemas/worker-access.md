@@ -36,6 +36,14 @@ are not part of the correctness contract. SQLite statements in autocommit see
 committed rows without a freshness query. Keep explicit read transactions only
 where multiple statements need one consistent snapshot.
 
+Idle outbound recovery and the Web Push subscription-presence check reuse
+physical-database facts on the Gateway host, avoiding worker requests as well as
+SQL. Queue insertions and replacements invalidate the empty recovery fact;
+subscription mutations publish or invalidate presence through the existing
+commit receipts. These facts do not authorize sends: delivery custody and current
+subscription policy remain with their existing owners. Mention Inbox head checks
+use the same physical-database admission lifecycle.
+
 Outside writers, including CLI commands, Doctor, cron processes, native companion
 processes, and plugin children, must route through the Gateway or acquire exclusive
 ownership while it is stopped. Existing direct writers that have not adopted that
@@ -57,6 +65,9 @@ change time as birthtime, the existing normalized unknown-birthtime value remain
 in use; retaining the original descriptor prevents that inode from being reused
 for a replacement file. This descriptor holds identity custody; it is separate
 from SQLite's native connection descriptor.
+
+Synchronous admission exchanges carry the requested physical database's facts and
+custody, including a retained file whose original pathname now points elsewhere.
 
 Quarantine guards retain their indexed durable row lookup by target pathname.
 A separate inspection process can admit a file before the Gateway's verifier
@@ -466,6 +477,93 @@ changes. Existing published updaters need no migration for these process-local
 receipts, and no synchronous SDK method is removed or given an asynchronous
 completion contract.
 
+### Session phase actor (B1, inactive)
+
+The shared session actor contract adds an inactive foundation for durable and
+incognito sessions. Production callers retain their existing routes. The actor
+lives inside the canonical agent execution worker and shares its physical writer
+queue; it does not introduce another database, worker service, or writer owner.
+Durable actors bind the physical database identity and session key. Incognito
+actors bind the existing memory database's handle and incarnation.
+
+Native incognito acquisition returns `not-actor-owned`; those sessions keep
+their existing owner and get no actor savings until Phase E / P12. The actor
+has no native incognito adapter. Worker-backed incognito acquisition selects
+the captured memory execution owner. Closing that owner invalidates captured
+targets; acquisition cannot revive its old run authority or create a replacement
+memory database. Follow-on input, turn, and delivery cutovers must honor the
+native decline until P12 selects the worker-backed actor.
+
+A cold actor read hydrates its entry, participants, membership, pending-input
+custody, and transcript metadata in one autocommit statement. A cold phase
+command uses that same statement inside its own write transaction, without a
+preceding read request. The versioned hot state
+includes exact anchors, idempotency identities, model-context membership, and
+the entry's lifecycle, recovery, and final-delivery fields. Anchor availability
+is explicit when the display projection is unready. When canonical facts
+cannot prove model context, it remains explicitly unavailable; an empty context
+is a different result. Payload history keeps its existing reader. Hydration and
+actor reads reuse process-wide schema and integrity admission without new format
+checks or foreign-commit probes.
+
+The persistence interface carries typed commands, explicit version and domain
+predicates, and complete postimage receipts. Database handles and SQL dialect
+operations stay inside the storage adapter. Actor writes use held state and
+in-process receipt counters instead of reading the legacy connection-local TEMP
+cache-generation table; callers awaiting cutover retain their existing cache.
+
+Typed commands cover input acceptance, run adoption and pre-hook checkpoints,
+tool results, transcript events, turn completion, pre-send custody, and delivery
+settlement. Each command uses one synchronous transaction and the resident
+preimage through the existing mutation kernels. Only a confirmed commit installs
+the new postimage. Commands may omit the expected version and use their admitted
+preimage. An explicit version mismatch returns a typed `stale-version` outcome
+with the current postimage before running any phase mutation. A caller can retry
+once with that version; an unknown outcome is never retryable.
+Phase-local pure reducers can join the next command; a
+remaining reducer batch commits before that phase settles. These batches do not
+move input, tool-result, or delivery acknowledgement across its required durable
+boundary. Compositions retain actor lifetime across asynchronous work, while
+individual commands acquire their own FIFO turn. No transaction awaits a hook,
+network operation, or another actor command.
+
+The MAIN replica retains complete committed hot state. A synchronous snapshot
+reads installed facts; an ordered read joins the existing physical writer FIFO
+and requests actor state only on a miss. Commit receipts identify the command,
+phase, and before/after version, and install before command acknowledgement.
+Existing session publications and in-process write receipts invalidate only
+the affected logical keys and shared transcript/window dependencies. Unrelated
+session snapshots survive. Raw writes with unknown coverage, schema changes,
+lost writers, and explicitly global maintenance retain database-wide fences.
+Scoped receipt counters share the physical admission lifetime; inactive actor
+paths do not allocate them or add worker requests. Partial entry or
+transcript receipts cannot certify complete pending-input and model-context
+facts. Native, SDK, recovery, and maintenance writers keep their existing
+publication and final-authority guards during this incremental cutover.
+
+Confirmed rollback leaves committed state intact. A lost reply reconciles
+against native commit evidence; an unknown outcome fences further commands and
+disclosure until a read rehydrates the original owner. Neither path replays the
+mutation: additive accounting reducers lack durable deduplication, so a generic
+retry could apply usage twice. The replica trusts the command owner's receipt
+validation and checks only freshness before installing its detached postimage.
+Lifetime closure joins accepted commands and phase flushes before
+releasing transport custody. Durable residency eviction drops settled snapshots,
+not stored sessions. Rehydration starts a new actor epoch and restores durable
+custody evidence without reviving a prior process's run or placement authority.
+Residency has a session-count bound and a soft byte budget; one oversized working
+set remains resident until another session displaces it.
+Incognito keeps its memory-only storage, original nonrenewing 24-hour expiry,
+and terminal session loss on worker failure; snapshot eviction does not delete
+its memory database.
+
+Actor command diagnostics record phase and settlement without payloads. Census
+consumers count commands, database worker requests, transfer frames, native SQL
+statements, and committed transactions separately. This inactive stage claims
+no production SQL reduction or T1 retirement. Schemas, stored bytes, durability,
+retention, permissions, released SDK completion contracts, and update behavior
+are unchanged; existing published updaters need no actor migration.
+
 ### Conversation and plugin-state receipt coverage
 
 Bundled keyed-state mutations use the data-only V2 store and the existing
@@ -473,6 +571,13 @@ shared-state worker. Preparation can await on the host; `compareAndApply` checks
 the destination and any same-plugin namespace conditions in one synchronous
 worker transaction. An explicit conflict requires fresh preparation. Neither an
 unknown outcome nor a failed worker request selects a native fallback.
+
+Conversation binding V2 adapters require awaited operations and coherent inspection
+snapshots with current-source assertions. Expiring lookup/list operations remain
+writer operations. The account manager uses the same current-binding worker and
+receipt owner; external adapters certify their own source. Bundled Matrix activity
+writes update the affected key, publish only after commit, and retain their existing
+activity coalescing policy using acknowledged facts.
 
 Native harness ownership prepares through the awaited harness hook. Descriptive
 session rows retain exact keyed-state read dependencies through acceptance and
@@ -490,7 +595,7 @@ existing durable worker transaction; initialization, incognito, or a mixed
 released participant can explicitly select the existing native atomic settlement
 before dispatch. This compatibility selection is never a recovery fallback.
 
-Released synchronous stores and opaque callbacks remain named
+Released synchronous stores, binding services, and opaque callbacks remain named
 compatibility paths until removed in the next Plugin SDK major. They preserve
 commit-before-return and use one shared migration-warning budget per plugin and
 capability family. Exact final-authority reads remain at ClickClack/peer delivery,
@@ -518,9 +623,10 @@ The Gateway retains bounded plugin-state observation rows from these receipts.
 Repeated observations reuse the stored JSON image without a worker request;
 expiry still turns a row into absence, and callers receive freshly decoded values.
 Pending writes suspend cache reads, and unknown settlement drops cached facts.
-Comparisons carry the current cached image to the writer, whose conditional
-update or delete matches its stored bytes and timestamps. A changed row returns
-a conflict; insertion still checks current absence and capacity in the write
+Comparisons reread the authoritative row inside the write transaction, including
+no-op comparisons. Native binding settlement invalidates its affected observation
+keys because its compound receipt does not carry plugin-state postimages. A changed
+row returns a conflict; insertion checks current absence and capacity in the write
 transaction. Same-value sets retain their age and TTL refresh behavior. This
 changes no stored format, schema version, update migration, or SDK signature.
 
@@ -945,6 +1051,11 @@ debt, as do synchronous result compatibility readers and pending-result guards.
 These changes require no schema, retention, durability, or update migration.
 
 Workspace publication and move/reclaim retain synchronous final-authority guards.
+Independent lease heartbeats for the same physical state database share one
+worker and native connection. Each lease retains its own expiry, current-owner
+checks, requests, and cleanup. Closing one lease leaves its siblings running;
+closing the last joins native worker exit. Renewal remains independent of the
+Gateway event loop, including during concurrent worktree creation.
 Workspace reservation keeps its existing lease acquisition order and native
 preparation path. Each authority check reads placement and pending-result or
 reconciliation presence in one indexed statement, including orphan results when
@@ -2238,10 +2349,9 @@ continue through the P02 transaction owners.
 
 Active Memory prepares one parent-entry snapshot per recall request and reuses it
 for eligibility, fast mode, and channel context; final authority checks remain
-current. Memory publication's connection-local TEMP scratch table creation and
-explicitly TEMP-qualified cleanup expire local read facts without revoking MAIN
-schema admission. Mixed SQL batches, unqualified drops, and actual MAIN schema
-changes retain their existing invalidation and repair behavior.
+current. Memory publication stages transfer fragments in worker memory without
+changing schema admission. Actual MAIN schema changes retain their existing
+invalidation and repair behavior.
 
 Production acquisition remains host-owned until P12. Unbound incognito calls keep
 their native owner and allocate no actor; native selector removal remains P12.
@@ -2947,10 +3057,13 @@ same FIFO interval.
 
 Memory source-state reads, cache pruning, standing-intent operations, and session
 collaboration writes without a preparation callback use that single-command
-path. Memory bindings reuse the canonical connection's installed policy and
-create staging tables only for a staged transfer. Small embedding-cache writes
-carry a bounded inline batch through the same revision, tombstone, capacity, and
-commit checks; larger inputs retain fragment staging. Standing-intent setup
+path. Memory bindings reuse the canonical connection's installed policy. Small
+source replacements and embedding-cache writes carry a bounded inline batch in
+one request through the same revision, tombstone, capacity, and commit checks.
+Larger inputs retain bounded fragment messages and stage one publication in worker
+memory until settlement, without TEMP tables or staging SQL. This trades additional
+memory proportional to that publication for fewer database calls; source size is
+not newly capped. Standing-intent setup
 consumes admitted MAIN schema facts and requests a write transaction only when
 installation is needed. Temporary tables cannot redirect its canonical schema
 installation. Cold installation commits separately from the business operation.
@@ -3061,9 +3174,9 @@ Generated embedding-cache publication uses the existing memory publication worke
 and the captured published database, including during a shadow rebuild. Its native
 transaction rereads the index revision and session tombstones before reserving cache
 capacity and writing vectors. Conflicting dimensions invalidate the generation
-before its writer turn releases, even when clearing fails or loses its reply;
-the error still propagates without replay. Bounded staging retains one vector row
-at a time and preserves cache binary values. Source-file inspection remains on the
+before the operation returns, even when clearing fails or loses its reply;
+the error still propagates without replay. Worker-owned staging preserves cache
+binary values and is discarded after settlement or owner closure. Source-file inspection remains on the
 host. Cache pruning uses that same worker for its live count and oldest-row deletion,
 with a transaction recheck before each batch of at most 100 rows. The host releases
 admission and yields between batches; only definite pre-entry lock failures retry.
@@ -3071,7 +3184,8 @@ Cache and source-hash reads use the retained publication worker, with caller
 authority checked after delivery. Source snapshots use that same publication owner;
 read-only diagnostics use the retrieval worker. Shadow session publication prepares
 its current tombstone predicate in the original published worker while retaining
-the workspace lock through commit. The shadow's empty tombstone table never grants
+the workspace lock through commit. Ordinary publication checks that predicate only
+inside its committing transaction. The shadow's empty tombstone table never grants
 publication authority. Cold opening remains separate work. Schemas, cache retention,
 and stored formats are unchanged.
 
@@ -3345,6 +3459,15 @@ uncertain settlement discard it. Remote launch preparation consumes its already
 prepared pending-result facts only before the first admission wait. Later waits
 refresh them, and the claim transaction still checks live ownership. No schema,
 stored bytes, permission, durability, retention, or update behavior changes.
+
+The placement authority owner retains up to 256 exact local-session projections,
+including absent placements, and one maintenance preservation inventory. Committed
+claim and release receipts replace the local projection before returning to callers;
+other placement and workspace writes invalidate it. Non-local placement changes
+invalidate the preservation inventory, while ordinary local claims leave it current.
+Pending or uncertain writes and database retirement retain the existing authority
+checks. Remote environment projections remain direct reads through their own owner.
+Eviction only requires another worker read; it does not change durable ownership.
 
 Session observer admission, publication, terminal synthesis, and companion snapshots
 read through the existing Gateway session worker lookup. Each observation captures

@@ -166,6 +166,16 @@ export function* memoryPublicationBatches(
   yield* publicationBatches(rows());
 }
 
+/** Ordinary sources fit one bounded command; larger sources retain chunked transfer. */
+export function memoryPublicationInline(replacement: MemorySourceIndexReplacement) {
+  const batches = memoryPublicationBatches(replacement);
+  const first = batches.next();
+  if (!batches.next().done) {
+    return undefined;
+  }
+  return { ...memoryPublicationHeader(replacement), fragments: first.value ?? [] };
+}
+
 export function* memoryEmbeddingCacheBatches(
   entries: readonly MemoryEmbeddingCacheEntry[],
 ): Generator<MemoryPublicationFragment[]> {

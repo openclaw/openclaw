@@ -72,14 +72,18 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
           identity: { avatar: bootstrapIdentity.avatar ?? undefined },
         }
       : undefined);
-  if (!cardAgent) {
+  const cached =
+    host.sidebarSnapshot?.mode === "chip" && host.sidebarSnapshot.brand.agentId === cardAgentId
+      ? host.sidebarSnapshot.brand
+      : null;
+  if (!cardAgent && !cached) {
     return renderSidebarWorkspaceHeader(host);
   }
   const menuUnread = cardAgents.some((entry) => {
     const agentId = normalizeAgentId(entry.id);
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
-  const cardName = normalizeAgentLabel(cardAgent, cardIdentity);
+  const cardName = cached?.name ?? (cardAgent ? normalizeAgentLabel(cardAgent, cardIdentity) : "");
   const avatarAuthReady = Boolean(
     gateway &&
     (gateway.snapshot.hello ||
@@ -91,9 +95,9 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     <openclaw-sidebar-agent-card
       .agentName=${cardName}
       .agentId=${cardAgentId}
-      .avatarUrl=${resolveAgentAvatarUrl(cardAgent, cardIdentity)}
+      .avatarUrl=${cached ? cached.avatar : cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : null}
       .avatarAuthReady=${avatarAuthReady}
-      .avatarText=${resolveAgentTextAvatar(cardAgent, cardIdentity)}
+      .avatarText=${cached ? (cached.textAvatar ?? null) : cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : null}
       .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
       .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
       .menuUnread=${menuUnread}
@@ -115,9 +119,43 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
   `;
 }
 
-function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
+export function readSidebarBrandPresentation(host: AppSidebarRenderHost) {
+  const config = host.sessionDataContext?.config.current;
+  const chip = host.activeChipAgent();
   const branding = host.sessionDataContext?.theme.branding ?? currentThemeBranding();
-  const name = readSidebarNativeGateway()?.name.trim() || branding.brandName;
+  return {
+    agentId: host.sidebarAgentsMode === "chip" ? chip.agent?.id : undefined,
+    textAvatar:
+      host.sidebarAgentsMode === "chip" && chip.agent
+        ? resolveAgentTextAvatar(chip.agent, chip.identity)
+        : undefined,
+    name:
+      host.sidebarAgentsMode === "chip" && chip.agent
+        ? normalizeAgentLabel(chip.agent, chip.identity)
+        : readSidebarNativeGateway()?.name.trim() || branding.brandName,
+    avatar:
+      host.sidebarAgentsMode === "chip" && chip.agent
+        ? resolveAgentAvatarUrl(chip.agent, chip.identity)
+        : (config?.assistantIdentity.avatar ?? null),
+    icon: branding.brandIcon,
+    iconUrl: branding.artwork?.icons?.[branding.brandIcon]?.url,
+    environment: config?.environment?.label ?? null,
+  };
+}
+
+function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
+  const currentBranding = host.sessionDataContext?.theme.branding ?? currentThemeBranding();
+  const cached = host.sidebarSnapshot?.brand.agentId ? null : host.sidebarSnapshot?.brand;
+  const brand = cached ?? readSidebarBrandPresentation(host);
+  const branding = cached
+    ? {
+        ...currentBranding,
+        brandName: brand.name,
+        brandIcon: brand.icon,
+        artwork: brand.iconUrl ? { icons: { [brand.icon]: { url: brand.iconUrl } } } : undefined,
+      }
+    : currentBranding;
+  const name = brand.name;
   const menuOpen = host.sidebarMenus.agentMenuPosition !== null;
   return html`
     <div class="sidebar-workspace-header">
@@ -166,10 +204,8 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
             >
           </span>
           ${
-            host.sessionDataContext?.config.current.environment
-              ? html`<span class="control-ui-environment-pill"
-                  >${host.sessionDataContext.config.current.environment.label}</span
-                >`
+            brand.environment
+              ? html`<span class="control-ui-environment-pill">${brand.environment}</span>`
               : nothing
           }
         </span>
@@ -247,10 +283,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
   const selfUser = host.sessionDataContext
     ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
     : null;
-  const selfLabel = selfUser?.name ?? selfUser?.email ?? t("nav.owner");
+  const displayUser = selfUser ?? host.sidebarSnapshot?.footer;
+  const selfLabel = displayUser?.name ?? displayUser?.email ?? t("nav.owner");
   const avatarUser = {
     id: "owner",
-    ...selfUser,
+    ...displayUser,
     name: selfLabel,
     watchedSessions: [],
   };
@@ -354,7 +391,7 @@ export function renderAppSidebarPageEntry(
           : sessionRows.has(entry.key)
             ? host.renderPinnedSidebarSession(sessionRows.get(entry.key)!)
             : nothing;
-  const draggable = entry.type === "route" || entry.type === "plugin";
+  const draggable = !host.sidebarSnapshot && (entry.type === "route" || entry.type === "plugin");
   return html`
     <div
       class="sidebar-zone-entry ${

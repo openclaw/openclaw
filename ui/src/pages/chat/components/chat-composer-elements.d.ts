@@ -1,5 +1,3 @@
-import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import type { McpAppCatalog } from "../../../components/mcp-app-catalog.ts";
 import type { McpAppContextStrip } from "../../../components/mcp-app-context-strip.ts";
@@ -37,33 +35,6 @@ declare module "@solidjs/web" {
         placement?: WaPopup["placement"];
         strategy?: WaPopup["strategy"];
         "onWa-reposition"?: EventHandlerUnion<WaPopup, CustomEvent>;
-      };
-      "wa-dropdown": HTMLAttributes<WaDropdown> & {
-        "prop:open"?: WaDropdown["open"];
-        "prop:placement"?: WaDropdown["placement"];
-        "prop:distance"?: WaDropdown["distance"];
-        "prop:skidding"?: WaDropdown["skidding"];
-        open?: boolean;
-        placement?: WaDropdown["placement"];
-        "onWa-show"?: EventHandlerUnion<WaDropdown, CustomEvent>;
-        "onWa-after-show"?: EventHandlerUnion<WaDropdown, CustomEvent>;
-        "onWa-hide"?: EventHandlerUnion<WaDropdown, CustomEvent>;
-        "onWa-after-hide"?: EventHandlerUnion<WaDropdown, CustomEvent>;
-        "onWa-select"?: EventHandlerUnion<WaDropdown, CustomEvent<{ item: WaDropdownItem }>>;
-      };
-      "wa-dropdown-item": HTMLAttributes<WaDropdownItem> & {
-        "prop:value"?: WaDropdownItem["value"];
-        "prop:disabled"?: WaDropdownItem["disabled"];
-        "prop:checked"?: WaDropdownItem["checked"];
-        "prop:type"?: WaDropdownItem["type"];
-        value?: string;
-        disabled?: boolean;
-        checked?: boolean;
-        type?: WaDropdownItem["type"];
-        variant?: WaDropdownItem["variant"];
-        href?: string;
-        target?: WaDropdownItem["target"];
-        rel?: string;
       };
       "openclaw-modal-dialog": HTMLAttributes<OpenClawModalDialog> & {
         "prop:open"?: OpenClawModalDialog["open"];

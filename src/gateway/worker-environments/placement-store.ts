@@ -37,8 +37,10 @@ import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { createPlacementSessionToolOperationOps } from "./placement-session-tool-operations.js";
 import {
   preparePlacementAuthorityRead,
+  preparePlacementPreservationRead,
   preparePlacementTurnClaimAuthority,
   prepareSessionPlacementRead,
+  readPlacementProjection,
   type PlacementTurnClaimAuthority,
 } from "./placement-turn-authority.js";
 import { attachWorkerTurnExecutionIdentityStore } from "./placement-turn-claim-events.js";
@@ -175,22 +177,17 @@ export function createWorkerSessionPlacementStore(
     },
 
     async prepareMaintenancePlacements() {
-      const { value: placements, ...observation } = await preparePlacementAuthorityRead(
-        path,
-        undefined,
-        async () => {
-          const result = await executeExistingOpenClawStateRead(
-            { path },
-            { type: "workers.placementPreservation" },
-            { current: true },
-          );
-          if (!result || !result.ok || result.type !== "workers.placementPreservation") {
-            throw new Error("Worker placement preservation source is unavailable");
-          }
-          return result.placements;
-        },
-      );
-      return { placements, ...observation };
+      return await preparePlacementPreservationRead(path, async () => {
+        const result = await executeExistingOpenClawStateRead(
+          { path },
+          { type: "workers.placementPreservation" },
+          { current: true },
+        );
+        if (!result || !result.ok || result.type !== "workers.placementPreservation") {
+          throw new Error("Worker placement preservation source is unavailable");
+        }
+        return result.placements;
+      });
     },
 
     async readProjection(
@@ -205,27 +202,34 @@ export function createWorkerSessionPlacementStore(
           return conflict ? [[id, conflict] as const] : [];
         }),
       );
-      const result = await executeExistingOpenClawStateRead(
-        { path },
-        {
-          type: "workers.placementProjection",
-          sessionIds: ids,
-          conflictBindings: [...conflicts.values()].map(({ placement, claim }) => ({
-            placement: {
-              sessionId: placement.sessionId,
-              generation: placement.generation,
-              environmentId: placement.environmentId,
-              activeOwnerEpoch: placement.activeOwnerEpoch,
-            },
-            claim: { ...claim },
-          })),
-        },
-        readOptions,
-      );
-      if (!result || !result.ok || result.type !== "workers.placementProjection") {
-        throw new Error("Worker placement projection source is unavailable");
-      }
-      const { projection, conflictSessionIds } = result.result;
+      const loadProjection = async () => {
+        const result = await executeExistingOpenClawStateRead(
+          { path },
+          {
+            type: "workers.placementProjection",
+            sessionIds: ids,
+            conflictBindings: [...conflicts.values()].map(({ placement, claim }) => ({
+              placement: {
+                sessionId: placement.sessionId,
+                generation: placement.generation,
+                environmentId: placement.environmentId,
+                activeOwnerEpoch: placement.activeOwnerEpoch,
+              },
+              claim: { ...claim },
+            })),
+          },
+          readOptions,
+        );
+        if (!result || !result.ok || result.type !== "workers.placementProjection") {
+          throw new Error("Worker placement projection source is unavailable");
+        }
+        return result.result;
+      };
+      const singleSessionId = ids.length === 1 ? ids[0] : undefined;
+      const { projection, conflictSessionIds } =
+        singleSessionId !== undefined && conflicts.size === 0
+          ? await readPlacementProjection(path, singleSessionId, loadProjection)
+          : await loadProjection();
       const placements = new Map(projection.placements);
       for (const [id, captured] of conflicts) {
         const record = placements.get(id);

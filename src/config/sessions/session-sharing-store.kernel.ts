@@ -7,6 +7,7 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -30,6 +31,10 @@ export function listSessionMembersInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionKey: string,
 ): SessionMember[] {
+  const actor = readSessionActorTransactionState(database, { sessionKey });
+  if (actor && sessionKey === actor.hot.target.sessionKey) {
+    return structuredClone(actor.hot.members);
+  }
   return executeSqliteQuerySync(
     database.db,
     getSessionMemberKysely(database)

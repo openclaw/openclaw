@@ -15,7 +15,7 @@ import {
 import {
   describeChannelAccount,
   resolveChannelAccount,
-  resolveChannelDmPolicy as resolvePluginDmPolicy,
+  resolvePluginDmPolicy,
 } from "../../channels/account-resolution.js";
 import { resolveChannelDmPolicy } from "../../channels/plugins/dm-access.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";

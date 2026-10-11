@@ -72,7 +72,7 @@ openclaw agent exec "Inspect this repository" \
 
 `--code-mode direct` disables Code Mode, `auto` uses model capability metadata, and `code` forces the generic Code Mode surface for tool-capable runs. `--local-model-lean` removes high-latency and channel-dependent tools and enables the bounded Tool Search defaults for the isolated run.
 
-The timeout defaults to 600 seconds for `agent exec`; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
+The timeout defaults to 600 seconds per model attempt for `agent exec`, with a fresh budget for each configured fallback; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
 
 If cleanup fails after a run error or timeout, the original result and exit code are preserved and the cleanup failure is reported on stderr. A cleanup failure after a successful run exits `1`.
 
@@ -334,7 +334,7 @@ These are observations, not statistical speed guarantees.
 - `--reply-account <id>`: delivery account override
 - `--local`: run the embedded agent directly (after plugin registry preload)
 - `--deliver`: send the reply back to the selected channel/target
-- `--timeout <seconds>`: override this command's agent-turn deadline (default 600, or `agents.defaults.timeoutSeconds`); `0` disables the overall deadline. The 600-second fallback belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours.
+- `--timeout <seconds>`: override the execution budget for each model attempt (default 600, or `agents.defaults.timeoutSeconds`); each configured fallback gets a fresh budget, and `0` disables the attempt deadline. The Gateway client waits for the run's terminal result across fallback attempts, with cancellation and connection failures still applying. The 600-second default belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours per attempt.
 - `--json`: output JSON
 
 Gateway commands using OpenClaw's managed agent loop return their completed reply before optional memory
