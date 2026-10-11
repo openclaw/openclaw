@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => ({
   acquireSessionMcpRuntime: vi.fn(),
   materializeBundleMcpToolsForRun: vi.fn(),
   applyFinalEffectiveToolPolicy: vi.fn(),
+  admitsMcpServer: vi.fn(),
+  buildBundleMcpPolicyLayers: vi.fn(),
+  createBundleMcpServerPolicyMatcher: vi.fn(),
   filterRuntimeCompatibleTools: vi.fn(),
 }));
 
@@ -41,12 +44,18 @@ vi.mock("../../tool-schema-projection.js", () => ({
   filterRuntimeCompatibleTools: mocks.filterRuntimeCompatibleTools,
 }));
 
+// mock-isolation: Pin final policy and MCP outage admission so each case records its own layers.
 vi.mock("../effective-tool-policy.js", () => ({
   applyFinalEffectiveToolPolicy: mocks.applyFinalEffectiveToolPolicy,
+  buildBundleMcpPolicyLayers: mocks.buildBundleMcpPolicyLayers,
+  createBundleMcpServerPolicyMatcher: mocks.createBundleMcpServerPolicyMatcher,
 }));
 
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
+
+/** Stand-in for the run's resolved allow/deny layers, recorded with the diagnostics. */
+const runPolicyLayers = [{ allow: ["memos__read_note"] }];
 
 describe("prepareEmbeddedAttemptBundleTools", () => {
   beforeEach(() => {
@@ -57,6 +66,9 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     mocks.applyFinalEffectiveToolPolicy
       .mockReset()
       .mockImplementation(({ bundledTools }: { bundledTools: unknown[] }) => bundledTools);
+    mocks.admitsMcpServer.mockReset().mockReturnValue(true);
+    mocks.buildBundleMcpPolicyLayers.mockReset().mockReturnValue(runPolicyLayers);
+    mocks.createBundleMcpServerPolicyMatcher.mockReset().mockReturnValue(mocks.admitsMcpServer);
     mocks.filterRuntimeCompatibleTools
       .mockReset()
       .mockImplementation((tools: unknown[]) => ({ tools, diagnostics: [] }));
@@ -375,6 +387,84 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     expect(mocks.createBundleLspToolRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ reservedToolNames: ["message", "client_allowed"] }),
     );
+    // The same taken names reach the outage layers: a failed server's tool of
+    // that name would have materialized renamed, so an exact allow admits none.
+    expect(mocks.buildBundleMcpPolicyLayers).toHaveBeenCalledWith(
+      expect.objectContaining({ reservedToolNames: ["message", "client_allowed"] }),
+    );
+    expect(mocks.createBundleMcpServerPolicyMatcher).toHaveBeenCalledWith(runPolicyLayers, [
+      "message",
+      "client_allowed",
+    ]);
+  });
+
+  it("carries recorded MCP catalog failures alongside the materialized tools", async () => {
+    const input = createInput([], []);
+    input.attempt.config = { plugins: { enabled: false } };
+    const diagnostics = [
+      {
+        serverName: "memos",
+        safeServerName: "memos",
+        launchSummary: "memos",
+        message: "connect ECONNREFUSED",
+        toolFilter: { include: ["read_*"] },
+        deniedToolNames: ["read_note"],
+      },
+    ];
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+    // `diagnostics` also lists a recovering server that kept its tools; only the
+    // servers left with no tool reach Tool Search as an outage.
+    const recovering = {
+      serverName: "notes",
+      safeServerName: "notes",
+      launchSummary: "notes",
+      message: "mcp transport closed",
+    };
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [],
+      diagnostics: [...diagnostics, recovering],
+      unavailableDiagnostics: diagnostics,
+    });
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+
+    // The layers that admitted them ride along: a later prompt-hook cap can only
+    // judge the failed server against its own cap and these together.
+    expect(result.mcpDiagnostics).toEqual({
+      diagnostics,
+      policyLayers: runPolicyLayers,
+      reservedToolNames: [],
+    });
+    // Server-level visibility is decided from the recorded failure itself (its
+    // safe server name, tool filter and session denials), not by a stand-in tool.
+    expect(mocks.admitsMcpServer).toHaveBeenCalledWith(diagnostics[0]);
+    expect(mocks.admitsMcpServer).not.toHaveBeenCalledWith(recovering);
+  });
+
+  it("drops recorded MCP catalog failures for servers the policy hides", async () => {
+    const input = createInput([], []);
+    input.attempt.config = { plugins: { enabled: false } };
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+      tools: [],
+      unavailableDiagnostics: [
+        {
+          serverName: "memos",
+          safeServerName: "memos",
+          launchSummary: "memos",
+          message: "connect ECONNREFUSED",
+        },
+      ],
+    });
+    mocks.admitsMcpServer.mockReturnValue(false);
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(result.mcpDiagnostics).toEqual({
+      diagnostics: [],
+      policyLayers: runPolicyLayers,
+      reservedToolNames: [],
+    });
   });
 
   it("never exposes client functions when the attempt disables every tool", async () => {

@@ -482,6 +482,19 @@ Tool Search should reject unavailable or disallowed tools:
 
 - if a tool is not in the effective policy, search should not return it
 - if a selected tool becomes unavailable, `tool_call` should fail
+- if a configured MCP server failed to connect or list its tools when the run
+  started, its tools are absent from the catalog (a server reconnecting after
+  a dropped transport keeps its tools listed, a per-requester OAuth server
+  keeps its `<server>__connect` sign-in tool, and neither is reported);
+  `tool_search` results and Code Mode `exec` / `wait` results then carry an
+  `unavailableMcpServers` entry naming that server and its redacted failure
+  (the in-script `search` keeps returning a plain array), and `tool_describe` /
+  `tool_call` for one of its `mcp:<server>:…` ids report the outage instead of
+  an unknown tool, so the model stops searching for tools that cannot appear;
+  a failed server no tool of which the effective tool policy, its own
+  `mcp.servers.<name>.toolFilter` and the session's tool denials could admit
+  together is not reported at all, exactly as none of its tools would have
+  been listed
 - if policy or approval blocks execution, the call result should report that
   block instead of bypassing it
 

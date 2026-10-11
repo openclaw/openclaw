@@ -2,9 +2,11 @@ import type { TSchema } from "typebox";
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
+import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import type { ToolPolicyLike } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
@@ -110,8 +112,24 @@ export type ToolSearchCatalogEntry = {
   tool: CatalogTool;
 };
 
+/**
+ * Servers whose catalog load failed, as recorded by the MCP runtime for this
+ * run's materialization. Their tools are absent from the catalog entries;
+ * without this fact a lookup miss is indistinguishable from an invented tool
+ * id. `policyLayers` are the allow/deny layers that already admitted these
+ * diagnostics, kept with them because a later boundary must judge the failed
+ * server's namespace against those layers and its own together.
+ */
+export type McpCatalogOutageRecord = {
+  diagnostics: readonly McpToolCatalogDiagnostic[];
+  policyLayers: readonly ToolPolicyLike[];
+  /** Names materialization had to avoid, which decide a failed tool's collision suffix. */
+  reservedToolNames?: readonly string[];
+};
+
 export type ToolSearchCatalogSession = {
   entries: ToolSearchCatalogEntry[];
+  mcpDiagnostics?: McpCatalogOutageRecord;
   counterScope: string;
   searchCount: number;
   describeCount: number;
@@ -147,6 +165,7 @@ export type ToolSearchCatalogCompactionParams = {
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   toolExecutionAllow?: readonly string[];
+  mcpDiagnostics?: McpCatalogOutageRecord;
   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
   isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
