@@ -111,6 +111,7 @@ agents:
 ### Anthropic (direct API and Vertex AI)
 
 - When caching is enabled and the route supports tool cache control, the tool prefix is checkpointed separately from the system prompt.
+- Up to two conversation checkpoints cover recent user messages or tool results. Keeping the previous checkpoint reachable avoids a cache miss when a new turn adds more than the provider's 20-block lookup window. Every conversation checkpoint stays before transient runtime context, including during steering and tool loops.
 - `cacheRetention` is supported for `anthropic` and `anthropic-vertex` providers, and for Claude models on `amazon-bedrock` and custom `anthropic-messages`-compatible endpoints when `cacheRetention` is set explicitly.
 - When unset, OpenClaw seeds `cacheRetention: "short"` for direct Anthropic (`anthropic` and `anthropic-vertex` providers only; other Anthropic-family routes require an explicit value).
 - Native Anthropic Messages responses expose `cache_read_input_tokens` and `cache_creation_input_tokens`, mapped to `cacheRead` and `cacheWrite`.
