@@ -158,6 +158,14 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       if (nextPayload !== undefined) {
         payload = nextPayload as ChatCompletionStreamRequest;
       }
+      const offeredFunctionNames = new Set<string>();
+      if (Array.isArray(payload.tools)) {
+        for (const tool of payload.tools) {
+          if (tool && typeof tool === "object" && "function" in tool && tool.function?.name) {
+            offeredFunctionNames.add(tool.function.name);
+          }
+        }
+      }
       const headers = { ...model.headers, ...options?.headers };
       // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
       // Respect explicit caller-provided header values.
@@ -177,7 +185,14 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         });
       }
       stream.push({ type: "start", partial: output });
-      await consumeChatStream(model, output, stream, mistralStream, options?.signal);
+      await consumeChatStream(
+        model,
+        output,
+        stream,
+        mistralStream,
+        options?.signal,
+        offeredFunctionNames,
+      );
 
       finalizeTransportStream({ stream, output, signal: options?.signal });
     } catch (error) {
@@ -345,6 +360,7 @@ async function consumeChatStream(
   stream: AssistantMessageEventStream,
   mistralStream: AsyncIterable<CompletionEvent>,
   signal?: AbortSignal,
+  offeredFunctionNames?: ReadonlySet<string>,
 ): Promise<void> {
   let currentBlock: TextContent | ThinkingContent | null = null;
   let terminalFinishReason: string | undefined;
@@ -354,6 +370,7 @@ async function consumeChatStream(
     explicitIds: Set<string>;
     functionNames: Set<string>;
     indexes: Set<number>;
+    isAssembled?: boolean;
   };
   // Persist every identity fact across chunks. The SDK defaults omitted indexes
   // to zero, so only a unique compatible candidate may receive later arguments.
@@ -416,6 +433,38 @@ async function consumeChatStream(
     return candidate;
   };
 
+  const extendsCallName = (
+    currentName: string,
+    incomingName: string,
+    identity: ToolBlockIdentity,
+  ): boolean => {
+    if (!currentName) {
+      return true;
+    }
+    if (currentName === incomingName || identity.functionNames.has(incomingName)) {
+      return true;
+    }
+    if (
+      offeredFunctionNames &&
+      offeredFunctionNames.size > 0 &&
+      offeredFunctionNames.has(currentName)
+    ) {
+      return false;
+    }
+    if (incomingName.startsWith(currentName)) {
+      return true;
+    }
+    if (
+      offeredFunctionNames &&
+      offeredFunctionNames.size > 0 &&
+      (offeredFunctionNames.has(currentName + incomingName) ||
+        [...offeredFunctionNames].some((name) => name.startsWith(currentName + incomingName)))
+    ) {
+      return true;
+    }
+    return false;
+  };
+
   const resolveToolBlockIndex = (params: {
     explicitId?: string;
     functionName?: string;
@@ -440,15 +489,35 @@ async function consumeChatStream(
     if (idCandidates.size > 0) {
       let candidates = idCandidates;
       if (nameCandidates.size > 0) {
-        candidates = intersectCandidates(candidates, nameCandidates);
+        const canExtendIdCandidate =
+          idCandidates.size === 1 &&
+          (() => {
+            const index = idCandidates.values().next().value as number;
+            const targetBlock = output.content[index];
+            const targetIdentity = toolBlockIdentities.get(index);
+            if (targetBlock?.type === "toolCall" && targetIdentity && functionName) {
+              return extendsCallName(targetBlock.name, functionName, targetIdentity);
+            }
+            return false;
+          })();
+
+        if (!canExtendIdCandidate) {
+          candidates = intersectCandidates(candidates, nameCandidates);
+        }
       }
       return requireExistingCandidate(candidates);
     }
 
     if (nameCandidates.size > 0) {
+      // Do not treat a default-zero index as proof of an assembled call's identity.
+      // Require an identity that distinguishes the calls (explicit ID or a nonzero index)
+      // so subsequent independent idless calls remain separate.
       const idCompatibleCandidates = filterIdentityCandidates(
         nameCandidates,
-        (identity) => !explicitId || identity.explicitIds.size === 0,
+        (identity) =>
+          (!explicitId || identity.explicitIds.size === 0) &&
+          (!identity.isAssembled ||
+            (toolCallIndex !== undefined && toolCallIndex > 0 && identity.indexes.has(toolCallIndex))),
       );
       if (
         idCompatibleCandidates.size <= 1 &&
@@ -462,9 +531,9 @@ async function consumeChatStream(
       const indexCompatibleCandidates = filterIdentityCandidates(
         idCompatibleCandidates,
         (identity) =>
-          toolCallIndex === undefined ||
-          identity.indexes.size === 0 ||
-          identity.indexes.has(toolCallIndex),
+          toolCallIndex === undefined
+            ? identity.indexes.size === 0
+            : identity.indexes.size === 0 || identity.indexes.has(toolCallIndex),
       );
       return requireSingleCandidate(indexCompatibleCandidates);
     }
@@ -584,7 +653,9 @@ async function consumeChatStream(
         }
 
         if (item.type === "thinking") {
-          const deltaText = item.thinking.map((part) => ("text" in part ? part.text : "")).join("");
+          const deltaText = item.thinking
+            .map((part: { text?: string }) => ("text" in part ? (part.text ?? "") : ""))
+            .join("");
           const thinkingDelta = sanitizeSurrogates(deltaText);
           if (!thinkingDelta) {
             continue;
@@ -679,14 +750,31 @@ async function consumeChatStream(
           identity.functionNames.add(functionName);
         } else if (block.name === functionName || identity.functionNames.has(functionName)) {
           // Preserve one-shot name repetitions without duplicate concatenation.
-        } else if (functionName.startsWith(block.name)) {
+        } else if (
+          functionName.startsWith(block.name) &&
+          !(offeredFunctionNames && offeredFunctionNames.has(block.name))
+        ) {
           // Cumulative name prefix update.
           block.name = functionName;
+          identity.functionNames.clear();
           identity.functionNames.add(functionName);
-        } else {
-          // Append nonempty name fragment to mirror pinned Mistral SDK accumulator.
+          identity.isAssembled = true;
+        } else if (
+          offeredFunctionNames &&
+          offeredFunctionNames.size > 0 &&
+          !offeredFunctionNames.has(block.name) &&
+          (offeredFunctionNames.has(block.name + functionName) ||
+            [...offeredFunctionNames].some((name) => name.startsWith(block.name + functionName)))
+        ) {
+          // Append nonempty name fragment towards an offered function tool.
           block.name += functionName;
+          identity.functionNames.clear();
           identity.functionNames.add(block.name);
+          identity.isAssembled = true;
+        } else {
+          throw new Error(
+            "Mistral streamed tool-call continuation changed function name; refusing to merge arguments",
+          );
         }
       }
       if (toolCallIndex !== undefined) {
