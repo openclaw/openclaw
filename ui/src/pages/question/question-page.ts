@@ -149,10 +149,17 @@ export class QuestionPage extends OpenClawLightDomElement {
   private async loadQuestion(client: GatewayBrowserClient): Promise<void> {
     const id = this.questionId;
     const generation = ++this.operationGeneration;
+    const initialPrompt = listQuestionPrompts(this.questionState).find(
+      (prompt) => prompt.id === id,
+    );
+    const initialRevision = initialPrompt?.revision;
     this.loading = true;
     this.requestError = null;
     try {
-      const result = await requestQuestionGateway(client, "question.get", { id });
+      const result = await requestQuestionGateway(client, "question.get", {
+        id,
+        includeContinuation: true,
+      });
       if (
         this.client !== client ||
         this.operationGeneration !== generation ||
@@ -160,9 +167,26 @@ export class QuestionPage extends OpenClawLightDomElement {
       ) {
         return;
       }
+      const currentPrompt = listQuestionPrompts(this.questionState).find(
+        (prompt) => prompt.id === id,
+      );
+      // Live events own newer answers and receipts while this initial snapshot is in flight.
+      if (
+        currentPrompt &&
+        (currentPrompt !== initialPrompt || currentPrompt.revision !== initialRevision)
+      ) {
+        return;
+      }
       if (!isRecord(result) || !isRecord(result.question) || result.question.id !== id) {
         this.requestError = "unavailable";
         return;
+      }
+      let continuationMessage: string | undefined;
+      const receipt = result.continuation;
+      if (isRecord(receipt) && (receipt.status === "blocked" || receipt.status === "interrupted")) {
+        continuationMessage = [receipt.reason, receipt.nextAction]
+          .filter((value): value is string => typeof value === "string")
+          .join(" ");
       }
       const record = result.question;
       if (
@@ -177,6 +201,12 @@ export class QuestionPage extends OpenClawLightDomElement {
       ) {
         this.requestError = "unavailable";
         return;
+      }
+      const prompt = listQuestionPrompts(this.questionState).find(
+        (candidate) => candidate.id === id,
+      );
+      if (prompt) {
+        prompt.continuationMessage = continuationMessage;
       }
       if (record.status === "answered") {
         const accepted = handleQuestionPromptEvent(this.questionState, {

@@ -361,6 +361,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             }
           : undefined,
         onYield: params.onYield,
+        nativeQuestionHandoff: params.onYield,
       };
       const allTools = await createOpenClawCodingToolsInternalAsync(
         codingToolOptions,

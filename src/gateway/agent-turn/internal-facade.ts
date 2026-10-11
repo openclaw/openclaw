@@ -252,6 +252,7 @@ export function createInternalAgentTurnFacade(
                 io,
                 onRunObserved,
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
+                commitAdmission: dispatchOptions.commitAdmission,
                 privateCompletion: dispatchOptions.privateCompletion,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,
               });

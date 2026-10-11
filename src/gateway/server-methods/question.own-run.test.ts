@@ -1,9 +1,12 @@
+import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { prepareSqliteScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as questionStorage from "../../config/sessions/session-questions.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -12,6 +15,9 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import * as questionChannel from "../../infra/question-channel-runtime.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -19,21 +25,27 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
-import type { GatewayWsClient } from "../server/ws-types.js";
 import { canReceiveSessionEvent } from "../session-sharing.js";
+import * as questionRegistration from "./question.durable-registration.js";
+import * as questionFixture from "./question.registration-collision.test-harness.js";
 import {
+  adminRequestClient,
   broadcast,
   callQuestionRpc,
-  installQuestionTestHooks,
+  createQuestionTestPeer,
   manager,
   requestParams,
   secretRequestParams,
@@ -41,45 +53,20 @@ import {
 } from "./question.test-support.js";
 import type { GatewayClient } from "./types.js";
 
-installQuestionTestHooks();
+questionFixture.registerQuestionCollisionTests(createOwnRunFixture);
 
 const answers = { answers: { destination: ["Library"] } };
 const sessionScope = { agentId: "main", sessionKey: requestParams.sessionKey };
 
-function questionPeer(
-  profile: ReturnType<typeof ensureProfileForEmail>,
-  connId: string,
-  scopes = ["operator.sessions.write"],
+async function createOwnRunFixture(
+  durable = false,
+  legacyGeneration = false,
+  creatorProfileId?: string,
 ) {
-  const socket = {
-    bufferedAmount: 0,
-    readyState: 1,
-    close: vi.fn(),
-    send: vi.fn(
-      (
-        _wire: string | Buffer,
-        options?: { binary: false } | ((error?: Error) => void),
-        callback?: (error?: Error) => void,
-      ) => (typeof options === "function" ? options : callback)?.(),
-    ),
-  };
-  const client: GatewayWsClient = {
-    socket: socket as unknown as GatewayWsClient["socket"],
-    connect: { role: "operator", scopes } as GatewayWsClient["connect"],
-    connId,
-    usesSharedGatewayAuth: false,
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: null,
-      avatarRevision: "",
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-  };
-  return { client, socket };
-}
-
-async function createOwnRunFixture() {
+  if (durable) {
+    // The real SQLite worker owns wall-clock deadlines outside Vitest's process clock.
+    vi.useRealTimers();
+  }
   const profile = ensureProfileForEmail("guest@example.test");
   const cfg: OpenClawConfig = {
     gateway: {
@@ -98,18 +85,26 @@ async function createOwnRunFixture() {
   };
   const entry: SessionEntry = {
     sessionId: "guest-question-session",
-    lifecycleRevision: "guest-question-generation",
+    ...(legacyGeneration ? {} : { lifecycleRevision: "guest-question-generation" }),
     updatedAt: 1,
     visibility: "shared",
-    createdActor: { type: "human", source: "profile", id: profile.id },
+    createdActor: { type: "human", source: "profile", id: creatorProfileId ?? profile.id },
   };
-  await upsertSessionEntryCore(sessionScope, entry);
-  const browser = questionPeer(profile, "original-browser");
+  await questionFixture.writeQuestionFixtureEntry(sessionScope, entry, legacyGeneration);
+  const browser = createQuestionTestPeer(profile, "original-browser");
+  if (durable) {
+    browser.client.internal = { authenticatedOperator: true };
+    browser.client.authPolicy = captureGatewayAuthPolicy(cfg, {
+      role: "operator",
+      authMethod: "token",
+    });
+  }
   const sourceController = new AbortController();
   const source = await captureGatewayOperatorRunAuthority({
     client: browser.client,
     context: { getRuntimeConfig: () => cfg },
     sourceAuthority: {
+      ...(durable ? { gatewayAccessGrant: null } : {}),
       signal: sourceController.signal,
       assertCurrent: () => sourceController.signal.throwIfAborted(),
     },
@@ -226,14 +221,353 @@ async function withOwnRunQuestion(
   });
 }
 
+describe("durable post-commit registration", () => {
+  it("retains committed custody when the original caller retires before publication", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = await createOwnRunFixture(true);
+      const register = questionRegistration.registerDurableQuestion;
+      let committedId: string | undefined;
+      const spy = vi
+        .spyOn(questionRegistration, "registerDurableQuestion")
+        .mockImplementation(async (params) => {
+          const committed = await register(params);
+          committedId = committed.record.id;
+          f.revokeSource();
+          return committed;
+        });
+      try {
+        expect(f.source.authority.recoverySnapshot).toBeDefined();
+        await expect(
+          f.call(
+            "question.request",
+            { ...requestParams, timeoutMs: 900_000, durable: true },
+            f.runtime,
+          ),
+        ).rejects.toThrow("Original question source revoked");
+        expect(committedId).toBeDefined();
+        expect(manager.hasDurableCustody(committedId!)).toBe(true);
+        expect(manager.get(committedId!)).toMatchObject({ status: "pending" });
+        const retained = manager.get(committedId!)!;
+        expect(retained.expiresAtMs - retained.createdAtMs).toBe(900_000);
+        expect(broadcast.mock.calls.some(([event]) => event === "question.requested")).toBe(false);
+      } finally {
+        spy.mockRestore();
+        await f.close();
+      }
+    });
+  });
+
+  it("repairs committed registration after a lost ACK and producer revocation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = await createOwnRunFixture(true);
+      const operate = questionStorage.executeSessionQuestionOperation;
+      let committedId: string | undefined;
+      const spy = vi
+        .spyOn(questionStorage, "executeSessionQuestionOperation")
+        .mockImplementation(async (scope, operation) => {
+          const result = await operate(scope, operation);
+          if (operation.kind === "register") {
+            committedId = operation.question.record.id;
+            f.revokeSource();
+            throw new SqliteWorkerError(
+              "Registration ACK lost after source retirement",
+              "outcome-unknown",
+            );
+          }
+          return result;
+        });
+      try {
+        await expect(
+          f.call(
+            "question.request",
+            { ...requestParams, timeoutMs: 900_000, durable: true },
+            f.runtime,
+          ),
+        ).rejects.toThrow("Original question source revoked");
+        expect(committedId).toBeDefined();
+        expect(manager.hasDurableCustody(committedId!)).toBe(true);
+        expect(manager.get(committedId!)).toMatchObject({ status: "pending" });
+        const retained = manager.get(committedId!)!;
+        expect(retained.expiresAtMs - retained.createdAtMs).toBe(900_000);
+        expect(broadcast.mock.calls.some(([event]) => event === "question.requested")).toBe(false);
+      } finally {
+        spy.mockRestore();
+        await f.close();
+      }
+    });
+  });
+
+  it("adopts an unknown committed answer without acknowledging a revoked responder", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = await createOwnRunFixture(true);
+      let responderCurrent = true;
+      const operate = questionStorage.executeSessionQuestionOperation;
+      let restore = () => {};
+      try {
+        const registered = await f.call(
+          "question.request",
+          { ...requestParams, timeoutMs: 900_000, durable: true },
+          f.runtime,
+        );
+        expect(registered[0], JSON.stringify(registered[2])).toBe(true);
+        expect(registered[1]).toMatchObject({ durable: true });
+        const id = (registered[1] as { id: string }).id;
+        const spy = vi
+          .spyOn(questionStorage, "executeSessionQuestionOperation")
+          .mockImplementation(async (scope, operation) => {
+            const result = await operate(scope, operation);
+            if (operation.kind === "settle") {
+              responderCurrent = false;
+              throw new SqliteWorkerError(
+                "Answer ACK lost after responder retirement",
+                "outcome-unknown",
+              );
+            }
+            return result;
+          });
+        restore = () => spy.mockRestore();
+        await expect(
+          callQuestionRpc(
+            "question.resolve",
+            { id, answers, resolutionId: "lost-answer-ack" },
+            {
+              cfg: f.cfg,
+              client: f.browser.client,
+              registered: true,
+              hasCurrentClientAuthority: () => responderCurrent,
+            },
+          ),
+        ).rejects.toThrow("Gateway requester authority changed");
+        expect(manager.get(id)).toMatchObject({ status: "answered", answers });
+        expect(await manager.waitAnswer(id, undefined, true)).toEqual({
+          status: "answered",
+          answers,
+          resolutionId: "lost-answer-ack",
+        });
+      } finally {
+        restore();
+        await f.close();
+      }
+    });
+  });
+
+  it("rejects a terminal ID without reopening channel delivery or publishing a prompt", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = await createOwnRunFixture(true);
+      const requested = vi.spyOn(questionChannel, "handleQuestionChannelRequested");
+      const params = {
+        ...requestParams,
+        id: "terminal-registration-retry",
+        timeoutMs: 900_000,
+        durable: true,
+      };
+      try {
+        const registered = await f.call("question.request", params, f.runtime);
+        expect(registered[1]).toMatchObject({ durable: true, status: "pending" });
+        const resolved = await f.call("question.resolve", { id: params.id, answers });
+        expect(resolved[1]).toEqual({ status: "answered", answers });
+        requested.mockClear();
+        broadcast.mockClear();
+        const retry = await f.call("question.request", params, f.runtime);
+        expect(retry[0]).toBe(false);
+        expect(manager.get(params.id)).toMatchObject({ status: "answered", answers });
+        expect(requested).not.toHaveBeenCalled();
+        expect(broadcast.mock.calls.some(([event]) => event === "question.requested")).toBe(false);
+      } finally {
+        requested.mockRestore();
+        await f.close();
+      }
+    });
+  });
+
+  it.each(["get", "list", "get-after-read", "list-after-read", "resolve"] as const)(
+    "refuses a same-ID successor database fact when %s reads a broadly authorized old observation first",
+    async (firstRead) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const f = await createOwnRunFixture(true);
+        let restoreRead: (() => void) | undefined;
+        try {
+          const registered = await f.call(
+            "question.request",
+            { ...requestParams, timeoutMs: 900_000, durable: true },
+            f.runtime,
+          );
+          const id = (registered[1] as { id: string }).id;
+          const scope = { ...sessionScope, assertCurrent() {} };
+          const original = await questionStorage.executeSessionQuestionOperation(scope, {
+            kind: "get",
+            id,
+          });
+          if (!original || Array.isArray(original)) {
+            throw new Error("Expected original durable fact");
+          }
+          const broad = { cfg: f.cfg, client: adminRequestClient };
+          expect((await callQuestionRpc("question.get", { id }, broad))[0]).toBe(true);
+          expect(
+            (await callQuestionRpc("question.list", { includeContinuation: true }, broad))[1],
+          ).toMatchObject({ questions: [{ id }] });
+          const replacementScope = { ...scope, storePath: state.statePath("successor.sqlite") };
+          await upsertSessionEntryCore(replacementScope, f.entry);
+          const target = await prepareSqliteScope(replacementScope);
+          if (!target.path) {
+            throw new Error("Expected successor database path");
+          }
+          const successorPath = target.path;
+          const identity = readDatabasePathIdentitySync(successorPath);
+          const successor = {
+            ...original,
+            record: { ...original.record, runId: "successor-asking" },
+            provenance: {
+              ...original.provenance,
+              sourceRunId: "successor-asking",
+              ...(original.provenance.recoverySource
+                ? {
+                    recoverySource: {
+                      ...original.provenance.recoverySource,
+                      sourceRunId: "successor-asking",
+                    },
+                  }
+                : {}),
+            },
+            sessionBinding: {
+              ...original.sessionBinding,
+              storePath: replacementScope.storePath,
+              databasePath: successorPath,
+              databaseIdentity: {
+                identity: identity.key.slice("file:".length),
+                birthtime: identity.birthtime,
+              },
+            },
+          };
+          await questionStorage.executeSessionQuestionOperation(replacementScope, {
+            kind: "register",
+            question: successor,
+          });
+          await questionStorage.executeSessionQuestionOperation(replacementScope, {
+            kind: "settle",
+            expectedQuestion: successor,
+            id,
+            outcome: {
+              id,
+              status: "answered",
+              answers: { answers: { destination: ["Successor"] } },
+            },
+            resolutionId: "successor-answer",
+          });
+          if (firstRead === "resolve") {
+            expect((await f.call("question.resolve", { id, answers }, f.runtime))[0]).toBe(true);
+          }
+          await closeOpenClawAgentDatabaseByPathAsync(successorPath);
+          await closeOpenClawAgentDatabaseByPathAsync(original.sessionBinding.databasePath);
+          const replaceDatabase = () => {
+            fs.renameSync(
+              original.sessionBinding.databasePath,
+              state.statePath("original-question.sqlite"),
+            );
+            fs.copyFileSync(successorPath, original.sessionBinding.databasePath);
+          };
+          if (firstRead.endsWith("after-read")) {
+            const read = questionStorage.readSessionQuestionCustody;
+            const readSpy = vi
+              .spyOn(questionStorage, "readSessionQuestionCustody")
+              .mockImplementation(async (...args) => {
+                const result = await read(...args);
+                if (args[1] === id) {
+                  replaceDatabase();
+                  restoreRead?.();
+                }
+                return result;
+              });
+            restoreRead = () => readSpy.mockRestore();
+          } else {
+            replaceDatabase();
+          }
+          const healthy = manager.request({
+            id: "healthy-unbound-question",
+            questions: requestParams.questions,
+            timeoutMs: 900_000,
+          });
+          if (firstRead.startsWith("get")) {
+            expect(
+              await callQuestionRpc("question.get", { id, includeContinuation: true }, broad),
+            ).toMatchObject([false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }]);
+          }
+          if (firstRead === "resolve") {
+            expect(await callQuestionRpc("question.resolve", { id, answers }, broad)).toMatchObject(
+              [false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }],
+            );
+          }
+          const listed = await callQuestionRpc(
+            "question.list",
+            { includeContinuation: true },
+            broad,
+          );
+          expect(listed[0]).toBe(true);
+          expect(listed[1]).toEqual({ questions: [healthy], continuations: [] });
+          expect(
+            await callQuestionRpc("question.get", { id, includeContinuation: true }, broad),
+          ).toMatchObject([false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }]);
+          expect(manager.observe(id)).toBeNull();
+          expect(manager.observe(healthy.id)?.isCurrent()).toBe(true);
+        } finally {
+          restoreRead?.();
+          await f.close();
+        }
+      });
+    },
+  );
+
+  it("reconciles an unknown registration ACK using the same canonical JSON definition", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = await createOwnRunFixture(true);
+      const operate = questionStorage.executeSessionQuestionOperation;
+      let lost = false;
+      const spy = vi
+        .spyOn(questionStorage, "executeSessionQuestionOperation")
+        .mockImplementation(async (scope, operation) => {
+          const result = await operate(scope, operation);
+          if (operation.kind === "register" && !lost) {
+            lost = true;
+            throw new SqliteWorkerError("Registration ACK lost after commit", "outcome-unknown");
+          }
+          return result;
+        });
+      try {
+        const response = await f.call(
+          "question.request",
+          { ...requestParams, timeoutMs: 900_000, durable: true },
+          f.runtime,
+        );
+        expect(response[0], JSON.stringify(response[2])).toBe(true);
+        expect(response[1]).toMatchObject({ durable: true });
+        expect(lost).toBe(true);
+        expect(manager.hasDurableCustody((response[1] as { id: string }).id)).toBe(true);
+      } finally {
+        spy.mockRestore();
+        await f.close();
+      }
+    });
+  });
+});
+
 describe("own-run question admission", () => {
+  it("keeps transient native questions readable despite having a durable session binding", async () => {
+    await withOwnRunQuestion(async (f) => {
+      const id = await f.request();
+      expect(manager.observe(id)?.sessionAccess?.durableBinding).toBeDefined();
+      expect(manager.hasDurableCustody(id)).toBe(false);
+      expect((await f.call("question.get", { id }))[1]).toMatchObject({ question: { id } });
+      expect((await f.call("question.list", {}))[1]).toMatchObject({ questions: [{ id }] });
+    });
+  });
+
   it.each(["suspension", "restart drain"] as const)(
     "keeps foreign question IDs outside retained roots during %s",
     async (mode) => {
       try {
         await withOwnRunQuestion(async (f) => {
           const id = await f.request();
-          const foreign = questionPeer(
+          const foreign = createQuestionTestPeer(
             ensureProfileForEmail("foreign-drain@example.test"),
             "foreign",
           );
@@ -306,7 +640,7 @@ describe("own-run question admission", () => {
         payload: { id },
       });
       f.clients.delete(f.browser.client);
-      const reconnected = questionPeer(f.profile, "reconnected-browser");
+      const reconnected = createQuestionTestPeer(f.profile, "reconnected-browser");
       f.clients.add(reconnected.client);
       expect((await f.call("question.list", {}, reconnected.client))[1]).toMatchObject({
         questions: [{ id }],
@@ -355,7 +689,7 @@ describe("own-run question admission", () => {
   it("conceals questions from foreign viewers and members with session read and write scopes", async () => {
     await withOwnRunQuestion(async (f) => {
       const peers = ["viewer", "member"].map((name) =>
-        questionPeer(ensureProfileForEmail(name + "@example.test"), name, [
+        createQuestionTestPeer(ensureProfileForEmail(name + "@example.test"), name, [
           "operator.sessions.write",
           "operator.sessions.read",
         ]),
@@ -545,7 +879,7 @@ describe("own-run question admission", () => {
           settled = true;
           return result;
         });
-        const recipient = questionPeer(f.profile, "independent-current-recipient");
+        const recipient = createQuestionTestPeer(f.profile, "independent-current-recipient");
         const entered = createDeferred();
         const release = createDeferred();
         const failure = new Error("Transient question worker read failure");

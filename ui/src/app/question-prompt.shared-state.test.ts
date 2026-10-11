@@ -92,6 +92,69 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each(["blocked", "interrupted"] as const)(
+  "refreshes a live %s continuation receipt after its answer event",
+  async (status) => {
+    let continuationStatus = "owed";
+    const request = vi.fn(async () => ({
+      questions: [
+        {
+          id: "question-1",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          questions: [
+            {
+              questionId: "format",
+              header: "Format",
+              question: "Which format should I use?",
+              options: [{ label: "Compact" }, { label: "Detailed" }],
+            },
+          ],
+          createdAtMs: 1_000,
+          expiresAtMs: Date.now() + 60_000,
+          status: "answered",
+          answers: { answers: { format: ["Compact"] } },
+        },
+      ],
+      continuations: [
+        {
+          questionId: "question-1",
+          status: continuationStatus,
+          ...(continuationStatus === "owed"
+            ? {}
+            : { reason: "Original caller is unavailable", nextAction: "Start a new user turn" }),
+        },
+      ],
+    }));
+    const state = connectQuestionState({ request });
+    const event = {
+      event: "question.resolved",
+      payload: {
+        id: "question-1",
+        status: "answered",
+        answers: { answers: { format: ["Compact"] } },
+      },
+    };
+    handleQuestionPromptEvent(state, event);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(state.prompts.get("question-1")?.continuationMessage).toBeUndefined();
+    continuationStatus = status;
+    handleQuestionPromptEvent(state, event);
+    await vi.waitFor(() =>
+      expect(state.prompts.get("question-1")?.continuationMessage).toContain(
+        "Start a new user turn",
+      ),
+    );
+    expect(request).toHaveBeenLastCalledWith(
+      "question.list",
+      { includeContinuation: true },
+      expect.any(Object),
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+  },
+);
+
 describe("Gateway-client question outcome ownership", () => {
   it("shares connection hydration across sidebar, favicon, and later chat mounts", async () => {
     vi.useFakeTimers();

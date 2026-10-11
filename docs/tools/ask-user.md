@@ -8,7 +8,7 @@ title: "Ask user"
 ---
 
 `ask_user` lets the agent ask the human one to three structured questions and
-wait for the answers. It is for decisions that genuinely belong to the user,
+hand off the current turn until the human answers. It is for decisions that genuinely belong to the user,
 not routine confirmation or information the agent can derive from the request,
 code, or a sensible default.
 
@@ -114,13 +114,48 @@ answers ambiguous, the summary shows the saved reply text without splitting it.
 ## Timeout and no answer
 
 The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
-30 through 3600 seconds. This is a maximum human wait, subject to earlier agent
-run cancellation or the current model attempt's timeout. A pending question
-does not pause or extend that attempt's execution budget.
+30 through 3600 seconds. For ordinary questions from a native OpenClaw run with a recoverable operator
+source or linked-channel authorization, and an acknowledged durable handoff,
+the Gateway commits the question before publishing the prompt and acknowledging
+the tool. The asking turn then yields; it does not keep a live answer waiter or
+extend its run budget. The original absolute question deadline survives a Gateway
+restart and transcript compaction.
 
-If the question expires or is cancelled before an answer arrives, the tool
-returns `status: "no_answer"`. The agent then continues with its best judgment.
-An aborted agent run cancels its pending Gateway question.
+For transient callers, this remains a maximum human wait subject to earlier agent
+run cancellation or the current model attempt's timeout. A pending transient
+question does not pause or extend that attempt's execution budget.
+
+Some existing channel conversations lack the session generation required by durable
+questions. For those conversations, durable registration is refused without an
+acknowledgement. Use `/new` or `/reset` to establish a new generation before asking
+a durable question. The upgrade does not backfill generations for existing conversations.
+
+An answer or skip is committed before its acknowledgement. The Gateway delivers
+the committed result as one explicit new turn in the original conversation, under
+the original caller's current permissions. Retrying an answer after a lost
+acknowledgement returns the first committed result. Session reset or deletion
+retires questions from that exact session generation.
+
+If a Gateway restart interrupts an already admitted continuation, the Gateway
+does not repeat it automatically. The modern Control UI restores a retained
+**Interrupted** or **Blocked** continuation receipt with the question summary and
+instructs you to start a new user turn. A revoked caller cannot be replaced with
+system permissions. Terminal continuation receipts are retained for 24 hours;
+pending questions and undelivered continuation obligations are not pruned by that
+receipt window.
+
+Linked-channel recovery revalidates the original linked identity and current
+profile, grant, and transport policy; it does not preserve an old permission
+grant. A recovery cohort containing unrelated runs is not replayed as a question
+continuation. Prepared output without a native delivery owner requires manual
+recovery rather than an automatic resend. Longer deadlines, including six-day
+and seven-day questions, remain a separate compatibility follow-up.
+
+Secret prompts, attached MCP questions, and harnesses without a native turn
+handoff, including unsupported system and cron sources, keep their existing
+live-wait behavior. For those transient questions,
+expiry or cancellation returns `status: "no_answer"`, and aborting the run cancels
+its pending question.
 
 Gateway question records include the optional originating `runId`. Clients can
 use it to keep the prompt and its terminal answer summary with the correct agent

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveProjectedMcpCodexToolApprovalMode } from "../agents/mcp-codex-tool-approval.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { DurableQuestion } from "../config/sessions/session-questions.types.js";
 import type { AgentRunApprovalClosureReason } from "../infra/agent-run-approval-leases.js";
 import {
   type AgentRunDelegatedAuthority,
@@ -17,6 +18,7 @@ import {
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
+import { handleQuestionChannelResolved } from "../infra/question-channel-runtime.js";
 import {
   SYSTEM_AGENT_APPROVAL_DECISIONS,
   type SystemAgentApprovalRequestPayload,
@@ -25,6 +27,7 @@ import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admissio
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "../secrets/runtime-command-secrets.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import { resolveApprovalSessionAudienceWithFallback } from "./approval-session-audience.js";
 import { createApprovalWebPushDelivery } from "./approval-web-push.js";
@@ -47,7 +50,13 @@ import {
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
 } from "./operator-approval-store.js";
+import { createQuestionCompletionReceipts } from "./question-completion-receipts.js";
+import { createQuestionContinuationPublication } from "./question-continuation-publication.js";
+import { createQuestionContinuationWork } from "./question-continuation-work.js";
 import { QuestionManager } from "./question-manager.js";
+import { createQuestionRecovery } from "./question-recovery.js";
+import { publishDurableQuestionResolution } from "./question-session-access.js";
+import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import { publishAppliedApprovalResolution } from "./server-methods/approval-publication.js";
 import {
   cancelAgentRuntimeBoundApprovals,
@@ -75,6 +84,8 @@ type GatewayAuxHandlerLogger = {
 export function createGatewayAuxHandlers(
   params: GatewaySecretsReloaderParams & {
     scheduler: GatewayScheduler;
+    getQuestionRuntime?: () => GatewayInstanceRuntime | undefined;
+    getQuestionContext?: () => GatewayRequestContext | undefined;
     log: GatewayAuxHandlerLogger;
     onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
     onAgentRunAuthorityClosed?: (
@@ -191,13 +202,153 @@ export function createGatewayAuxHandlers(
   const questionManager = new QuestionManager(params.scheduler, () =>
     params.log.warn?.("Question terminal publication failed; answer state retained."),
   );
+  let questionsClosing = false;
+  const continuations = createQuestionContinuationWork({
+    scheduler: params.scheduler,
+    track: trackPresentationWork,
+    isClosing: () => questionsClosing,
+  });
+  const assertQuestionOwnerCurrent = () => {
+    if (questionsClosing || !params.getQuestionRuntime?.()?.isAvailable()) {
+      throw new Error("Durable question Gateway owner is unavailable.");
+    }
+  };
+  const publishContinuationReceipt = createQuestionContinuationPublication({
+    questionManager,
+    getContext: () => params.getQuestionContext?.(),
+    assertCurrent: assertQuestionOwnerCurrent,
+    warn: (message) => params.log.warn?.(message),
+  });
+  const completionReceipts = createQuestionCompletionReceipts({
+    scheduler: params.scheduler,
+    warn: (message) => params.log.warn?.(message),
+  });
+  const onContinuationOwed = (question: DurableQuestion) => {
+    if (questionsClosing) {
+      return;
+    }
+    const observation = questionManager.observe(question.record.id);
+    void continuations.offer(question, async (signal) => {
+      let admissionOwed = false;
+      try {
+        const runtime = params.getQuestionRuntime?.();
+        const context = params.getQuestionContext?.();
+        if (!runtime || !context) {
+          throw new Error("Durable question native dispatcher is unavailable.");
+        }
+        const { dispatchQuestionContinuation } = await import("./question-continuation.js");
+        const receipt = await dispatchQuestionContinuation({
+          question,
+          scope: question.sessionBinding,
+          context,
+          runtime,
+          assertCurrent: assertQuestionOwnerCurrent,
+          signal,
+        });
+        if (receipt.status === "admission_owed") {
+          admissionOwed = true;
+          return receipt;
+        }
+        if (receipt.status === "completion_owed" || receipt.status === "terminal_owed") {
+          completionReceipts.offer(
+            receipt,
+            () => publishContinuationReceipt(question, observation),
+            () => {
+              if (observation) {
+                questionManager.retireDurableCustodyObservation(observation);
+              }
+            },
+          );
+        }
+      } catch (error) {
+        params.log.warn?.(
+          `durable question continuation ${question.record.id} failed: ${String(error)}`,
+        );
+      } finally {
+        if (!admissionOwed) {
+          await publishContinuationReceipt(question, observation);
+        }
+      }
+      return undefined;
+    });
+  };
+  const agentDatabaseStartup = getAgentDatabaseStartupAdmission();
+  const questionRecovery = createQuestionRecovery({
+    scheduler: params.scheduler,
+    pendingPreparation: () => agentDatabaseStartup?.pendingPreparation,
+    assertCurrent: assertQuestionOwnerCurrent,
+    track: trackPresentationWork,
+    warn: (message) => params.log.warn?.(message),
+    discover: async () => {
+      const context = params.getQuestionContext?.();
+      assertQuestionOwnerCurrent();
+      if (!context) {
+        throw new Error("Durable question recovery context is unavailable.");
+      }
+      const { discoverRestartRecoveryStoreTargets } =
+        await import("../agents/main-session-recovery/main-session-restart-recovery-shared.js");
+      const unavailable: unknown[] = [];
+      const targets = await discoverRestartRecoveryStoreTargets({
+        cfg: (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
+        onUnavailable: (_target, error) => unavailable.push(error),
+      });
+      return {
+        scopes: targets.map((target) =>
+          Object.assign({}, target, { sessionKey: `agent:${target.agentId}:main` }),
+        ),
+        unavailable,
+      };
+    },
+    recover: async (scope) => {
+      const context = params.getQuestionContext?.();
+      assertQuestionOwnerCurrent();
+      if (!context) {
+        throw new Error("Durable question recovery context is unavailable.");
+      }
+      const [
+        { executeSessionQuestionOperation },
+        { recoverDurableQuestions },
+        { getAgentEventLifecycleGeneration },
+      ] = await Promise.all([
+        import("../config/sessions/session-questions.js"),
+        import("./durable-question-runtime.js"),
+        import("../infra/agent-events.js"),
+      ]);
+      await executeSessionQuestionOperation(
+        { ...scope, assertCurrent: assertQuestionOwnerCurrent },
+        { kind: "interrupt", gatewayEpoch: getAgentEventLifecycleGeneration() },
+      );
+      await recoverDurableQuestions(
+        questionManager,
+        [scope],
+        onContinuationOwed,
+        assertQuestionOwnerCurrent,
+        () => ({
+          onResolved: async (event, observation) => {
+            assertQuestionOwnerCurrent();
+            handleQuestionChannelResolved(event);
+            await publishDurableQuestionResolution({
+              context,
+              event,
+              observation,
+              assertCurrent: assertQuestionOwnerCurrent,
+            });
+          },
+        }),
+      );
+    },
+  });
+  const recoverDurableQuestionInteractions = questionRecovery.recover;
   const loadQuestionHandlers = createLazyPromise(
     async () => {
       const [{ createQuestionHandlers }, storeWriteService] = await Promise.all([
         import("./server-methods/question.js"),
         loadSecretStoreWriteService(),
       ]);
-      return createQuestionHandlers(questionManager, storeWriteService, params.scheduler);
+      return createQuestionHandlers(questionManager, storeWriteService, params.scheduler, {
+        onContinuationOwed,
+        waitForRecovery: questionRecovery.waitForRecovery,
+      });
     },
     { cacheRejections: true },
   );
@@ -423,7 +574,16 @@ export function createGatewayAuxHandlers(
         for (const manager of approvalManagers) {
           manager.retire();
         }
+        questionsClosing = true;
+        continuations.beginClose();
+        completionReceipts.beginClose();
+        questionRecovery.beginClose();
         questionManager.close();
+        await Promise.all([
+          questionRecovery.stop(),
+          completionReceipts.stop(),
+          continuations.stop(),
+        ]);
         await questionManager.drain();
         await Promise.all(approvalManagers.map((manager) => manager.drain()));
         await presentationWork.drain();
@@ -468,6 +628,7 @@ export function createGatewayAuxHandlers(
     beginCloseApprovalObservers,
     stopOperatorInteractions,
     questionManager,
+    recoverDurableQuestionInteractions,
     extraHandlers: {
       "exec.approval.get": execApprovalHandler("exec.approval.get"),
       "exec.approval.list": execApprovalHandler("exec.approval.list"),

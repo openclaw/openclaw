@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { SessionEntry } from "./types.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 export { normalizeNullableString as normalizeText } from "@openclaw/normalization-core/string-coerce";
 
@@ -17,4 +18,9 @@ export function normalizeSessionRowChatType(value: unknown): "direct" | "group" 
     return value;
   }
   return null;
+}
+
+export function createInboundSessionFallback(sessionKey: string): SessionEntry {
+  const patch = isIncognitoSessionKey(sessionKey) ? {} : { lifecycleRevision: randomUUID() };
+  return mergeSessionEntry(undefined, patch);
 }

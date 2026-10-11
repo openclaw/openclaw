@@ -1,11 +1,14 @@
 import { copyFileSync, renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { recoverDurableQuestions } from "../../gateway/durable-question-runtime.js";
+import { QuestionManager } from "../../gateway/question-manager.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -191,6 +194,26 @@ describe("durable question custody", () => {
       resolutionId: "first-resolution",
       continuation: { status: "owed" },
     });
+    const scheduler = createTestGatewayScheduler();
+    const manager = new QuestionManager(scheduler);
+    const offered: DurableQuestion[] = [];
+    try {
+      const recover = () =>
+        recoverDurableQuestions(
+          manager,
+          [scope()],
+          (current) => offered.push(current),
+          () => {},
+        );
+      await recover();
+      await recover();
+      expect(offered).toEqual([settled]);
+      expect(manager.get(question.record.id)?.answers).toEqual(answer.answers);
+    } finally {
+      manager.close();
+      await manager.drain();
+      await scheduler.stop();
+    }
     await operate({
       kind: "claim",
       id: question.record.id,

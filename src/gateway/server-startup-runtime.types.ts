@@ -1,0 +1,113 @@
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import type { CliDeps } from "../cli/deps.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import type { PluginServiceCronHost } from "../plugins/service-cron.js";
+import type { PluginServicesHandle } from "../plugins/services.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
+import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
+import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
+import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
+import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
+import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
+import type { GatewayStartupTrace } from "./server-startup-trace.js";
+import type { GatewayHttpTransport } from "./server-transport-bridge.js";
+import type { ReadinessChecker } from "./server/readiness.js";
+
+type Awaitable<T> = T | Promise<T>;
+type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
+type GatewayStartedRuntime = GatewayKernelRuntime & GatewayHttpTransport;
+
+/** Startup composition contracts shared by the attach and readiness owners. */
+export type GatewayStartupFinishParams = {
+  kernelRuntime: GatewayStartedRuntime;
+  port: number;
+  bootId: string;
+  opts: GatewayStartedRuntime["opts"];
+  log: GatewayLogger;
+  logHealth: GatewayLogger;
+  logWsControl: GatewayLogger;
+  logHooks: GatewayLogger;
+  logChannels: GatewayLogger;
+  logCron: GatewayLogger;
+  logReload: GatewayLogger;
+  waitForPostReadyWork: () => Promise<void>;
+};
+
+export type GatewayPostAttachRuntimeParams = {
+  scheduler: GatewayScheduler;
+  minimalTestGateway: boolean;
+  updateCanary?: boolean;
+  cfgAtStart: OpenClawConfig;
+  getConfig: () => OpenClawConfig;
+  port: number;
+  log: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+  };
+  isNixMode: boolean;
+  startupStartedAt?: number;
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
+  broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
+  controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
+  gatewayPluginConfigAtStart: OpenClawConfig;
+  activationSourceConfig: OpenClawConfig;
+  pluginManifestRecords: readonly PluginManifestRecord[];
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  pluginRegistry: PluginRegistry;
+  defaultWorkspaceDir: string;
+  deps: CliDeps;
+  startChannels: () => Promise<void>;
+  refreshChatMetadata?: () => Promise<void>;
+  recoveryRuntime: GatewayRecoveryRuntime;
+  recoverDurableQuestionInteractions?: () => Promise<void>;
+  isRestartRecoverySuppressed: () => boolean;
+  resolveGatewayContext: GatewayContextResolver;
+  logHooks: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+    error: (msg: string) => void;
+  };
+  logChannels: { info: (msg: string) => void; error: (msg: string) => void };
+  unlockStartupMethods: () => void;
+  loadStartupPlugins?: () => Awaitable<{
+    pluginRegistry: PluginRegistry;
+    gatewayMethods: string[];
+    retireGatewayRuntimeBindings?: () => void;
+  }>;
+  onStartupPluginsLoading?: () => void;
+  onStartupPluginsLoaded?: (result: {
+    pluginRegistry: PluginRegistry;
+    gatewayMethods: string[];
+    retireGatewayRuntimeBindings?: () => void;
+  }) => Awaitable<boolean>;
+  pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
+  getCurrentPluginRegistry?: () => PluginRegistry;
+  getCurrentPluginServices?: () => PluginServicesHandle | null;
+  getCurrentPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
+  getCurrentActivationSourceConfig?: () => OpenClawConfig | null;
+  getCronService?: () => PluginServiceCronHost | null | undefined;
+  onChannelsStarted?: () => Awaitable<void>;
+  onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
+  onPostReadySidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
+  onGatewayLifetimeSidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
+  unregisterConnectionDependentSidecar: (sidecar: GatewayPostReadySidecarHandle) => void;
+  trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
+  onSidecarsReady?: () => void;
+  getReadiness: ReadinessChecker;
+  isClosing?: () => boolean;
+  startupTrace?: GatewayStartupTrace;
+  sidecarStartup?: GatewaySidecarStartupMode;
+  waitForPostReadyWork?: () => Promise<void>;
+  activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
+};

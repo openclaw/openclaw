@@ -303,6 +303,8 @@ export async function startGatewayCoreRuntime(input: {
     return {
       ...createGatewayAuxHandlers({
         scheduler: runtime.scheduler,
+        getQuestionRuntime: () => runtime.gatewayInstanceRuntimeRef.current,
+        getQuestionContext: () => runtime.resolvePluginGatewayContext(),
         log,
         chatAbortControllers,
         hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),

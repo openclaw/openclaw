@@ -14,7 +14,10 @@ import { prepareSessionStoreTargetInventoryRead } from "../../config/sessions/se
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
 
 export const mainSessionRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
@@ -47,6 +50,7 @@ export async function discoverRestartRecoveryStoreTargets(params: {
   agentIds?: ReadonlySet<string>;
   stateDir?: string;
   shouldContinue?: () => boolean;
+  onUnavailable?: (target: SessionStoreTarget, error: unknown) => void;
 }): Promise<SessionStoreTarget[]> {
   if (params.shouldContinue?.() === false) {
     return [];
@@ -112,11 +116,19 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     return [];
   }
   return storeTargets
-    .filter(
-      (target) =>
-        (params.cfg !== undefined || !params.agentIds || params.agentIds.has(target.agentId)) &&
-        !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
-    )
+    .filter((target) => {
+      if (params.cfg === undefined && params.agentIds && !params.agentIds.has(target.agentId)) {
+        return false;
+      }
+      const refusal = readAgentDatabaseAdmissionRefusal(target.agentId, { env });
+      if (refusal) {
+        if (params.shouldContinue?.() !== false) {
+          params.onUnavailable?.(target, new AgentDatabaseAdmissionError(refusal));
+        }
+        return false;
+      }
+      return true;
+    })
     .toSorted(
       (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),
     );

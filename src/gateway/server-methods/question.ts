@@ -4,46 +4,53 @@ import {
   type Question,
   type QuestionRequestParams,
   type QuestionRecord,
-  type QuestionResolvedEvent,
-  validateQuestionGetParams,
-  validateQuestionListParams,
   validateQuestionRequestParams,
   validateQuestionResolveParams,
   validateQuestionWaitAnswerParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { registerActiveEmbeddedRunHumanInputWait } from "../../agents/embedded-agent-runner/run-state.js";
+import type { DurableQuestion } from "../../config/sessions/session-questions.types.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
-import {
-  handleQuestionChannelRequested,
-  handleQuestionChannelResolved,
-} from "../../infra/question-channel-runtime.js";
+import { handleQuestionChannelRequested } from "../../infra/question-channel-runtime.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import {
   listSecretStoreEntries,
   SecretStoreValidationError,
 } from "../../secrets/store/secret-store.js";
+import { installDurableQuestion } from "../durable-question-runtime.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
-import { canSelectQuestion, usesOwnRunQuestionAccess } from "../question-access.js";
+import { usesOwnRunQuestionAccess } from "../question-access.js";
 import { QuestionManager, type QuestionObservation } from "../question-manager.js";
+import type { QuestionRegistrationReservation } from "../question-registration-reservations.js";
 import {
   withQuestionSessionAccess,
   withPreparedQuestionSessions,
   type PreparedQuestionSession,
-  questionNotFound,
-  prepareQuestionAuthorization,
   prepareQuestionCommitAuthority,
   questionBroadcastOptions,
 } from "../question-session-access.js";
 import type { QuestionSessionAccess } from "../question-session-access.types.js";
+import { createDurableQuestionSessionAccess } from "../question-session-durable-access.js";
 import { questionShapeError } from "../question-validation.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import {
+  registerDurableQuestion,
+  retainUnpublishedDurableQuestion,
+  durableQuestionPublication,
+} from "./question.durable-registration.js";
 import { managerError, QuestionRequestValidationError } from "./question.errors.js";
+import {
+  createQuestionReadHandlers,
+  prepareSelectedQuestion,
+  waitForQuestionRecovery,
+} from "./question.read-handlers.js";
+import { createTransientQuestionPublication } from "./question.transient-publication.js";
 import type { SecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -93,44 +100,11 @@ export function createQuestionHandlers(
   manager: QuestionManager,
   storeWriteService: SecretStoreWriteService,
   scheduler: GatewayScheduler,
+  durable?: {
+    onContinuationOwed: (question: DurableQuestion) => void;
+    waitForRecovery?: () => Promise<void>;
+  },
 ): GatewayRequestHandlers {
-  const prepareSelectedQuestion = (
-    options: GatewayRequestHandlerOptions,
-    id: string,
-    access: "read" | "mutate",
-  ) => {
-    readGatewayRequestMutationAuthority(options).assertCurrent();
-    const question = canSelectQuestion(manager, id, options.client) ? manager.get(id) : null;
-    if (!question) {
-      options.respond(false, undefined, questionNotFound(id));
-      return undefined;
-    }
-    const observation = manager.observe(id, question);
-    const authorize = prepareQuestionAuthorization(options, observation, id, access);
-    return {
-      question,
-      observation,
-      authorize,
-      withCurrent<T>(consume: () => T, includeMembers?: boolean) {
-        return withPreparedQuestionSessions(
-          options,
-          [authorize.target],
-          ([prepared]) => {
-            const error = authorize.authorize(prepared);
-            if (error) {
-              options.respond(false, undefined, error);
-              return undefined;
-            }
-            return consume();
-          },
-          {
-            assertCurrent: authorize.assertCurrent,
-            ...(includeMembers !== undefined ? { includeMembers } : {}),
-          },
-        );
-      },
-    };
-  };
   return {
     "question.request": async (options) => {
       const { params, respond, context, client } = options;
@@ -144,6 +118,8 @@ export function createQuestionHandlers(
       const narrow = usesOwnRunQuestionAccess(client);
       let sessionAccess: QuestionSessionAccess | undefined;
       let accepted = false;
+      let durableCommitted: DurableQuestion | undefined;
+      let registrationReservation: QuestionRegistrationReservation | undefined;
       const requiresSharing = () =>
         !isGatewayAdmin(client) && hasOperatorBoundary(client, context.getRuntimeConfig());
       // Store-bound questions end in a secret-store write on resolve. Without
@@ -217,6 +193,14 @@ export function createQuestionHandlers(
         };
       }
       try {
+        // Caller-selected IDs share the recovered namespace across every agent store.
+        if (
+          request.id &&
+          durable?.waitForRecovery &&
+          !(await waitForQuestionRecovery(options, durable.waitForRecovery))
+        ) {
+          return;
+        }
         const questions = await normalizeQuestions(request, authority.assertCurrent);
         if (narrow && operatorAuthority) {
           assertAdmittedRunOperatorAuthority(operatorAuthority);
@@ -332,56 +316,96 @@ export function createQuestionHandlers(
                 ? (isPending: () => boolean) =>
                     registerActiveEmbeddedRunHumanInputWait(requester.delegatedAuthority, isPending)
                 : undefined,
-            onResolved: async (event: QuestionResolvedEvent, observation: QuestionObservation) => {
-              handleQuestionChannelResolved(event);
-              let consumed = false;
-              try {
-                await withPreparedQuestionSessions(
-                  options,
-                  [
-                    {
-                      ...observation.record,
-                      sessionAccess: observation.sessionAccess,
-                    },
-                  ],
-                  ([current]) => {
-                    consumed = true;
-                    if (!observation.isCurrent()) {
-                      return;
-                    }
-                    broadcastQuestion("question.resolved", event, observation, current);
-                  },
-                  {
-                    assertCurrent: () => {
-                      if (!observation.isCurrent()) {
-                        throw new Error("Question publication owner retired");
-                      }
-                    },
-                  },
-                );
-              } catch (error) {
-                if (consumed || !observation.isCurrent()) {
-                  throw error;
-                }
-                // A failed optional read grants no narrow access. Publish only to
-                // recipients the sharing owner admits with unknown session facts.
-                broadcastQuestion("question.resolved", event, observation, undefined);
-              }
-            },
+            onResolved: durableCommitted
+              ? durableQuestionPublication(context)
+              : createTransientQuestionPublication(options, (event, observation, current) =>
+                  broadcastQuestion("question.resolved", event, observation, current),
+                ),
           };
-          const record = manager.request(managerRequest);
+          let record: QuestionRecord;
+          if (durableCommitted && durable) {
+            installDurableQuestion(
+              manager,
+              durableCommitted,
+              durable.onContinuationOwed,
+              managerRequest,
+              registrationReservation,
+            );
+            record = manager.observe(durableCommitted.record.id)?.record ?? durableCommitted.record;
+          } else {
+            record = manager.request(managerRequest);
+          }
           accepted = true;
-          handleQuestionChannelRequested(record, scheduler);
-          broadcastQuestion(
-            "question.requested",
-            record,
-            manager.observe(record.id, record),
-            prepared,
-            record,
+          if (!durableCommitted || durableCommitted.record.status === "pending") {
+            handleQuestionChannelRequested(record, scheduler);
+            broadcastQuestion(
+              "question.requested",
+              record,
+              manager.observe(record.id, record),
+              prepared,
+              record,
+            );
+          }
+          respond(
+            true,
+            {
+              id: record.id,
+              expiresAtMs: record.expiresAtMs,
+              ...(request.durable
+                ? {
+                    durable: Boolean(durableCommitted),
+                    ...(durableCommitted ? { status: durableCommitted.record.status } : {}),
+                  }
+                : {}),
+            },
+            undefined,
           );
-          respond(true, { id: record.id, expiresAtMs: record.expiresAtMs }, undefined);
         };
-        if (sessionKey && requestedSession?.ok) {
+        const recoverableSource =
+          operatorAuthority?.recoverySnapshot || operatorAuthority?.channelRecoveryReference;
+        if (request.durable && recoverableSource) {
+          if (
+            !durable ||
+            !requester ||
+            !sessionKey ||
+            !requestedSession?.ok ||
+            questions.some(
+              (question) =>
+                question.isSecret ||
+                question.secretStore ||
+                question.presentation ||
+                question.resource,
+            )
+          ) {
+            throw new QuestionRequestValidationError(
+              "Durable custody requires an ordinary native ask_user question in an existing session.",
+            );
+          }
+          registrationReservation = manager.reserveRegistration(request.id);
+          durableCommitted = await registerDurableQuestion({
+            options,
+            request,
+            questions,
+            sessionKey,
+            agentId: requestedSession.agentId,
+            narrow,
+            requiresSharing,
+            scheduler,
+            defaultTimeoutMs: DEFAULT_QUESTION_TIMEOUT_MS,
+            assertGatewayCurrent: manager.captureCustodyCurrent(),
+            reservation: registrationReservation,
+          });
+          sessionAccess = createDurableQuestionSessionAccess(durableCommitted.sessionBinding);
+          await withPreparedQuestionSessions(
+            options,
+            [{ ...durableCommitted.record, sessionAccess }],
+            ([prepared]) => create(prepared),
+            {
+              assertCurrent: authority.assertCurrent,
+              includeMembers: !narrow && requiresSharing(),
+            },
+          );
+        } else if (sessionKey && requestedSession?.ok) {
           let consumed = false;
           try {
             await withQuestionSessionAccess(
@@ -436,8 +460,21 @@ export function createQuestionHandlers(
           throw error;
         }
       } finally {
-        if (!accepted) {
-          sessionAccess?.release();
+        try {
+          if (!accepted) {
+            sessionAccess?.release();
+            if (durableCommitted && durable) {
+              retainUnpublishedDurableQuestion(
+                manager,
+                durableCommitted,
+                durable.onContinuationOwed,
+                context,
+                registrationReservation,
+              );
+            }
+          }
+        } finally {
+          registrationReservation?.release();
         }
       }
     },
@@ -450,7 +487,14 @@ export function createQuestionHandlers(
       }
       const request = params;
       try {
-        const selected = prepareSelectedQuestion(options, request.id, "read");
+        const selection = prepareSelectedQuestion(
+          manager,
+          options,
+          request.id,
+          "read",
+          durable?.waitForRecovery,
+        );
+        const selected = selection instanceof Promise ? await selection : selection;
         if (!selected) {
           return;
         }
@@ -478,11 +522,56 @@ export function createQuestionHandlers(
       }
       const request = params;
       try {
-        const selected = prepareSelectedQuestion(options, request.id, "mutate");
+        const selection = prepareSelectedQuestion(
+          manager,
+          options,
+          request.id,
+          "mutate",
+          durable?.waitForRecovery,
+        );
+        const selected = selection instanceof Promise ? await selection : selection;
         if (!selected) {
           return;
         }
         const { question, observation, authorize } = selected;
+        if (manager.hasDurableCustody(request.id)) {
+          const commitAuthority = await selected.prepareCommitAuthority();
+          try {
+            const outcome =
+              "cancel" in request
+                ? { status: "cancelled" as const, resolvedBy: request.resolvedBy }
+                : {
+                    status: "answered" as const,
+                    answers: request.answers,
+                    resolvedBy: request.resolvedBy,
+                    resolutionId: request.resolutionId,
+                  };
+            const result = await manager.settleDurable(
+              request.id,
+              outcome,
+              commitAuthority.assertCurrent,
+            );
+            commitAuthority.assertCurrent();
+            if (result.status === "expired") {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  "The question expired before this answer was committed.",
+                  {
+                    details: { reason: "QUESTION_ALREADY_TERMINAL", status: "expired" },
+                  },
+                ),
+              );
+            } else {
+              respond(true, result, undefined);
+            }
+          } finally {
+            commitAuthority.release();
+          }
+          return;
+        }
         let reload: { name: string; result: ReturnType<QuestionManager["resolve"]> } | undefined;
         let save: Promise<void> | undefined;
         await selected.withCurrent(
@@ -621,60 +710,6 @@ export function createQuestionHandlers(
         }
       }
     },
-    "question.get": async (options) => {
-      const { params, respond } = options;
-      if (!assertValidParams(params, validateQuestionGetParams, "question.get", respond)) {
-        return;
-      }
-      const selected = prepareSelectedQuestion(options, params.id, "read");
-      if (!selected) {
-        return;
-      }
-      await selected
-        .withCurrent(() => {
-          respond(true, { question: selected.observation!.record }, undefined);
-        })
-        .catch((error: unknown) => {
-          if (!managerError(error, respond)) {
-            throw error;
-          }
-        });
-    },
-    "question.list": async (options) => {
-      const { params, respond } = options;
-      if (!assertValidParams(params, validateQuestionListParams, "question.list", respond)) {
-        return;
-      }
-      readGatewayRequestMutationAuthority(options).assertCurrent();
-      const records = manager
-        .list(
-          usesOwnRunQuestionAccess(options.client)
-            ? (question) => canSelectQuestion(manager, question.id, options.client)
-            : undefined,
-        )
-        .map((question) => {
-          const observation = manager.observe(question.id, question);
-          return {
-            question,
-            observation,
-            authorize: prepareQuestionAuthorization(options, observation, question.id, "read"),
-          };
-        });
-      await withPreparedQuestionSessions(
-        options,
-        records.map(({ authorize }) => authorize.target),
-        (prepared) => {
-          const questions = records.flatMap(({ question, observation, authorize }, index) =>
-            observation?.record === question &&
-            question.status === "pending" &&
-            !authorize.authorize(prepared[index])
-              ? [question]
-              : [],
-          );
-          respond(true, { questions }, undefined);
-        },
-        { assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent },
-      );
-    },
+    ...createQuestionReadHandlers(manager, durable?.waitForRecovery),
   };
 }

@@ -5,6 +5,8 @@ import {
 } from "../agents/admitted-run-context.js";
 import { restoreOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readSessionQuestionCustody } from "../config/sessions/session-questions.js";
+import type { DurableQuestion } from "../config/sessions/session-questions.types.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
@@ -69,8 +71,10 @@ export function readGatewayOperatorRecoverySource(
 }
 
 /** Re-admit the exact durable source under current policy; never revive an old run capability. */
-export async function restoreGatewayOperatorRecovery(params: {
+async function restoreGatewayDurableOperatorRecovery(params: {
   target: OperatorRecoveryTarget;
+  questionId?: string;
+  expectedQuestion?: DurableQuestion;
   context: GatewayRequestContext;
   assertCurrent: () => void;
 }): Promise<
@@ -122,12 +126,50 @@ export async function restoreGatewayOperatorRecovery(params: {
   const release = releaseHold();
   try {
     const read = () => readSessionEntryReadOnlyInWorker(target, assertOwner);
-    const entry = await read();
-    if (!entry?.restartRecoveryOperatorSource) {
+    if (params.questionId && !params.expectedQuestion) {
+      throw new Error("Durable question recovery requires captured custody.");
+    }
+    const entry = params.questionId ? undefined : await read();
+    const questionResult =
+      params.questionId && params.expectedQuestion
+        ? await readSessionQuestionCustody(
+            params.expectedQuestion.sessionBinding,
+            params.questionId,
+            assertOwner,
+          )
+        : undefined;
+    const question = Array.isArray(questionResult) ? undefined : questionResult;
+    const savedSource = params.questionId
+      ? question?.provenance.recoverySource
+      : entry?.restartRecoveryOperatorSource;
+    if (!savedSource) {
       release();
       return undefined;
     }
-    const source = decodeGatewayOperatorRecoverySource(entry.restartRecoveryOperatorSource);
+    const source = decodeGatewayOperatorRecoverySource(savedSource);
+    const assertQuestionClaim = (current: DurableQuestion | undefined) => {
+      if (
+        !current ||
+        !params.expectedQuestion ||
+        !isDeepStrictEqual(current.record, params.expectedQuestion.record) ||
+        !isDeepStrictEqual(current.sessionBinding, params.expectedQuestion.sessionBinding) ||
+        !isDeepStrictEqual(current.provenance, params.expectedQuestion.provenance) ||
+        current.resolutionId !== params.expectedQuestion.resolutionId ||
+        current.sessionId !== target.sessionId ||
+        current.lifecycleRevision !== source.lifecycleRevision ||
+        current.sessionKey !== target.sessionKey ||
+        current.provenance.issuer !== "operator" ||
+        current.provenance.sourceRunId !== target.sourceRunId ||
+        current.continuation.status !== "owed" ||
+        source.agentId !== target.agentId ||
+        source.sessionKey !== target.sessionKey ||
+        source.sessionId !== target.sessionId ||
+        source.sourceRunId !== target.sourceRunId ||
+        !isDeepStrictEqual(current.provenance.recoverySource, source)
+      ) {
+        throw new Error("Durable question operator source no longer owns this input.");
+      }
+    };
     const assertClaim = (current: InternalSessionEntry | undefined) => {
       const reservation = current?.mainRestartRecovery?.reservation;
       if (
@@ -148,7 +190,11 @@ export async function restoreGatewayOperatorRecovery(params: {
         throw new Error("Restart recovery operator source no longer owns this input.");
       }
     };
-    assertClaim(entry);
+    if (params.questionId) {
+      assertQuestionClaim(question);
+    } else {
+      assertClaim(entry);
+    }
     const snapshot = source.snapshot;
     let pairingSource: ReturnType<typeof capturePublishedOperatorDeviceSource> | undefined;
     const generationOwner = context.sharedGatewaySessionGenerationState;
@@ -268,7 +314,16 @@ export async function restoreGatewayOperatorRecovery(params: {
       subscriptions.push(pairingSource.release);
     }
     assertPolicy();
-    assertClaim(await read());
+    if (params.questionId && params.expectedQuestion) {
+      const fresh = await readSessionQuestionCustody(
+        params.expectedQuestion.sessionBinding,
+        params.questionId,
+        assertOwner,
+      );
+      assertQuestionClaim(fresh);
+    } else {
+      assertClaim(await read());
+    }
     assertPolicy();
     const live = captureChannelOperatorRunAuthority({
       profileId: snapshot.profileId,
@@ -309,4 +364,24 @@ export async function restoreGatewayOperatorRecovery(params: {
     release();
     throw error;
   }
+}
+
+/** Restart custody remains owned by the exact private session recovery claim. */
+export function restoreGatewayOperatorRecovery(params: {
+  target: OperatorRecoveryTarget;
+  context: GatewayRequestContext;
+  assertCurrent: () => void;
+}) {
+  return restoreGatewayDurableOperatorRecovery(params);
+}
+
+/** Question custody is loaded by its owner, never accepted as caller-supplied attribution. */
+export function restoreGatewayQuestionOperatorRecovery(params: {
+  target: OperatorRecoveryTarget;
+  questionId: string;
+  expectedQuestion: DurableQuestion;
+  context: GatewayRequestContext;
+  assertCurrent: () => void;
+}) {
+  return restoreGatewayDurableOperatorRecovery(params);
 }

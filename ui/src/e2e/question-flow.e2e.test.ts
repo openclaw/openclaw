@@ -218,6 +218,53 @@ suite.define(() => {
     context = undefined;
   });
 
+  it.each(["blocked", "interrupted"] as const)(
+    "shows a retained %s continuation in the normal chat after reconnect",
+    async (status) => {
+      const { gateway, page } = await openQuestionPage();
+      const original = questionRecord(`durable-${status}`, [
+        {
+          questionId: "environment",
+          header: "Environment",
+          question: "Which environment should I deploy to?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ]);
+      const answered = {
+        ...original,
+        status: "answered",
+        answers: { answers: { environment: ["Staging"] } },
+      };
+      await gateway.setMethodResponse("question.list", { questions: [answered] });
+      await page.reload();
+      const summary = page
+        .locator(".chat-question-summary")
+        .filter({ hasText: "Which environment should I deploy to?" });
+      await expect.poll(async () => summary.textContent()).toContain("Staging");
+      await screenshot(page, `durable-${status}-before.png`);
+      const nextAction = "Start a new user turn; this continuation was not automatically repeated.";
+      await gateway.setMethodResponse("question.list", {
+        questions: [answered],
+        continuations: [
+          {
+            questionId: original.id,
+            status,
+            reason:
+              status === "blocked"
+                ? "The original caller no longer has access."
+                : "The Gateway restarted after admitting this turn.",
+            nextAction,
+          },
+        ],
+      });
+      await page.reload();
+      await expect.poll(async () => summary.textContent()).toContain(nextAction);
+      await screenshot(page, `durable-${status}-after.png`);
+      const listRequest = await gateway.waitForRequest("question.list");
+      expect(listRequest.params).toEqual({ includeContinuation: true });
+    },
+  );
+
   it("reveals sidebar attention on touch without navigating or closing the drawer", async () => {
     const { gateway, page } = await openQuestionPage({ width: 390, height: 844 }, true);
     const request = questionRecord("sidebar-touch-question", [
@@ -634,7 +681,7 @@ suite.define(() => {
     );
     await page.goto(documentUrl.toString());
     const getRequest = await gateway.waitForRequest("question.get");
-    expect(getRequest.params).toEqual({ id: request.id });
+    expect(getRequest.params).toEqual({ id: request.id, includeContinuation: true });
 
     const document = page.locator("openclaw-question-page");
     await document.waitFor();

@@ -8,7 +8,6 @@ import {
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { isNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
@@ -24,38 +23,21 @@ import {
 } from "./plugin-node-capability.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
 import { activateGatewayAgentDatabaseStartup } from "./server-agent-database-startup.js";
-import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
 import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
+import type { GatewayStartupFinishParams } from "./server-startup-runtime.types.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
-import type { GatewayHttpTransport } from "./server-transport-bridge.js";
 import { startWorkerHumanPresence } from "./server/client-human-presence.js";
 import { collectGatewayWorkerPoolMetrics } from "./server/process-vitals.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-policy.js";
 import { DEFAULT_TERMINAL_DETACH_SECONDS } from "./terminal/session-limits.js";
 
-type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 const [POST_READY_MAINTENANCE_DELAY_MS, RETAINED_PLUGIN_CLEANUP_DELAY_MS] = [250, 30_000];
 
-type GatewayStartedRuntime = GatewayKernelRuntime & GatewayHttpTransport;
-
-export async function finishGatewayStartup(params: {
-  kernelRuntime: GatewayStartedRuntime;
-  port: number;
-  bootId: string;
-  opts: GatewayStartedRuntime["opts"];
-  log: GatewayLogger;
-  logHealth: GatewayLogger;
-  logWsControl: GatewayLogger;
-  logHooks: GatewayLogger;
-  logChannels: GatewayLogger;
-  logCron: GatewayLogger;
-  logReload: GatewayLogger;
-  waitForPostReadyWork: () => Promise<void>;
-}) {
+export async function finishGatewayStartup(params: GatewayStartupFinishParams) {
   const {
     kernelRuntime: runtime,
     port,
@@ -289,6 +271,7 @@ export async function finishGatewayStartup(params: {
           deps,
           startChannels,
           recoveryRuntime: gatewayInstanceRuntime.recovery,
+          recoverDurableQuestionInteractions: runtime.recoverDurableQuestionInteractions,
           isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
           resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
           logHooks,

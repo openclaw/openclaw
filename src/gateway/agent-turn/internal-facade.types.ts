@@ -22,7 +22,18 @@ export type RequesterSettleWakeReplay = {
   assertCurrent: () => void;
 };
 
+export type AgentTurnAdmissionCommit = (target: {
+  runId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  lifecycleGeneration: string;
+  assertCurrent: () => void;
+}) => Promise<void>;
+
 export type InternalAgentTurnDispatchOptions = {
+  /** Private durable input transfers custody before native acceptance. */
+  commitAdmission?: AgentTurnAdmissionCommit;
   /** Internal completion delivery owns its hidden input and durable processing receipt. */
   privateCompletion?: true;
   settleWakeReplay?: RequesterSettleWakeReplay;
