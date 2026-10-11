@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { BigIntStats } from "node:fs";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -347,6 +348,25 @@ export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
   private readonly published = new Map<string, Admission>();
   private revision = 0;
+
+  retainDescriptor(location: string, descriptor: number, opened: BigIntStats): Admission {
+    const record: Admission = {
+      identity: readSqliteDatabaseAdmissionIdentity(opened),
+      location,
+      descriptor,
+      descriptorOwner: 0,
+      generationId: randomUUID(),
+      generation: new SharedArrayBuffer(
+        Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
+      ),
+      writers: new Map(),
+      writeScopes: new Map(),
+      facts: new Map(),
+    };
+    this.records.set(record.identity, record);
+    this.publish(record);
+    return record;
+  }
 
   publish(record?: Admission): void {
     // Another isolate can retire shared custody. Reclaim it at publication, not on every request.

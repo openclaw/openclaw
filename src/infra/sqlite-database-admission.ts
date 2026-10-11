@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -11,7 +10,6 @@ import {
   SqliteDatabaseGenerationSlot,
   SqliteDatabaseAdmissionRegistry,
   type SqliteDatabaseAdmissionCursor,
-  SQLITE_DATABASE_GENERATION_LENGTH,
   readSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissionIdentity as identity,
   readSqliteDatabaseFactRevision,
@@ -75,7 +73,7 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
   exchange,
   publish(record) {
     state.registry.publish(record);
-    exchange();
+    exchange(record);
   },
 });
 export const {
@@ -109,25 +107,6 @@ function exchange(target: string | Admission, create?: boolean): void {
   }
 }
 
-function retainDescriptor(location: string, descriptor: number, opened: fs.BigIntStats): Admission {
-  const record: Admission = {
-    identity: identity(opened),
-    location,
-    descriptor,
-    descriptorOwner: 0,
-    generationId: randomUUID(),
-    generation: new SharedArrayBuffer(
-      Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
-    ),
-    writers: new Map(),
-    writeScopes: new Map(),
-    facts: new Map(),
-  };
-  state.registry.records.set(record.identity, record);
-  state.registry.publish(record);
-  return record;
-}
-
 /** Identity descriptors stay open for the process: closing one can release SQLite's POSIX locks. */
 export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   const observed = fs.statSync(location, { bigint: true });
@@ -155,7 +134,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   if (!opened.isFile() || identity(opened) !== key) {
     throw new Error("SQLite database changed while retaining its admission identity");
   }
-  retainDescriptor(location, descriptor, opened);
+  state.registry.retainDescriptor(location, descriptor, opened);
 }
 
 function pathAdmission(location: string): Admission | undefined {
@@ -226,7 +205,7 @@ export function prepareSqliteDatabaseAdmission(
         throw creationError;
       }
       const opened = fs.fstatSync(descriptor, { bigint: true });
-      const record = retainDescriptor(filename, descriptor, opened);
+      const record = state.registry.retainDescriptor(filename, descriptor, opened);
       if (prepareSqliteDatabaseAdmission(filename) !== record.identity) {
         throw new Error("SQLite database changed identity during file creation", { cause: error });
       }

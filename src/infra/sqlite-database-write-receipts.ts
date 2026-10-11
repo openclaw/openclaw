@@ -31,7 +31,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
   suspended(this: void, database: DatabaseSync): boolean;
-  exchange(this: void, location?: string): void;
+  exchange(this: void, record: Admission): void;
   publish(this: void, record: Admission): void;
 }) {
   /** A typed owner certifies all session keys affected by this synchronous kernel. */
@@ -64,7 +64,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
         )
     ) {
       // Only cold actor-key registration needs metadata exchange. Inactive actors add none.
-      owner.exchange(record.location);
+      owner.exchange(record);
     }
     const previous = state.writeScopes.get(database);
     state.writeScopes.set(database, keys);
