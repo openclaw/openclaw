@@ -133,7 +133,12 @@ export function normalizeOpenAIStrictToolParameters<T>(
 
 /** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
+  const normalized = normalizeStrictOpenAIJsonSchema(schema);
+  // Violation findings (e.g. regex lookarounds) also make a schema strict-incompatible.
+  return (
+    isStrictOpenAIJsonSchemaCompatibleRecursive(normalized) &&
+    findOpenAIStrictSchemaViolations(normalized, "parameters").length === 0
+  );
 }
 
 type OpenAIStrictToolSchemaDiagnostic = {
