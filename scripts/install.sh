@@ -3671,9 +3671,13 @@ install_with_bun() {
     escaped_bin="${escaped_bin//\$/\\$}"
     escaped_bin="${escaped_bin//\`/\\\`}"
     escaped_bin="${escaped_bin//\"/\\\"}"
-    persist_shell_path_prepend "$bin_dir" "$escaped_bin" append
+    if ! persist_shell_path_prepend "$bin_dir" "$escaped_bin" append; then
+        ui_warn "Could not update every shell profile; installation will continue. Add Bun to PATH manually:"
+        echo "  Bash/zsh: export PATH=\"${escaped_bin}:\$PATH\""
+        echo "  Fish: fish_add_path --move --prepend -- \"${escaped_bin}\""
+    fi
     if [[ -n "$old_claw" && "$old_claw" != "$OPENCLAW_BIN" ]]; then
-        ui_info "Bun bin directory now takes precedence over ${old_claw} in this session and persisted PATH."
+        ui_info "Bun bin directory now takes precedence over ${old_claw} in this session."
     fi
     if is_gateway_daemon_loaded "$OPENCLAW_BIN"; then
         run_quiet_step "Pinning existing Gateway to Bun" "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force

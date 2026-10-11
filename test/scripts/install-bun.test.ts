@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -250,34 +251,47 @@ describe("install.sh Bun runtime", () => {
     },
   );
 
-  it("installs a verified launcher with no Node and re-pins an existing service", () => {
-    const f = fixture();
-    writeFileSync(
-      join(f.home, ".bashrc"),
-      `export PATH="${f.home}/.bun/bin:$PATH"\nexport PATH="/old/node/bin:$PATH"\n`,
-    );
-    const result = f.run(["--runtime", "bun", "--version", "beta", "--no-onboard"], {
-      SERVICE_LOADED: "true",
-    });
-    expect(result.status, output(result)).toBe(0);
-    const target = join(f.home, ".openclaw/tools", `bun-${tag}`, "bun");
-    expect(sha(readFileSync(target))).toBe(f.artifact.executableSha256);
-    expect(readFileSync(join(f.root, "effects"), "utf8")).toBe(
-      `add:add -g --trust openclaw@${version} launcher:${target}\ncli:--version\ncli:daemon status --json\ncli:gateway install --runtime bun --runtime-path ${target} --force\n`,
-    );
-    expect(readFileSync(join(f.home, ".bashrc"), "utf8").trim().split("\n").at(-1)).toBe(
-      `export PATH="${f.home}/.bun/bin:$PATH"`,
-    );
-    f.pin.tag = "openclaw-new-pin";
-    writeFileSync(join(f.root, "pin.json"), JSON.stringify(f.pin));
-    const updated = f.run(["--runtime", "bun", "--no-onboard"], { SERVICE_LOADED: "true" });
-    expect(updated.status, output(updated)).toBe(0);
-    const updatedTarget = join(f.home, ".openclaw/tools/bun-openclaw-new-pin/bun");
-    expect(readFileSync(join(f.root, "effects"), "utf8")).toContain(
-      `cli:gateway install --runtime bun --runtime-path ${updatedTarget} --force`,
-    );
-    expect(readdirSync(f.tmp)).toEqual([]);
-  });
+  it.each([false, true])(
+    "installs and re-pins with an unsafe shell profile: %s",
+    (unsafeProfile) => {
+      const f = fixture();
+      const outsideProfile = join(f.root, "outside-profile");
+      if (unsafeProfile) {
+        writeFileSync(outsideProfile, "# untouched\n");
+        symlinkSync(outsideProfile, join(f.home, ".profile"));
+      }
+      writeFileSync(
+        join(f.home, ".bashrc"),
+        `export PATH="${f.home}/.bun/bin:$PATH"\nexport PATH="/old/node/bin:$PATH"\n`,
+      );
+      const result = f.run(["--runtime", "bun", "--version", "beta", "--no-onboard"], {
+        SERVICE_LOADED: "true",
+      });
+      expect(result.status, output(result)).toBe(0);
+      if (unsafeProfile) {
+        expect(output(result)).toContain("Refusing profile symlink outside your home");
+        expect(output(result)).toContain(`export PATH="${f.home}/.bun/bin:$PATH"`);
+        expect(readFileSync(outsideProfile, "utf8")).toBe("# untouched\n");
+      }
+      const target = join(f.home, ".openclaw/tools", `bun-${tag}`, "bun");
+      expect(sha(readFileSync(target))).toBe(f.artifact.executableSha256);
+      expect(readFileSync(join(f.root, "effects"), "utf8")).toBe(
+        `add:add -g --trust openclaw@${version} launcher:${target}\ncli:--version\ncli:daemon status --json\ncli:gateway install --runtime bun --runtime-path ${target} --force\n`,
+      );
+      expect(readFileSync(join(f.home, ".bashrc"), "utf8").trim().split("\n").at(-1)).toBe(
+        `export PATH="${f.home}/.bun/bin:$PATH"`,
+      );
+      f.pin.tag = "openclaw-new-pin";
+      writeFileSync(join(f.root, "pin.json"), JSON.stringify(f.pin));
+      const updated = f.run(["--runtime", "bun", "--no-onboard"], { SERVICE_LOADED: "true" });
+      expect(updated.status, output(updated)).toBe(0);
+      const updatedTarget = join(f.home, ".openclaw/tools/bun-openclaw-new-pin/bun");
+      expect(readFileSync(join(f.root, "effects"), "utf8")).toContain(
+        `cli:gateway install --runtime bun --runtime-path ${updatedTarget} --force`,
+      );
+      expect(readdirSync(f.tmp)).toEqual([]);
+    },
+  );
 
   it("accepts an explicit fork for a custom package", () => {
     const f = fixture();
