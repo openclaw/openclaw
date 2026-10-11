@@ -1671,27 +1671,37 @@ describe("createTelegramBot", () => {
         { agents: { defaults: { userTimezone: "UTC" } } },
       );
       loadConfig.mockReturnValue(config);
-      const callbackHandler = await createCallbackHandler({ config });
-      const page = buildCommandsMessagePaginated(config, [], {
-        surface: "telegram",
-        forcePaginatedList: true,
-        page: Number.MAX_SAFE_INTEGER,
-      });
-      expect(page.text).toContain("active-memory");
-      await callbackHandler(
-        createTelegramCallbackContext({
-          id: "cbq-command-code",
-          data: `commands_page_${page.currentPage}:main`,
-          message: { message_id: 17 },
-        }),
-      );
-      expect(editMessageTextSpy).toHaveBeenCalledWith(
-        1234,
-        17,
-        expect.stringContaining("<code>/active-memory</code>"),
-        expect.objectContaining({ parse_mode: "HTML" }),
-      );
-      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Inspect memory &lt;scope&gt;");
+      const readSession = vi
+        .spyOn(telegramBotDepsForTest, "getSessionEntryAsync")
+        .mockResolvedValue(undefined);
+      try {
+        const callbackHandler = await createCallbackHandler({ config });
+        const page = buildCommandsMessagePaginated(config, [], {
+          surface: "telegram",
+          forcePaginatedList: true,
+          page: Number.MAX_SAFE_INTEGER,
+        });
+        expect(page.text).toContain("active-memory");
+        await callbackHandler(
+          createTelegramCallbackContext({
+            id: "cbq-command-code",
+            data: `commands_page_${page.currentPage}:main`,
+            message: { message_id: 17 },
+          }),
+        );
+        expect(editMessageTextSpy).toHaveBeenCalledWith(
+          1234,
+          17,
+          expect.stringContaining("<code>/active-memory</code>"),
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
+        expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Inspect memory &lt;scope&gt;");
+        expect(readSession).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "main", sessionKey: expect.any(String) }),
+        );
+      } finally {
+        readSession.mockRestore();
+      }
     });
   });
 

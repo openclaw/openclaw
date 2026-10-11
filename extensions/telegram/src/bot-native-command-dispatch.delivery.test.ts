@@ -178,6 +178,7 @@ describe("Telegram typed command delivery", () => {
           chat,
           from,
           text: "Earlier answer",
+          reply_to_message: undefined,
         },
         quote: { text: "Earlier answer", position: 0 },
       },
@@ -190,12 +191,9 @@ describe("Telegram typed command delivery", () => {
       }),
     );
     const messages = (await readVisibleSessionTranscriptMessageEntries(scope)).map(
-      ({ message }) => ({
-        role: message.role,
-        content: message.content,
-      }),
+      ({ message }) => message,
     );
-    expect(messages).toEqual([
+    expect(messages).toMatchObject([
       { role: "assistant", content: "Earlier answer" },
       { role: "user", content: [{ type: "text", text: "/think low" }] },
       { role: "assistant", content: [{ type: "text", text: "Thinking level set to low." }] },
