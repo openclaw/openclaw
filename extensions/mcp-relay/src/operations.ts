@@ -3,8 +3,7 @@ import { listAgentIds, tryResolveDefaultAgentId } from "openclaw/plugin-sdk/agen
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createDeadlineGatewayRequest, type GatewayRequest } from "./gateway-request.js";
 import { capResult, RelayError, truncateText } from "./protocol.js";
