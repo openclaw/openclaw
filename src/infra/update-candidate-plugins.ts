@@ -383,9 +383,6 @@ export async function prepareUpdateCandidatePlugins(
     candidateRoot: params.candidateRoot,
     onProgress: params.onProgress,
   });
-  for (const inspection of inspections) {
-    inspection.assertSourceCurrent();
-  }
   const aliases: UpdateCandidatePluginPlan["aliases"] = [];
   for (const { source, real, file, preserveBasename } of locators) {
     const copy = trees.copies.find(([directory]) => isPathInside(directory, real));

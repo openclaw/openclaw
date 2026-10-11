@@ -8,6 +8,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-inputs.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
@@ -18,6 +19,90 @@ import { withSessionTranscriptSourcePublication } from "./transcript-write-conte
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+it.each([
+  { phase: "acceptInput", change: "metadata" },
+  { phase: "adoptRun", change: "metadata" },
+  { phase: "acceptInput", change: "lifecycle" },
+  { phase: "adoptRun", change: "lifecycle" },
+] as const)(
+  "preserves input custody across a $change write before $phase admission",
+  async ({ phase, change }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          { agentId: f.scope.agentId, storePath: f.scope.storePath, target: f.target },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "durable input actor",
+      );
+      const message = {
+        role: "user" as const,
+        content: "Retain one prepared input.",
+        timestamp: 1,
+        idempotencyKey: "intervening-write:user",
+      };
+      const prepare = vi.fn<
+        NonNullable<Parameters<typeof createUserTurnTranscriptRecorder>[0]["beforeMessageWrite"]>
+      >(({ message: preparedMessage }) => preparedMessage);
+      const recorder = createUserTurnTranscriptRecorder({
+        message,
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+        beforeMessageWrite: prepare,
+        updateMode: "none",
+        onPersistenceError() {},
+      });
+      bindUserTurnInputActor(recorder, { phase, acquire: async () => input });
+      let changed = false;
+      const intervene = async () => {
+        if (changed) {
+          return;
+        }
+        changed = true;
+        await patchSessionEntryCore(f.scope, () =>
+          change === "metadata" ? { updatedAt: 2, startedAt: 2 } : { abortedLastRun: true },
+        );
+      };
+      if (phase === "acceptInput") {
+        const execute = input.actor.acceptInput.bind(input.actor);
+        vi.spyOn(input.actor, "acceptInput").mockImplementation(async (...args) => {
+          await intervene();
+          return execute(...args);
+        });
+      } else {
+        const execute = input.actor.adoptRun.bind(input.actor);
+        vi.spyOn(input.actor, "adoptRun").mockImplementation(async (...args) => {
+          await intervene();
+          return execute(...args);
+        });
+      }
+      try {
+        const persistence = recorder.persistApproved();
+        if (change === "metadata") {
+          await expect(persistence).resolves.toMatchObject({ appended: true, message });
+          expect(recorder.hasPersisted()).toBe(true);
+          expect(recorder.getAdmissionReceipt()).toMatchObject({ sessionId: f.scope.sessionId });
+          expect(f.events().filter((event) => event.type === "message")).toEqual([
+            expect.objectContaining({ message }),
+          ]);
+          expect(f.read()).toMatchObject({ startedAt: 2 });
+        } else {
+          await expect(persistence).rejects.toThrow(
+            "Session actor turn was refused by its current owner",
+          );
+          expect(recorder.hasPersisted()).toBe(false);
+          expect(recorder.getAdmissionReceipt()).toBeUndefined();
+          expect(f.events()).toEqual([]);
+          expect(f.read()).toMatchObject({ abortedLastRun: true });
+        }
+        expect(prepare).toHaveBeenCalledOnce();
+      } finally {
+        await input.actor.release();
+      }
+    });
+  },
+);
 
 it("retains actor-bound recorder custody through a durable worker publication failure", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

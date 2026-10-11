@@ -6,11 +6,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import type { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
 import "./file-preview-modal-registration.ts";
 import { icons } from "./icons.ts";
 
-type FilePreviewModalElement = OpenClawFilePreviewModal;
+type FilePreviewModalElement = HTMLElementTagNameMap["openclaw-file-preview-modal"];
 
 let container: HTMLDivElement;
 
@@ -32,7 +31,7 @@ const files = [
 type RenderPreviewOptions = {
   query?: string;
   activePath?: string;
-  previewFiles?: OpenClawFilePreviewModal["files"];
+  previewFiles?: FilePreviewModalElement["files"];
   layout?: "files" | "document";
 };
 

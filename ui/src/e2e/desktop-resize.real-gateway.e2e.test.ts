@@ -279,7 +279,7 @@ suite.define(() => {
             },
             gateway: {
               auth: { mode: "trusted-proxy", password: gatewayToken, trustedProxy },
-              // The Gateway approves the local device; the fixture approves its command surface.
+              // The Gateway approves the local device and its initial command surface.
               nodes: { pairing: { autoApproveLocal: true } },
               controlUi: {
                 enabled: true,
