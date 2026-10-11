@@ -59,8 +59,10 @@ Flags:
 - `--text <text>`: required system event text.
 - `--mode <mode>`: `now` or `next-heartbeat` (default).
 - `--session-key <sessionKey>`: optional; target a specific agent session
-  instead of the agent's main session. Keys that do not belong to the
-  resolved agent fall back to the agent's main session.
+  instead of the agent's main session. Use an agent-qualified key such as
+  `agent:ops:main` for a configured `ops` agent. The Gateway rejects malformed
+  keys, unknown agents, targets outside the caller's agent scope, and subagent
+  sessions.
 
 ## `system heartbeat last|enable|disable`
 
