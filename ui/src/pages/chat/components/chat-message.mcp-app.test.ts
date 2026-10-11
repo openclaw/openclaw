@@ -2,6 +2,8 @@
 
 import { render } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
 import {
   createAssistantCanvasBlock,
@@ -11,7 +13,7 @@ import {
 import { renderToolFixture, settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 it("keeps MCP App raw details reachable from its widget menu", async () => {
-  const container = document.createElement("div");
+  const container = createApplicationContextProvider(createInitializationContext());
   onTestFinished(async () => {
     await vi.dynamicImportSettled();
     render(null, container);
