@@ -80,7 +80,7 @@ async function fixture(key = sessionKey) {
           createdAt: 1,
           updatedAt: 1,
           incognito: true,
-          projectId: "original",
+          category: "original",
           sessionRoot: "/synthetic/workspace",
         },
       },
@@ -115,17 +115,17 @@ it("reads current memory rows without acquiring sessions or opening an absent ow
   const { actor, binding, owner } = await fixture();
   await fixture(siblingKey);
   await fixture(otherKey);
-  expect(read()).toMatchObject({ entry: { projectId: "original" }, members: [] });
+  expect(read()).toMatchObject({ entry: { category: "original" }, members: [] });
   expect(escapedAssertion).toThrow("no longer retained");
   const patched = await actor.storage!.mutate(
     {
       type: "session.entry.patch",
-      input: { operation: { kind: "fields", patch: { projectId: "updated" } } },
+      input: { operation: { kind: "fields", patch: { category: "updated" } } },
     },
     authority,
   );
   expect(patched.kind).toBe("committed");
-  expect(read()).toMatchObject({ entry: { projectId: "updated" } });
+  expect(read()).toMatchObject({ entry: { category: "updated" } });
   const member = { identityId: "viewer@example.test", addedBy: "owner", addedAt: 2 };
   const added = await actor.storage!.mutate(
     { type: "session.collaboration.add", input: { params: member } },
@@ -154,19 +154,19 @@ it("retains detached planning data and rejects effects after the selected actor 
   await runWithSessionActorStorage(binding, () =>
     withGatewaySessionEntryReadOnly({ cfg, key: sessionKey }, async (loaded, assertCurrent) => {
       expect(loaded.entry).toMatchObject({
-        projectId: "original",
+        category: "original",
         sessionRoot: "/synthetic/workspace",
       });
       escapedAssertion = assertCurrent;
       const patched = await actor.storage!.mutate(
         {
           type: "session.entry.patch",
-          input: { operation: { kind: "fields", patch: { projectId: "updated" } } },
+          input: { operation: { kind: "fields", patch: { category: "updated" } } },
         },
         authority,
       );
       expect(patched.kind).toBe("committed");
-      expect(loaded.entry?.projectId).toBe("original");
+      expect(loaded.entry?.category).toBe("original");
       assertCurrent();
       owner.closeSession(sessionKey);
       expect(assertCurrent).toThrow("closed");
@@ -214,7 +214,7 @@ it("rechecks metadata only at response and honors the caller's allowed metadata 
   const read = retainGatewaySessionEntryReadOnly(
     sessionKey,
     "main",
-    (previous, current) => previous.projectId === current.projectId,
+    (previous, current) => previous.category === current.category,
     cfg,
   );
   try {
@@ -228,14 +228,14 @@ it("rechecks metadata only at response and honors the caller's allowed metadata 
     );
     expect(title.kind).toBe("committed");
     expect(read.isCurrentAtResponse()).toBe(true);
-    const project = await actor.storage!.mutate(
+    const category = await actor.storage!.mutate(
       {
         type: "session.entry.patch",
-        input: { operation: { kind: "fields", patch: { projectId: "another-project" } } },
+        input: { operation: { kind: "fields", patch: { category: "another-category" } } },
       },
       authority,
     );
-    expect(project.kind).toBe("committed");
+    expect(category.kind).toBe("committed");
     expect(read.isCurrentAtResponse()).toBe(false);
     expect(read.isCurrent()).toBe(true);
     owner.close();
@@ -271,6 +271,12 @@ it("projects unbound memory watches from current facts with the existing recipie
   expect(project(client)).toEqual([{ ...person, watchedSessions: [sessionKey, otherKey] }]);
   client.connect.scopes = ["operator.read"];
   client.authenticatedUserId = "viewer@example.test";
+  client.authenticatedUserProfile = {
+    profileId: "viewer@example.test",
+    displayName: null,
+    hasAvatar: false,
+    updatedAt: 1,
+  };
   expect(project(client)).toEqual([person]);
   expect(project(null)).toEqual([]);
   owner.closeSession(sessionKey);

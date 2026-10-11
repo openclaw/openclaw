@@ -206,7 +206,7 @@ describe("memory actor fork and cut", () => {
     if (rewind.status !== "created") {
       throw new Error("Rewind failed");
     }
-    await expect(
+    await expect(async () =>
       storage(parent).read({ type: "session.entry.read", input: {} }, authority),
     ).rejects.toThrow(/closed/);
     const active = await acquire();

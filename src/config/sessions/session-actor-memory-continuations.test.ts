@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reconcileHarnessCompletionDelivery } from "../../agents/agent-harness-completion-delivery.js";
 import { createHarnessCompletionSourceAssertion } from "../../agents/agent-harness-completion-recovery.js";
+import type {
+  ResetEntry,
+  SessionMessageEntry,
+} from "../../agents/sessions/session-manager-types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { lookupSessionGoalOperation } from "./goals-operations-read.js";
@@ -28,6 +32,7 @@ import {
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
+import type { SessionMetadataOperations } from "./session-manager-write-contract.js";
 import { listSessionPendingInputs } from "./session-pending-input-history.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import { readSessionPendingInputReceiptsInWorker } from "./session-pending-input-receipts.js";
@@ -95,17 +100,27 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
       authority,
     ),
   );
-  const append = async (event: unknown) => {
+  const append = async (
+    event: ResetEntry | (Omit<SessionMessageEntry, "message"> & { message: unknown }),
+  ) => {
+    const input: SessionMetadataOperations["session.metadata.append"]["input"] = {
+      scope,
+      event: JSON.stringify(event),
+      options: {},
+    };
+    if (event.type === "message") {
+      const { message, ...envelope } = event;
+      input.event = envelope;
+      input.message = {
+        messageJson: JSON.stringify(message),
+        cwd: "/synthetic",
+        validateTurn: false,
+      };
+    }
     const current = await acquire();
     try {
       return committed(
-        await current.actor.storage!.mutate(
-          {
-            type: "session.metadata.append",
-            input: { scope, event: JSON.stringify(event), options: {} },
-          },
-          authority,
-        ),
+        await current.actor.storage!.mutate({ type: "session.metadata.append", input }, authority),
       );
     } finally {
       await current.actor.release();
@@ -410,9 +425,9 @@ describe("memory continuation adapters", () => {
     await binding.actor.release();
     expect(await beginRestartRecoveryTerminalDelivery(target)).toBe("started");
     expect(await beginRestartRecoveryTerminalDelivery(target)).toBe("delivery-ambiguous");
-    expect(
-      await cancelRestartRecoveryTerminalDelivery({ ...target, toolCallId: "wrong-send" }),
-    ).toBe("stale");
+    await expect(
+      cancelRestartRecoveryTerminalDelivery({ ...target, toolCallId: "wrong-send" }),
+    ).rejects.toThrow("failed to clear terminal delivery intent");
     expect(await cancelRestartRecoveryTerminalDelivery(target)).toBe("cleared");
     expect(await beginRestartRecoveryTerminalDelivery(target)).toBe("started");
     expect(await completeRestartRecoveryTerminalDelivery(target)).toBe("recorded");

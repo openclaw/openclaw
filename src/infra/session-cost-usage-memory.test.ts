@@ -62,25 +62,35 @@ async function fixture(entry: Partial<InternalSessionEntry> = {}) {
         {
           commandId: id,
           phaseId: "turn",
-          sessionId,
-          lifecycleRevision: null,
-          eventJson: JSON.stringify({
-            type: "message",
-            id,
-            timestamp: "2026-10-01T12:00:00.000Z",
-            message: {
-              role: "assistant",
-              content: "answer",
-              usage: {
-                input,
-                output: 2,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: input + 2,
-                cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+          append: {
+            kind: "metadata",
+            input: {
+              scope: { agentId: "main", sessionKey, sessionId, storePath: binding.path },
+              event: {
+                type: "message",
+                id,
+                parentId: null,
+                timestamp: "2026-10-01T12:00:00.000Z",
               },
+              message: {
+                messageJson: JSON.stringify({
+                  role: "assistant",
+                  content: "answer",
+                  usage: {
+                    input,
+                    output: 2,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: input + 2,
+                    cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+                  },
+                }),
+                cwd: "/synthetic",
+                validateTurn: false,
+              },
+              options: { appendIntent: "active-branch" },
             },
-          }),
+          },
         },
         authority,
       ),

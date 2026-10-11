@@ -52,7 +52,7 @@ function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
 
 function message(id: string, parentId: string | null, role: string, content: string) {
   return {
-    type: "message",
+    type: "message" as const,
     id,
     parentId,
     timestamp: "2026-10-11T00:00:00.000Z",
@@ -84,12 +84,21 @@ async function fixture(sessionId = "one", agentId = "main") {
   );
   const scope = { agentId, sessionKey, sessionId, storePath, env };
   const binding = { actor, authority, agentId, path: storePath };
-  const append = async (event: unknown) =>
+  const append = async ({ message: payload, ...event }: ReturnType<typeof message>) =>
     committed(
       await storage.mutate(
         {
           type: "session.metadata.append",
-          input: { scope, event: JSON.stringify(event), options: {} },
+          input: {
+            scope,
+            event,
+            message: {
+              messageJson: JSON.stringify(payload),
+              cwd: "/synthetic",
+              validateTurn: false,
+            },
+            options: {},
+          },
         },
         authority,
       ),

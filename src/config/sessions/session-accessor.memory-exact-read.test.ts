@@ -141,7 +141,12 @@ it("serves exact entry wrappers and projections from the selected memory owner a
       value: [
         {
           sessionKey: siblingKey,
-          entry: { sessionId: "sibling-id", updatedAt: 2, delivery: undefined, groupId: undefined },
+          entry: {
+            sessionId: "sibling-id",
+            updatedAt: 2,
+            delivery: { kind: "none" },
+            groupId: undefined,
+          },
         },
       ],
     });

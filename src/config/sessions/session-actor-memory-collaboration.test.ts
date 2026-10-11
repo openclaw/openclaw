@@ -268,15 +268,24 @@ describe("memory collaboration through the public adapters", () => {
           {
             commandId: "message",
             phaseId: "turn",
-            sessionId: "first",
-            lifecycleRevision: null,
-            eventJson: JSON.stringify({
-              type: "message",
-              id: "message",
-              parentId: null,
-              timestamp: new Date(1).toISOString(),
-              message: { role: "user", content: "Hello" },
-            }),
+            append: {
+              kind: "metadata",
+              input: {
+                scope: { ...scope, sessionId: "first" },
+                event: {
+                  type: "message",
+                  id: "message",
+                  parentId: null,
+                  timestamp: new Date(1).toISOString(),
+                },
+                message: {
+                  messageJson: JSON.stringify({ role: "user", content: "Hello" }),
+                  cwd: "/synthetic",
+                  validateTurn: false,
+                },
+                options: {},
+              },
+            },
           },
           authority,
         )

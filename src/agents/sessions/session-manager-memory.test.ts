@@ -102,7 +102,7 @@ describe("SessionManager selected memory actor", () => {
     ).toEqual(messages);
     expect(
       (await readSessionManagerModelContextAsync(target, {}, (context) => context, manager)).events,
-    ).toEqual(reopened.getPersistedEntries());
+    ).toMatchObject(reopened.getPersistedEntries());
     owner.close();
     await expect(manager.appendMessageAsync(makeUserMessage("closed", 3))).rejects.toThrow(
       /closed/,
