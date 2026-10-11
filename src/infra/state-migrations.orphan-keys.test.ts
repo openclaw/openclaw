@@ -388,7 +388,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
-        `Deferred migration of 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred migration of 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one session.store path without aliases, then rerun openclaw doctor --fix`,
       ]);
       expect(rerun).toEqual(result);
       expect(
@@ -441,7 +441,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
-        `Deferred session key migration for ${standardStorePath}; filesystem identity could not be established for every configured store path. Restore path access or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred session key migration for ${standardStorePath}; filesystem identity could not be established for every configured store path. Restore path access or configure one session.store path without aliases, then rerun openclaw doctor --fix`,
       ]);
       expect(requireStoreEntry(readStore(standardStorePath), "voice:15550001111").sessionId).toBe(
         "legacy-voice",
@@ -475,7 +475,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
-        `Deferred migration of 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred migration of 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one session.store path without aliases, then rerun openclaw doctor --fix`,
       ]);
       expect(fs.lstatSync(configuredStorePath).isSymbolicLink()).toBe(true);
       expect(
@@ -501,7 +501,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
-        `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred session key migration in final-component symlink store ${storePath}; configure one session.store path without aliases, then rerun openclaw doctor --fix`,
       ]);
       expect(fs.lstatSync(storePath).isSymbolicLink()).toBe(true);
       expect(requireStoreEntry(readStore(outsideStorePath), "voice:15550001111").sessionId).toBe(
@@ -525,7 +525,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
-        `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred session key migration in final-component symlink store ${storePath}; configure one session.store path without aliases, then rerun openclaw doctor --fix`,
       ]);
       expect(fs.lstatSync(storePath).isSymbolicLink()).toBe(true);
       expect(requireStoreEntry(readStore(outsideStorePath), "agent:main:main").sessionId).toBe(
@@ -557,7 +557,7 @@ describe("migrateOrphanedSessionKeys", () => {
       }
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
-        `Deferred session key migration in aliased store ${configuredStorePath}; atomic replacement cannot update distinct filesystem aliases as one operation. Remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred session key migration in aliased store ${configuredStorePath}; atomic replacement cannot update distinct filesystem aliases as one operation. Remove filesystem aliases or configure one session.store path without aliases, then rerun openclaw doctor --fix`,
       ]);
     });
   });

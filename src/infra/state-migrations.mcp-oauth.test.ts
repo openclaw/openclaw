@@ -432,7 +432,7 @@ describe("legacy MCP OAuth Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain(
-      `Preserved canonical SQLite MCP OAuth store for ${storeKey}.json.`,
+      `Preserved current SQLite MCP OAuth store for ${storeKey}.json.`,
     );
     expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).toEqual({
       credentialState: "cleared",

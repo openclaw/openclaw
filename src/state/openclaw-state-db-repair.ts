@@ -304,7 +304,7 @@ export function repairStateSchema(
           assertCurrentStateRuntimeSchema(db, pathname);
         }
         if (rebuiltIndexNames.size > 0) {
-          applied.push(`Rebuilt canonical shared-state SQLite indexes (${rebuiltIndexNames.size})`);
+          applied.push(`Rebuilt shared-state SQLite indexes (${rebuiltIndexNames.size})`);
         }
         return applied;
       },

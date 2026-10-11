@@ -581,9 +581,7 @@ export async function archiveLegacyMeetingTranscriptSnapshots(params: {
 
 export class LegacyMeetingTranscriptArchiveMovedError extends Error {
   constructor(cause: unknown) {
-    super(
-      `legacy transcript source moved but canonical export restoration failed: ${String(cause)}`,
-    );
+    super(`legacy transcript source moved but current export restoration failed: ${String(cause)}`);
     this.name = "LegacyMeetingTranscriptArchiveMovedError";
   }
 }
@@ -597,7 +595,7 @@ async function assertCanonicalExportDirectory(
   const stat = await fs.lstat(targetPath);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new Error(
-      `canonical transcript export ${role} is not a directory: ${targetPath}`,
+      `current transcript export ${role} is not a directory: ${targetPath}`,
       cause === undefined ? undefined : { cause },
     );
   }
@@ -605,7 +603,7 @@ async function assertCanonicalExportDirectory(
     rootDir,
     targetPath,
     allowMissing: false,
-    messagePrefix: `Canonical transcript export ${role}`,
+    messagePrefix: `Current transcript export ${role}`,
   });
 }
 
@@ -632,7 +630,7 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
         return !relative || relative.startsWith("..") || path.isAbsolute(relative);
       })
     ) {
-      throw new Error(`canonical transcript export path escaped its root: ${relativeDir}`);
+      throw new Error(`current transcript export path escaped its root: ${relativeDir}`);
     }
     if (migratedRelativeDirs.has(relativeDir)) {
       continue;
@@ -663,7 +661,7 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
         sourceMetadata.sessionId !== destinationMetadata.sessionId ||
         sourceMetadata.startedAt !== destinationMetadata.startedAt
       ) {
-        throw new Error(`canonical transcript export destination changed identity: ${destination}`);
+        throw new Error(`current transcript export destination changed identity: ${destination}`);
       }
       continue;
     } catch (error) {
@@ -675,7 +673,7 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
       rootDir: params.sourceRoot,
       targetPath: destination,
       allowMissing: true,
-      messagePrefix: "Canonical transcript export destination",
+      messagePrefix: "Current transcript export destination",
     });
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(source, destination);

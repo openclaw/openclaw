@@ -29,7 +29,7 @@ export async function recoverEmptyRetainedTranscript(params: {
     .readdirSync(path.dirname(source.originalPath))
     .filter((name) => name.startsWith(prefix) && /^\d+-\d+$/.test(name.slice(prefix.length)))
     .map((name) => path.join(path.dirname(source.originalPath), name));
-  const manual = `Preserve ${source.path} and the backup candidates (${candidates.join(", ") || `${source.originalPath}.bak-<pid>-<timestamp>: none found`}). Restore a complete verified transcript at ${source.originalPath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against this same state directory. Canonical database: ${target.sqlitePath}.`;
+  const manual = `Preserve ${source.path} and the backup candidates (${candidates.join(", ") || `${source.originalPath}.bak-<pid>-<timestamp>: none found`}). Restore a complete verified transcript at ${source.originalPath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against this same state directory. SQLite database: ${target.sqlitePath}.`;
   try {
     if (original.size !== 0) {
       throw new Error("Retained transcript is no longer empty");
@@ -52,11 +52,11 @@ export async function recoverEmptyRetainedTranscript(params: {
       const sessionKey = snapshot.snapshot.sessionKeysBySessionId.get(sessionId);
       if (!sessionKey) {
         throw new Error(
-          `No canonical session owner for ${sessionId}; deleted history was not replayed`,
+          `No saved session owner for ${sessionId}; deleted history was not replayed`,
         );
       }
       if (!backups.length && !snapshot.snapshot.transcriptEventCountsBySessionId.get(sessionId)) {
-        throw new Error(`No backup or canonical transcript rows for ${sessionId}`);
+        throw new Error(`No backup or saved transcript rows for ${sessionId}`);
       }
       for (const [index, backup] of backups.entries()) {
         if (
@@ -71,7 +71,7 @@ export async function recoverEmptyRetainedTranscript(params: {
           verifyCanonicalSessionTranscriptSources({ target, sources, env, mode });
         const verified = verify(index === 0 ? "appendable" : "contained");
         if (!verified || verified.events === 0) {
-          throw new Error(`Backup is not covered by canonical history: ${backup.path}`);
+          throw new Error(`Backup is not covered by saved history: ${backup.path}`);
         }
         if (verified.missingEvents) {
           const fingerprint = readTranscriptFingerprint(backup.path);
@@ -129,7 +129,7 @@ export async function recoverEmptyRetainedTranscript(params: {
       throw new Error("Retained transcript or backup changed during recovery");
     }
     params.assertCurrent();
-    return `Verified-empty retained transcript; superseded by canonical SQLite history. Backup candidates: ${candidates.join(", ") || "none"}.`;
+    return `Verified-empty retained transcript; superseded by stored SQLite history. Backup candidates: ${candidates.join(", ") || "none"}.`;
   } catch (error) {
     throw new Error(`${String(error)}. ${manual}`, { cause: error });
   }

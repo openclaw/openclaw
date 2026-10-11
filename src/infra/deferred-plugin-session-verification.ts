@@ -78,7 +78,7 @@ export async function verifyDeferredSessionDatabase(params: {
       snapshot.snapshot.sessionKeysBySessionId.get(record.entry.sessionId) !== record.sessionKey
     ) {
       throw new Error(
-        `Retained session ${record.sessionKey} is not present in ${params.sqlitePath}; sources remain protected. Preserve ${record.transcriptPath ?? target.storePath} and its backups. Restore the intended session from a verified backup to ${params.sqlitePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state directory. Canonical edits and deletions were not replayed.`,
+        `Retained session ${record.sessionKey} is not present in ${params.sqlitePath}; sources remain protected. Preserve ${record.transcriptPath ?? target.storePath} and its backups. Restore the intended session from a verified backup to ${params.sqlitePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state directory. Existing edits and deletions were left unchanged.`,
       );
     }
   }
@@ -127,7 +127,7 @@ export async function verifyDeferredSessionDatabase(params: {
       })
     ) {
       throw new Error(
-        `Retained transcript ${source.path} is not complete in ${params.sqlitePath}; source remains protected. Compare a verified database backup before retrying recovery; canonical history was not overwritten.`,
+        `Retained transcript ${source.path} is not complete in ${params.sqlitePath}; source remains protected. Compare a verified database backup before retrying recovery; stored history was not overwritten.`,
       );
     }
   }

@@ -81,7 +81,7 @@ export function importLegacyAcpSessionMetadata(params: LegacyAcpMetadataInput): 
         const sourceBinding = source.lifecycleRevision ?? source.sessionId;
         if (!sourceBinding || current.session_id !== sourceBinding) {
           throw new Error(
-            "Canonical ACP metadata has a conflicting session binding; resolve the conflict before rerunning Doctor. Legacy metadata was retained.",
+            "Stored ACP metadata has a conflicting session binding; resolve the conflict before rerunning Doctor. Legacy metadata was retained.",
           );
         }
         imported = false;

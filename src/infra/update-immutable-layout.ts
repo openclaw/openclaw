@@ -14,7 +14,7 @@ export function directoryIdentity(file: string): string {
 
 export function readImmutableLayout(root: string) {
   if (fsSync.realpathSync(root) !== root) {
-    throw new Error("Immutable installation must have a canonical physical root.");
+    throw new Error("Immutable installation must have a resolved physical root.");
   }
   const rootIdentity = directoryIdentity(root);
   const releases = path.join(root, "releases");

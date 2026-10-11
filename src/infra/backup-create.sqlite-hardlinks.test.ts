@@ -227,7 +227,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     {
       name: "refuses a canonical symlink retargeted after an earlier declared plugin snapshot completes",
       change: "symlink retarget",
-      error: /Canonical SQLite path changed after discovery/iu,
+      error: /Resolved SQLite path changed after discovery/iu,
     },
     {
       name: "refuses a canonical-bound hardlink alias replaced after an earlier declared plugin snapshot completes",

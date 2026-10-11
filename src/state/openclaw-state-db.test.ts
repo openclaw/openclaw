@@ -3116,7 +3116,7 @@ describe("openclaw state database", () => {
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
         "Migrated shared state operator approvals → OpenClaw system changes",
-        expect.stringMatching(/^Rebuilt canonical shared-state SQLite indexes \(\d+\)$/u),
+        expect.stringMatching(/^Rebuilt shared-state SQLite indexes \(\d+\)$/u),
       ],
       warnings: [],
     });

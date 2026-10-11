@@ -156,7 +156,7 @@ describe("canonical transcript archive batch transactions", () => {
         .all();
       const result = await f.migrate();
       expect(result.rewrittenArchives).toBe(0);
-      expect(result.warnings[0]).toContain("Missing 35 canonical transcript archive file(s)");
+      expect(result.warnings[0]).toContain("Missing 35 transcript archive file(s)");
       expect(
         f.database
           .prepare("SELECT archive_sha256 FROM session_transcript_archives ORDER BY session_id")
@@ -420,7 +420,7 @@ describe("canonical transcript archive batch transactions", () => {
 
       const retry = await f.migrate({ transformContent: changeContent, onArchive: prepareFile });
       expect(retry.rewrittenArchives).toBe(3);
-      expect(retry.warnings[0]).toContain("Missing 1 canonical transcript archive file(s)");
+      expect(retry.warnings[0]).toContain("Missing 1 transcript archive file(s)");
       expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(1);
       expect(
         await transcriptDirectiveArchivesNeedMigration(f.database, {

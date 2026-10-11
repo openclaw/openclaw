@@ -73,7 +73,7 @@ describe("legacy device-auth Doctor migration", () => {
     seedDeviceAuthToken({ deviceId: "device-1", role: "operator", token: "canonical-token", env });
     const result = await migrate();
     expect(result.warnings).toEqual([]);
-    expect(result.notices).toContain("Preserved 1 canonical SQLite device-auth token.");
+    expect(result.notices).toContain("Preserved 1 current SQLite device-auth token.");
     expect(readToken()?.token).toBe("canonical-token");
     expect(fs.existsSync(sourcePath)).toBe(false);
   });

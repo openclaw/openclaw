@@ -229,7 +229,7 @@ function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): 
     return;
   }
   if (!source.workspaceDir) {
-    throw new Error("configured legacy workspace source has no canonical path");
+    throw new Error("configured legacy workspace source has no resolved path");
   }
   const current = resolveWorkspaceStateIdentity(source.workspaceAliasPath);
   if (
@@ -499,9 +499,7 @@ async function migrateOneSource(params: {
   }
   const label = params.source.kind === "setup" ? "workspace setup state" : "workspace attestation";
   return {
-    changes: [
-      imported.imported ? `Migrated ${label} to SQLite.` : `Verified canonical SQLite ${label}.`,
-    ],
+    changes: [imported.imported ? `Migrated ${label} to SQLite.` : `Verified SQLite ${label}.`],
     warnings: [],
     notices: [
       ...(archivePath ? [`Archived legacy workspace setup state at ${archivePath}.`] : []),

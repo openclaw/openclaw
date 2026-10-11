@@ -15,7 +15,7 @@ import {
 
 const gatewayAlreadyRunningHint = `Gateway already running locally. Stop it (${formatCliCommand("openclaw gateway stop")}) or use a different port.`;
 const multipleListenersHint =
-  "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.";
+  "Multiple listeners detected; keep only one gateway/tunnel per port unless intentionally running isolated profiles.";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writeScript(entry: string, directory: string, packageName = "openclaw"): string {

@@ -30,7 +30,7 @@ import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const repairMessage = "Rebuilt canonical agent SQLite indexes";
+const repairMessage = "Rebuilt agent SQLite indexes";
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();

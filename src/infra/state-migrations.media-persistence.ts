@@ -521,7 +521,7 @@ export async function migrateLegacyMediaPersistence(
           }
           if (result.rewrittenArchives > 0) {
             changes.push(
-              `Migrated canonical transcript archive media in ${pathname}: ${result.rewrittenArchives} archive(s).`,
+              `Migrated transcript archive media in ${pathname}: ${result.rewrittenArchives} archive(s).`,
             );
           }
         } catch (error) {

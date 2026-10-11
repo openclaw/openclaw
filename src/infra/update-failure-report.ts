@@ -502,7 +502,7 @@ export async function submitUpdateFailureReport(
       ...(!terminalRecorded
         ? {
             message:
-              "GitHub issue was created, but its canonical receipt is still pending. Do not submit this report again.",
+              "GitHub issue was created, but its receipt has not been saved yet. Do not submit this report again.",
           }
         : {}),
       savedReportPath: ownedPrepared.savedReportPath,

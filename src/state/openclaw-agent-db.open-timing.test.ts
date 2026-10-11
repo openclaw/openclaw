@@ -162,9 +162,7 @@ describe("agent database open timings", () => {
     expect(logger.warn).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenNthCalledWith(
       1,
-      expect.stringContaining(
-        `Rebuilt canonical agent SQLite indexes for ${options.agentId} (${pathname}):`,
-      ),
+      expect.stringContaining(`Rebuilt agent SQLite indexes for ${options.agentId} (${pathname}):`),
       {
         agentId: options.agentId,
         path: pathname,

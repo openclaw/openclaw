@@ -108,7 +108,7 @@ export async function preparePackageActivationJournal(
   const anchor = resolvePackageActivationAnchor(authority.installKey);
   const parent = path.dirname(anchor);
   if (fs.realpathSync(parent) !== parent) {
-    throw new Error("Package publication recovery requires canonical installation parents.");
+    throw new Error("Package publication recovery requires resolved installation parents.");
   }
   const stageRoot = resolveUpdateInstallRoot(params.stageRoot);
   const launcherRoot = resolveUpdateInstallRoot(params.launcherRoot);

@@ -177,7 +177,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   }
   if (listeners.length > 1 && !expectedGatewayListeners) {
     hints.push(
-      "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.",
+      "Multiple listeners detected; keep only one gateway/tunnel per port unless intentionally running isolated profiles.",
     );
   }
   return hints;

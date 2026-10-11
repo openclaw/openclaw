@@ -284,15 +284,15 @@ export function aliasedSessionStoreMigrationWarning(params: {
   count: number;
   storePath: string;
 }): string {
-  return `Deferred ${params.subject} ${params.count} ambiguous session key(s) in aliased store ${params.storePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`;
+  return `Deferred ${params.subject} ${params.count} ambiguous session key(s) in aliased store ${params.storePath}; remove filesystem aliases or configure one session.store path without aliases, then rerun openclaw doctor --fix`;
 }
 
 export function unresolvedSessionStoreIdentityWarning(subject: string, storePath: string): string {
-  return `Deferred ${subject} for ${storePath}; filesystem identity could not be established for every configured store path. Restore path access or configure one canonical session.store path, then rerun openclaw doctor --fix`;
+  return `Deferred ${subject} for ${storePath}; filesystem identity could not be established for every configured store path. Restore path access or configure one session.store path without aliases, then rerun openclaw doctor --fix`;
 }
 
 export function distinctSessionStoreAliasWarning(subject: string, storePath: string): string {
-  return `Deferred ${subject} in aliased store ${storePath}; atomic replacement cannot update distinct filesystem aliases as one operation. Remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`;
+  return `Deferred ${subject} in aliased store ${storePath}; atomic replacement cannot update distinct filesystem aliases as one operation. Remove filesystem aliases or configure one session.store path without aliases, then rerun openclaw doctor --fix`;
 }
 
 function sessionStoreMayNeedCanonicalization(params: {
@@ -563,7 +563,7 @@ export async function migrateOrphanedSessionKeys(params: {
     }
     if (storeAliases.hasFinalSymlink) {
       warnings.push(
-        `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred session key migration in final-component symlink store ${storePath}; configure one session.store path without aliases, then rerun openclaw doctor --fix`,
       );
       continue;
     }
@@ -747,7 +747,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     }
     if (hasLegacyAcpMetadata && storeAliases.hasFinalSymlink) {
       warnings.push(
-        `Deferred ACP metadata migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+        `Deferred ACP metadata migration in final-component symlink store ${storePath}; configure one session.store path without aliases, then rerun openclaw doctor --fix`,
       );
       continue;
     }

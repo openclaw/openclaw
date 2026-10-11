@@ -274,7 +274,7 @@ export async function recoverTranscriptArchivePublication(params: {
       const archivePath = transcriptArchivePathFor(params.archiveDirectory, row.archive_name);
       if (sha256Hex(nextBytes) !== recorded.nextSha256) {
         throw new Error(
-          `Canonical SQLite transcript archive is corrupt: ${archivePath} (${recorded.sessionId}:${recorded.generation})`,
+          `Stored SQLite transcript archive is corrupt: ${archivePath} (${recorded.sessionId}:${recorded.generation})`,
         );
       }
       params.onArchive?.(archivePath);
@@ -288,7 +288,7 @@ export async function recoverTranscriptArchivePublication(params: {
       } else {
         batchUnresolved.push(recorded);
         if (missingCopyExamples.length < MIGRATION_WARNING_EXAMPLE_LIMIT) {
-          missingCopyExamples.push(`Missing canonical transcript archive copy: ${archivePath}`);
+          missingCopyExamples.push(`Missing transcript archive copy: ${archivePath}`);
         }
       }
     }
@@ -335,10 +335,10 @@ export async function recoverTranscriptArchivePublication(params: {
   return unresolved.length > 0
     ? [
         formatMigrationWarningSummary({
-          summary: `${params.pathname}: Missing ${unresolved.length} canonical transcript archive file(s)`,
+          summary: `${params.pathname}: Missing ${unresolved.length} transcript archive file(s)`,
           count: unresolved.length,
           detail:
-            "Canonical SQLite archive blobs remain retained. Migration completed without recreating the missing copies.",
+            "SQLite archive contents remain saved. Migration completed without recreating the missing copies.",
         }),
         ...missingCopyExamples,
       ]

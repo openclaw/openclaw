@@ -144,7 +144,7 @@ export async function migrateLegacySessions(
       changes,
       warnings,
       notices: [
-        "Preserved legacy session sources for pending plugin migration or verified import archival; Doctor still imports and verifies canonical sessions.",
+        "Preserved legacy session sources for pending plugin migration or verified import archival; Doctor still imports and verifies SQLite sessions.",
       ],
     };
   }
@@ -171,7 +171,7 @@ export async function migrateLegacySessions(
   }
   if (detected.sessions.targetStoreAliases.hasFinalSymlink) {
     warnings.push(
-      `Deferred legacy session migration in final-component symlink store ${detected.sessions.targetStorePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+      `Deferred legacy session migration in final-component symlink store ${detected.sessions.targetStorePath}; configure one session.store path without aliases, then rerun openclaw doctor --fix`,
     );
     return { changes, warnings };
   }
@@ -461,7 +461,7 @@ export async function migrateLegacyAgentDir(
           ...(deferred.length > 0 ? { deferred } : {}),
           warnings: [
             ...warnings,
-            `Refused legacy agent migration from ${legacyDir} to ${targetDir}: overlapping directories or root symlinks could move canonical data.`,
+            `Refused legacy agent migration from ${legacyDir} to ${targetDir}: overlapping directories or root symlinks could move active data.`,
           ],
         };
       }

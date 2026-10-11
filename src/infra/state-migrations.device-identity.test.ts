@@ -420,7 +420,7 @@ describe("legacy device identity Doctor migration", () => {
 
     const result = await migrate();
 
-    expect(result.warnings.join("\n")).toContain("canonical SQLite device identity differs");
+    expect(result.warnings.join("\n")).toContain("current SQLite device identity differs");
     expect(identityRow()?.device_id).toBe(winner.deviceId);
     await expect(fsp.readFile(sourcePath)).resolves.toEqual(before);
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
@@ -540,7 +540,7 @@ describe("legacy device identity Doctor migration", () => {
     // The startup readiness gate hard-fails on any migration warning, so this exact
     // classification is what keeps a divergent inert file from crash-looping the gateway.
     expect(retry.warnings).toEqual([]);
-    expect(retry.notices?.join("\n")).toContain("canonical SQLite identity remains authoritative");
+    expect(retry.notices?.join("\n")).toContain("OpenClaw still uses the SQLite identity.");
     await expect(fsp.readFile(sourcePath, "utf8")).resolves.toBe(replacement);
     expect(identityRow()?.created_at_ms).toBe(CREATED_AT_MS);
     expect(receipt()).toMatchObject({ removed_source: 1 });
@@ -561,7 +561,7 @@ describe("legacy device identity Doctor migration", () => {
     const retry = await migrate();
 
     expect(retry.warnings).toEqual([]);
-    expect(retry.notices?.join("\n")).toContain("canonical SQLite identity remains authoritative");
+    expect(retry.notices?.join("\n")).toContain("OpenClaw still uses the SQLite identity.");
     await expect(fsp.readFile(claimPath, "utf8")).resolves.toBe(replacement);
     expect(receipt()).toMatchObject({ removed_source: 0 });
   });

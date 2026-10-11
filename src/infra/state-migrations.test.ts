@@ -1878,7 +1878,7 @@ describe("state migrations", () => {
       });
     }
     expect(result.warnings).toEqual([
-      `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+      `Deferred session key migration in final-component symlink store ${storePath}; configure one session.store path without aliases, then rerun openclaw doctor --fix`,
     ]);
   });
 
@@ -1923,7 +1923,7 @@ describe("state migrations", () => {
       }),
     ).toBeUndefined();
     expect(result.warnings).toContain(
-      `Deferred ACP metadata migration in final-component symlink store ${configuredStorePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+      `Deferred ACP metadata migration in final-component symlink store ${configuredStorePath}; configure one session.store path without aliases, then rerun openclaw doctor --fix`,
     );
     expect(result.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
