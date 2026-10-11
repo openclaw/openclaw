@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import { ENV_SECRET_REF_ID_RE } from "../../../../src/config/types.secrets.js";
 import { isSensitiveEnvName } from "../../../../src/secrets/secret-env-name.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -302,8 +302,10 @@ class SecretsPageState {
 
 function SecretsPageContent() {
   const context = useApplication();
-  const [revision, setRevision] = createSignal(0);
-  const model = new SecretsPageState(context, () => setRevision((value) => value + 1));
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const model = untrack(
+    () => new SecretsPageState(context, () => setRevision((value) => value + 1)),
+  );
   createEffect(
     () => context.gateway,
     (gateway) => model.bindGateway(gateway),

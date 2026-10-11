@@ -126,7 +126,7 @@ function Cell(props: { labelKey: string; value: JSX.Element; mono?: boolean }) {
 function ApprovalsPageContent() {
   const context = useApplication();
   let disposed = false;
-  const [revision, setRevision] = createSignal(0);
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const publish = () => setRevision((value) => value + 1);
   // Request admission stays synchronous; Solid observes these view-owned facts.
   const state: {

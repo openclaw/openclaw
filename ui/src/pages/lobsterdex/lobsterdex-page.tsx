@@ -18,11 +18,14 @@ import "../../styles/settings.css";
 function LobsterdexPageContent(props: { host: HTMLElement }) {
   const host = untrack(() => props.host);
   const context = useApplication();
-  const branding = projectSource(context.theme, {
-    read: (theme) => theme.branding,
-    subscribe: (theme, notify) => theme.subscribe(notify),
-    equality: Object.is,
-  });
+  const branding = projectSource(
+    untrack(() => context.theme),
+    {
+      read: (theme) => theme.branding,
+      subscribe: (theme, notify) => theme.subscribe(notify),
+      equality: Object.is,
+    },
+  );
   createEffect(
     () => context.theme,
     (source) => branding.replaceSource(source),

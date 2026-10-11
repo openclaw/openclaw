@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createEffect, createSignal, onCleanup } from "solid-js";
+import { For, createEffect, createSignal, onCleanup, untrack } from "solid-js";
 import {
   LearnMoreLink,
   SettingsPage,
@@ -31,9 +31,9 @@ import {
 
 function LabsPageContent() {
   const context = useApplication();
-  const config = projectRuntimeConfig(context.runtimeConfig);
-  const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
-  const [revision, setRevision] = createSignal(0);
+  const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
+  const lifecycle = createGatewayConnectionLifecycle(untrack(() => context.gateway.snapshot));
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let pending: { featureId: string; value: boolean | string } | null = null;
   let saveError: string | null = null;
   const publish = () => setRevision((value) => value + 1);
@@ -231,7 +231,7 @@ function LabsPageContent() {
                     <br />
                     {t("labsPage.decisionAssistance.optedIn")}
                   </>
-                ) : null}
+                ) : null}{" "}
                 <a
                   href={props.feature.docsUrl}
                   target={EXTERNAL_LINK_TARGET}

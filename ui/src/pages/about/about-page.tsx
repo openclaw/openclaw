@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -16,7 +16,7 @@ const CLAWD_WAVE_MS = 1400;
 
 function AboutPageContent() {
   const context = useApplication();
-  const gateway = projectGateway(context.gateway);
+  const gateway = projectGateway(untrack(() => context.gateway));
   createEffect(
     () => context.gateway,
     (source) => gateway.replaceSource(source),
