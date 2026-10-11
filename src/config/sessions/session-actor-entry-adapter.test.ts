@@ -155,12 +155,12 @@ describe("generic session entry APIs with actor memory storage", () => {
   });
 
   it.each([
-    ["target changed", "SqliteSessionMutationConflictError"],
-    ["label claimed", "SessionLabelConflictError"],
+    ["target changed", "SqliteSessionMutationConflictError", "target-changed"],
+    ["label claimed", "SessionLabelConflictError", "label-claimed"],
   ])(
     "rejects prepared creation when %s without installing its transcript or owner",
-    async (change, errorName) => {
-      const { actor, binding, scope, creationScope } = await fixture(errorName);
+    async (change, errorName, fixtureName) => {
+      const { actor, binding, scope, creationScope } = await fixture(fixtureName);
       await runWithSessionActorStorage(binding, async () => {
         const entered = createDeferredCore();
         const resume = createDeferredCore();
@@ -204,7 +204,7 @@ describe("generic session entry APIs with actor memory storage", () => {
         }
         await rejected;
         expect(loadSessionEntryReadOnly(scope)).toMatchObject({
-          sessionId: errorName,
+          sessionId: fixtureName,
           label: change === "target changed" ? "Concurrent edit" : "Original",
         });
         expect(loadSessionEntryReadOnly(scope)?.owner).toBeUndefined();

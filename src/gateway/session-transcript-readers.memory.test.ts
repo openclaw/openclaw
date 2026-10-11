@@ -6,6 +6,7 @@ import type { SessionActorAuthority } from "../config/sessions/session-actor-con
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
+import type { SessionMetadataOperations } from "../config/sessions/session-manager-write-contract.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
@@ -47,7 +48,7 @@ const messageIds = (messages: readonly unknown[]) =>
   );
 
 function event(id: string, parentId: string | null, message: Record<string, unknown>) {
-  return { type: "message", id, parentId, timestamp: "2026-10-11T00:00:00.000Z", message };
+  return { type: "message" as const, id, parentId, timestamp: "2026-10-11T00:00:00.000Z", message };
 }
 
 async function fixture(sessionId = "one", agentId = "main", announce = false) {
@@ -81,21 +82,26 @@ async function fixture(sessionId = "one", agentId = "main", announce = false) {
     ),
   );
   const scope = { agentId, sessionKey, sessionId, storePath, env };
+  const append = async (
+    input: Pick<SessionMetadataOperations["session.metadata.append"]["input"], "event" | "message">,
+  ) =>
+    readSessionActorStorageResult(
+      await storage.mutate(
+        { type: "session.metadata.append", input: { scope, ...input, options: {} } },
+        authority,
+      ),
+    );
   return {
     owner,
     actor,
     scope,
     binding: { actor, authority, agentId, path: storePath },
-    append: async (next: unknown) =>
-      readSessionActorStorageResult(
-        await storage.mutate(
-          {
-            type: "session.metadata.append",
-            input: { scope, event: JSON.stringify(next), options: {} },
-          },
-          authority,
-        ),
-      ),
+    append: (next: unknown) => append({ event: JSON.stringify(next) }),
+    appendMessage: ({ message, ...envelope }: ReturnType<typeof event>) =>
+      append({
+        event: envelope,
+        message: { messageJson: JSON.stringify(message), cwd: "/synthetic", validateTurn: false },
+      }),
   };
 }
 
@@ -135,18 +141,23 @@ describe("Gateway memory transcript readers", () => {
       expect(
         await readSessionConversationBindingAsync(root.scope, identity.conversationRef),
       ).toMatchObject({ target: "reef:new-address" });
-      expect(await readSessionConversationBindingAsync(root.scope, "missing")).toBeNull();
+      expect(
+        await readSessionConversationBindingAsync(
+          root.scope,
+          "conv_00000000000000000000000000000000",
+        ),
+      ).toBeNull();
     });
   });
 
   it("serves queued writes through pages, exact reads, accounting, summaries, and artifacts", async () => {
-    const { binding, scope, append } = await fixture();
+    const { binding, scope, append, appendMessage } = await fixture();
     await runWithSessionActorStorage(binding, async () => {
       expect(await readSessionMessageCountAsync(scope)).toBe(2);
       expect(await readSessionTranscriptSummaryAsync(scope, { kind: "usage" })).toMatchObject({
         usage: { inputTokens: 10, outputTokens: 2 },
       });
-      const writing = append(
+      const writing = appendMessage(
         event("next", "answer", {
           role: "assistant",
           content: [

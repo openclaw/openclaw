@@ -99,14 +99,34 @@ it.each([
       {
         commandId: "latest-answer",
         phaseId: "preparation",
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-        eventJson: JSON.stringify({
-          type: "message",
-          id: "a2",
-          parentId: "a1",
-          message: { role: "assistant", content: "Latest answer", stopReason: "stop" },
-        }),
+        append: {
+          kind: "metadata",
+          input: {
+            scope: {
+              agentId: "main",
+              storePath: parent.owner.path,
+              sessionKey: parentKey,
+              sessionId: entry.sessionId,
+              expectedLifecycleRevision: entry.lifecycleRevision,
+            },
+            event: {
+              type: "message",
+              id: "a2",
+              parentId: "a1",
+              timestamp: "2026-01-01T00:00:01.000Z",
+            },
+            message: {
+              messageJson: JSON.stringify({
+                role: "assistant",
+                content: "Latest answer",
+                stopReason: "stop",
+              }),
+              cwd: "/synthetic",
+              validateTurn: false,
+            },
+            options: {},
+          },
+        },
       },
       authority,
     );

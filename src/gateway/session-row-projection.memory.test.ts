@@ -96,15 +96,24 @@ async function fixture(sessionKey = key, entry: Partial<InternalSessionEntry> = 
       {
         commandId: id,
         phaseId: "turn",
-        sessionId: sessionKey,
-        lifecycleRevision: null,
-        eventJson: JSON.stringify({
-          type: "message",
-          id,
-          parentId,
-          timestamp: new Date(1).toISOString(),
-          message,
-        }),
+        append: {
+          kind: "metadata",
+          input: {
+            scope: { agentId, storePath: owner.path, sessionKey, sessionId: sessionKey },
+            event: {
+              type: "message",
+              id,
+              parentId,
+              timestamp: new Date(1).toISOString(),
+            },
+            message: {
+              messageJson: JSON.stringify(message),
+              cwd: "/synthetic/workspace",
+              validateTurn: false,
+            },
+            options: {},
+          },
+        },
       },
       authority,
     );
