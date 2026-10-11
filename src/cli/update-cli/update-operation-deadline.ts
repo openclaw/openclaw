@@ -18,7 +18,7 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
   let failure: E | undefined;
   const expired = createDeferredCore<{ error: E }>();
   const inspectDeadline = () => {
-    if (!closed && !failure && admission && Date.now() >= admission.deadlineAtMs) {
+    if (!closed && !failure && admission && performance.now() >= admission.deadlineAtMs) {
       failure = admission.error;
       try {
         onExpired?.(failure);
@@ -55,8 +55,10 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
       if (admission) {
         return;
       }
-      admission = { error, timeoutMs, deadlineAtMs: Date.now() + timeoutMs };
-      cancelDeadline = scheduleAbsoluteDeadline(admission.deadlineAtMs, inspectDeadline);
+      admission = { error, timeoutMs, deadlineAtMs: performance.now() + timeoutMs };
+      cancelDeadline = scheduleAbsoluteDeadline(admission.deadlineAtMs, inspectDeadline, () =>
+        performance.now(),
+      );
     },
     async run<T>(operation: () => Promise<T>): Promise<T> {
       return await withCommandProcessScope(async () => {
@@ -75,6 +77,7 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
             const joined = await awaitWithinDeadline(
               () => work,
               admission!.deadlineAtMs + admission!.timeoutMs,
+              () => performance.now(),
             );
             timeout.message +=
               joined === ABSOLUTE_DEADLINE_EXPIRED
