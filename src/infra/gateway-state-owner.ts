@@ -599,7 +599,6 @@ export function captureGatewayStateOwner(databasePath: string) {
       owners.get(pathname) !== owner ||
       !owner.accepting ||
       resolveGatewayStateOwnerPath(databasePath) !== pathname ||
-      !hasPhysicalOwnership(owner) ||
       (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
     ) {
       throw new GatewayStateOwnerContentionError(databasePath);
