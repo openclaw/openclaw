@@ -100,10 +100,7 @@ async function write<Key extends keyof UserProfileWriteOperations>(
                 entry.published = true;
                 entry.fence.settle(true);
                 if (facts.githubConnections) {
-                  publishUserGitHubConnectionCommit(
-                    context.admission.databasePath,
-                    facts.githubConnections,
-                  );
+                  publishUserGitHubConnectionCommit(facts.githubConnections);
                 }
                 onCommitted?.(facts);
               });
