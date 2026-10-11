@@ -40,10 +40,6 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
-import {
-  getSessionActorStorageBinding,
-  runWithSessionActorStorage,
-} from "./session-actor-storage-binding.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { getSessionInputActor } from "./session-input-actor.js";
 import {
@@ -215,30 +211,16 @@ export function stageSessionPendingInput(
   scope: PendingInputScope,
   options: PendingInputStageOptions,
 ): Promise<SessionPendingInputReceipt | undefined> {
-  const memory = getSessionActorStorageBinding(scope);
-  const incognito = memory
-    ? undefined
-    : (scope.incognito ?? captureIncognitoSessionOperation(scope));
+  const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
   incognito?.admissionSignal?.throwIfAborted();
   incognito?.actor.assertCurrent();
   const captured = {
     ...scope,
-    sessionActor: memory,
     incognito: incognito && { ...incognito },
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const preparedRequest = preparePendingInputRequest(options);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  if (memory) {
-    return runWithSessionActorStorage(memory, () =>
-      preparePendingInputStore(
-        captured,
-        options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
-      ).then((store) =>
-        stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store),
-      ),
-    );
-  }
   return getSessionInputActor(captured).then((inputActor) => {
     const admission = inputActor ? undefined : resolveSqliteWriteAdmissionScope(captured);
     const stage = async () => {
@@ -489,9 +471,7 @@ async function stagePreparedPendingInput(
         }
         scope.incognito?.authority.assertCurrent();
         options.assertCurrent();
-        return scope.sessionActor
-          ? runWithSessionActorStorage(scope.sessionActor, operation)
-          : operation();
+        return operation();
       };
       return {
         state: "queued",
@@ -561,7 +541,6 @@ async function stagePreparedPendingInput(
           );
         }
         owner = {
-          sessionActor: scope.sessionActor,
           agentId: scope.agentId,
           databaseAgentId: store.databaseAgentId,
           inputId: staged.input_id,

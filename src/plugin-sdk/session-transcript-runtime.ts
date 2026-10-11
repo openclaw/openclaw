@@ -22,7 +22,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { normalizeVisibleDeltaLimits } from "../config/sessions/session-accessor.sqlite-visible-cursor.js";
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import {
@@ -406,22 +405,19 @@ export async function appendAssistantMirrorMessageByIdentity(
   });
   const sourceRunId = params.sourceRunId;
   const scope = bindSessionTranscriptStoreScope(params, params.config);
-  const memory = getSessionActorStorageBinding(scope);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(scope);
+  const binding = captureIncognitoSessionBinding(scope);
   return await withTranscriptWriteSequence(scope, async (locked) => {
     params.signal?.throwIfAborted();
-    const currentEntry = memory
-      ? memory.actor.snapshot(memory.authority)?.entry
-      : await readSessionEntryReadOnlyInWorker(
-          scope,
-          () => {
-            binding?.actor.assertCurrent();
-            binding?.admissionSignal?.throwIfAborted();
-            params.signal?.throwIfAborted();
-          },
-          undefined,
-          targetDiscoveryLane,
-        );
+    const currentEntry = await readSessionEntryReadOnlyInWorker(
+      scope,
+      () => {
+        binding?.actor.assertCurrent();
+        binding?.admissionSignal?.throwIfAborted();
+        params.signal?.throwIfAborted();
+      },
+      undefined,
+      targetDiscoveryLane,
+    );
     if (!currentEntry?.sessionId) {
       return { ok: false, reason: "missing active session", code: "blocked" };
     }

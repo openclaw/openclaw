@@ -285,7 +285,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/acp/runtime/session-meta.test.ts",
   "src/acp/runtime/session-meta-list.test.ts",
   "src/acp/runtime/session-meta-read.test.ts",
-  "src/acp/runtime/session-meta-memory.worker.test.ts",
   "src/acp/runtime/session-meta-write.worker.test.ts",
   "src/acp/runtime/session-meta-reset.worker.test.ts",
   "src/auto-reply/reply/commands-acp.test.ts",

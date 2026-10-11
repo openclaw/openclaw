@@ -1,9 +1,3 @@
-import path from "node:path";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
-import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
   gatewaySessionStoreReadOptions,
@@ -22,60 +16,29 @@ export function prepareIncognitoGatewaySessionStoreTarget(
   },
 ): GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore> {
   const { agentId, canonicalKey } = params;
-  const memory = getSessionActorStorageBinding({});
-  if (!memory) {
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
-    const read: GatewaySessionStoreRead = {
-      storePath,
-      agentId,
-      clone: params.clone,
-      // Arbitrary stale keys must not materialize process-lifetime incognito state.
-      options: gatewaySessionStoreReadOptions(params, [canonicalKey], true),
-    };
-    return {
-      reads: [read],
-      resolve: () => ({
-        agentId,
-        storePath,
-        canonicalKey,
-        storeKeys: [canonicalKey],
-        store: (params.readStore ?? readGatewaySessionStore)(read),
-        ...(read.readSource ? { readSource: read.readSource } : {}),
-        ...(read.capturedReadSource
-          ? {
-              capturedReadSource: read.capturedReadSource,
-              capturedReadSources: [read.capturedReadSource],
-            }
-          : {}),
-      }),
-    };
-  }
-  const storePath = resolveIncognitoOpenClawAgentSqlitePath({
-    agentId,
-    env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(memory.path, "../../../..") },
-  });
-  const captured = captureSessionActorStorageOwner({
-    agentId,
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
+  const read: GatewaySessionStoreRead = {
     storePath,
-    sessionKey: canonicalKey,
-  });
+    agentId,
+    clone: params.clone,
+    // Arbitrary stale keys must not materialize process-lifetime incognito state.
+    options: gatewaySessionStoreReadOptions(params, [canonicalKey], true),
+  };
   return {
-    reads: [],
-    resolve() {
-      memory.actor.assertReadable();
-      const hot =
-        memory.actor.target.sessionKey === canonicalKey
-          ? memory.actor.snapshot(memory.authority)
-          : captured?.owner?.readSession(canonicalKey, memory.authority);
-      const entry = hot?.entry && attachSessionEntrySnapshots(hot.entry, {}, params.projection);
-      return {
-        agentId,
-        canonicalKey,
-        storePath: captured?.path ?? storePath,
-        storeKeys: [canonicalKey],
-        store: entry ? { [canonicalKey]: entry } : {},
-        readSource: { agentId, path: captured?.path ?? storePath },
-      };
-    },
+    reads: [read],
+    resolve: () => ({
+      agentId,
+      storePath,
+      canonicalKey,
+      storeKeys: [canonicalKey],
+      store: (params.readStore ?? readGatewaySessionStore)(read),
+      ...(read.readSource ? { readSource: read.readSource } : {}),
+      ...(read.capturedReadSource
+        ? {
+            capturedReadSource: read.capturedReadSource,
+            capturedReadSources: [read.capturedReadSource],
+          }
+        : {}),
+    }),
   };
 }

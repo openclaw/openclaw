@@ -4,10 +4,6 @@ import {
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import {
-  getSessionActorStorageBinding,
-  type SessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionStoreTarget } from "../config/sessions/session-store-target-runtime.js";
@@ -58,7 +54,6 @@ export async function recordMessageToolRunOutcome(params: {
   occurredAt: number;
   storePath?: string;
   env?: NodeJS.ProcessEnv;
-  sessionActor?: SessionActorStorageBinding;
 }): Promise<void> {
   const values: MessageToolRunOutcomeInsert = {
     run_id: params.runId,
@@ -70,17 +65,6 @@ export async function recordMessageToolRunOutcome(params: {
     run_status: params.runStatus,
     occurred_at: params.occurredAt,
   };
-  const memory = getSessionActorStorageBinding(params);
-  if (memory) {
-    const result = await memory.actor.storage!.mutate(
-      { type: "session.messageToolOutcome.record", input: values },
-      memory.authority,
-    );
-    if (result.kind === "rolled-back") {
-      throw new Error(result.error.message);
-    }
-    return;
-  }
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = { ...params, env };

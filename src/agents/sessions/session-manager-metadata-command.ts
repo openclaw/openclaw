@@ -4,7 +4,7 @@ import type {
   SessionMetadataOperations,
 } from "../../config/sessions/session-manager-write-contract.js";
 
-/** Both backends receive the same prepared CLI and pending-input custody facts. */
+/** Prepare CLI and pending-input custody facts for the metadata worker. */
 export function prepareSessionManagerMetadataCommand<Key extends keyof SessionMetadataOperations>(
   command: { type: Key; input: SessionMetadataOperations[Key]["input"] },
   path: string,

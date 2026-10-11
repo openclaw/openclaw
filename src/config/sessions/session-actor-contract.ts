@@ -7,12 +7,6 @@ import type {
   SessionActorLifetime,
   SessionActorHotState,
 } from "./session-actor-state.types.js";
-import type {
-  SessionActorStorageAuthority,
-  SessionActorStorageOutcome,
-  SessionActorStorageReads,
-  SessionActorStorageWrites,
-} from "./session-actor-storage-contract.js";
 import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
@@ -317,31 +311,6 @@ type SessionActorCommands = {
   ) => Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>>;
 };
 
-type SessionActorStorageCommitObserver<Value> = {
-  committed(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
-};
-
-/** Bound at acquisition; shares the actor's accepted work, FIFO, and state owner. */
-export type SessionActorStorage = {
-  /** Synchronous current facts for an actual effect; never reads an uninstalled working copy. */
-  readCurrent<Key extends keyof SessionActorStorageReads>(
-    query: { type: Key; input: SessionActorStorageReads[Key]["input"] },
-    authority: SessionActorStorageAuthority,
-  ): SessionActorStorageReads[Key]["output"];
-  /** Acquire a separately releasable handle from this already-selected owner. */
-  acquire(sessionKey: string, lifetime?: SessionActorLifetime): Promise<SessionActor>;
-
-  read<Key extends keyof SessionActorStorageReads>(
-    query: { type: Key; input: SessionActorStorageReads[Key]["input"] },
-    authority: SessionActorStorageAuthority,
-  ): Promise<SessionActorStorageReads[Key]["output"]>;
-  mutate<Key extends keyof SessionActorStorageWrites>(
-    command: { type: Key; input: SessionActorStorageWrites[Key]["input"] },
-    authority: SessionActorStorageAuthority,
-    observer?: SessionActorStorageCommitObserver<SessionActorStorageWrites[Key]["output"]>,
-  ): Promise<SessionActorStorageOutcome<SessionActorStorageWrites[Key]["output"]>>;
-};
-
 /**
  * One command is one synchronous writer transaction. No mailbox hold crosses an await.
  * Unknown outcomes fence disclosure until read() reconciles; commands are never replayed.
@@ -350,8 +319,6 @@ export type SessionActorStorage = {
 export type SessionActor = SessionActorLifetime &
   SessionActorCommands & {
     readonly target: SessionActorTarget;
-    /** Present only when the selected backend owns the storage domain. */
-    readonly storage?: SessionActorStorage;
     /** Detached installed MAIN state; undefined means fenced/missing. Never opens SQLite or dispatches a worker request. */
     snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
     read(authority: SessionActorAuthority): Promise<SessionActorHotState>;

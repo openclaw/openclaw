@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
 import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
@@ -17,7 +16,6 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
 import { updateAcpSessionStoreEntry } from "./session-meta-entry.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
-import { upsertMemoryAcpSessionMeta } from "./session-meta-memory.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 import {
@@ -34,10 +32,6 @@ export async function upsertAcpSessionMeta(
   params: AcpSessionMutationParams,
   incognito?: { actor: IncognitoSessionActor; authority: IncognitoSessionAuthority },
 ): Promise<SessionEntry | null> {
-  const memory = getSessionActorStorageBinding({ ...params, sessionKey: params.sessionKey.trim() });
-  if (memory && params.sessionKey.trim()) {
-    return upsertMemoryAcpSessionMeta(params, memory);
-  }
   const binding = incognito ?? captureIncognitoSessionOperation(params);
   const sessionKey = params.sessionKey.trim();
   // Empty keys keep the shared no-op result without entering either storage owner.

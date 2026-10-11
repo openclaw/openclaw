@@ -20,7 +20,6 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -242,11 +241,8 @@ async function loadSessionFiles(
   const target = await resolveTranscriptReadTarget(scope);
   // Entry-scoped reads without an explicit sessionFile always resolve to a canonical SQLite marker.
   // Legacy transcript files are doctor-owned migration debt, not a runtime read path.
-  const memory = getSessionActorStorageBinding(scope);
-  const actor = memory ? undefined : captureIncognitoSessionBinding(scope)?.actor;
-  const sourceIdentity = memory
-    ? JSON.stringify(memory.actor.target.database)
-    : actor?.identity.incarnation;
+  const actor = captureIncognitoSessionBinding(scope)?.actor;
+  const sourceIdentity = actor?.identity.incarnation;
   const files = await loadSessionTouchedFiles(
     toTranscriptReadScope(target),
     `${agentId}\0${entry.sessionId}\0${target.storePath ?? ""}${sourceIdentity ? `\0${sourceIdentity}` : ""}`,

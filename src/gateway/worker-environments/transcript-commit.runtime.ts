@@ -12,8 +12,6 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { redactTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
-import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import { restoreSessionColdTranscript } from "../../config/sessions/session-cold-storage.js";
 import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
@@ -71,11 +69,10 @@ async function applyWorkerTranscriptCommit(params: {
   messages: readonly CommittedAgentMessage[];
   assistantItemIds: ReadonlyMap<string, string>;
   recoverPersistedBatch: boolean;
-  memoryReceipt?: WorkerTranscriptCommitInput;
   requestedBaseLeafId: string | null;
   runId: string | null;
   target: BoundAgentRunSessionTarget;
-}): Promise<ApplyTranscriptCommitResult & { memoryOutcome?: WorkerTranscriptCommitOutcome }> {
+}): Promise<ApplyTranscriptCommitResult> {
   const target = withOwnedSessionTranscriptWriterFence<
     BoundAgentRunSessionTarget & SessionTranscriptWriteScope
   >({
@@ -84,9 +81,7 @@ async function applyWorkerTranscriptCommit(params: {
     expectedWriterRunId: params.target.expectedWriterRunId,
   });
   const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
-  const incognito = getSessionActorStorageBinding(target)
-    ? undefined
-    : captureIncognitoSessionOperation(target);
+  const incognito = captureIncognitoSessionOperation(target);
   const assertOwned = captureOwnedTranscriptWriteAssertion(target);
   const assertCurrent = () => {
     params.assertCurrent();
@@ -119,34 +114,7 @@ async function applyWorkerTranscriptCommit(params: {
     });
   };
   let applied: ApplyTranscriptCommitResult;
-  let memoryOutcome: WorkerTranscriptCommitOutcome | undefined;
-  const memory = getSessionActorStorageBinding(target);
-  if (memory) {
-    const preparedMessages = prepareFresh(0);
-    if (!preparedMessages) {
-      return { ok: false, reason: "invalid-batch" };
-    }
-    const { scope: _scope, ...batch } = input;
-    if (!params.memoryReceipt) {
-      throw new Error("Memory transcript commit requires its batch receipt");
-    }
-    const outcome = await memory.actor.storage!.mutate(
-      {
-        type: "session.workerTranscript.commit",
-        input: { scope: target, batch, preparedMessages, receipt: params.memoryReceipt },
-      },
-      {
-        ...memory.authority,
-        assertCurrent() {
-          memory.authority.assertCurrent();
-          assertCurrent();
-        },
-      },
-    );
-    const committed = readSessionActorStorageResult(outcome);
-    applied = committed.result;
-    memoryOutcome = committed.outcome;
-  } else if (incognito) {
+  if (incognito) {
     const preparedMessages = prepareFresh(0);
     if (!preparedMessages) {
       return { ok: false, reason: "invalid-batch" };
@@ -292,7 +260,7 @@ async function applyWorkerTranscriptCommit(params: {
     applied = outcome.value;
   }
   if (!applied.ok) {
-    return { ...applied, ...(memoryOutcome ? { memoryOutcome } : {}) };
+    return applied;
   }
 
   for (const message of applied.messages) {
@@ -316,12 +284,12 @@ async function applyWorkerTranscriptCommit(params: {
       ...(runId ? { runId } : {}),
     });
   }
-  return { ...applied, ...(memoryOutcome ? { memoryOutcome } : {}) };
+  return applied;
 }
 
 export async function commitWorkerTranscript(
   options: WorkerTranscriptCommitterOptions,
-  store: WorkerTranscriptCommitStore | undefined,
+  store: WorkerTranscriptCommitStore,
   sessionId: string,
   params: Parameters<WorkerTranscriptCommitApplication>[0],
 ): Promise<WorkerTranscriptCommitOutcome> {
@@ -334,6 +302,8 @@ export async function commitWorkerTranscript(
       stableStringify({ baseLeafId: params.request.baseLeafId, messages: params.request.messages }),
     ),
   };
+  const complete = (outcome: WorkerTranscriptCommitOutcome) =>
+    store.complete({ ...input, outcome }, params.assertCurrent);
   const config = options.getConfig();
   const target = withOwnedSessionTranscriptWriterFence({
     ...captureSessionTranscriptTargetBinding(params.sessionTarget),
@@ -356,29 +326,6 @@ export async function commitWorkerTranscript(
     return { ...structuredClone(message), idempotencyKey };
   });
   const requestedBaseLeafId = params.request.baseLeafId;
-  if (getSessionActorStorageBinding(target)) {
-    const applied = await applyWorkerTranscriptCommit({
-      assertCurrent: params.assertCurrent,
-      config,
-      identity: params.identity,
-      messages,
-      assistantItemIds,
-      recoverPersistedBatch: false,
-      memoryReceipt: input,
-      requestedBaseLeafId,
-      runId: params.identity.runId,
-      target,
-    });
-    if (!applied.memoryOutcome) {
-      throw new Error("Memory transcript commit omitted its batch receipt");
-    }
-    return applied.memoryOutcome;
-  }
-  if (!store) {
-    throw new Error("Durable transcript commit requires its ledger");
-  }
-  const complete = (outcome: WorkerTranscriptCommitOutcome) =>
-    store.complete({ ...input, outcome }, params.assertCurrent);
   params.assertCurrent();
   const started = await store.begin(input, params.assertCurrent);
   if (started.kind === "replay") {

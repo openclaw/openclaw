@@ -9,7 +9,6 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import {
@@ -76,13 +75,10 @@ export function resolveWorkerTurnTranscriptTarget(
   turn: WorkerTranscriptTurn,
 ): BoundAgentRunSessionTarget {
   const target = captureWorkerTurnTranscriptTarget(turn);
-  const memory = getSessionActorStorageBinding(target);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
-  const currentEntry = memory
-    ? memory.actor.snapshot(memory.authority)?.entry
-    : binding
-      ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
-      : loadSessionEntry(target);
+  const binding = captureIncognitoSessionBinding(target);
+  const currentEntry = binding
+    ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
+    : loadSessionEntry(target);
   if (
     currentEntry?.sessionId !== target.sessionId ||
     (target.expectedLifecycleRevision !== undefined &&
@@ -107,8 +103,7 @@ export async function withWorkerTurnTranscriptDatabase<T>(
 ): Promise<T> {
   const captured = captureWorkerTurnTranscriptTarget(turn);
   const target = { ...captured, storePath: nodePath.resolve(captured.storePath) };
-  const memory = getSessionActorStorageBinding(target);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
+  const binding = captureIncognitoSessionBinding(target);
   let executing = false;
   let authority: Awaited<ReturnType<typeof controls.prepareAuthority>> | undefined;
   const assertPreparing = () => {
@@ -145,16 +140,6 @@ export async function withWorkerTurnTranscriptDatabase<T>(
     }
   };
   controls.assertCurrent();
-  if (memory) {
-    authority = await controls.prepareAuthority();
-    try {
-      assertPreparing();
-      return await runAdmitted(target);
-    } finally {
-      authority.release();
-      authority = undefined;
-    }
-  }
   if (binding) {
     return binding.actor.sessions.withSharedState(async () => {
       await binding.actor.sessions.read(
@@ -222,8 +207,7 @@ export function captureWorkerTurnTranscriptSource(
     refuse: () => never;
   },
 ): SessionSourceAssertion {
-  const memory = getSessionActorStorageBinding(target);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
+  const binding = captureIncognitoSessionBinding(target);
   const expected: WorkerTranscriptSourceIdentity = predicate
     ? { ...predicate.expected }
     : {
@@ -250,9 +234,6 @@ export function captureWorkerTurnTranscriptSource(
       refuse();
     }
   };
-  if (memory) {
-    return () => assertEntry(memory.actor.snapshot(memory.authority)?.entry);
-  }
   if (binding) {
     const claim = binding.actor.sessions.captureCurrent(target.sessionKey);
     return () => {

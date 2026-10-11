@@ -24,8 +24,6 @@ import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
-import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
-import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
@@ -36,13 +34,6 @@ import { captureSessionTranscriptTargetBinding } from "./transcript-target-bindi
 export function bindSessionTranscriptStoreScope<
   T extends Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionKey" | "storePath">,
 >(scope: T, config?: OpenClawConfig): T & { storePath: string } {
-  const memory =
-    !scope.sessionKey || isIncognitoSessionKey(scope.sessionKey)
-      ? captureSessionActorStorageOwner(scope)
-      : undefined;
-  if (memory) {
-    return { ...scope, storePath: memory.path };
-  }
   return {
     ...scope,
     storePath: resolveSessionStorePathForScope(
@@ -58,19 +49,6 @@ export async function resolveSessionTranscriptRuntimeTarget(
   config?: OpenClawConfig,
   options: { keyFormat?: "agent-qualified" } = {},
 ): Promise<ResolvedSessionTranscriptRuntimeTarget> {
-  const memory = captureSessionActorTranscriptRead(scope);
-  if (memory) {
-    const current = options.keyFormat ? memory.currentEntry() : undefined;
-    return {
-      ...memory.target,
-      ...(options.keyFormat
-        ? {
-            selectedSessionId: current?.sessionId ?? null,
-            selectedLifecycleRevision: current?.lifecycleRevision ?? null,
-          }
-        : {}),
-    };
-  }
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
   if (!agentId) {
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
@@ -178,10 +156,6 @@ export async function resolveSessionTranscriptRuntimeTarget(
 export async function resolveSessionKeyBySessionIdAsync(
   scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
 ): Promise<string | undefined> {
-  const memory = captureSessionActorTranscriptRead(scope);
-  if (memory) {
-    return memory.missing ? undefined : memory.target.sessionKey;
-  }
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const target = { ...scope, agentId: resolved.agentId, sessionKey: "" };
   const source = isMainThread ? captureIncognitoSessionSource(target) : undefined;
@@ -256,12 +230,6 @@ export function readSessionTranscriptRuntimeTarget(
 export function resolveSessionTranscriptDatabasePath(
   target: SessionTranscriptRuntimeTarget,
 ): string {
-  const memory = isIncognitoSessionKey(target.sessionKey)
-    ? captureSessionActorStorageOwner(target)
-    : undefined;
-  if (memory) {
-    return memory.path;
-  }
   const resolved = resolveSqliteTranscriptScope(target);
   return resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
 }
@@ -269,9 +237,5 @@ export function resolveSessionTranscriptDatabasePath(
 export function resolveSessionTranscriptReadTarget(
   scope: SessionTranscriptReadScope,
 ): SessionTranscriptReadTarget {
-  const memory = captureSessionActorTranscriptRead(scope);
-  if (memory) {
-    return memory.target;
-  }
   return resolveSessionTranscriptReadTargetCore(scope, resolveSessionStorePathForScope);
 }

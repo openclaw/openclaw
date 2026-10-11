@@ -33,7 +33,6 @@ import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-s
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { preserveResetSessionPresentation } from "../config/sessions/reset-preserved-presentation.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { preserveSessionLineage } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
@@ -391,11 +390,6 @@ async function performPreparedGatewaySessionReset({
   lookup: Parameters<typeof withGatewaySessionEntryReadOnly>[0];
   initialResetEntry: SessionEntry | undefined;
 }): ReturnType<typeof performGatewaySessionReset> {
-  const memory = getSessionActorStorageBinding({
-    sessionKey: resetTarget.target.canonicalKey,
-    agentId: resetTarget.target.agentId,
-    storePath: resetTarget.storePath,
-  });
   const authorizeResetCreation = () =>
     authorizeGatewaySessionCreation({
       cfg: resetTarget.cfg,
@@ -585,7 +579,7 @@ async function performPreparedGatewaySessionReset({
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
       const { entry, legacyKey, canonicalKey } = await loadResetSession(assertReadAuthorized);
-      if (!memory && normalizeOptionalString(entry?.sessionId) !== preparedResetSessionId) {
+      if (normalizeOptionalString(entry?.sessionId) !== preparedResetSessionId) {
         return params.expectedSessionId === undefined
           ? unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`)
           : { ok: false, error: sessionChangedError() };
@@ -787,14 +781,6 @@ async function performPreparedGatewaySessionReset({
                   entry,
                   reason: params.reason,
                 });
-              }
-              if (memory) {
-                validateCleanupRevocation = await prepareSubagentSessionCleanupRevocation(
-                  target.canonicalKey,
-                  agentId,
-                  assertCompletionAuthorized,
-                );
-                return;
               }
               await withSessionEntryReadOnlyInWorker(
                 { agentId, storePath, sessionKey: target.canonicalKey },

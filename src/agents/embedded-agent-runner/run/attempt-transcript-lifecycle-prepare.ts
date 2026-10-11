@@ -158,12 +158,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
         fencedSessionTarget,
         attempt.sessionManager,
       );
-      if (incognito && "kind" in incognito) {
-        ownedTranscriptWriteContext.sessionActor = {
-          actor: await incognito.storage.acquire(sessionTarget.sessionKey, lifetime),
-          database: incognito.database,
-        };
-      } else if (incognito) {
+      if (incognito) {
         const execution = await captureOpenClawAgentDatabaseExecution({
           kind: "ephemeral",
           agentId: incognito.actor.agentId,

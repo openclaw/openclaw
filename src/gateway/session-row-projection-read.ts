@@ -5,7 +5,6 @@ import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runt
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { resolveStateDir } from "../config/paths.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
@@ -18,7 +17,6 @@ import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { findSessionRepositoryWorkspaces } from "../state/session-repository-workspaces.js";
-import { withMemorySessionRows } from "./session-row-projection-memory.js";
 import {
   createIncognitoSessionRow,
   type PreparedSessionRowDatabaseFacts,
@@ -345,10 +343,6 @@ export function withBoundIncognitoSessionRows<T>(
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<T> {
   const env = { ...environment, OPENCLAW_STATE_DIR: resolveStateDir(environment) };
-  const memory = getSessionActorStorageBinding({});
-  if (memory) {
-    return withMemorySessionRows(memory, cfg, queries, consume, env);
-  }
   const selections = queries.flatMap((query) => {
     const binding = captureIncognitoSessionBinding({ ...query, sessionKey: query.key, env });
     return binding

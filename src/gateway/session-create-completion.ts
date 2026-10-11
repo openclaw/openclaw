@@ -1,5 +1,4 @@
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -30,13 +29,7 @@ export async function completeGatewaySessionCreation(
       storePath: initializingSession.storePath,
       sessionKey: initializingSession.key,
     };
-    const memory = getSessionActorStorageBinding(scope);
-    const stored = memory
-      ? memory.actor.storage.readCurrent(
-          { type: "session.entry.read", input: {} },
-          memory.authority,
-        )
-      : await readSessionEntryReadOnlyInWorker(scope, commitGuard);
+    const stored = await readSessionEntryReadOnlyInWorker(scope, commitGuard);
     if (
       !stored ||
       stored.sessionId !== initializingSession.entry.sessionId ||

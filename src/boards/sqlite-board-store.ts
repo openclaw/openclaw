@@ -8,7 +8,6 @@ import type {
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
@@ -57,7 +56,6 @@ import {
   type BoardSnapshotWithHtmlViewMetadata,
   type BoardWidgetMcpAppDocument,
 } from "./board-store.js";
-import { createSessionActorBoardStore } from "./session-actor-board-store.js";
 import {
   prepareBoardSourceAuthority,
   reportBoardCleanupFailure,
@@ -405,10 +403,6 @@ export class SqliteBoardStore implements BoardStore {
   async getSnapshotWithHtmlViewMetadata(
     target: BoardSessionTarget,
   ): Promise<BoardSnapshotWithHtmlViewMetadata> {
-    const binding = getSessionActorStorageBinding(target);
-    if (binding) {
-      return createSessionActorBoardStore(() => binding).getSnapshotWithHtmlViewMetadata(target);
-    }
     return this.consumeSnapshotWithHtmlViewMetadata(target, (snapshot) => snapshot);
   }
 
@@ -532,10 +526,6 @@ export class SqliteBoardStore implements BoardStore {
     target: BoardSessionTarget,
     consume: (snapshot: BoardSnapshot) => T,
   ): Promise<Awaited<T>> {
-    const binding = getSessionActorStorageBinding(target);
-    if (binding) {
-      return createSessionActorBoardStore(() => binding).useSnapshot(target, consume);
-    }
     return this.consumeSnapshotWithHtmlViewMetadata(target, ({ snapshot }) => consume(snapshot));
   }
 
@@ -544,10 +534,6 @@ export class SqliteBoardStore implements BoardStore {
     name: string,
     consume: (document: BoardWidgetDocument | undefined) => T,
   ): Promise<Awaited<T>> {
-    const binding = getSessionActorStorageBinding(target);
-    if (binding) {
-      return createSessionActorBoardStore(() => binding).useWidgetDocument(target, name, consume);
-    }
     return this.consumeWidgetDocument(target, name, consume);
   }
 
@@ -580,10 +566,6 @@ export class SqliteBoardStore implements BoardStore {
     ops: readonly BoardOp[],
     options?: BoardWriteOptions,
   ): Promise<BoardSnapshot> {
-    const binding = getSessionActorStorageBinding(target);
-    if (binding) {
-      return createSessionActorBoardStore(() => binding).applyOps(target, ops, options);
-    }
     if (ops.length === 0) {
       return this.getSnapshot(target);
     }
@@ -607,10 +589,6 @@ export class SqliteBoardStore implements BoardStore {
   }
 
   async putWidget(params: BoardWidgetMaterializedPutParams, options?: BoardWidgetWriteOptions) {
-    const binding = getSessionActorStorageBinding(params);
-    if (binding) {
-      return createSessionActorBoardStore(() => binding).putWidget(params, options);
-    }
     const viewGeneration = randomBytes(16).toString("hex");
     let preparedParams = structuredClone(params);
     const content = preparedParams.content;
@@ -660,17 +638,6 @@ export class SqliteBoardStore implements BoardStore {
     instanceId?: string,
     options?: BoardWriteOptions,
   ): Promise<BoardSnapshot> {
-    const binding = getSessionActorStorageBinding(target);
-    if (binding) {
-      return createSessionActorBoardStore(() => binding).grant(
-        target,
-        name,
-        decision,
-        revision,
-        instanceId,
-        options,
-      );
-    }
     return this.write(
       target,
       options,
@@ -714,10 +681,6 @@ export class SqliteBoardStore implements BoardStore {
     target: BoardSessionTarget,
     name: string,
   ): Promise<BoardWidgetMcpAppDocument | undefined> {
-    const binding = getSessionActorStorageBinding(target);
-    if (binding) {
-      return createSessionActorBoardStore(() => binding).readWidgetMcpApp(target, name);
-    }
     return this.consumeWidgetDocument(
       target,
       name,

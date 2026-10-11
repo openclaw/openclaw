@@ -47,7 +47,6 @@ import {
   captureIncognitoSessionMutationFacts,
   SessionMutationFactsUnavailableError,
 } from "./session-sharing-incognito.js";
-import { prepareMemorySessionMutationFacts } from "./session-sharing-memory-facts.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
 import {
   readSessionRoutingFacts,
@@ -117,13 +116,6 @@ export async function prepareSessionMutationFacts(
 ): Promise<SessionFactsRead<PreparedSessionSourceFacts>> {
   const assertRoutingCurrent = captureSessionMutationRouting(params.cfg, undefined, [params]);
   const { canonicalKey, agentId } = resolveSessionStoreIdentity(params);
-  const memory = prepareMemorySessionMutationFacts(
-    { ...params, agentId, canonicalKey },
-    assertRoutingCurrent,
-  );
-  if (memory) {
-    return memory;
-  }
   const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
   const incognito = isIncognitoSessionKey(canonicalKey);
   const binding = captureIncognitoSessionBinding({ agentId, sessionKey: canonicalKey });

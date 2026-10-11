@@ -34,7 +34,6 @@ import {
 } from "../../agents/tool-policy.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
@@ -56,7 +55,6 @@ import {
   withReplyToolAuthorityCohort,
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
-import { prepareMemoryReplyToolAuthorityCaller } from "./reply-tool-authority-memory.js";
 import { prepareNativeReplyToolAuthorityRead } from "./reply-tool-authority.native-read.js";
 
 export type ReplyToolAuthorityInput = {
@@ -362,16 +360,6 @@ export async function resolveFollowupRunToolAuthorityFingerprintAsync(
   route?: ReplyToolAuthorityRoute,
   assertCurrent: () => void = () => {},
 ): Promise<string> {
-  const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
-  const memory = sessionKey && getSessionActorStorageBinding({ sessionKey });
-  if (memory && !isToolAuthorityReadCaptureActive()) {
-    assertCurrent();
-    return resolvePreparedReplyToolAuthorityFingerprint(
-      snapshot,
-      route,
-      memory.actor.snapshot(memory.authority)?.entry,
-    );
-  }
   if (isToolAuthorityReadCaptureActive()) {
     const owner = prepareReplyToolAuthority(snapshot);
     const fingerprint = await owner.fingerprintAsync(route);
@@ -457,8 +445,6 @@ export function prepareReplyToolAuthority(
   };
   const env = { ...process.env };
   const cwd = process.cwd();
-  const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
-  const memory = sessionKey && getSessionActorStorageBinding({ sessionKey });
   let captured: CapturedReplyToolAuthoritySession | undefined;
   let capturedReadPlan: GatewaySessionEntryReadPlan | undefined;
   const assertClassificationSession = (
@@ -478,13 +464,6 @@ export function prepareReplyToolAuthority(
     route?: ReplyToolAuthorityRoute,
     consumeInitialSelection = false,
   ) => {
-    if (memory) {
-      return resolvePreparedReplyToolAuthorityFingerprint(
-        input,
-        route,
-        memory.actor.snapshot(memory.authority)?.entry,
-      );
-    }
     let selectedFingerprint: string | undefined;
     const assertCurrent = () => {
       assertCurrentOperatorAuthority(snapshot.operatorAuthority);
@@ -558,26 +537,17 @@ export function prepareReplyToolAuthority(
     },
     requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
     fingerprint: (route?: ReplyToolAuthorityRoute) =>
-      memory
-        ? resolvePreparedReplyToolAuthorityFingerprint(
-            snapshot,
-            route,
-            memory.actor.snapshot(memory.authority)?.entry,
-          )
-        : resolveFollowupRunToolAuthorityFingerprint(snapshot, route),
+      resolveFollowupRunToolAuthorityFingerprint(snapshot, route),
     fingerprintAsync: async (route?: ReplyToolAuthorityRoute) =>
-      memory
-        ? prepare(snapshot, route)
-        : withReplyToolAuthorityCohort({
-            reader: resolveReader?.(),
-            original: captured,
-            readPlan: capturedReadPlan,
-            env,
-            assertCurrent: () => assertCurrentOperatorAuthority(snapshot.operatorAuthority),
-            prepare: () => prepare(snapshot, route, captured === undefined),
-            consume: (entry) =>
-              resolvePreparedReplyToolAuthorityFingerprint(snapshot, route, entry),
-          }),
+      withReplyToolAuthorityCohort({
+        reader: resolveReader?.(),
+        original: captured,
+        readPlan: capturedReadPlan,
+        env,
+        assertCurrent: () => assertCurrentOperatorAuthority(snapshot.operatorAuthority),
+        prepare: () => prepare(snapshot, route, captured === undefined),
+        consume: (entry) => resolvePreparedReplyToolAuthorityFingerprint(snapshot, route, entry),
+      }),
     projectAsync: async (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => {
       assertCurrentOperatorAuthority(snapshot.operatorAuthority);
       return prepare(projectInput(overlay), route);
@@ -585,32 +555,12 @@ export function prepareReplyToolAuthority(
     project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => {
       // Steering retains the running turn's authority and browser bindings across reconnects.
       assertCurrentOperatorAuthority(snapshot.operatorAuthority);
-      return memory
-        ? resolvePreparedReplyToolAuthorityFingerprint(
-            projectInput(overlay),
-            route,
-            memory.actor.snapshot(memory.authority)?.entry,
-          )
-        : resolveFollowupRunToolAuthorityFingerprint(projectInput(overlay), route);
+      return resolveFollowupRunToolAuthorityFingerprint(projectInput(overlay), route);
     },
   };
   bindReplyToolAuthorityCallerRead(
     result.projectAsync,
     async (caller, expected, route, assertActive) => {
-      if (memory) {
-        const projected = projectInput(caller);
-        const prepared = prepareMemoryReplyToolAuthorityCaller(memory, assertActive, (entry) =>
-          [snapshot, projected].every(
-            (input) =>
-              resolvePreparedReplyToolAuthorityFingerprint(input, route, entry) === expected,
-          ),
-        );
-        recordPreparedToolAuthorityRead({
-          ...prepared,
-          assertLegacyCurrent: () => prepared.assertPrepared([]),
-        });
-        return prepared;
-      }
       if (isIncognitoSessionKey(snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey)) {
         if (!captured) {
           await prepare(snapshot, route);

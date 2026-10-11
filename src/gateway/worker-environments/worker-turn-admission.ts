@@ -10,7 +10,6 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { assertRequiredWorkerLocalExecution } from "../../config/required-worker-profile.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
@@ -185,13 +184,10 @@ export async function waitForInitialWorkerPlacement(params: {
     ...identity,
     storePath: params.turn.sessionTarget?.storePath ?? resolveSessionStorePathForScope(identity),
   };
-  const memory = getSessionActorStorageBinding(target);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
-  const original = memory
-    ? memory.actor.snapshot(memory.authority)?.entry
-    : binding
-      ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
-      : loadSessionEntryReadOnly(target);
+  const binding = captureIncognitoSessionBinding(target);
+  const original = binding
+    ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
+    : loadSessionEntryReadOnly(target);
   const refuseSession = (): never => {
     throw createAbortError("Session changed while waiting for worker setup");
   };
@@ -395,11 +391,7 @@ export async function executeLocalTurn<T>(params: {
       ...identity,
       storePath: reader?.database.path ?? resolveSessionStorePathForScope(identity),
     };
-    const memory = getSessionActorStorageBinding(scope);
-    if (memory) {
-      assertPreflightCurrent();
-      assertLocalWorkspace(memory.actor.snapshot(memory.authority)?.entry?.repositoryWorkspaceId);
-    } else if (reader) {
+    if (reader) {
       const key = assertSessionEntryCohortScope(reader, scope);
       await reader.withRead(
         { sessionKeys: [key], snapshotFields: [] },

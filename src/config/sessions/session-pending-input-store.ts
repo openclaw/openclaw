@@ -26,12 +26,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { runSessionActorCommand } from "./session-actor-scope.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
-import { prepareMemoryPendingInputStore } from "./session-pending-input-memory-store.js";
 import {
   readPendingInputMutationReceipt,
   type PendingInputCustodyGrant,
@@ -47,7 +45,6 @@ import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-sta
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type PendingInputScope = SessionAccessScope & {
-  sessionActor?: import("./session-actor-storage-binding.js").SessionActorStorageBinding;
   agentId: string;
   sessionId: string;
   /** Inactive until the atomic incognito activation supplies this captured owner. */
@@ -62,10 +59,6 @@ export async function preparePendingInputStore(
   scope: PendingInputScope,
   assertCurrent: () => void,
 ) {
-  const memory = getSessionActorStorageBinding(scope);
-  if (memory) {
-    return prepareMemoryPendingInputStore(memory, assertCurrent);
-  }
   const captured = {
     ...scope,
     incognito: scope.incognito ?? captureIncognitoSessionOperation(scope),

@@ -5,7 +5,6 @@ import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/runs.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import {
   readSessionEntriesFromStoreInWorker,
   withSessionEntriesFromStoresInWorker,
@@ -199,19 +198,6 @@ export async function readSessionCreateTarget(
     return { ok: true, value: currentTargetEntry };
   };
   assertCurrent();
-  const memory = getSessionActorStorageBinding({
-    agentId: target.agentId,
-    sessionKey: target.canonicalKey,
-    storePath: target.storePath,
-  });
-  if (memory) {
-    return validate(
-      memory.actor.storage!.readCurrent(
-        { type: "session.entry.read", input: {} },
-        memory.authority,
-      ),
-    );
-  }
   // Process-held incognito stores retain their native owner until its complete cutover.
   if (isIncognitoSessionKey(target.canonicalKey)) {
     return validate(

@@ -8,10 +8,6 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  getSessionActorStorageBinding,
-  runWithSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
-import {
   captureIncognitoSessionBinding,
   withIncognitoSessionBinding,
 } from "../config/sessions/session-incognito-binding.js";
@@ -26,10 +22,7 @@ import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
-import {
-  captureIncognitoSessionMutationFacts,
-  captureSessionActorMutationFacts,
-} from "./session-sharing-incognito.js";
+import { captureIncognitoSessionMutationFacts } from "./session-sharing-incognito.js";
 import { hiddenSessionNotFound } from "./session-sharing-policy.js";
 import { prepareSessionSharingSource } from "./session-sharing-source.js";
 import { prepareSessionSharing, resolveSessionSharingTarget } from "./session-sharing.js";
@@ -115,18 +108,17 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         return;
       }
       const sourceCfg = context.getRuntimeConfig();
-      const sourceTargetScope = {
+      const binding = captureIncognitoSessionBinding({
         agentId: target.agentId,
         sessionKey: target.sessionKey,
-      };
-      const memory = getSessionActorStorageBinding(sourceTargetScope);
-      const binding = memory ? undefined : captureIncognitoSessionBinding(sourceTargetScope);
-      const actorFacts = memory
-        ? captureSessionActorMutationFacts(memory, target.sessionKey, true)
-        : binding && captureIncognitoSessionMutationFacts(binding, target.sessionKey, true);
-      const initialSharingTarget = actorFacts
-        ? actorFacts.readCurrent().target
-        : resolveSessionSharingTarget({ cfg: sourceCfg, ...sourceTargetScope });
+      });
+      const actorFacts =
+        binding && captureIncognitoSessionMutationFacts(binding, target.sessionKey, true);
+      const initialSharingTarget = resolveSessionSharingTarget({
+        cfg: sourceCfg,
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+      });
       if (!companionTargetIsVisible(target, client, context, { target: initialSharingTarget })) {
         respond(false, undefined, hiddenSessionNotFound(target.sessionKey));
         return;
@@ -181,18 +173,16 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           }
         },
         // The source may be incognito even when Side chat's private execution is durable.
-        isIncognitoSessionKey(target.sessionKey) && !memory && !binding
+        isIncognitoSessionKey(target.sessionKey) && !binding
           ? { nativeSource: true }
           : {
               async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
                 assertLifetimeCurrent();
-                const prepare = () =>
-                  prepareSessionSharingSource(sourceTarget, assertLifetimeCurrent);
-                const read = await (memory
-                  ? runWithSessionActorStorage(memory, prepare)
-                  : binding
-                    ? withIncognitoSessionBinding(binding, prepare)
-                    : prepare());
+                const read = await (binding
+                  ? withIncognitoSessionBinding(binding, () =>
+                      prepareSessionSharingSource(sourceTarget, assertLifetimeCurrent),
+                    )
+                  : prepareSessionSharingSource(sourceTarget, assertLifetimeCurrent));
                 const assertCurrent = () => {
                   assertLifetimeCurrent();
                   read.assertCurrent();
@@ -241,7 +231,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       let retainedSource: PreparedSessionSourceAuthority | undefined;
       try {
         assertInputCurrent?.();
-        if (memory || binding) {
+        if (binding) {
           retainedSource = await assertSourceCurrent.prepareSessionSource?.();
           retainedSource?.assertCurrent();
         }

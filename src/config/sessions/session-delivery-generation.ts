@@ -35,14 +35,12 @@ import type {
 import { readSessionEntryGenerationInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
 import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import {
   SessionDeliveryGenerationRevokedError,
   SessionDeliveryGenerationUnavailableError,
   isSessionDeliveryGenerationRevokedError,
   isSessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
-import { prepareMemorySessionGeneration } from "./session-delivery-generation-memory.js";
 import type {
   SessionDeliveryGeneration,
   SessionGenerationEntry,
@@ -96,10 +94,6 @@ async function prepareSessionGenerationLease(
 }> {
   if (!isSessionGenerationFacts(input)) {
     throw new SessionDeliveryGenerationUnavailableError();
-  }
-  const memory = getSessionActorStorageBinding(input);
-  if (memory) {
-    return prepareMemorySessionGeneration(memory, input, onRevoked);
   }
   const generation = { ...input };
   const binding = captureIncognitoSessionBinding(generation);

@@ -18,10 +18,6 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
-import {
-  getSessionActorStorageBinding,
-  type SessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
 import { restoreSessionColdTranscript } from "../config/sessions/session-cold-storage.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
@@ -53,7 +49,6 @@ import {
   captureUsageCostIncognitoBinding,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
-import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import {
   createUsageCostResolver,
   prepareUsageCostPricing,
@@ -82,7 +77,6 @@ export type PreparedUsageCostWorker = {
   agentDir: string;
   databases: Array<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>;
   incognito?: UsageCostIncognitoBinding;
-  sessionActor?: SessionActorStorageBinding;
 };
 
 export function prepareUsageCostWorker(params: {
@@ -95,28 +89,7 @@ export function prepareUsageCostWorker(params: {
   sessionFiles?: readonly string[];
   env?: NodeJS.ProcessEnv;
   incognito?: UsageCostIncognitoBinding;
-  sessionActor?: SessionActorStorageBinding;
 }): PreparedUsageCostWorker {
-  const sessionActor = getSessionActorStorageBinding({
-    ...params,
-    storePath: params.storePath ?? params.databasePath,
-  });
-  if (sessionActor) {
-    const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
-    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-    return {
-      location: {
-        agentId: sessionActor.agentId,
-        databasePath: sessionActor.path,
-        storePath: sessionActor.path,
-        env: { ...env },
-      },
-      config: params.config,
-      agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionActor.agentId),
-      databases: [],
-      sessionActor,
-    };
-  }
   const incognito = captureUsageCostIncognitoBinding(params);
   const agentId = normalizeAgentId(params.agentId);
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
@@ -240,21 +213,6 @@ export async function runUsageCostWorker(
   operation: UsageCostWorkerRequest,
   suppliedIncognito?: UsageCostIncognitoBinding,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
-  if (prepared.sessionActor) {
-    const pricing =
-      operation.kind === "refresh"
-        ? await prepareUsageCostPricing(prepared.config, prepared.agentDir)
-        : undefined;
-    const request: UsageCostWorkerOperation =
-      operation.kind === "refresh"
-        ? { ...operation, pricingFingerprint: pricing!.fingerprint() }
-        : operation;
-    return runSessionActorUsage(
-      prepared.sessionActor,
-      request,
-      createUsageCostResolver(prepared, pricing),
-    );
-  }
   const incognito = suppliedIncognito ?? prepared.incognito;
   if (!incognito) {
     return runPreparedUsageCostWorker(prepared, operation);

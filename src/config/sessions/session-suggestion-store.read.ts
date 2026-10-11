@@ -5,7 +5,6 @@ import {
   resolveExplicitIncognitoAgentSqliteTarget,
 } from "../../state/openclaw-agent-db.paths.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import {
@@ -21,13 +20,6 @@ export async function listSessionSuggestions(
   input: SessionCollaborationScope,
   params: Parameters<typeof listSessionSuggestionsInDatabase>[2] = {},
 ) {
-  const memory = getSessionActorStorageBinding(input);
-  if (memory) {
-    return memory.actor.storage!.read(
-      { type: "session.suggestions.read", input: { params } },
-      memory.authority,
-    );
-  }
   const source = input.incognito ? undefined : captureIncognitoSessionSource(input);
   if (source && "kind" in source) {
     return [];

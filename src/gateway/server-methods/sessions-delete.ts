@@ -16,10 +16,6 @@ import {
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import {
-  getSessionActorStorageBinding,
-  type SessionActorStorageBinding,
-} from "../../config/sessions/session-actor-storage-binding.js";
-import {
   captureIncognitoSessionOperation,
   captureIncognitoSessionSource,
   withIncognitoSessionBinding,
@@ -85,10 +81,6 @@ export async function deleteGatewaySession(
   options: DeleteGatewaySessionOptions,
 ): Promise<DeleteGatewaySessionResult> {
   const scope = { sessionKey: options.params.key.trim(), agentId: options.params.agentId };
-  const memory = getSessionActorStorageBinding(scope);
-  if (memory) {
-    return deleteGatewaySessionInScope(options, undefined, undefined, memory);
-  }
   const source = captureIncognitoSessionSource(scope);
   const absent = source && "kind" in source ? source : undefined;
   const binding = absent ? undefined : captureIncognitoSessionOperation(scope);
@@ -114,7 +106,6 @@ async function deleteGatewaySessionInScope(
     NonNullable<ReturnType<typeof captureIncognitoSessionSource>>,
     { kind: "absent" }
   >,
-  memory?: SessionActorStorageBinding,
 ): Promise<DeleteGatewaySessionResult> {
   assertCallerCurrent?.();
   const key = p.key.trim();
@@ -125,9 +116,9 @@ async function deleteGatewaySessionInScope(
   }
   const requestedAgentId = requestedAgent.agentId;
   const actorIdentity =
-    (memory || binding || absent) &&
+    (binding || absent) &&
     resolveSessionStoreIdentity({ cfg, sessionKey: key, agentId: requestedAgentId });
-  const actorOwner = memory ?? binding?.actor ?? absent;
+  const actorOwner = binding?.actor ?? absent;
   const target =
     actorIdentity && actorOwner
       ? {
@@ -168,8 +159,6 @@ async function deleteGatewaySessionInScope(
   const assertExternalCurrent = () => {
     assertCallerCurrent?.();
     sessionMutationAuthorization?.assertCurrent();
-    memory?.actor.assertCurrent();
-    memory?.authority.assertCurrent();
     binding?.authority.assertCurrent();
     absent?.assertCurrent();
   };
@@ -180,17 +169,13 @@ async function deleteGatewaySessionInScope(
       { sessionKey: target.canonicalKey },
     ));
   const actorClaim = actorEntry?.claim;
-  const readMemoryEntry = () =>
-    memory?.actor.storage!.readCurrent({ type: "session.entry.read", input: {} }, memory.authority);
-  const initialDeleteEntry = memory
-    ? readMemoryEntry()
-    : actorEntry
-      ? actorEntry.entry
-      : absent
-        ? undefined
-        : loadSessionEntry(key, {
-            agentId: requestedAgentId,
-          }).entry;
+  const initialDeleteEntry = actorEntry
+    ? actorEntry.entry
+    : absent
+      ? undefined
+      : loadSessionEntry(key, {
+          agentId: requestedAgentId,
+        }).entry;
   const expectedSessionId = p.expectedSessionId?.trim();
   const expectedLifecycleRevision = p.expectedLifecycleRevision?.trim();
   const sessionChangedError = () =>
@@ -266,14 +251,6 @@ async function deleteGatewaySessionInScope(
   };
   const assertCurrent = () => {
     assertGenerationCurrent();
-    if (memory) {
-      const entry = readMemoryEntry();
-      const error = resolveEntryError(entry);
-      if (error) {
-        throw new SessionDeletionError(error);
-      }
-      return { ...target, entry, legacyKey: undefined };
-    }
     actorEntry?.snapshot.assertCurrent();
     const current = actorEntry
       ? { ...target, entry: actorEntry.entry, legacyKey: undefined }
@@ -307,7 +284,7 @@ async function deleteGatewaySessionInScope(
       try {
         drain = await prepareSessionLifecycleDrain({
           action: "delete",
-          authorize: binding || memory ? assertGenerationCurrent : assertCurrent,
+          authorize: binding ? assertGenerationCurrent : assertCurrent,
           beforeCancel: () => {
             // Compare before cancellation writes its own terminal metadata.
             if (
@@ -381,28 +358,25 @@ async function deleteGatewaySessionInScope(
             legacyKey,
             canonicalKey,
             reason: "session-delete",
-            assertCurrent:
-              binding || memory
-                ? () => {
-                    assertGenerationCurrent();
-                    commitGuard();
-                  }
-                : commitGuard,
+            assertCurrent: binding
+              ? () => {
+                  assertGenerationCurrent();
+                  commitGuard();
+                }
+              : commitGuard,
           });
           if (mutationCleanupError) {
             throw new SessionDeletionError(mutationCleanupError);
           }
           await refreshActorEntry();
           assertCurrent();
-          const postCleanupTarget = memory
-            ? { entry: readMemoryEntry(), target }
-            : actorEntry
-              ? { entry: actorEntry.entry, target }
-              : loadAccessorSessionEntryForGatewayTarget({
-                  key,
-                  cfg,
-                  agentId: requestedAgentId,
-                });
+          const postCleanupTarget = actorEntry
+            ? { entry: actorEntry.entry, target }
+            : loadAccessorSessionEntryForGatewayTarget({
+                key,
+                cfg,
+                agentId: requestedAgentId,
+              });
           const postCleanupEntry = postCleanupTarget.entry;
           const deletedWorktreeId = normalizeOptionalString(postCleanupEntry?.worktree?.id);
           commitGuard();
@@ -415,10 +389,10 @@ async function deleteGatewaySessionInScope(
             commitGuard,
             deleteDeliveryArtifacts: true,
             deleteTranscriptWithoutArchive: incognito,
-            expectedEntry: memory ? undefined : postCleanupEntry,
+            expectedEntry: postCleanupEntry,
             expectedLifecycleRevision,
             expectedSessionId: initialDeleteEntry?.sessionId ?? null,
-            expectedUpdatedAt: memory ? undefined : postCleanupEntry?.updatedAt,
+            expectedUpdatedAt: postCleanupEntry?.updatedAt,
             storePath,
             target: { canonicalKey: target.canonicalKey, storeKeys: target.storeKeys },
           };

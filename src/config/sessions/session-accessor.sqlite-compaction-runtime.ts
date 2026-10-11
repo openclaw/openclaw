@@ -1,6 +1,5 @@
 import type { CommittedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
 import { captureSessionManagerIncognitoBinding } from "../../agents/sessions/session-manager-incognito-scope.js";
-import { createSessionManagerMemoryDatabase } from "../../agents/sessions/session-manager-memory.js";
 import {
   receiveSessionManagerCommit,
   SessionEntryCommittedError,
@@ -18,7 +17,6 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
-import type { SessionManagerIncognitoDatabase } from "./session-manager-write-contract.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import {
   captureSessionTranscriptTargetBinding,
@@ -67,9 +65,7 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
     initialWriter?.assertActive();
   };
   const options = toDatabaseOptions(resolveSqliteTranscriptScope(captured));
-  const binding = captureSessionManagerIncognitoBinding(captured);
-  const actor =
-    binding && ("kind" in binding ? createSessionManagerMemoryDatabase(binding) : binding.actor);
+  const actor = captureSessionManagerIncognitoBinding(captured)?.actor;
   const transcriptByteCompactionLatch = { ...params.transcriptByteCompactionLatch };
   const persistBoundary = async () => {
     assertCurrent();
@@ -84,9 +80,7 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
       () => import("../../agents/sessions/session-manager-metadata-runtime.js"),
     );
     assertCurrent();
-    const persist = (
-      database: OpenClawAgentDatabase | IncognitoSessionActor | SessionManagerIncognitoDatabase,
-    ) =>
+    const persist = (database: OpenClawAgentDatabase | IncognitoSessionActor) =>
       withSessionMetadataWorker(
         options,
         database,
@@ -114,11 +108,11 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
           );
           const receipt = acknowledged.value;
           try {
-            if (receipt.initialEntry?.fence && "sessions" in database) {
+            if (receipt.initialEntry?.fence && !("db" in database)) {
               initialWriter?.recordCommitted(receipt.initialEntry.fence);
             }
           } finally {
-            if (receipt.initialEntry?.identity && "sessions" in database) {
+            if (receipt.initialEntry?.identity && !("db" in database)) {
               publishCommittedSessionIdentity(
                 captured.agentId,
                 database.identity.incarnation,
@@ -149,9 +143,5 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
       ? await persist(actor)
       : await withOpenClawAgentDatabaseRuntime(options, persist, assertCurrent);
   };
-  return await trackAsyncWork(() =>
-    binding && "kind" in binding
-      ? persistBoundary()
-      : runOpenClawAgentWriteAdmission(options, persistBoundary, true),
-  );
+  return await trackAsyncWork(() => runOpenClawAgentWriteAdmission(options, persistBoundary, true));
 }

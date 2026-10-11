@@ -15,7 +15,6 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.types.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { prepareIncognitoSessionHistoryRead } from "../config/sessions/session-incognito-history-read.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -69,54 +68,6 @@ export function captureCodexSessionContextReader(
   source: SessionTranscriptRuntimeTarget,
   signal?: AbortSignal,
 ): SessionTranscriptContextReader | undefined {
-  const memory = getSessionActorStorageBinding(source);
-  if (memory) {
-    const target = captureSessionTranscriptTargetBinding(source);
-    const assertOwned = captureOwnedTranscriptWriteAssertion(target);
-    const admission = resolveSessionTranscriptReadFence(target);
-    const authority = {
-      ...memory.authority,
-      assertCurrent() {
-        signal?.throwIfAborted();
-        memory.authority.assertCurrent();
-        memory.actor.assertReadable();
-        assertOwned();
-      },
-    };
-    return async (readTarget, read) => {
-      if (
-        readTarget.agentId !== target.agentId ||
-        readTarget.sessionKey !== target.sessionKey ||
-        readTarget.sessionId !== target.sessionId
-      ) {
-        throw new SessionTranscriptReadFenceError(
-          "Context reader belongs to another transcript target",
-        );
-      }
-      const snapshot = await memory.actor.storage!.read(
-        {
-          type: "session.history.context-messages",
-          input: { sessionId: target.sessionId, admission },
-        },
-        authority,
-      );
-      // Detached content reflects the committed read; only live disclosure authority matters now.
-      const messages = (function* () {
-        for (const message of snapshot.messages) {
-          authority.assertCurrent();
-          yield message;
-        }
-      })();
-      try {
-        authority.assertCurrent();
-        const result = await read(messages, snapshot.header);
-        authority.assertCurrent();
-        return result;
-      } finally {
-        messages.return(undefined);
-      }
-    };
-  }
   const binding = captureIncognitoSessionBinding(source);
   if (!binding) {
     return undefined;
@@ -162,7 +113,7 @@ export function captureCodexSessionContextReader(
 }
 
 function assertCodexSessionSyncAccess(target: SessionTranscriptReadScope, method: string) {
-  if (getSessionActorStorageBinding(target) || captureIncognitoSessionBinding(target)) {
+  if (captureIncognitoSessionBinding(target)) {
     throw new IncognitoSessionSyncAccessError(method, "captureCodexSessionContextReader");
   }
 }

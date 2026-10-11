@@ -1,4 +1,3 @@
-import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -23,7 +22,6 @@ export async function refreshCostUsageCacheForAgent(params: {
   startMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
   incognito?: UsageCostIncognitoBinding;
-  sessionActor?: SessionActorStorageBinding;
 }): Promise<"refreshed" | "busy"> {
   const prepared = prepareUsageCostWorker(params);
   return withUsageCostIncognitoScope<"refreshed" | "busy">(

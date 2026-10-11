@@ -1,5 +1,4 @@
 import path from "node:path";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionActor,
@@ -22,17 +21,6 @@ export async function withControlUiSessionPrSource<T>(
   operation: (assertCurrent: () => void, sourceIdentity: string) => Promise<T>,
 ): Promise<T> {
   const target = { agentId: normalizeAgentId(source.agentId), path: path.resolve(source.path) };
-  const memory = getSessionActorStorageBinding({
-    agentId: target.agentId,
-    storePath: target.path,
-  });
-  if (memory) {
-    const assertCurrent = () => {
-      memory.authority.assertCurrent();
-      memory.actor.assertReadable();
-    };
-    return operation(assertCurrent, JSON.stringify(memory.actor.target.database));
-  }
   const binding = captureIncognitoSessionBinding({
     agentId: target.agentId,
     storePath: target.path,

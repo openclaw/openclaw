@@ -93,19 +93,6 @@ export function readResidentUserProfileId(
   return resolveCatalogProfile(catalog.rows, profileId)?.id;
 }
 
-/** Participant recording consumes the Gateway's prepared aliases without opening storage. */
-export function readResidentUserProfileAliases(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): ReadonlySet<string> {
-  const catalog = profileCatalogs.get(profileCatalogPath(options));
-  if (!catalog?.valid) {
-    throw new Error("User profile catalog is not ready");
-  }
-  const identity = projectCatalogUserProfileIdentity(catalog.rows, profileId);
-  return new Set([profileId, ...(identity?.aliases ?? [])]);
-}
-
 export function captureResidentUserProfileAccess(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},

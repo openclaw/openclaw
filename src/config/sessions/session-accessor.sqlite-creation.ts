@@ -40,8 +40,6 @@ import type {
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCommitContext,
 } from "./session-accessor.types.js";
-import { createSessionActorEntryWithTranscript } from "./session-actor-entry-adapter.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { publishSessionStateArchivesInWorker } from "./session-archive-publication.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { createIncognitoSessionEntryWithTranscript } from "./session-incognito-entry-creation.js";
@@ -65,10 +63,6 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
   options: SessionEntryCreateWithTranscriptOptions,
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
-  const memory = getSessionActorStorageBinding({ ...scope, storePath: scope.path });
-  if (memory) {
-    return createSessionActorEntryWithTranscript(memory, scope.env, createEntry, options);
-  }
   const binding = captureIncognitoSessionBinding({ ...scope, storePath: scope.path });
   if (binding) {
     return createIncognitoSessionEntryWithTranscript(binding, scope, createEntry, options);

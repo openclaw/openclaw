@@ -1,5 +1,4 @@
 import { isMainThread } from "node:worker_threads";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -9,7 +8,6 @@ import {
   MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
-import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
@@ -72,8 +70,6 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
-import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import {
   deleteCapturedIncognitoSession,
@@ -566,55 +562,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   }
 }
 
-function deleteMemorySessionEntryLifecycle(
-  params: DeleteSessionEntryLifecycleParams,
-  allowLocked = false,
-): Promise<DeleteSessionEntryLifecycleResult> | undefined {
-  const memory = getSessionActorStorageBinding({
-    ...params,
-    sessionKey: params.target.canonicalKey,
-  });
-  if (!memory) {
-    return undefined;
-  }
-  let authorityError: unknown;
-  return memory.actor
-    .storage!.mutate(
-      {
-        type: "session.lifecycle.delete",
-        input: {
-          expectedEntry: params.expectedEntry,
-          expectedSessionId: params.expectedSessionId,
-          expectedLifecycleRevision: params.expectedLifecycleRevision,
-          expectedUpdatedAt: params.expectedUpdatedAt,
-        },
-      },
-      {
-        assertCurrent() {
-          try {
-            memory.authority.assertCurrent();
-            params.commitGuard?.();
-          } catch (error) {
-            authorityError = error;
-            throw error;
-          }
-        },
-        authorize(stage, facts, publication) {
-          memory.authority.authorize(stage, facts, publication);
-          if (!allowLocked && facts.entry) {
-            assertModelSelectionUnlocked(facts.entry, MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
-          }
-        },
-      },
-    )
-    .then((outcome) => {
-      if (outcome.kind === "rolled-back" && authorityError) {
-        throw toErrorObject(authorityError, "Session deletion authority rejected the operation");
-      }
-      return readSessionActorStorageResult(outcome);
-    });
-}
-
 export async function deleteSessionEntryLifecycle(
   params:
     | DeleteSessionEntryLifecycleParams
@@ -624,7 +571,6 @@ export async function deleteSessionEntryLifecycle(
     return deleteIncognitoSessionLifecycle(params);
   }
   return (
-    deleteMemorySessionEntryLifecycle(params) ??
     deleteCapturedIncognitoSession(params) ??
     deleteSqliteSessionEntryLifecycleInternal(params, false)
   );
@@ -679,7 +625,6 @@ export async function rollbackAgentHarnessSessionEntryLifecycle(
     throw new Error(expectedEntryError ?? MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
   return (
-    deleteMemorySessionEntryLifecycle(params, true) ??
     deleteCapturedIncognitoSession(params, undefined, params.expectedEntry.agentHarnessId) ??
     deleteSqliteSessionEntryLifecycleInternal(params, true)
   );
@@ -705,7 +650,6 @@ export async function rollbackPluginOwnedSessionEntryLifecycle(
     throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
   return (
-    deleteMemorySessionEntryLifecycle(params, true) ??
     deleteCapturedIncognitoSession(params, expectedPluginOwner) ??
     deleteSqliteSessionEntryLifecycleInternal(params, true, expectedPluginOwner)
   );

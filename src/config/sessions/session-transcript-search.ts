@@ -35,7 +35,6 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import {
   prepareIncognitoSessionHistoryRead,
@@ -101,16 +100,6 @@ export async function searchSessionTranscripts(
   incognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTranscriptSearchResult> {
   validateSessionTranscriptSearchQuery(params.query);
-  const memory = getSessionActorStorageBinding({
-    ...params,
-    storePath: preparedDatabase?.path ?? params.storePath,
-  });
-  if (memory) {
-    return memory.actor.storage!.read(
-      { type: "session.history.search", input: params },
-      memory.authority,
-    );
-  }
   const shared = incognito
     ? undefined
     : captureIncognitoSessionBinding({

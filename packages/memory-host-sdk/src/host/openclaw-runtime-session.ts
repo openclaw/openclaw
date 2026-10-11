@@ -7,7 +7,6 @@ import {
   readTranscriptStatsBatchReadOnlySync as readAccessorTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../../../../src/config/sessions/session-actor-storage-binding.js";
 import {
   captureIncognitoSessionSource,
   captureIncognitoSessionHistoryBinding,
@@ -34,10 +33,7 @@ export function assertBoundIncognitoMemorySyncAccess(
   method: string,
   replacement: string,
 ) {
-  if (
-    getSessionActorStorageBinding({ agentId: scope?.agentId, storePath: scope?.storePath }) ||
-    captureIncognitoSessionSource(scope)
-  ) {
+  if (captureIncognitoSessionSource(scope)) {
     throw new IncognitoSessionSyncAccessError(method, replacement);
   }
 }
@@ -59,61 +55,6 @@ export function readTranscriptStatsBatchReadOnlySync(
 export function captureIncognitoMemoryReader(
   scope: Parameters<typeof captureIncognitoSessionHistoryBinding>[0],
 ) {
-  const memory = getSessionActorStorageBinding({
-    agentId: scope.agentId,
-    storePath: scope.storePath,
-  });
-  if (memory) {
-    const selectedId = scope.sessionId ?? scope.sessionEntry?.sessionId;
-    const selectedKey = scope.sessionKey;
-    const storage = memory.actor.storage!;
-    const selection = { sessionId: selectedId, sessionKey: selectedKey };
-    const assertDisclosure = (sessionId: string) => {
-      const selected = storage.readCurrent(
-        { type: "session.entry.readById", input: { sessionId } },
-        memory.authority,
-      );
-      if (!selected) {
-        throw new Error("Incognito Memory session is no longer available");
-      }
-    };
-    return {
-      async memoryEntry(
-        absPath: string,
-        options: import("./session-files.js").BuildSessionEntryOptions,
-      ) {
-        const { buildSessionEntryFromSnapshot } = await import("./session-files.js");
-        const snapshot = await storage.read(
-          {
-            type: "session.memory.entry",
-            input: { ...selection, includeMessages: Boolean(options.onTranscriptMessage) },
-          },
-          memory.authority,
-        );
-        if (!snapshot) {
-          return null;
-        }
-        return buildSessionEntryFromSnapshot(
-          absPath,
-          {
-            ...options,
-            agentId: memory.agentId,
-            storePath: memory.path,
-            sessionId: snapshot.sessionId,
-            sessionKey: snapshot.sessionKey,
-          },
-          snapshot,
-          () => assertDisclosure(snapshot.sessionId),
-        );
-      },
-      memoryResetRecall() {
-        return storage.read(
-          { type: "session.memory.resetRecall", input: selection },
-          memory.authority,
-        );
-      },
-    };
-  }
   const shared = captureIncognitoSessionSource(scope);
   if (!shared) {
     return undefined;
@@ -268,16 +209,6 @@ export function readBoundIncognitoMemoryCorpus(
   scope: import("./session-transcript-corpus.types.js").SessionTranscriptCorpusScope,
   options: import("./session-transcript-corpus.types.js").SessionTranscriptCorpusOptions,
 ) {
-  const memory = getSessionActorStorageBinding({
-    agentId: scope.normalizedAgentId,
-    storePath: scope.storePath,
-  });
-  if (memory) {
-    return memory.actor.storage!.read(
-      { type: "session.corpus.list", input: { options } },
-      memory.authority,
-    );
-  }
   const binding = captureIncognitoSessionSource({
     agentId: scope.normalizedAgentId,
     // Corpus discovery captures ambient env; the configured sentinel owns its physical root.

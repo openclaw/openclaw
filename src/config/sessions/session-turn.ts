@@ -71,10 +71,7 @@ export async function appendSessionTurnInWorker(
   if (inputActor && inputActor.target.readSource?.path !== database.path) {
     throw new Error("Input actor changed the transcript's physical target");
   }
-  const memory = inputActor?.actor.target.database.kind === "memory";
-  const incognito = memory
-    ? undefined
-    : captureIncognitoSessionOperation({ ...scope, storePath: scope.path });
+  const incognito = captureIncognitoSessionOperation({ ...scope, storePath: scope.path });
   const execution =
     incognito || inputActor ? undefined : captureOpenClawAgentDatabaseExecution(database);
   const ownerSource = options.ownerSource;
@@ -87,7 +84,6 @@ export async function appendSessionTurnInWorker(
   const assertCurrent = () => {
     execution?.assertCurrent();
     incognito?.authority.assertCurrent();
-    inputActor?.storageAuthority?.assertCurrent();
     (ownerSource?.assertPreparedCurrent ?? ownerSource?.assertCurrent)?.();
     options.assertCurrent?.();
     options.sessionTurnMutation?.assertCurrent?.();
@@ -141,7 +137,6 @@ export async function appendSessionTurnInWorker(
   const actor = inputActor?.actor;
   const fixedVoiceTranscript =
     !incognito &&
-    !memory &&
     Boolean(options.voiceTranscript) &&
     !custody &&
     !cliWriter &&
@@ -161,7 +156,6 @@ export async function appendSessionTurnInWorker(
   // Observable append predicates and fixed voice commits retain eager restoration.
   const prepareColdTranscript =
     !incognito &&
-    !memory &&
     !fixedVoiceTranscript &&
     !messages.some((append) => append.shouldAppend) &&
     (Boolean(sessionTurnMutation) ||
@@ -192,7 +186,7 @@ export async function appendSessionTurnInWorker(
       throw new Error("Incognito turns require owner authority prepared for the same actor");
     }
     const restore = async () => {
-      if (incognito || memory) {
+      if (incognito) {
         return undefined;
       }
       const { restoreSessionColdTranscript, SessionColdTurnReboundError } =
@@ -268,11 +262,7 @@ export async function appendSessionTurnInWorker(
           freshCommitGuards.add(source.assertCurrent);
           return true;
         }
-        if (
-          !isRecord(facts) ||
-          (facts.kind !== "session-turn-custody" &&
-            !(memory && facts.kind === "session-message" && facts.check === "pending"))
-        ) {
+        if (!isRecord(facts) || facts.kind !== "session-turn-custody") {
           return false;
         }
         if (!custody) {
@@ -369,7 +359,7 @@ export async function appendSessionTurnInWorker(
             sources[index] = source;
             if (
               (!actor && source.nativeSource) ||
-              ((incognito || memory) && source.hasOpaqueCheck) ||
+              (incognito && source.hasOpaqueCheck) ||
               source.checks.some((check) => check.predicate.source.path !== database.path)
             ) {
               assertCurrent();
@@ -463,9 +453,8 @@ export async function appendSessionTurnInWorker(
         };
         const authority: SessionActorAuthority = {
           assertCurrent: () => checkAuthority(assertCurrent),
-          authorize(stage, state, publication) {
+          authorize(_stage, _state, publication) {
             checkAuthority(() => {
-              inputActor.storageAuthority?.authorize(stage, state, publication);
               operation.onTransactionFacts(publication);
               if (isRecord(publication) && publication.kind === "session-turn") {
                 // SAFETY: the actor's typed phase kernel publishes this discriminated commit.
@@ -481,9 +470,6 @@ export async function appendSessionTurnInWorker(
             const replicaPreparation = prepareSessionInputFromReplica(plan, hot, scope);
             if (replicaPreparation) {
               return replicaPreparation;
-            }
-            if (memory) {
-              return actor.storage!.read({ type: "session.turn.prepare", input: plan }, authority);
             }
             if (incognito) {
               return incognito.actor.sessions.entry(
@@ -545,11 +531,7 @@ export async function appendSessionTurnInWorker(
                         before.entry,
                         turn.result.sessionEntry,
                       );
-                    } else if (
-                      !memory &&
-                      turn.result.sessionEntry &&
-                      inputActor.target.readSource
-                    ) {
+                    } else if (turn.result.sessionEntry && inputActor.target.readSource) {
                       publishCommittedSessionIdentity(
                         scope.agentId,
                         inputActor.target.readSource.databaseIdentity,
@@ -562,8 +544,7 @@ export async function appendSessionTurnInWorker(
                 const command = {
                   commandId: randomUUID(),
                   phaseId: `${inputActor.phase}:${options.expectedSessionId}`,
-                  // Memory commands use their FIFO owner's current state, not a cached version.
-                  expected: memory ? undefined : before.version,
+                  expected: before.version,
                   expectedState,
                   lifecycle: {},
                   turn: plan,

@@ -23,10 +23,6 @@ import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
-  captureSessionActorMutationFacts,
-  captureSessionSharingActorBinding,
-} from "./session-sharing-incognito.js";
-import {
   hiddenSessionNotFound,
   resolveSessionSharingTarget,
   type SessionSharingTarget,
@@ -40,7 +36,6 @@ import {
   resolveDirectSessionTargets,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
-import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 
@@ -82,9 +77,6 @@ export async function prepareSessionSharingRead(params: {
   projection?: SessionSharingReadProjection;
 }) {
   try {
-    if (captureSessionSharingActorBinding({ ...params, resolved: null })) {
-      return prepareSessionMutationFacts({ ...params, allowMissing: true });
-    }
     const { cfg, projection } = params;
     const query = { key: params.sessionKey, agentId: params.agentId };
     const resident = projection?.sharingTarget(query);
@@ -223,21 +215,6 @@ export function readSessionMutationTarget(params: {
     return { error: input.error };
   }
   try {
-    const binding = captureSessionSharingActorBinding({ ...params.targetRef, resolved: null });
-    if (binding) {
-      const { agentId, canonicalKey } = resolveSessionStoreIdentity({
-        cfg: params.cfg,
-        ...params.targetRef,
-      });
-      const facts = captureSessionActorMutationFacts(
-        binding,
-        canonicalKey,
-        true,
-        params.cfg.session?.store &&
-          resolveSessionStorePathCore(params.cfg.session.store, { agentId }),
-      );
-      return { target: facts.readCurrent().target, preparedReadSource: facts.source };
-    }
     const projection = getSessionRowProjection(params.context);
     const projected =
       projection && readProjectedSessionMutationTarget(params.targetRef, params.cfg, projection);

@@ -50,10 +50,6 @@ import {
   captureSessionManagerIncognitoAdmissionAssertion,
   captureSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
-import {
-  prepareSessionManagerMemoryHydration,
-  prepareSessionManagerMemoryRead,
-} from "./session-manager-memory-read.js";
 
 /** Exact owner postimages can validate metadata, never replace bounded payload reads. */
 export function readSessionManagerActorTranscript(
@@ -105,12 +101,6 @@ export function prepareSessionManagerHydration(
   if (!incognitoBinding) {
     return { ...prepareSessionTranscriptHydration(target, limits, signal, lane), incognitoBinding };
   }
-  if ("kind" in incognitoBinding) {
-    return {
-      ...prepareSessionManagerMemoryHydration(incognitoBinding, limits, signal),
-      incognitoBinding,
-    };
-  }
   const assertAdmission = captureSessionManagerIncognitoAdmissionAssertion(incognitoBinding);
   const actor = incognitoBinding.actor;
   const assertOwned = captureOwnedTranscriptWriteAssertion(target);
@@ -142,7 +132,7 @@ function prepareSessionManagerIncognitoContext(
   manager?: object,
 ) {
   const binding = captureSessionManagerIncognitoBinding(target, manager);
-  if (!binding || "kind" in binding) {
+  if (!binding) {
     return undefined;
   }
   const assertAdmission = captureSessionManagerIncognitoAdmissionAssertion(binding);
@@ -238,20 +228,6 @@ export async function readSessionManagerModelContextAsync<T>(
   const through = options.through ? { ...options.through } : undefined;
   const limits = options.limits ? { ...options.limits } : undefined;
   options.signal?.throwIfAborted();
-  const selected = captureSessionManagerIncognitoBinding(readTarget, manager);
-  if (selected && "kind" in selected) {
-    const reader = prepareSessionManagerMemoryRead(selected, options.signal);
-    const context = await reader.read("session.history.context", {
-      sessionId: readTarget.sessionId,
-      admission,
-      through,
-      limits,
-    });
-    reader.assertCurrent();
-    const value = await consume(context);
-    reader.assertCurrent();
-    return value;
-  }
   const actor = withSessionContextAdmission(readTarget, admission, () =>
     prepareSessionManagerIncognitoContext(readTarget, options.signal, manager),
   );
@@ -303,28 +279,6 @@ export async function readSessionManagerContextAsync<T>(
   const signal = options.signal;
   signal?.throwIfAborted();
   assertOwned();
-  const selected = captureSessionManagerIncognitoBinding(captured);
-  if (selected && "kind" in selected) {
-    const reader = prepareSessionManagerMemoryRead(selected, signal);
-    const snapshot = await reader.read("session.history.context-messages", {
-      sessionId: captured.sessionId,
-      admission,
-    });
-    const messages = (function* () {
-      for (const message of snapshot.messages) {
-        reader.assertCurrent();
-        yield message;
-      }
-    })();
-    try {
-      reader.assertCurrent();
-      const value = await read(messages, snapshot.header);
-      reader.assertCurrent();
-      return value;
-    } finally {
-      messages.return(undefined);
-    }
-  }
   return withSessionContextAdmission(captured, admission, async () => {
     const actor = prepareSessionManagerIncognitoContext(captured, signal);
     const native =

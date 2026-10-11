@@ -14,7 +14,6 @@ import {
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
 import {
   readSessionEntriesFromStoreInWorker,
@@ -133,15 +132,6 @@ export function readGitHubPublicationSession(
   sessionKey: string,
   options: Parameters<typeof loadGatewaySessionEntryReadOnly>[1] = {},
 ): PublicationSessionRead {
-  const memory = getSessionActorStorageBinding({ sessionKey, agentId: options?.agentId });
-  if (memory) {
-    return {
-      canonicalKey: sessionKey,
-      agentId: memory.agentId,
-      storePath: memory.path,
-      entry: memory.actor.snapshot(memory.authority)?.entry,
-    };
-  }
   const binding = captureIncognitoSessionBinding({ sessionKey, agentId: options?.agentId });
   if (!binding) {
     return loadGatewaySessionEntryReadOnly(sessionKey, options);
@@ -314,10 +304,8 @@ export async function prepareGitHubPublicationWorkspaceOwner(
   assertCurrent();
   const target = options.sessionTarget ? { ...options.sessionTarget } : undefined;
   let snapshot: PublicationSessionRead;
-  const actorScope = { ...params, storePath: target?.storePath };
-  const memory = getSessionActorStorageBinding(actorScope);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(actorScope);
-  if (memory || binding) {
+  const binding = captureIncognitoSessionBinding({ ...params, storePath: target?.storePath });
+  if (binding) {
     snapshot = readGitHubPublicationSession(params.sessionKey, { agentId: params.agentId });
     if (
       target &&
@@ -573,7 +561,7 @@ export async function hasSupportedGitHubPublicationTarget(
   const context = captureOpenClawStateWorkerContext();
   const initial = requirePublicationSessionOwner(
     session,
-    getSessionActorStorageBinding(session) || captureIncognitoSessionBinding(session)
+    captureIncognitoSessionBinding(session)
       ? readGitHubPublicationSession(session.sessionKey, { agentId: session.agentId })
       : await loadGatewaySessionEntryReadOnlyInWorker({
           cfg: getRuntimeConfig(),

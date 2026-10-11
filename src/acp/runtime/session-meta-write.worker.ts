@@ -68,10 +68,6 @@ function readMutationSource(
   },
   phase: "metadata preparation" | "legacy source consumption",
 ) {
-  if ("kind" in input.source && input.source.kind === "memory") {
-    // Memory entries have one in-process owner and no legacy disk provenance.
-    return input.source.snapshot;
-  }
   if ("kind" in input.source) {
     // The host grant revalidates this exact actor snapshot; never reopen its sentinel.
     const current =

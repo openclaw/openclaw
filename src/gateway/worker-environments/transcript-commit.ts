@@ -1,9 +1,5 @@
 import type { WorkerTranscriptCommitParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
-import {
-  getSessionActorStorageBinding,
-  runWithSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,7 +30,7 @@ export type WorkerTranscriptCommitterOptions = {
 
 /** Applies ordered, idempotent semantic worker turns to the canonical session transcript. */
 export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitterOptions) {
-  let store = options.store;
+  const store = options.store ?? createWorkerTranscriptCommitStore();
   const sessionOperations = new KeyedAsyncQueue();
 
   const commit: WorkerTranscriptCommitApplication = async (params) => {
@@ -45,28 +41,17 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
     if (params.request.runEpoch !== params.identity.ownerEpoch) {
       return { ok: false, reason: "epoch-mismatch" };
     }
-    const memory = getSessionActorStorageBinding(params.sessionTarget);
-    const binding = memory ? undefined : captureIncognitoSessionBinding(params.sessionTarget);
-    const captured =
-      binding || memory
-        ? { ...params, sessionTarget: captureSessionTranscriptTargetBinding(params.sessionTarget) }
-        : params;
+    const binding = captureIncognitoSessionBinding(params.sessionTarget);
+    const captured = binding
+      ? { ...params, sessionTarget: captureSessionTranscriptTargetBinding(params.sessionTarget) }
+      : params;
     const execute = () =>
       sessionOperations.enqueue(sessionId, async () => {
         // Keep loading inside the queue, before authority checks or ledger reservations.
         const { commitWorkerTranscript } = await loadTranscriptCommitRuntime();
-        return await commitWorkerTranscript(
-          options,
-          memory ? undefined : (store ??= createWorkerTranscriptCommitStore()),
-          sessionId,
-          captured,
-        );
+        return await commitWorkerTranscript(options, store, sessionId, captured);
       });
-    return await (memory
-      ? runWithSessionActorStorage(memory, execute)
-      : binding
-        ? binding.actor.sessions.withSharedState(execute)
-        : execute());
+    return await (binding ? binding.actor.sessions.withSharedState(execute) : execute());
   };
 
   return { commit };

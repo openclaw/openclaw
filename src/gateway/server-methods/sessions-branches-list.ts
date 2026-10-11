@@ -4,7 +4,6 @@ import {
   type SessionsBranchesListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listSessionBranches } from "../../config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,
@@ -54,22 +53,12 @@ export async function listSessionBranchesForGateway(
           respond(true, { branches: [] }, undefined);
           return;
         }
-        const memory = getSessionActorStorageBinding({
-          sessionKey: current.canonicalKey,
+        const result = await listSessionBranches({
           agentId: current.agentId,
+          sessionKey: current.canonicalKey,
+          sessionStoreKey: current.canonicalKey,
           storePath: current.storePath,
         });
-        const result = memory
-          ? await memory.actor.storage!.read(
-              { type: "session.history.branches", input: {} },
-              memory.authority,
-            )
-          : await listSessionBranches({
-              agentId: current.agentId,
-              sessionKey: current.canonicalKey,
-              sessionStoreKey: current.canonicalKey,
-              storePath: current.storePath,
-            });
         assertCurrent();
         read?.assertCurrent();
         if (result.status !== "ok") {

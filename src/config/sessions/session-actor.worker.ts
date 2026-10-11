@@ -32,10 +32,7 @@ import {
   hydrateSessionActorState,
   projectSessionActorHotState,
 } from "./session-actor-hydration.worker.js";
-import {
-  applySessionActorPhase,
-  SessionActorStaleStateError,
-} from "./session-actor-phase.worker.js";
+import { applySessionActorPhase, SessionActorStaleStateError } from "./session-actor-phase.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
 import {
   cloneSessionActorStoredState,

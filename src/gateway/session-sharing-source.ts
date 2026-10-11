@@ -3,7 +3,6 @@ import type { CapturedSessionEntryReadSource } from "../config/sessions/session-
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionBinding,
-  type IncognitoSessionBinding,
 } from "../config/sessions/session-incognito-binding.js";
 import { listSessionMembersInDatabase } from "../config/sessions/session-sharing-store.kernel.js";
 import {
@@ -40,8 +39,6 @@ import {
 } from "./session-sharing-authorization.js";
 import {
   captureIncognitoSessionMutationFacts,
-  captureSessionActorMutationFacts,
-  captureSessionSharingActorBinding,
   captureSessionSharingIncognitoBinding,
   hasNativeIncognitoSessionSharingSource,
 } from "./session-sharing-incognito.js";
@@ -65,59 +62,7 @@ export async function prepareSessionSharingSource(
     "agentId" | "canonicalKey" | "storeKey" | "storePath" | "readSource"
   >,
   assertCallerCurrent: () => void,
-  memoryFacts?: ReturnType<typeof captureSessionActorMutationFacts>,
 ) {
-  const memoryBinding = memoryFacts
-    ? undefined
-    : captureSessionSharingActorBinding({
-        agentId: target.agentId,
-        sessionKey: target.storeKey,
-        resolved: target,
-      });
-  const read =
-    memoryFacts ??
-    (memoryBinding &&
-      captureSessionActorMutationFacts(
-        memoryBinding,
-        target.storeKey,
-        true,
-        target.readSource?.path ?? target.storePath,
-      ));
-  if (read) {
-    if (
-      target.agentId !== read.location.agentId ||
-      (target.readSource &&
-        !isSameSessionSharingSource(
-          { readSource: read.source, storePath: read.location.path },
-          target,
-        ))
-    ) {
-      throw new Error("Session sharing source changed");
-    }
-    let active = true;
-    const assertCurrent = () => {
-      if (!active) {
-        throw new Error("Session sharing source is no longer retained");
-      }
-      assertCallerCurrent();
-      read.assertCurrent();
-    };
-    assertCurrent();
-    return {
-      actorSource: true as const,
-      source: read.source,
-      get target() {
-        return read.readCurrent().target;
-      },
-      get members() {
-        return [...read.readCurrent().membership];
-      },
-      assertCurrent,
-      async release() {
-        active = false;
-      },
-    };
-  }
   const binding = captureIncognitoSessionBinding({
     agentId: target.agentId,
     sessionKey: target.storeKey,
@@ -242,43 +187,22 @@ export function withPreparedSessionSharingSource(params: {
     currentTalkTarget?: PreparedTalkSessionTarget,
   ) => void;
 }): SessionSourceAssertion {
-  const boundSources = new Map<
-    AuthorizedSessionMutationTarget,
-    | {
-        kind: "memory";
-        facts: ReturnType<typeof captureSessionActorMutationFacts>;
-      }
-    | {
-        kind: "native";
-        binding: IncognitoSessionBinding;
-        facts: ReturnType<typeof captureIncognitoSessionMutationFacts>;
-      }
-  >();
-  for (const target of params.targets) {
-    const memoryBinding = captureSessionSharingActorBinding(target);
-    if (memoryBinding) {
-      boundSources.set(target, {
-        kind: "memory",
-        facts: captureSessionActorMutationFacts(
-          memoryBinding,
-          target.sessionKey,
-          true,
-          target.resolved?.readSource?.path ??
-            target.resolved?.storePath ??
-            target.absentTarget?.storePath,
-        ),
-      });
-      continue;
-    }
-    const binding = captureSessionSharingIncognitoBinding(target);
-    if (binding) {
-      boundSources.set(target, {
-        kind: "native",
-        binding,
-        facts: captureIncognitoSessionMutationFacts(binding, target.sessionKey, true),
-      });
-    }
-  }
+  const boundSources = new Map(
+    params.targets.flatMap((target) => {
+      const binding = captureSessionSharingIncognitoBinding(target);
+      return binding
+        ? [
+            [
+              target,
+              {
+                binding,
+                facts: captureIncognitoSessionMutationFacts(binding, target.sessionKey, true),
+              },
+            ] as const,
+          ]
+        : [];
+    }),
+  );
   const targetChanged = (key: string) => sessionMutationTargetChanged(params.request.method, key);
   const assertSource = () => {
     const error = authorizeOwnSessionMutation({
@@ -356,11 +280,9 @@ export function withPreparedSessionSharingSource(params: {
         const bound = boundSources.get(params.targets[index]!);
         prepared.push(
           await (bound
-            ? bound.kind === "memory"
-              ? prepareSessionSharingSource(target, assertSourceCurrent, bound.facts)
-              : withIncognitoSessionBinding(bound.binding, () =>
-                  prepareSessionSharingSource(target, assertSourceCurrent),
-                )
+            ? withIncognitoSessionBinding(bound.binding, () =>
+                prepareSessionSharingSource(target, assertSourceCurrent),
+              )
             : prepareSessionSharingSource(target, assertSourceCurrent)),
         );
       }
