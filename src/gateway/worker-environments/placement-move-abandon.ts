@@ -7,7 +7,7 @@ import {
   forceAbandonWorkerEnvironment,
   reportWorkerAbandonmentCleanupError,
 } from "./placement-force-abandon.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
