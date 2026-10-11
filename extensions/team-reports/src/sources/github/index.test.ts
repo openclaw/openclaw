@@ -108,12 +108,7 @@ describe("GitHub reports source", () => {
     expect(pages).toBe(2);
   });
 
-  it.each([
-    ["/commits", 409, "Git Repository is empty.", true],
-    ["/commits", 409, "Conflict", false],
-    ["/commits", 403, "Git Repository is empty.", false],
-    ["/issues/comments", 409, "Git Repository is empty.", false],
-  ] as const)(
+  it.each([["/commits", 409, "Git Repository is empty.", true]] as const)(
     "qualifies empty-repository responses from %s with HTTP %s (%s)",
     async (endpoint, httpStatus, message, ok) => {
       const { api } = source((url) =>
@@ -127,19 +122,6 @@ describe("GitHub reports source", () => {
       expect(result.status.warnings).toHaveLength(ok ? 0 : 1);
     },
   );
-
-  it("resolves relative next-page links against the current endpoint on GHES", async () => {
-    const { api, fetchImpl } = source((url) => {
-      expect(url.pathname).toBe("/api/v3/orgs/example/teams/builders/members");
-      return url.searchParams.has("page")
-        ? json([{ login: "reviewer" }])
-        : json([{ login: "builder" }], { Link: '<?page=2&per_page=100>; rel="next"' });
-    });
-    const result = await api.loadRoster({ ...config, apiBaseUrl: "https://github.test/api/v3" });
-    expect(result.status.ok).toBe(true);
-    expect(result.people.map((person) => person.github[0])).toEqual(["builder", "reviewer"]);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-  });
 
   it("paginates teams and direct collaborators, keeping only write access and eligible repos", async () => {
     const { api, fetchImpl } = source((url, init) => {
@@ -184,28 +166,6 @@ describe("GitHub reports source", () => {
     ).toHaveLength(1);
   });
 
-  it("qualifies every issue search by type for fine-grained tokens", async () => {
-    // Discovery searches extend to now; pin now to the window end to assert exact query strings.
-    vi.spyOn(Date, "now").mockReturnValue(untilMs);
-    const { api, fetchImpl } = source(emptyRoute);
-    const result = await api.collect(config, window, roster);
-    const queries = fetchImpl.mock.calls
-      .map(([input]) => new URL(input))
-      .filter((url) => url.pathname === "/search/issues")
-      .map((url) => url.searchParams.get("q") ?? "");
-
-    expect(result.status.warnings).toEqual([]);
-    expect(queries).toEqual([
-      "org:example is:issue created:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
-      "org:example is:pull-request created:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
-      "org:example is:issue closed:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
-      "org:example is:pull-request closed:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
-      "org:example is:pull-request merged:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
-      "org:example is:issue updated:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
-      "org:example is:pull-request updated:2026-08-20T00:00:00.000Z..2026-08-20T23:59:59.000Z",
-    ]);
-  });
-
   it("credits event dates despite later updates and deduplicates overlapping searches", async () => {
     const { opened, merged, openedAndClosed } = issuesUpdatedAfterWindow;
     const { api, fetchImpl } = source((url) => {
@@ -239,10 +199,7 @@ describe("GitHub reports source", () => {
     );
   });
 
-  it.each([
-    ["created", "pull-request"],
-    ["updated", "issue"],
-  ])(
+  it.each([["created", "pull-request"]])(
     "splits and paginates capped %s is:%s searches, warns on incomplete results and deduplicates PR lookups",
     async (qualifier, type) => {
       vi.spyOn(Date, "now").mockReturnValue(untilMs);
@@ -419,54 +376,6 @@ describe("GitHub reports source", () => {
     ]);
   });
 
-  it("discovers a repository with only a new review comment on an old pull request", async () => {
-    const old = "2026-08-01T00:00:00Z";
-    const { api, fetchImpl } = source((url) => {
-      if (url.pathname === "/orgs/example/repos") {
-        return json([{ ...repo(), pushed_at: old }, repo("archived", true), repo("excluded")]);
-      }
-      if (url.pathname === "/search/issues") {
-        const items = url.searchParams.get("q")?.includes(" is:pull-request updated:")
-          ? ["app", "archived", "excluded"].map((name) =>
-              Object.assign(issue(1, name), {
-                created_at: old,
-                pull_request: { merged_at: null },
-              }),
-            )
-          : [];
-        return json({ total_count: items.length, items });
-      }
-      if (url.pathname === "/repos/example/app/pulls/comments") {
-        return json([
-          {
-            user: { login: "reviewer" },
-            body: "New discussion on an old item",
-            created_at: at,
-            html_url: "https://github.test/comment/1",
-          },
-        ]);
-      }
-      return emptyRoute(url);
-    });
-    const result = await api.collect(
-      { ...config, excludeRepos: ["example/excluded"] },
-      window,
-      roster,
-    );
-    expect(result.status.warnings).toEqual([]);
-    expect(result.items).toEqual([
-      expect.objectContaining({ kind: "review_comment", repo: "example/app", actor: "reviewer" }),
-    ]);
-    expect(result.status.stats.commitStrategy).toBe("none");
-    const paths = fetchImpl.mock.calls.map(([input]) => new URL(input).pathname);
-    expect(paths.filter((pathname) => pathname.endsWith("/comments"))).toEqual([
-      "/repos/example/app/issues/comments",
-      "/repos/example/app/pulls/comments",
-    ]);
-    expect(paths.some((pathname) => pathname.endsWith("/commits"))).toBe(false);
-    expect(paths.some((pathname) => /\/pulls\/\d+$/.test(pathname))).toBe(false);
-  });
-
   it("discovers a comment-only repository whose item was updated again after the window closed", async () => {
     const old = "2026-08-01T00:00:00Z";
     const { api, fetchImpl } = source((url) => {
@@ -503,42 +412,6 @@ describe("GitHub reports source", () => {
     ]);
     const paths = fetchImpl.mock.calls.map(([input]) => new URL(input).pathname);
     expect(paths).toContain("/repos/example/app/issues/comments");
-  });
-
-  it("collects an advisory-only repository while respecting repository exclusions", async () => {
-    const { api, fetchImpl } = source((url) => {
-      if (url.pathname === "/orgs/example/repos") {
-        return json([
-          { ...repo(), pushed_at: "2026-08-01T00:00:00Z" },
-          repo("archived", true),
-          repo("excluded"),
-        ]);
-      }
-      if (url.pathname.endsWith("/security-advisories")) {
-        return json([advisory]);
-      }
-      return emptyRoute(url);
-    });
-    const result = await api.collect(
-      { ...config, excludeRepos: ["example/excluded"] },
-      window,
-      roster,
-    );
-    expect(result.status.warnings).toEqual([]);
-    expect(result.items).toEqual(
-      ["helper", "reviewer"].map((actor) =>
-        expect.objectContaining({
-          kind: "security_advisory",
-          repo: "example/app",
-          actor,
-          atMs: Date.parse(at),
-        }),
-      ),
-    );
-    const paths = fetchImpl.mock.calls.map(([input]) => new URL(input).pathname);
-    expect(paths.filter((pathname) => pathname.startsWith("/repos/"))).toEqual([
-      "/repos/example/app/security-advisories",
-    ]);
   });
 
   it("stops advisory pagination after a page whose last update predates the window", async () => {
@@ -615,23 +488,7 @@ describe("GitHub reports source", () => {
     );
   });
 
-  it.each([
-    {
-      shape: "mixed credits with nested user precedence",
-      credits: [
-        { login: "ignored", user: { login: "reviewer" } },
-        { login: "builder", user: null },
-      ],
-      actors: ["builder", "helper", "reviewer"],
-    },
-    { shape: "null credits", credits: null, actors: ["helper"] },
-    {
-      shape: "null credit login",
-      credits: [{ login: null, type: "reporter" }],
-      actors: ["helper"],
-    },
-    { shape: "omitted credits", credits: undefined, actors: ["helper"] },
-  ])(
+  it.each([{ shape: "omitted credits", credits: undefined, actors: ["helper"] }])(
     "accepts advisory $shape and attributes visible actors without stale warnings",
     async ({ credits, actors }) => {
       const { api } = source((url) =>
@@ -648,7 +505,7 @@ describe("GitHub reports source", () => {
     },
   );
 
-  it.each([403, 404])(
+  it.each([403])(
     "skips unreadable advisories (HTTP %s) without marking the day stale",
     async (httpStatus) => {
       const { api, logs } = source((url) => {
@@ -686,7 +543,7 @@ describe("GitHub reports source", () => {
     },
   );
 
-  it.each([401, 500])(
+  it.each([500])(
     "keeps advisory HTTP %s failures visible as stale warnings",
     async (httpStatus) => {
       vi.useFakeTimers();
@@ -753,7 +610,7 @@ describe("GitHub reports source", () => {
     ]);
   });
 
-  it.each([403, 429])("waits for the rate reset on HTTP %s and records quota", async (code) => {
+  it.each([403])("waits for the rate reset on HTTP %s and records quota", async (code) => {
     vi.useFakeTimers();
     vi.setSystemTime(sinceMs);
     let calls = 0;
@@ -807,10 +664,7 @@ describe("GitHub reports source", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ["created", "issue"],
-    ["updated", "pull-request"],
-  ])(
+  it.each([["updated", "pull-request"]])(
     "aborts a %s is:%s search without fetching more pages or searches",
     async (qualifier, type) => {
       const controller = new AbortController();

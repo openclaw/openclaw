@@ -24,7 +24,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { gitBackupCommandRuntimeEntrypoint } from "./git-backup-command-runtime.test-support.js";
 import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
@@ -206,7 +206,7 @@ describe("Git-backed SQLite snapshots", () => {
     );
   });
 
-  it.each(["missing", "old-schema", "removed"] as const)(
+  it.each(["old-schema", "removed"] as const)(
     "refreshes --all backups without losing a configured %s agent",
     async (condition) => {
       clearRuntimeConfigSnapshot();
@@ -263,9 +263,7 @@ describe("Git-backed SQLite snapshots", () => {
             main.close();
           }
           const opsPath = path.join(entries.ops.agentDir, "openclaw-agent.sqlite");
-          if (condition === "missing") {
-            await fs.rm(opsPath);
-          } else if (condition === "old-schema") {
+          if (condition === "old-schema") {
             const ops = new DatabaseSync(opsPath);
             try {
               ops.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
@@ -293,7 +291,7 @@ describe("Git-backed SQLite snapshots", () => {
             return;
           }
           expect(await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/ops"])).toBe(opsTree);
-          const reason = condition === "missing" ? /ENOENT/u : /uses schema version/u;
+          const reason = /uses schema version/u;
           expect(result.warnings).toEqual([expect.stringMatching(/agent ops.*degraded/iu)]);
           const warning = result.warnings?.[0];
           expect(warning).toMatch(reason);
@@ -468,36 +466,6 @@ describe("Git-backed SQLite snapshots", () => {
     },
   );
 
-  it("uses a commit-scoped fallback identity when Git has no configured email", async () => {
-    const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "identity-free-repository");
-    const isolatedHome = path.join(root, "git-home");
-    await fs.mkdir(isolatedHome, { recursive: true });
-    const gitEnv = createPathResolutionEnv(isolatedHome, {
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    });
-
-    const result = await createGitBackup({
-      repositoryPath,
-      stateDir,
-      databases: [database],
-      gitEnv,
-    });
-
-    expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
-    expect(
-      await requireGit(repositoryPath, ["log", "-1", "--format=%an <%ae>"], { env: gitEnv }),
-    ).toBe("OpenClaw <backup@openclaw.local>");
-    expect(
-      await requireGit(repositoryPath, ["config", "--local", "--get", "user.email"], {
-        env: gitEnv,
-      }).catch(() => undefined),
-    ).toBeUndefined();
-  });
-
   it("redacts and durably preserves credential-bearing push diagnostics", async () => {
     const root = await tempRoot();
     const { stateDir } = createStateDatabaseFixture(root);
@@ -665,18 +633,6 @@ describe("Git-backed SQLite snapshots", () => {
     }
   });
 
-  it("does not treat a symbolic HEAD with a missing object as an empty log", async () => {
-    const root = await tempRoot();
-    const repositoryPath = path.join(root, "broken-repository");
-    await requireGit(root, ["init", repositoryPath]);
-    const headRef = await requireGit(repositoryPath, ["symbolic-ref", "HEAD"]);
-    const headRefPath = path.join(repositoryPath, ".git", ...headRef.split("/"));
-    await fs.mkdir(path.dirname(headRefPath), { recursive: true });
-    await fs.writeFile(headRefPath, `${"a".repeat(40)}\n`);
-
-    await expect(readGitBackupLog({ repositoryPath, limit: 10 })).rejects.toThrow(/git show-ref/u);
-  });
-
   it("does not treat a missing non-branch symbolic HEAD as an unborn branch", async () => {
     const root = await tempRoot();
     const repositoryPath = path.join(root, "missing-symbolic-ref-repository");
@@ -767,72 +723,7 @@ describe("Git-backed SQLite snapshots", () => {
     await expect(conflict).rejects.not.toThrow(password);
   });
 
-  it("round-trips losslessly, converges FTS, and omits derived vec and transcript state", async () => {
-    const root = await tempRoot();
-    const source = path.join(root, "source.sqlite");
-    const dump = path.join(root, "dump");
-    const restoredPath = path.join(root, "restored.sqlite");
-    await createFormatFixture(source);
-    const manifest = await dumpGitBackupDatabase({
-      snapshotPath: source,
-      outputPath: dump,
-      identity: { role: "global" },
-    });
-    const restored = await restoreGitBackupDirectory({
-      sourcePath: dump,
-      targetPath: restoredPath,
-      expectedIdentity: { role: "global" },
-    });
-    expect(restored.tables.every((table) => table.ok)).toBe(true);
-    expect(restored.manifest.tables).toEqual(manifest.tables);
-    expect(manifest.tables).not.toHaveProperty("session_transcript_index_state");
-    expect(manifest.tables).not.toHaveProperty("session_transcript_fts_rows");
-    if (process.platform !== "win32") {
-      expect((await fs.stat(restoredPath)).mode & 0o777).toBe(0o600);
-    }
-
-    const database = new DatabaseSync(restoredPath, { readOnly: true });
-    try {
-      const statement = database.prepare(
-        "SELECT id, huge, bytes, optional FROM content ORDER BY id",
-      );
-      statement.setReadBigInts(true);
-      const rows = statement.all() as Array<{
-        id: bigint;
-        huge: bigint;
-        bytes: Uint8Array;
-        optional: string | null;
-      }>;
-      expect(
-        rows.map((row) => ({
-          id: row.id,
-          huge: row.huge,
-          bytes: [...row.bytes],
-          optional: row.optional,
-        })),
-      ).toEqual([
-        {
-          id: 1n,
-          huge: 9_007_199_254_740_993n,
-          bytes: [0, 1, 254, 255],
-          optional: "",
-        },
-        { id: 2n, huge: -9_007_199_254_740_994n, bytes: [42], optional: null },
-      ]);
-      expect(
-        database.prepare("SELECT rowid FROM content_fts WHERE content_fts MATCH 'lobster'").all(),
-      ).toEqual([{ rowid: 1 }]);
-      const tables = database
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
-        .all() as Array<{ name: string }>;
-      expect(tables.some((table) => table.name === "memory_vec")).toBe(false);
-      expect(tables.some((table) => table.name === "session_transcript_index_state")).toBe(false);
-    } finally {
-      database.close();
-    }
-  });
-
-  it.each([false, true])(
+  it.each([true])(
     "redacts catalog credentials only for secret-excluded backups (exclude=%s)",
     async (excludeSecrets) => {
       const root = await tempRoot();

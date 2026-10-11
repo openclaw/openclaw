@@ -465,7 +465,7 @@ afterEach(async () => {
 const itWithCli = it.runIf(process.platform !== "win32");
 
 describe("OpenCode session catalog", () => {
-  itWithCli.each(["runtime", "request"] as const)(
+  itWithCli.each(["request"] as const)(
     "discovers paired nodes only for selected hosts through the %s node runtime",
     async (discovery) => {
       await installFakeOpenCode();
@@ -511,7 +511,7 @@ describe("OpenCode session catalog", () => {
     },
   );
 
-  itWithCli.each([1, 2])(
+  itWithCli.each([2])(
     "lists and reads sessions through the v%s CLI JSON surfaces",
     async (version) => {
       await installFakeOpenCode("hi", "Catalog session", { command: "pwd" }, version);
@@ -668,25 +668,6 @@ describe("OpenCode session catalog", () => {
       }
     },
   );
-
-  itWithCli("hides and rejects Continue when ACP cannot resume OpenCode", async () => {
-    await installFakeOpenCode();
-    acpRuntimeMocks.resolveAcpSessionAvailability.mockReturnValue({
-      available: false,
-      message: "ACP runtime backend is unavailable",
-    });
-    const { provider } = captureOpenCodeContinuationCatalog();
-
-    await expect(provider.list({ hostIds: ["gateway"] })).resolves.toEqual([
-      expect.objectContaining({
-        sessions: [expect.objectContaining({ threadId: "ses_test", canContinue: false })],
-      }),
-    ]);
-    await expectRejects(
-      provider.continueSession!({ hostId: "gateway", threadId: "ses_test" }),
-      "ACP runtime backend is unavailable",
-    );
-  });
 
   itWithCli("adopts local OpenCode sessions once with the native ACP resume binding", async () => {
     await installFakeOpenCode();

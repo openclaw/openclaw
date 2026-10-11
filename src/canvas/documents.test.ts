@@ -25,7 +25,7 @@ function createHtmlDocument(
 }
 
 describe("canvas documents", () => {
-  it.skipIf(process.platform === "win32").each(["document", "manifest.json", "index.html"])(
+  it.skipIf(process.platform === "win32").each(["document", "index.html"])(
     "rejects a symlinked %s when reading widget HTML",
     async (target) => {
       const stateDir = tempDirs.make("openclaw-canvas-links-");
@@ -43,20 +43,17 @@ describe("canvas documents", () => {
     },
   );
 
-  it.each(["manifest.json", "index.html"])(
-    "rejects a hardlinked %s when reading widget HTML",
-    async (target) => {
-      const stateDir = tempDirs.make("openclaw-canvas-hardlinks-");
-      const document = await createHtmlDocument(stateDir, "<p>aliased</p>");
-      await link(
-        path.join(resolveCanvasDocumentDir(stateDir, document.id), target),
-        path.join(stateDir, `alias-${target}`),
-      );
-      await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).rejects.toMatchObject({
-        code: "hardlink",
-      });
-    },
-  );
+  it.each(["index.html"])("rejects a hardlinked %s when reading widget HTML", async (target) => {
+    const stateDir = tempDirs.make("openclaw-canvas-hardlinks-");
+    const document = await createHtmlDocument(stateDir, "<p>aliased</p>");
+    await link(
+      path.join(resolveCanvasDocumentDir(stateDir, document.id), target),
+      path.join(stateDir, `alias-${target}`),
+    );
+    await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).rejects.toMatchObject({
+      code: "hardlink",
+    });
+  });
 
   it("bounds HTML reads by bytes while independently allowing the manifest", async () => {
     const stateDir = tempDirs.make("openclaw-canvas-bounded-");

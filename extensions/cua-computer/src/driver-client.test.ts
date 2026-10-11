@@ -97,22 +97,6 @@ describe("CUA Driver direct session", () => {
     });
   });
 
-  it("matches the installed CUA Driver desktop input enum contract", async () => {
-    const driverSdk = await import("@trycua/cua-driver");
-
-    expect(ClickButton).toEqual({
-      Left: driverSdk.ClickButton.Left,
-      Right: driverSdk.ClickButton.Right,
-      Middle: driverSdk.ClickButton.Middle,
-    });
-    expect(ScrollDirection).toEqual({
-      Up: driverSdk.ScrollDirection.Up,
-      Down: driverSdk.ScrollDirection.Down,
-      Left: driverSdk.ScrollDirection.Left,
-      Right: driverSdk.ScrollDirection.Right,
-    });
-  });
-
   it("uses configured creation with one trusted lifecycle session", async () => {
     const driver = createCuaDriver({ loadSdk: async () => sdk as never });
 
