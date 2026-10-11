@@ -111,6 +111,29 @@ export const browserPanelStyles = css`
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .bp-surfacebar {
+    flex-wrap: wrap;
+  }
+  .bp-surfacebar__control {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+  }
+  .bp-surfacebar__control label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+  }
+  .bp-surfacebar__control input {
+    width: 32px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid var(--border);
+    background: transparent;
+  }
   .bp-btn {
     border: 1px solid var(--border, #262b34);
     background: transparent;

@@ -21,6 +21,7 @@ import {
   openBrowserTab,
   startBrowser,
 } from "./browser-client.ts";
+import { BrowserPanelAnnotations } from "./browser-panel-annotations.ts";
 import { BrowserPanelInputController } from "./browser-panel-controller-input.ts";
 import { BrowserPanelDownload } from "./browser-panel-download.ts";
 import { BrowserPanelNativeController } from "./browser-panel-native-controller.ts";
@@ -63,6 +64,7 @@ export class BrowserPanelController implements ReactiveController {
   readonly pendingInput = new BrowserPanelPendingInput();
   readonly download = new BrowserPanelDownload(this);
   readonly input: BrowserPanelInputController;
+  readonly annotations = new BrowserPanelAnnotations(this);
   readonly stream: BrowserPanelStream;
   private activeClient: GatewayBrowserClient | null = null;
   urlDraftEditing = false;
@@ -91,6 +93,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   suspendView(): void {
+    this.annotations.suspend();
     this.native.cancelCapture();
     this.native.presentation.hide();
     this.input.resetCaptureState();
@@ -108,9 +111,14 @@ export class BrowserPanelController implements ReactiveController {
     if ((key === "view" && value === null) || key === "activeTargetId") {
       this.stream.close();
     }
+    const previousView = this.view;
     Object.assign(this, { [key]: value });
     if (key === "view" && this.view) {
       this.viewport.captured();
+      if (!previousView || previousView.url !== this.view.url) {
+        this.annotations.reset();
+        void this.annotations.refresh();
+      }
     }
     this.host.requestUpdate();
     if (key === "activeTargetId" || key === "mode") {
@@ -153,6 +161,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   private invalidateViewOperations(): void {
+    this.annotations.reset();
     this.download.cancel();
     this.stream.close();
     this.operations.invalidate();
@@ -669,6 +678,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   setMode(mode: BrowserPanelMode): void {
+    void this.annotations.stop();
     if (this.mode === mode) {
       this.exitCaptureModes();
       return;
@@ -687,24 +697,43 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   handleStageClick(event: MouseEvent): void {
+    if (this.annotations.state?.active) {
+      this.annotations.select(event);
+      return;
+    }
     if (!this.native.activeTab) {
       this.input.handleStageClick(event);
     }
   }
 
   handleWheel(event: WheelEvent): void {
+    if (this.annotations.state?.active) {
+      event.preventDefault();
+      return;
+    }
     if (!this.native.activeTab) {
       this.input.handleWheel(event);
     }
   }
 
   handleViewportKeydown(event: KeyboardEvent): void {
+    if (this.annotations.state?.active) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void this.annotations.stop();
+      }
+      return;
+    }
     if (!this.native.activeTab) {
       this.input.handleViewportKeydown(event);
     }
   }
 
   handleViewportPaste(event: ClipboardEvent): void {
+    if (this.annotations.state?.active) {
+      event.preventDefault();
+      return;
+    }
     if (!this.native.activeTab) {
       this.input.handleViewportPaste(event);
     }

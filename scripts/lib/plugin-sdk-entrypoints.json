@@ -182,6 +182,7 @@
   "allow-from",
   "allowlist-config-edit",
   "browser-cdp",
+  "browser-annotations",
   "browser-config",
   "boolean-param",
   "channel-contract-testing",
