@@ -96,11 +96,9 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
         placementAuthority?.assertCurrent();
       };
       try {
-        assertCurrent();
         // Stop the old process and revoke its credential, but retain the epoch: it also owns
         // the node workspace directory. A new turn gets a new claim and credential below.
         await stopOwner(record, undefined, { assertCurrent });
-        assertCurrent();
         const receipt = await callBootstrap(installation, async (timeoutSignal) => {
           const refreshSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
           assertCurrent();
@@ -131,7 +129,6 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
             assertCurrent,
           });
         });
-        assertCurrent();
         if (!sameWorkerBuild(receipt, installation)) {
           throw new Error("Worker runtime refresh returned a mismatched build receipt");
         }
@@ -150,15 +147,12 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
           bootstrapReceipt: { ...receipt, installKind: "bundle" },
           assertCurrent,
         });
-        assertCurrent();
         await ensurePendingCredential(refreshed, sessionId ?? null);
       } finally {
         placementAuthority?.release();
       }
     } finally {
-      if (inFlight.get(record.environmentId) === fact) {
-        inFlight.delete(record.environmentId);
-      }
+      inFlight.delete(record.environmentId);
       settled.resolve();
     }
   };

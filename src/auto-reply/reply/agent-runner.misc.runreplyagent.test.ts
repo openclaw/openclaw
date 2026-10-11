@@ -60,7 +60,11 @@ import { type BaseRunOptions, createBaseRun } from "./agent-runner.runreplyagent
 import { clearPendingFinalDeliveryAfterSuccess } from "./dispatch-from-config.pending-final.js";
 import { scheduleFollowupDrain } from "./queue.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
-import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  replyRunRegistry,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 function createCliBackendTestConfig() {
@@ -298,11 +302,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         compactionCount: 0,
       };
       const prompt = "What is two plus two? Answer in one short sentence without tools.";
-      const operation = createReplyOperation({
-        sessionKey,
-        sessionId: "session",
-        resetTriggered: false,
-      });
+      const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
       const delivery = createDeferred();
       const requestBudget = {
         contextWindow: 32_768,
@@ -429,7 +429,7 @@ describe("runReplyAgent auto-compaction token update", () => {
             sessionStore: { [sessionKey]: sessionEntry },
             sessionKey,
             storePath,
-            replyOperation: operation,
+            opts: { onReplyOperationOwned },
           },
         });
         const result = await withPluginRuntimeGatewayRequestScope(
@@ -445,12 +445,21 @@ describe("runReplyAgent auto-compaction token update", () => {
           },
           turn.run,
         );
+        const operation = expectDefined(
+          onReplyOperationOwned.mock.calls[0]?.[0],
+          "admitted reply operation",
+        );
 
         expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
         expect(runtimeErrorMock).not.toHaveBeenCalled();
         expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
         expectReplyText(result, "Two plus two is four.");
         expect(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        operation.completeWithAfterClearBarrier(delivery.promise, 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
+        // Foreground priority has cleared, but maintenance still waits for actual delivery.
         let maintenanceSettled = false;
         const maintenance = waitForSessionMaintenance(sessionKey).then(() => {
           maintenanceSettled = true;
@@ -458,10 +467,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(maintenanceSettled).toBe(false);
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        operation.completeWithAfterClearBarrier(delivery.promise, 1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
         if (preempted) {
           releaseForeground = await beginForegroundSessionMaintenance(sessionKey);
         }
@@ -504,7 +509,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       } finally {
         vi.useRealTimers();
         delivery.resolve();
-        operation.complete();
+        onReplyOperationOwned.mock.calls[0]?.[0].complete();
         releaseForeground?.();
         await waitForSessionMaintenance(sessionKey);
         setLoggerOverride(null);
@@ -634,12 +639,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         totalTokens: 50_000,
       };
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-      const replyOperation = createReplyOperation({
-        sessionKey,
-        sessionId: sessionEntry.sessionId,
-        resetTriggered: false,
-        upstreamAbortSignal: upstreamAbort.signal,
-      });
+      const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
       let releaseFallback: () => void = () => undefined;
       let markCandidateSettled: () => void = () => undefined;
       const candidateSettled = new Promise<void>((resolve) => {
@@ -691,13 +691,17 @@ describe("runReplyAgent auto-compaction token update", () => {
           sessionStore: { [sessionKey]: sessionEntry },
           sessionKey,
           storePath,
-          replyOperation,
+          opts: { abortSignal: upstreamAbort.signal, onReplyOperationOwned },
         },
       });
 
       try {
         const pending = baseRun.run();
         await candidateSettled;
+        const replyOperation = expectDefined(
+          onReplyOperationOwned.mock.calls[0]?.[0],
+          "admitted reply operation",
+        );
         if (superseded) {
           replyOperation.supersede();
         } else {
@@ -719,7 +723,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         expect(peekSystemEvents(resolveSystemEventQueueKey(sessionKey, "main"))).toEqual([]);
       } finally {
         releaseFallback();
-        replyOperation.complete();
+        onReplyOperationOwned.mock.calls[0]?.[0].complete();
       }
     },
   );

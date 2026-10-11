@@ -2,32 +2,30 @@ export function createNodeHostUpdatePause(params: {
   hasLocalActiveWork: () => boolean;
   hasWorkerActiveWork: () => Promise<boolean> | undefined;
 }) {
-  let updatePause: symbol | undefined;
+  let updatePause = false;
   return {
     get isPaused() {
-      return updatePause !== undefined;
+      return updatePause;
     },
     async tryPauseForUpdate(this: void) {
       if (updatePause || params.hasLocalActiveWork()) {
         return false;
       }
-      // Close invoke admission before the journal read yields. A resumed or
-      // replaced pause cannot be claimed or cleared by this older attempt.
-      const pause = Symbol("node-host-update-pause");
-      updatePause = pause;
+      // The update loop awaits this check before resuming; close invoke admission first.
+      updatePause = true;
       let admitted = false;
       try {
         const workerBusy = await params.hasWorkerActiveWork();
-        admitted = updatePause === pause && !workerBusy && !params.hasLocalActiveWork();
+        admitted = !workerBusy && !params.hasLocalActiveWork();
         return admitted;
       } finally {
-        if (!admitted && updatePause === pause) {
-          updatePause = undefined;
+        if (!admitted) {
+          updatePause = false;
         }
       }
     },
     resumeAfterUpdate(this: void) {
-      updatePause = undefined;
+      updatePause = false;
     },
   };
 }

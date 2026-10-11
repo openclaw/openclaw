@@ -154,19 +154,23 @@ export function removeSessionMember(
         expectedEntry,
       );
       const db = getSessionMemberKysely(database);
-      let deletion = db
+      // SQLite replaces lone surrogates at binding; the expected grant uses decoded row values.
+      if (expected && expected.addedBy !== toUSVString(expected.addedBy)) {
+        return null;
+      }
+      let removal = db
         .deleteFrom("session_members")
         .where("session_key", "=", sessionKey)
         .where("identity_id", "=", normalizedIdentityId);
       if (expected) {
-        deletion = deletion
+        removal = removal
           .where("added_by", "=", expected.addedBy)
           .where("added_at", "=", expected.addedAt);
       }
       const row = withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
         executeSqliteQueryTakeFirstSync(
           database.db,
-          deletion.returning(["identity_id", "added_by", "added_at"]),
+          removal.returning(["identity_id", "added_by", "added_at"]),
         ),
       );
       if (!row) {

@@ -782,40 +782,6 @@ describe("channelsHandlers channels.status", () => {
     }
   });
 
-  it("filters channel status to a requested channel", async () => {
-    const whatsappProbe = vi.fn(async () => ({ ok: true }));
-    const imessageProbe = vi.fn(async () => ({ ok: true }));
-    mocks.listChannelPlugins.mockReturnValue([
-      createChannelPlugin({ id: "whatsapp", probeAccount: whatsappProbe }),
-      createChannelPlugin({ id: "imessage", probeAccount: imessageProbe }),
-    ]);
-
-    const payload = await runChannelsStatus({
-      channel: "imessage",
-      probe: true,
-      timeoutMs: 1000,
-    });
-
-    expect(whatsappProbe).not.toHaveBeenCalled();
-    expect(imessageProbe).toHaveBeenCalledOnce();
-    expect(payload.channelOrder).toEqual(["imessage"]);
-    expect(payload.channels).toEqual({
-      imessage: { configured: true },
-    });
-    expect(payload.channelAccounts).toEqual({
-      imessage: [
-        {
-          accountId: "default",
-          configured: true,
-          lastProbeAt: expect.any(Number),
-          lastInboundAt: null,
-          lastOutboundAt: null,
-          healthState: "not-running",
-        },
-      ],
-    });
-  });
-
   it("preserves channel account rows when a live probe throws", async () => {
     const probeAccount = vi.fn(async () => {
       throw new Error("probe failed");

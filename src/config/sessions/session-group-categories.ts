@@ -7,10 +7,8 @@ import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-ent
 import { publishSessionEntryCacheCategoryUpdate } from "./session-accessor.sqlite-entry-cache.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
-import {
-  applySessionGroupCategoryMutation,
-  prepareSessionGroupCategoryMutation,
-} from "./session-group-categories.kernel.js";
+import { applySessionGroupCategoryMutation } from "./session-group-categories.kernel.js";
+import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
 
@@ -80,8 +78,8 @@ export function updateSessionGroupCategoriesInWorker(params: {
     (capturedScope) => {
       const options = toDatabaseOptions(resolveSqliteScope(capturedScope));
       const database = openOpenClawAgentDatabase(options);
-      const planned = prepareSessionGroupCategoryMutation(database, from);
-      keys = [...planned.keys()];
+      const planned = readSessionGroupCategoryKeys(database, from);
+      keys = planned;
       assertCurrent();
       return runOpenClawAgentWriteTransaction(
         (current) => {
@@ -89,6 +87,7 @@ export function updateSessionGroupCategoriesInWorker(params: {
           return applySessionGroupCategoryMutation(
             current,
             planned,
+            from,
             to,
             capturedScope.env ?? process.env,
           ).length;
