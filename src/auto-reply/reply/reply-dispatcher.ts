@@ -365,6 +365,7 @@ export function createReplyDispatcher(
     info: ReplyDispatchRuntimeInfo,
   ): Promise<{
     settlement: Promise<ReplyDispatchDeliveryOutcome>;
+    deferred?: boolean;
     pendingDelivery?: boolean;
     payload?: ReplyPayload;
   }> => {
@@ -463,6 +464,7 @@ export function createReplyDispatcher(
       pendingFinalizations += finalization ? 1 : 0;
       return {
         payload: deliveredPayload,
+        deferred: Boolean(finalization),
         get pendingDelivery() {
           return pendingDelivery;
         },
@@ -499,21 +501,6 @@ export function createReplyDispatcher(
     }
   };
 
-  const startSerializedDelivery = (
-    input: ReplyDispatchOperation,
-    info: ReplyDispatchRuntimeInfo,
-    shouldDelay: boolean,
-  ) =>
-    scheduleDelivery(async () => {
-      if (shouldDelay) {
-        const delayMs = getHumanDelay(options.humanDelay);
-        if (delayMs > 0) {
-          await sleep(delayMs);
-        }
-      }
-      return await deliverOnce(input, info);
-    });
-
   const enqueue = (kind: ReplyDispatchKind, input: ReplyDispatchOperation) => {
     const payload = input.kind === "prepared" ? input.plan.payload : input.payload;
     const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
@@ -547,7 +534,7 @@ export function createReplyDispatcher(
       }
       return false;
     }
-    const deliveryFallback =
+    let deliveryFallback =
       normalizedPrimary.kind === "deliver" && normalizedFallback?.kind === "deliver"
         ? replaceDispatchPayload(input, normalizedFallback.payload)
         : null;
@@ -566,7 +553,26 @@ export function createReplyDispatcher(
       normalizedInput.kind === "prepared" ? normalizedInput.plan.payload : normalizedInput.payload,
       kind,
     );
-    const delivery = startSerializedDelivery(normalizedInput, dispatchInfo, shouldDelay);
+    const delivery = scheduleDelivery(async () => {
+      if (shouldDelay) {
+        const delayMs = getHumanDelay(options.humanDelay);
+        if (delayMs > 0) {
+          await sleep(delayMs);
+        }
+      }
+      const attempt = await deliverOnce(normalizedInput, dispatchInfo);
+      if (
+        deliveryFallback &&
+        !attempt.deferred &&
+        shouldRetryReplyDispatch(await attempt.settlement) &&
+        !attempt.pendingDelivery
+      ) {
+        const fallback = deliveryFallback;
+        deliveryFallback = null;
+        return await deliverOnce(fallback, dispatchInfo);
+      }
+      return attempt;
+    });
     settlementChain = settlementChain.then(async () => {
       let attempt: Awaited<typeof delivery> | undefined;
       try {
@@ -577,7 +583,10 @@ export function createReplyDispatcher(
           !attempt.pendingDelivery &&
           shouldRetryReplyDispatch(deliveryOutcome)
         ) {
-          attempt = await startSerializedDelivery(deliveryFallback, dispatchInfo, false);
+          // Deferred providers may need the admitted batch to drain before their
+          // finalization can prove no-send; those alternatives join the next batch.
+          const fallback = deliveryFallback;
+          attempt = await scheduleDelivery(() => deliverOnce(fallback, dispatchInfo));
           deliveryOutcome = await attempt.settlement;
         }
         settledCounts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[deliveryOutcome]] += 1;
