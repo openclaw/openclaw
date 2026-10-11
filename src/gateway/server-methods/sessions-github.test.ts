@@ -28,7 +28,7 @@ import type {
 const mocks = vi.hoisted(() => ({
   caller: vi.fn(),
   loadSession: vi.fn(),
-  request: vi.fn<GitHubPublicationCoordinator["requestForSession"]>(),
+  request: vi.fn<GitHubPublicationCoordinator["requestForSessionV2"]>(),
 }));
 
 vi.mock("../../agents/tools/gateway-caller-context.js", async (importOriginal) => ({
@@ -67,7 +67,7 @@ async function invoke(
     params,
     respond,
     context: {
-      githubPublicationService: { requestForSession: mocks.request },
+      githubPublicationService: { requestForSessionV2: mocks.request },
       getRuntimeConfig,
     } as never,
     client:

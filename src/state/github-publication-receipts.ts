@@ -168,6 +168,15 @@ export function withGitHubPublicationDeletionReceipt(
   return withGitHubPublicationReceipt(createAdmission, context, false);
 }
 
+/** Register before presentation observers so every reply sees installed authority facts. */
+export function withGitHubPublicationWorkerReceipt(
+  createAdmission: SqliteWorkerAdmissionFactory,
+  context: OpenClawStateWorkerContext,
+  publish: (facts: unknown) => void,
+): SqliteWorkerAdmissionFactory {
+  return withGitHubPublicationReceipt(createAdmission, context, true, publish);
+}
+
 function withGitHubPublicationReceipt(
   createAdmission: SqliteWorkerAdmissionFactory,
   context: OpenClawStateWorkerContext,

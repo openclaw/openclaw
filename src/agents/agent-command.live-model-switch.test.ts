@@ -421,19 +421,17 @@ vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   resolveEffectiveAgentSkillFilter: () => undefined,
 }));
 
+// mock-isolation: mutable fixtures must stay independent of the process config publication owner.
 vi.mock("../config/runtime-snapshot.js", async () => {
   const { hashRuntimeConfigValue } = await vi.importActual<
     typeof import("../config/runtime-snapshot.js")
   >("../config/runtime-snapshot.js");
-  return {
+  const { createMutableRuntimeSnapshotMock } =
+    await import("./agent-command.runtime-snapshot.test-support.js");
+  return createMutableRuntimeSnapshotMock({
     hashRuntimeConfigValue,
     getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-    // No source snapshot: runtime-source projection no-ops and resolvers read the
-    // provided config directly, matching this suite's pre-projection world.
-    getRuntimeConfigSourceSnapshot: () => null,
-    registerRuntimeConfigSnapshotPreparer: vi.fn(),
-    setRuntimeConfigSnapshot: vi.fn(),
-  };
+  });
 });
 
 vi.mock("../config/sessions.js", () => ({

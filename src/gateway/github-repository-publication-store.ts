@@ -5,6 +5,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type {
   RepositoryGitHubPublicationRow,
   RepositoryGitHubPublicationReceiptTarget,
@@ -158,10 +159,16 @@ export function readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(
   return [...known];
 }
 
+/** @deprecated Use insertRepositoryGitHubPublicationAsync; removed in the next Plugin SDK major. */
 export function insertRepositoryGitHubPublication(
   row: RepositoryGitHubPublicationRow,
   assertCurrent: () => void,
 ) {
+  warnPluginSdkDeprecation({
+    family: "github-publication",
+    method: "insertRepositoryGitHubPublication",
+    replacement: "insertRepositoryGitHubPublicationAsync",
+  });
   return runOpenClawStateWriteTransaction(
     (database) => insertRepositoryGitHubPublicationInDatabase(database, row, assertCurrent),
     undefined,
@@ -236,11 +243,17 @@ export function insertRepositoryGitHubPublicationInDatabase(
   return stored;
 }
 
+/** @deprecated Use bindRepositoryGitHubPublicationCheckpointAsync; removed in the next Plugin SDK major. */
 export function bindRepositoryGitHubPublicationCheckpoint(
   row: RepositoryGitHubPublicationRow,
   checkpoint: Pick<RepositoryGitHubPublicationRow, (typeof checkpointColumns)[number]>,
   assertCurrent: () => void,
 ) {
+  warnPluginSdkDeprecation({
+    family: "github-publication",
+    method: "bindRepositoryGitHubPublicationCheckpoint",
+    replacement: "bindRepositoryGitHubPublicationCheckpointAsync",
+  });
   return runOpenClawStateWriteTransaction(
     (database) =>
       bindRepositoryGitHubPublicationCheckpointInDatabase(database, row, checkpoint, assertCurrent),
@@ -286,11 +299,17 @@ export function bindRepositoryGitHubPublicationCheckpointInDatabase(
   return changed(db, updated);
 }
 
+/** @deprecated Use failRepositoryGitHubPublicationPreparationAsync; removed in the next Plugin SDK major. */
 export function failRepositoryGitHubPublicationPreparation(
   row: RepositoryGitHubPublicationRow,
   nextAction: string,
   assertCurrent: () => void,
 ) {
+  warnPluginSdkDeprecation({
+    family: "github-publication",
+    method: "failRepositoryGitHubPublicationPreparation",
+    replacement: "failRepositoryGitHubPublicationPreparationAsync",
+  });
   return runOpenClawStateWriteTransaction(
     (database) =>
       failRepositoryGitHubPublicationPreparationInDatabase(
@@ -435,11 +454,17 @@ export function claimRepositoryGitHubPublicationInDatabase(
   return changed(db, updated);
 }
 
+/** @deprecated Use claimRepositoryGitHubPublicationAsync; removed in the next Plugin SDK major. */
 export function claimRepositoryGitHubPublication(
   row: RepositoryGitHubPublicationRow,
   instanceId: string,
   authority: { assertCustody: () => void; assertCurrent: () => void },
 ) {
+  warnPluginSdkDeprecation({
+    family: "github-publication",
+    method: "claimRepositoryGitHubPublication",
+    replacement: "claimRepositoryGitHubPublicationAsync",
+  });
   const executionId = randomUUID();
   const claimed = runOpenClawStateWriteTransaction(
     (database) =>
@@ -544,7 +569,13 @@ export function failStaleRepositoryGitHubPublicationInDatabase(
   return undefined;
 }
 
+/** @deprecated Use deferRepositoryGitHubPublicationClaimsAsync; removed in the next Plugin SDK major. */
 export function deferRepositoryGitHubPublicationClaims(requestIds: readonly string[]): void {
+  warnPluginSdkDeprecation({
+    family: "github-publication",
+    method: "deferRepositoryGitHubPublicationClaims",
+    replacement: "deferRepositoryGitHubPublicationClaimsAsync",
+  });
   if (requestIds.length) {
     runOpenClawStateWriteTransaction(
       (database) => deferRepositoryGitHubPublicationClaimsInDatabase(database, requestIds),
@@ -594,46 +625,3 @@ export function terminalRepositoryGitHubPublication(
 export type RepositoryGitHubPublicationExecution = ReturnType<
   typeof claimRepositoryGitHubPublication
 >;
-
-export function failStaleRepositoryGitHubPublication(
-  row: RepositoryGitHubPublicationRow,
-  sessionIsCurrent: () => boolean,
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const current = readRepositoryGitHubPublication(row.request_id);
-      if (
-        !current ||
-        terminalRepositoryGitHubPublication(current) ||
-        current.request_digest !== row.request_digest ||
-        sessionIsCurrent()
-      ) {
-        return;
-      }
-      // Retention preserves the original effects, not authority to publish after
-      // archive/reset. Clearing the execution also fences awaited response writers.
-      const updated = executeSqliteQueryTakeFirstSync(
-        db,
-        query(db)
-          .updateTable(table)
-          .set({
-            status: "failed",
-            error_code: "session_changed",
-            next_action:
-              "Review any recorded GitHub effects, then request publication from a current session.",
-            execution_id: null,
-            gateway_instance_id: null,
-            updated_at_ms: Date.now(),
-          })
-          .where("request_id", "=", row.request_id)
-          .where("request_digest", "=", row.request_digest)
-          .returningAll(),
-      );
-      if (updated) {
-        changed(db, updated);
-      }
-    },
-    undefined,
-    { operationLabel: "github-repository-publication.retire" },
-  );
-}

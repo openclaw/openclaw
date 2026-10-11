@@ -21,10 +21,10 @@ import {
 } from "../../lib/plugins/index.ts";
 import { installPlugin } from "../../lib/plugins/install.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.ts";
+import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.tsx";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
-import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
+import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 
 type PluginMutationSuccess<Result> = (

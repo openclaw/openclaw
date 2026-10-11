@@ -247,12 +247,13 @@ it.each(["finalize", "rollback", "changed" as const])(
           },
         });
         if (outcome === "finalize") {
-          await expect(creation).resolves.toMatchObject({
+          const created = await creation;
+          expect(created).toMatchObject({
             entry: {
-              initializationPending: undefined,
               pluginExtensions: { test: { initialized: true } },
             },
           });
+          expect(created.entry.initializationPending).toBeUndefined();
         } else {
           await expect(creation).rejects.toThrow(
             outcome === "rollback" ? "initializer rejected" : "guarded rollback did not complete",

@@ -2548,7 +2548,7 @@ src/skills/runtime/remote-skills.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
 src/snapshot/git-backup.ts	2
-src/snapshot/local-repository.ts	6
+src/snapshot/local-repository.ts	4
 src/snapshot/manifest.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
@@ -2673,8 +2673,6 @@ ui/src/components/board/board-widget-cell.ts	1
 ui/src/components/board/board-widget-frame.ts	1
 ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
-ui/src/components/browser/browser-panel-render.ts	4
-ui/src/components/browser/browser-panel.ts	1
 ui/src/components/config-form-collection-draft.ts	4
 ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form-structured-draft.ts	2
@@ -2686,10 +2684,8 @@ ui/src/components/confirm-dialog.ts	1
 ui/src/components/connect-command.ts	2
 ui/src/components/desktop/desktop-client.ts	2
 ui/src/components/desktop/desktop-mobile-keyboard.ts	1
-ui/src/components/desktop/desktop-panel.ts	2
 ui/src/components/dock-panel-layout.ts	3
 ui/src/components/exec-approval.ts	1
-ui/src/components/hub-tabs.ts	1
 ui/src/components/input-dialog.ts	1
 ui/src/components/lobster-dex.ts	2
 ui/src/components/login-gate.ts	2
@@ -2700,7 +2696,6 @@ ui/src/components/mcp-app-theme.ts	1
 ui/src/components/mcp-server-form.ts	1
 ui/src/components/model-picker.ts	1
 ui/src/components/onboarding-memory-import.ts	1
-ui/src/components/panel-tab-strip.ts	4
 ui/src/components/select-picker.ts	2
 ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	1
@@ -2803,7 +2798,6 @@ ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/debug/view.ts	3
 ui/src/pages/labs/labs-registry.ts	4
-ui/src/pages/logs/view.ts	2
 ui/src/pages/memory-import/view.ts	2
 ui/src/pages/new-session/draft-place-browser.ts	2
 ui/src/pages/new-session/place-browser.ts	1
@@ -2812,8 +2806,6 @@ ui/src/pages/plugin/logbook-view.ts	1
 ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
-ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	4
 ui/src/pages/usage/view-overview.ts	2
 ui/src/pages/usage/view.ts	5
-ui/src/pages/worktrees/worktrees-page.ts	2

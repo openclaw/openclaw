@@ -2,7 +2,9 @@ import type { GitHubPublicationSourcePredicate } from "./github-publication-sour
 import type {
   GitHubPublicationInsert,
   PersonalPublicationMutation,
+  PublicationMaintenanceMutation,
   PublicationMutationReceipt,
+  PublicationReadOperations,
   RepositoryPublicationMutation,
   SharedPublicationMutation,
 } from "./github-publication-worker.types.js";
@@ -12,7 +14,11 @@ type MutationInput<Input> = Input & {
   source?: GitHubPublicationSourcePredicate;
 };
 
-export type PublicationWorkerOperations = {
+export type PublicationWorkerOperations = PublicationReadOperations & {
+  "githubPublications.maintenance": {
+    input: PublicationMaintenanceMutation & { operationId: string };
+    output: PublicationMutationReceipt;
+  };
   "githubPublications.insert": {
     input: GitHubPublicationInsert & {
       operation: "insert";
