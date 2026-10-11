@@ -1912,6 +1912,7 @@
   "ui/src/lib/sessions/recover.ts",
   "ui/src/lib/sessions/route-navigation.ts",
   "ui/src/lib/sessions/session-archive-state.ts",
+  "ui/src/lib/sessions/session-boot-roster-schema.ts",
   "ui/src/lib/sessions/session-boot-roster.ts",
   "ui/src/lib/sessions/session-boot-snapshot.ts",
   "ui/src/lib/sessions/session-deletions.ts",
