@@ -53,12 +53,9 @@ export class PluginInstance {
   private replacementReserved = false;
   private readonly retainedWork = new Set<object>();
   private readonly calls = new Map<object, PluginInstanceCall>();
+  private callsExpired = false;
   private forcedRetirement = false;
   private disposalFailures?: Set<unknown>;
-  private timedOutCalls?: {
-    remaining: Set<object>;
-    settled: ReturnType<typeof createDeferredCore<void>>;
-  };
   private readonly consumers = new Map<
     object,
     {
@@ -135,7 +132,12 @@ export class PluginInstance {
   }
 
   private hasToken(token: object): boolean {
-    return this.calls.has(token) || this.consumers.get(token)?.active === true;
+    const call = this.calls.get(token);
+    return (
+      (call !== undefined &&
+        (call.cleanup || (!this.forcedRetirement && (call.ownerJoined || !this.callsExpired)))) ||
+      this.consumers.get(token)?.active === true
+    );
   }
 
   private activeCall(scope = invocation.getStore()) {
@@ -150,13 +152,13 @@ export class PluginInstance {
     return this.activeCall() !== undefined;
   }
 
-  /** A reload has reserved this instance and is draining its admitted work. */
+  /** The reload is waiting for this instance's live work. */
   get replacementPending(): boolean {
     return this.replacementReserved;
   }
 
   holdsPendingReplacement(token: object): boolean {
-    return this.replacementReserved && this.hasToken(token);
+    return this.replacementPending && this.hasToken(token);
   }
 
   run<T>(run: () => T): T {
@@ -212,9 +214,6 @@ export class PluginInstance {
 
   /** Track finite host work without granting invocation authority or joining disposal. */
   retainWork(): () => void {
-    if (this.replacementReserved) {
-      throw new Error(`Plugin ${this.pluginId} replacement is in progress`);
-    }
     const token = {};
     this.retainedWork.add(token);
     return () => {
@@ -236,11 +235,11 @@ export class PluginInstance {
   }
 
   /** Observe admitted work without closing callbacks or idle publication custody. */
-  async waitForRetainedWork(
+  waitForRetainedWork(
     signal: AbortSignal,
     { includeConsumers = true, includeCalls = false } = {},
   ): Promise<void> {
-    await waitForPluginInstanceSettlement(
+    return waitForPluginInstanceSettlement(
       this.pluginId,
       this.waiters,
       () =>
@@ -251,8 +250,8 @@ export class PluginInstance {
   }
 
   /** Observe when a pre-stop replacement drain would pass: no retained work or calls, cleanup included. */
-  async waitForIdle(signal: AbortSignal): Promise<void> {
-    await waitForPluginInstanceSettlement(
+  waitForIdle(signal: AbortSignal): Promise<void> {
+    return waitForPluginInstanceSettlement(
       this.pluginId,
       this.waiters,
       () => this.calls.size === 0 && this.retainedWorkCount === 0,
@@ -260,23 +259,16 @@ export class PluginInstance {
     );
   }
 
-  /** Reserve replacement atomically before host owners invalidate or stop this instance. */
+  /** Refuse a caller-dependent reload before stopping its serving instance. */
   reserveReplacement(): () => void {
     if (this.hasActiveCall) {
       throw new Error(
         `Plugin ${this.pluginId} cannot replace itself from its own active call; retry after the call finishes.`,
       );
     }
-    if (this.replacementReserved) {
-      throw new Error(`Plugin ${this.pluginId} replacement is in progress`);
-    }
     this.replacementReserved = true;
-    let released = false;
     return () => {
-      if (!released) {
-        released = true;
-        this.replacementReserved = false;
-      }
+      this.replacementReserved = false;
     };
   }
 
@@ -289,10 +281,7 @@ export class PluginInstance {
     const current = this.activeCall();
     const parent = current && this.consumers.get(current.token);
     // Only an exact live retained consumer can derive admission after ordinary closure.
-    if (
-      (this.replacementReserved && parent?.kind !== "work") ||
-      ((!this.accepting || this.owner?.revoked) && !parent?.active)
-    ) {
+    if ((!this.accepting || this.owner?.revoked) && !parent?.active) {
       throw new Error(`Plugin ${this.pluginId} is retiring`);
     }
     const released = createDeferredCore();
@@ -321,19 +310,15 @@ export class PluginInstance {
           // Close operation callbacks before entering a separate host teardown token.
           // Its release must not join the disposal waiting on this physical hold.
           token.active = false;
-          const completion = createDeferredCore();
-          closing = completion.promise.finally(release);
-          try {
-            completion.resolve(
+          closing = new Promise<void>((resolve) => {
+            resolve(
               this.invoke(
                 cleanup,
                 this.lease({ cleanup: true, registry: token.registry }),
                 this.disposalFailures,
               ),
             );
-          } catch (error) {
-            completion.reject(error);
-          }
+          }).finally(release);
         }
         return closing ?? Promise.reject(new Error(`Plugin ${this.pluginId} consumer is closed`));
       },
@@ -421,9 +406,7 @@ export class PluginInstance {
     pluginInvocationContext.getStore()?.lookup(this);
     const current = invocation.getStore();
     const call =
-      current?.instance === this && current.token === token
-        ? current
-        : { instance: this, token, parent: current };
+      current?.instance === this && current.token === token ? current : { instance: this, token };
     if (!this.owner) {
       const enter = () => invocation.run(call, run);
       // Deferred setup imports use the same SDK resolver facts as their initial load.
@@ -473,11 +456,6 @@ export class PluginInstance {
       token,
       release: () => {
         this.calls.delete(token);
-        const timedOut = this.timedOutCalls;
-        if (timedOut?.remaining.delete(token) && timedOut.remaining.size === 0) {
-          this.timedOutCalls = undefined;
-          timedOut.settled.resolve();
-        }
         this.waiters.forEach((wake) => wake());
         // Earlier borrowers may feed other calls or hand off a stream. Only the
         // last borrower joins disposal; cleanup callbacks cannot await themselves.
@@ -585,23 +563,6 @@ export class PluginInstance {
     return this.disposal !== undefined;
   }
 
-  private trackTimedOutCalls(): Promise<void> {
-    const { remaining, settled } = this.timedOutCalls ?? {
-      remaining: new Set<object>(),
-      settled: createDeferredCore(),
-    };
-    for (const token of this.calls.keys()) {
-      remaining.add(token);
-    }
-    if (remaining.size) {
-      // Revoking admission below cannot stand in for these leases actually returning.
-      this.timedOutCalls = { remaining, settled };
-    } else {
-      settled.resolve();
-    }
-    return settled.promise;
-  }
-
   resume(): void {
     this.accepting ||= !this.disposal && !this.controller.signal.aborted && !this.owner?.revoked;
   }
@@ -630,15 +591,10 @@ export class PluginInstance {
       this.disposal = new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           const fact = {
-            activeCallCount: new Set([
-              ...this.calls.keys(),
-              ...(this.timedOutCalls?.remaining ?? []),
-            ]).size,
+            activeCallCount: this.calls.size,
             retainedConsumerCount: this.consumers.size,
           };
           this.forcedRetirement = true;
-          void this.trackTimedOutCalls();
-          this.revokeOrdinaryCalls(false);
           // Admitted consumers keep their own authority until the host closes or releases them.
           this.abortDisposal(work);
           const error = new PluginInstanceDrainTimeoutError(
@@ -656,14 +612,6 @@ export class PluginInstance {
       void this.disposal.catch(() => {});
     }
     return this.activeCall() ? Promise.resolve({ errors: [] }) : this.disposal;
-  }
-
-  private revokeOrdinaryCalls(keepOwnerJoined: boolean): void {
-    for (const [token, call] of this.calls) {
-      if (!call.cleanup && !(keepOwnerJoined && call.ownerJoined)) {
-        this.calls.delete(token);
-      }
-    }
   }
 
   private abortDisposal(work: AsyncWorkScope): void {
@@ -694,16 +642,18 @@ export class PluginInstance {
       await this.waitForCalls((token) => this.calls.get(token)?.ownerJoined === true);
     } catch (error) {
       failures.push(
-        new PluginInstanceDrainTimeoutError(formatErrorMessage(error), this.trackTimedOutCalls(), {
-          cause: error,
-        }),
+        new PluginInstanceDrainTimeoutError(
+          formatErrorMessage(error),
+          this.waitForCalls(() => false, new AbortController().signal),
+          { cause: error },
+        ),
       );
     }
     // Revoke ordinary call tokens even when they miss their drain deadline.
     // Owner-joined work keeps its token until it settles. Logical consumers
     // retain only their own scope through engine disposal; physical cleanup
     // waits for those consumers to close.
-    this.revokeOrdinaryCalls(true);
+    this.callsExpired = true;
     while (this.consumers.size > 0) {
       await Promise.all([...this.consumers.values()].map(({ completion }) => completion));
     }
@@ -742,13 +692,8 @@ export class PluginInstance {
     terminalFailures: DisposalFailures,
   ): Promise<PluginInstanceDisposalResult> {
     const { failures, hostFailure, moduleCleanups } = await cleanupCompletion;
-    // Owner-joined work kept its admission through cleanup; module teardown still waits for it.
-    await this.waitForCalls(
-      (token) => !this.calls.get(token)?.ownerJoined,
-      new AbortController().signal,
-    );
-    // Logical expiry revokes results; it cannot delete code still used by the original calls.
-    await this.timedOutCalls?.settled.promise;
+    // Expired calls lose authority, but retain their code until they actually return.
+    await this.waitForCalls(() => false, new AbortController().signal);
     for (const cleanup of moduleCleanups) {
       try {
         await this.invoke(cleanup, this.lease({ cleanup: true }));

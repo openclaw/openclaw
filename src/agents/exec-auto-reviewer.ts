@@ -350,19 +350,14 @@ export function createModelExecAutoReviewer(params: {
         );
       }
       if (hasReviewerDirective(input)) {
-        return "kind" in input
-          ? {
-              decision: "ask",
-              risk: "medium",
-              rationale:
-                "exec reviewer deferred because the command contains reviewer-directed text",
-            }
-          : {
-              decision: "deny",
-              risk: "high",
-              rationale:
-                "exec reviewer denied the command because it contains reviewer-directed text",
-            };
+        const widget = "kind" in input;
+        return {
+          decision: widget ? "ask" : "deny",
+          risk: widget ? "medium" : "high",
+          rationale: widget
+            ? "exec reviewer deferred because the command contains reviewer-directed text"
+            : "exec reviewer denied the command because it contains reviewer-directed text",
+        };
       }
       completionController = new AbortController();
       const signal = params.signal

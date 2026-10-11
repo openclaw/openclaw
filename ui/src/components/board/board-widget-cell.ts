@@ -75,6 +75,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   private context?: ApplicationContext;
 
   @property({ attribute: false }) widget?: BoardWidget;
+  @property({ type: Number }) boardRevision = 0;
   @property({ attribute: false }) rect?: BoardGridRect;
   @property({ attribute: false }) contentHeightPx?: number;
   @property({ type: Boolean }) fitAutoContent = false;
@@ -133,9 +134,18 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   }
 
   override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has("boardRevision")) {
+      this.actionError = "";
+    }
     const previousWidget = changed.get("widget");
     if (previousWidget && previousWidget !== this.widget) {
-      this.actionError = "";
+      if (
+        previousWidget.name !== this.widget?.name ||
+        previousWidget.instanceId !== this.widget?.instanceId ||
+        previousWidget.revision !== this.widget?.revision
+      ) {
+        this.actionError = "";
+      }
       this.frame.widgetChanged(previousWidget, this.widget);
     }
     this.appView.update(this.widget, this.callbacks);

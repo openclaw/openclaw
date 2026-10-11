@@ -15,6 +15,7 @@ import { createCronOutputCommand } from "./output-mode.js";
 import { registerCronMutationOptions } from "./register.cron-options.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
+  assertCronCliJobSpec,
   assertCronTimeoutSupported,
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
@@ -262,23 +263,7 @@ export function registerCronAddCommand(cron: Command) {
               throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
             }
 
-            if (
-              sessionTarget === "main" &&
-              resolvedPayload.kind !== "systemEvent" &&
-              resolvedPayload.kind !== "script"
-            ) {
-              throw new CronCliError("Main jobs require --system-event or --script.");
-            }
-            if (
-              resolvedPayload.kind === "script" &&
-              sessionTarget !== "main" &&
-              sessionTarget !== "isolated"
-            ) {
-              throw new CronCliError("Script jobs require --session main or --session isolated.");
-            }
-            if (isIsolatedLikeSessionTarget && !isDeliveryPayload) {
-              throw new CronCliError("Isolated jobs require --message, --command, or --script.");
-            }
+            await assertCronCliJobSpec({ sessionTarget, payload: resolvedPayload });
             const supportsChatDelivery = isIsolatedLikeSessionTarget && isDeliveryPayload;
             if ((opts.announce || typeof opts.deliver === "boolean") && !supportsChatDelivery) {
               throw new CronCliError(

@@ -9,6 +9,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
@@ -178,11 +179,15 @@ describe("chat pane assistant identity snapshots", () => {
     try {
       pane.connectedCallback();
       await vi.waitFor(() =>
-        expect(subscribeMessages).toHaveBeenCalledWith("global", {
+        expect(pane.state.chatSessionMessageSubscription).toMatchObject({
+          key: "global",
           agentId: "main",
-          includeApprovals: true,
         }),
       );
+      expect(subscribeMessages).toHaveBeenCalledWith("global", {
+        agentId: "main",
+        includeApprovals: true,
+      });
       pane.state.chatSessionApprovalQueue = [
         {
           id: "stale-main-approval",
@@ -541,7 +546,7 @@ describe("global chat pane feature ownership", () => {
           },
         });
       }
-      const container = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(createApplicationContextProvider(context));
       const draw = async () => {
         await pane.updateComplete;
         render(renderChat(pane.chatProps!), container);

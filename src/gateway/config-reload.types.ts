@@ -23,6 +23,8 @@ export type GatewayConfigReloadCandidate = {
 
 export type GatewayConfigReloadTransactionOwnership = {
   isCurrent: () => boolean;
+  /** A queued successor can finish model preparation without revoking this transaction. */
+  hasNewerConfig?: () => boolean;
   checkpoint: () => Promise<void>;
   withRestartPreparation: <T>(
     run: (ownership: GatewayConfigReloadTransactionOwnership) => Promise<T>,

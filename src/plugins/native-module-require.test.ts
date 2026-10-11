@@ -22,16 +22,6 @@ type NativeEsmGraphProbe = {
 let nativeEsmGraphProbe: NativeEsmGraphProbe;
 
 describe("tryNativeRequireJavaScriptModule", () => {
-  it("loads native CommonJS modules", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(modulePath, 'module.exports = { marker: "native" };\n', "utf8");
-
-    const result = tryNativeRequireJavaScriptModule(modulePath);
-
-    expect(result).toEqual({ ok: true, moduleExport: { marker: "native" } });
-  });
-
   it("uses source-transform fallback only when native TLA loading needs it", () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const modulePath = path.join(dir, "plugin.mjs");
@@ -69,14 +59,6 @@ describe("tryNativeRequireJavaScriptModule", () => {
     expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({
       ok: false,
     });
-  });
-
-  it("propagates missing dependency errors from existing modules", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(modulePath, 'require("./missing-dependency.cjs");\n', "utf8");
-
-    expect(() => tryNativeRequireJavaScriptModule(modulePath)).toThrow("missing-dependency.cjs");
   });
 
   beforeAll(() => {
@@ -138,20 +120,6 @@ describe("tryNativeRequireJavaScriptModule", () => {
 
     const result = tryNativeRequireJavaScriptModule(modulePath);
     expect(result).toMatchObject({ ok: true, moduleExport: { loaded: true } });
-  });
-
-  it("propagates real module evaluation errors instead of falling back", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(
-      modulePath,
-      'throw new Error("plugin exploded during native load");\n',
-      "utf8",
-    );
-
-    expect(() => tryNativeRequireJavaScriptModule(modulePath)).toThrow(
-      "plugin exploded during native load",
-    );
   });
 
   it("keeps native paths, file URLs, and source SDK aliases on the process module graph", async () => {

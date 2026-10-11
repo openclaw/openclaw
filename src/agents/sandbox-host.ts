@@ -144,46 +144,40 @@ function normalizeDomains(
   const allowedProtocols = options?.allowWebSocket
     ? new Set(["http:", "https:", "ws:", "wss:"])
     : new Set(["http:", "https:"]);
-  const entries = value
-    .filter((entry): entry is string => {
-      if (
-        typeof entry !== "string" ||
-        entry.length === 0 ||
-        entry.length > 2048 ||
-        entry !== entry.trim()
-      ) {
-        return false;
-      }
-      if (containsAsciiControlCharacter(entry)) {
-        return false;
-      }
-      if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
-        return true;
-      }
-      const parsed = URL.parse(entry);
-      if (
-        !parsed ||
-        !allowedProtocols.has(parsed.protocol) ||
-        parsed.username !== "" ||
-        parsed.password !== "" ||
-        parsed.pathname !== "/" ||
-        parsed.search !== "" ||
-        parsed.hash !== ""
-      ) {
-        return false;
-      }
-      // URL parsing validates bracketed IPv6. MCP Apps additionally support one
-      // leading wildcard label, while board declarations arrive as exact hosts.
-      return (
-        /^\[[0-9A-Fa-f:.]+\]$/u.test(parsed.hostname) ||
-        /^(?:\*\.)?[A-Za-z0-9.-]+$/u.test(parsed.hostname)
-      );
-    })
-    .map((entry) =>
-      options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")
-        ? entry
-        : new URL(entry).origin,
-    );
+  const entries = value.flatMap((entry) => {
+    if (
+      typeof entry !== "string" ||
+      entry.length === 0 ||
+      entry.length > 2048 ||
+      entry !== entry.trim()
+    ) {
+      return [];
+    }
+    if (containsAsciiControlCharacter(entry)) {
+      return [];
+    }
+    if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
+      return [entry];
+    }
+    const parsed = URL.parse(entry);
+    if (
+      !parsed ||
+      !allowedProtocols.has(parsed.protocol) ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
+      return [];
+    }
+    // URL parsing validates bracketed IPv6. MCP Apps additionally support one
+    // leading wildcard label, while board declarations arrive as exact hosts.
+    return /^\[[0-9A-Fa-f:.]+\]$/u.test(parsed.hostname) ||
+      /^(?:\*\.)?[A-Za-z0-9.-]+$/u.test(parsed.hostname)
+      ? [parsed.origin]
+      : [];
+  });
   return entries.length > 0 ? entries : undefined;
 }
 

@@ -16,11 +16,8 @@ type CatalogSchedule = {
   closed: AbortController;
 };
 type ExecutionScope = {
-  schedule: CatalogSchedule;
-  exclusive: boolean;
   active: boolean;
   settlement?: Promise<void>;
-  parent?: ExecutionScope;
 };
 
 // Refs survive client-tool append and are shared by every cell in an admitted run.
@@ -83,19 +80,7 @@ export async function runScheduledToolSearchCall<T>(params: {
     throw new ToolInputError("Tool Search catalog is unavailable for this run.");
   }
   const schedule = schedules.get(owner) ?? createSchedule(owner);
-  const mode = params.entry.tool.executionMode;
-  const exclusive = mode === "sequential";
-  const parent = executionScope.getStore();
-  let ancestor = parent;
-  while (ancestor && (!ancestor.active || ancestor.schedule !== schedule)) {
-    ancestor = ancestor.parent;
-  }
-  if (
-    ancestor &&
-    (ancestor.exclusive || exclusive || schedule.queue.some((entry) => entry.exclusive))
-  ) {
-    throw new ToolInputError("Reentrant tool call would wait on its own catalog execution.");
-  }
+  const exclusive = params.entry.tool.executionMode === "sequential";
   const admission: Admission = { ready: createDeferredCore(), exclusive, started: false };
   // Admit before schema compilation or hooks can reorder callers. Only the
   // contiguous parallel prefix may pass a queued exclusive invocation.
@@ -109,13 +94,17 @@ export async function runScheduledToolSearchCall<T>(params: {
     signals.push(params.signal);
   }
   const signal = AbortSignal.any(signals);
-  const scope: ExecutionScope = { schedule, exclusive, active: false, parent };
+  const scope: ExecutionScope = { active: false };
   try {
     // Queued cancellation must settle even if a predecessor ignores abort.
     await racePromiseWithAbortSignal(admission.ready.promise, signal);
     signal.throwIfAborted();
     const current = owner.current?.entries.find((entry) => entry.id === params.entry.id);
-    if (!current || current.tool !== params.entry.tool || current.tool.executionMode !== mode) {
+    if (
+      !current ||
+      current.tool !== params.entry.tool ||
+      (current.tool.executionMode === "sequential") !== exclusive
+    ) {
       throw new ToolInputError("Queued tool changed or is no longer available in this run.");
     }
     scope.active = true;

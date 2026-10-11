@@ -1,4 +1,4 @@
-import { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
+import type { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
@@ -37,8 +37,11 @@ const getNodeConversationState = defineCodexBuildState(
   () => ({ queue: new KeyedAsyncQueue() }),
 );
 
-function isCurrentPublicBinding(binding: PluginConversationBinding): boolean {
-  const inspection = inspectConversationBinding({
+function isCurrentPublicBinding(
+  binding: PluginConversationBinding,
+  inspect: typeof inspectConversationBinding,
+): boolean {
+  const inspection = inspect({
     channel: binding.channel,
     accountId: binding.accountId,
     conversationId: binding.conversationId,
@@ -86,7 +89,9 @@ export async function handleCodexConversationInboundClaim(
           if (!resume) {
             return "Codex CLI node binding is unavailable because Gateway node runtime is not attached.";
           }
-          if (!isCurrentPublicBinding(publicBinding)) {
+          const { inspectConversationBinding } =
+            await import("openclaw/plugin-sdk/conversation-binding-inspection-runtime");
+          if (!isCurrentPublicBinding(publicBinding, inspectConversationBinding)) {
             return "This Codex conversation was detached or changed before its message could run.";
           }
           const resumed = await resume({
@@ -112,9 +117,11 @@ export async function handleCodexConversationInboundClaim(
     const result = await withCodexConversationThreadActivity(data.bindingId, async () => {
       const expected = await pendingExpected;
       const { runBoundTurnWithMissingThreadRecovery } = await import("./conversation-binding.js");
+      const { inspectConversationBinding } =
+        await import("openclaw/plugin-sdk/conversation-binding-inspection-runtime");
       const current = options.bindingStore.read(identity);
       if (
-        !isCurrentPublicBinding(publicBinding) ||
+        !isCurrentPublicBinding(publicBinding, inspectConversationBinding) ||
         (expected &&
           (!current ||
             current.threadId !== expected.threadId ||

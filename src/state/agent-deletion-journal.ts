@@ -460,24 +460,27 @@ export function completeAgentDeletionJournalInDatabase(
   const id = normalizeAgentId(agentId);
   assertAgentDeletionJournalAvailable(database.db);
   const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-  const result = executeSqliteQuerySync(
+  const completed = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .updateTable("agent_deletion_journal")
       .set({ cleanup_completed: 1 })
       .where("agent_id", "=", id)
-      .where("operation_id", "=", operationId),
+      .where("operation_id", "=", operationId)
+      .returning("database_paths_json"),
   );
-  const completed = Number(result.numAffectedRows ?? 0) > 0;
   // The journal already fences authority. Keep creation history through refusals and
   // partial cleanup, and remove it only when this exact deletion owner completes.
   if (completed) {
-    const journal = readAgentDeletionJournalInDatabase(database, id);
-    resolveAgentDeletionRecoveryHolds(database, id, journal?.databasePaths ?? []);
+    resolveAgentDeletionRecoveryHolds(
+      database,
+      id,
+      parseAgentDeletionDatabasePaths(completed.database_paths_json),
+    );
     deleteAgentProvenanceForAgent(database.db, id);
     sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   }
-  return completed;
+  return completed !== undefined;
 }
 
 /** The caller owns journal authority, transaction admission, and committed publication. */

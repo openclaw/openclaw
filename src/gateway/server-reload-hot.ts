@@ -2,6 +2,7 @@ import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { listAgentIds } from "../agents/agent-roster.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeConfig,
   beginPreparedModelRuntimePluginDrain,
@@ -429,11 +430,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         const message = runtimeCommitted
           ? `config hot reload committed with unrecovered ${surface} failure${detail}; gateway restart recovery is unavailable; runtime may be inconsistent`
           : `config hot reload failed before commit during ${surface}${detail}; gateway restart recovery is unavailable`;
-        if (params.logReload.error) {
-          params.logReload.error(message);
-        } else {
-          params.logReload.warn(message);
-        }
+        const logFailure = params.logReload.error ?? params.logReload.warn;
+        logFailure(message);
         if (runtimeCommitted) {
           throw new GatewayHotReloadRecoveryError(surface);
         }
@@ -559,13 +557,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           isCurrent,
           !runtimeCommitted,
         );
-        // A committed owner must finish its model/channel tail before the next config runs.
-        // Supersession ends this wait: a newer writer may itself be awaiting that next reload.
+        // The committed owner finishes its channel/model tail before the next config runs.
         pluginReloadAborted = waitCancelled && isPluginReloadAborted();
       }
       if (pluginReloadAborted) {
-        // Only an uncommitted reload can transfer its receipt to the watcher. After
-        // commit, same-content replay may be a no-op and cannot finish the interrupted tail.
+        // Cancellation before commit leaves its receipt available to a queued successor.
         throw createReloadCancellationError(
           !runtimeCommitted && publication?.isCurrent() === false,
         );
@@ -641,12 +637,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     } catch (err) {
       if (
-        publication?.isCurrent() === false &&
-        !isRestartRetryStopped() &&
-        !plan.pluginLifecycle &&
-        !plan.disposeMcpRuntimes &&
-        !plan.restartGmailWatcher &&
-        channelReloadTargets().size === 0
+        err instanceof PreparedModelRuntimePublicationSupersededError ||
+        ((publication?.hasNewerConfig?.() || publication?.isCurrent() === false) &&
+          !isRestartRetryStopped() &&
+          !plan.pluginLifecycle &&
+          !plan.disposeMcpRuntimes &&
+          !plan.restartGmailWatcher &&
+          channelReloadTargets().size === 0)
       ) {
         // The successor rebuilds stale owners even when its own edit is model-neutral.
         modelRuntime.defer();

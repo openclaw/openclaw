@@ -117,9 +117,10 @@ The command exits nonzero on an error-level finding, so a deployer can reject
 the candidate before cutover without changing Codex state or app-server
 settings.
 
-Executable handoff and native-config fencing coordinate clients inside one
-running Gateway process. Restart the Gateway after another process changes the
-native Codex plugin config.
+In-flight work can finish with the executable and native configuration it
+started with; concurrent changes are best effort. New client acquisitions use
+the current executable selection. Restart the Gateway after another process
+changes the native Codex plugin config.
 
 Supervision resolves a separate connection. With no explicit
 `appServer` connection settings, it uses managed stdio with `homeScope: "user"`;
