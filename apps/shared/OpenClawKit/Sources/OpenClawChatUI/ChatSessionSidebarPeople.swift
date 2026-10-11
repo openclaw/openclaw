@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import Observation
 import enum OpenClawKit.GatewayPayloadDecoding
@@ -30,60 +29,60 @@ public struct OpenClawSidebarPeopleActions {
 @MainActor
 @Observable
 public final class OpenClawChatSidebarPeople {
-    struct User: Decodable, Sendable {
-        struct Identity: Decodable, Sendable {
-            let type: String
-            let id: String
+    public struct User: Decodable, Sendable {
+        public struct Identity: Decodable, Sendable {
+            public let type: String
+            public let id: String
         }
 
-        let id: String
-        let identity: Identity?
-        let name: String?
-        let email: String?
-        let avatarUrl: String?
+        public let id: String
+        public let identity: Identity?
+        public let name: String?
+        public let email: String?
+        public let avatarUrl: String?
 
-        var key: String {
+        public var key: String {
             self.identity.map { "profile:\($0.id)" } ?? "raw:\(self.id)"
         }
     }
 
-    struct Person: Identifiable, Sendable {
-        let user: User
-        let entries: [PresenceEntry]
-        let watchedSessions: Set<String>
-        var id: String {
+    public struct Person: Identifiable, Sendable {
+        public let user: User
+        public let entries: [PresenceEntry]
+        public let watchedSessions: Set<String>
+        public var id: String {
             self.user.key
         }
 
-        var profileID: String? {
+        public var profileID: String? {
             self.user.identity?.id
         }
 
-        var label: String {
+        public var label: String {
             // ui/src/lib/presence-users.ts:43: shared credentials must not imply one identified person.
             self.user.id == "gateway-owner"
                 ? String(localized: "Shared owner") : self.user.name ?? self.user.email ?? self.user.id
         }
 
-        var lastActivity: Int? {
+        public var lastActivity: Int? {
             self.entries.compactMap(\.lastactivityat).max()
         }
 
-        var onlineSince: Int? {
+        public var onlineSince: Int? {
             self.entries.compactMap(\.onlinesince).min()
         }
 
         // ui/src/lib/presence-users.ts:53: heartbeat timestamps are not human activity.
-        func activity(at now: Date) -> Activity {
+        public func activity(at now: Date) -> Activity {
             guard let lastActivity else { return .unknown }
             return now.timeIntervalSince1970 * 1000 - Double(lastActivity) < 120_000 ? .active : .idle
         }
     }
 
-    enum Activity: Int {
+    public enum Activity: Int {
         case active, idle, unknown
 
-        var label: String {
+        public var label: String {
             switch self {
             case .active: String(localized: "Online · Active")
             case .idle: String(localized: "Online · Idle")
@@ -92,10 +91,10 @@ public final class OpenClawChatSidebarPeople {
         }
     }
 
-    private(set) var people: [Person] = []
-    private(set) var selfKey: String?
-    private(set) var counts: [String: SessionOwnerSessionCount]?
-    private(set) var countsFailed = false
+    public private(set) var people: [Person] = []
+    public private(set) var selfKey: String?
+    public private(set) var counts: [String: SessionOwnerSessionCount]?
+    public private(set) var countsFailed = false
     public private(set) var presenceFailed = false
     public private(set) var activityTime = Date()
     private var connectionID: String?
@@ -131,6 +130,16 @@ public final class OpenClawChatSidebarPeople {
         self.globalScope = (defaults?["mainSessionKey"]?.value as? String)?.lowercased() == "global"
         self.connectionID = hello.server["connId"]?.value as? String
         self.replacePresence(hello.snapshot.presence)
+    }
+
+    /// Starts a presence-only consumer whose transport does not expose the hello snapshot.
+    /// The caller owns connection lifetime and loads system-presence once, then applies pushed snapshots.
+    public func beginConnection(defaultAgentID: String = "main", mainSessionKey: String = "main") {
+        self.disconnect()
+        self.connectionID = UUID().uuidString
+        self.defaultAgentID = defaultAgentID.lowercased()
+        self.mainKey = mainSessionKey.split(separator: ":").last.map(String.init)?.lowercased() ?? "main"
+        self.globalScope = mainSessionKey.lowercased() == "global"
     }
 
     @discardableResult
@@ -234,12 +243,12 @@ public final class OpenClawChatSidebarPeople {
         }
     }
 
-    func workload(for person: Person) -> SessionOwnerSessionCount? {
+    public func workload(for person: Person) -> SessionOwnerSessionCount? {
         guard let counts, let id = person.profileID else { return nil }
         return counts[id] ?? SessionOwnerSessionCount(profileid: id, _open: 0, running: 0)
     }
 
-    func online(at now: Date? = nil, expanded: Bool) -> [Person] {
+    public func online(at now: Date? = nil, expanded: Bool) -> [Person] {
         let now = now ?? self.activityTime
         return self.people.sorted { lhs, rhs in
             let leftActivity = lhs.activity(at: now).rawValue
@@ -263,6 +272,41 @@ public final class OpenClawChatSidebarPeople {
         }
     }
 
+    public enum StatusFilter: String, CaseIterable, Sendable {
+        case all, running
+    }
+
+    public enum SortMode: String, CaseIterable, Sendable {
+        case presence, running, open, name
+    }
+
+    /// Mirrors app-sidebar-online.ts: explicit count sorts cross presence groups,
+    /// unknown counts follow known zero counts, and the running filter requires evidence.
+    public func online(status: StatusFilter, sort: SortMode, at now: Date? = nil) -> [Person] {
+        let now = now ?? self.activityTime
+        return self.people.filter { status == .all || (self.workload(for: $0)?.running ?? 0) > 0 }
+            .sorted { lhs, rhs in
+                switch sort {
+                case .presence:
+                    let left = lhs.activity(at: now).rawValue
+                    let right = rhs.activity(at: now).rawValue
+                    if left != right { return left < right }
+                    let leftRunning = (self.workload(for: lhs)?.running ?? 0) > 0
+                    let rightRunning = (self.workload(for: rhs)?.running ?? 0) > 0
+                    if leftRunning != rightRunning { return leftRunning }
+                case .running, .open:
+                    let left = sort == .running ? self.workload(for: lhs)?.running : self.workload(for: lhs)?._open
+                    let right = sort == .running ? self.workload(for: rhs)?.running : self.workload(for: rhs)?._open
+                    if (left ?? -1) != (right ?? -1) { return (left ?? -1) > (right ?? -1) }
+                case .name:
+                    break
+                }
+                let order = lhs.label.compare(
+                    rhs.label, options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+                return order == .orderedSame ? lhs.id < rhs.id : order == .orderedAscending
+            }
+    }
+
     func viewers(for sessionKey: String, excludingProfileIDs: Set<String> = []) -> [Person] {
         self.people.filter {
             $0.id != self.selfKey && $0.watchedSessions.contains(sessionKey) &&
@@ -276,7 +320,7 @@ public final class OpenClawChatSidebarPeople {
         return profileID.addingPercentEncoding(withAllowedCharacters: allowed).map { "/activity/\($0)" }
     }
 
-    func cardSessions(
+    public func cardSessions(
         for person: Person,
         sessions: [OpenClawChatSessionEntry],
         recentKeys: [String]? = nil)
@@ -325,5 +369,3 @@ public final class OpenClawChatSidebarPeople {
             selected, selected.map { identity($0.key, $0.agentId) })
     }
 }
-
-#endif

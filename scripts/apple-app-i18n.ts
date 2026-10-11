@@ -197,7 +197,7 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "Text(verbatim: self.item.detail)",
     "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
     "private func actionButton(\n        _ title: OpenClawTextValue",
-    "self.actionButton(.verbatim(category)",
+    "self.actionButton(\n                    .verbatim(category)",
   ],
   "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift": [
     "fullRowToggle(_ title: LocalizedStringKey",

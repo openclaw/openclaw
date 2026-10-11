@@ -125,6 +125,7 @@ public actor GatewayNodeSession {
     private var serverMethods: Set<String>?
     private var serverCapabilities: Set<GatewayServerCapability>?
     private var operatorScopes: Set<String>?
+    private var sessionMenuMetadata: (multipleIdentities: Bool, controlUIURL: String?)?
     var reactionAccess: GatewayReactionAccessFacts?
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
@@ -701,6 +702,12 @@ public actor GatewayNodeSession {
         self.currentRouteValue(self.operatorScopes, ifCurrentRoute: route)
     }
 
+    public func currentSessionMenuMetadata(ifCurrentRoute route: GatewayNodeSessionRoute)
+        -> (multipleIdentities: Bool, controlUIURL: String?)?
+    {
+        self.currentRouteValue(self.sessionMenuMetadata, ifCurrentRoute: route)
+    }
+
     public func currentAttachmentLimits(ifCurrentRoute route: GatewayNodeSessionRoute) -> GatewayAttachmentLimits? {
         self.currentRouteValue(self.attachmentLimits, ifCurrentRoute: route)
     }
@@ -882,6 +889,9 @@ extension GatewayNodeSession {
             self.serverCapabilities = Set(
                 GatewayServerCapability.allCases.filter { ok.supportsServerCapability($0) })
             self.operatorScopes = ok.advertisedOperatorScopes()
+            self.sessionMenuMetadata = (
+                ok.policy["hasMultipleSessionSharingIdentities"]?.value as? Bool == true,
+                ok.controluiurl)
             self.reactionAccess = GatewayReactionAccessFacts(hello: ok)
             self.attachmentLimits = ok.advertisedAttachmentLimits()
             let snapshotMainSessionKey = ok.snapshot.sessiondefaults?["mainSessionKey"]?.value as? String
@@ -914,6 +924,7 @@ extension GatewayNodeSession {
         self.serverMethods = nil
         self.serverCapabilities = nil
         self.operatorScopes = nil
+        self.sessionMenuMetadata = nil
         self.reactionAccess = nil
         self.attachmentLimits = nil
         self.mainSessionKey = nil

@@ -1,5 +1,6 @@
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 struct CommandSessionRow: View {
@@ -73,10 +74,8 @@ struct CommandSessionRow: View {
 struct CommandSessionActionsModifier: ViewModifier {
     typealias Mutation = (any OpenClawChatTransport) async throws -> Void
 
-    private enum Editor {
-        case rename
-        case newGroup
-    }
+    @Environment(\.commandSessionMenuConnection) private var connection
+    @Environment(NodeAppModel.self) private var appModel
 
     let session: OpenClawChatSessionEntry
     let mainSessionKey: String
@@ -88,10 +87,31 @@ struct CommandSessionActionsModifier: ViewModifier {
     let archivesSession: () -> Bool
     let performMutation: (String?, @escaping Mutation) -> Void
     let fork: () -> Void
+    var select: (() -> Void)?
+    var onArchived: ((OpenClawChatSessionEntry, OpenClawSessionMenuConnection) -> Void)?
+    var moveUp: (() -> Void)?
+    var moveDown: (() -> Void)?
 
-    @State private var editor: Editor?
-    @State private var draftText = ""
+    private struct PresentedMenu: Identifiable {
+        let id = UUID()
+        let kind: CommandSessionMenuPresentation
+        let session: OpenClawChatSessionEntry
+        let connection: OpenClawSessionMenuConnection
+    }
+
     @State private var confirmsDelete = false
+    @State private var confirmsStop = false
+    @State private var presentation: PresentedMenu?
+    @State private var confirmedTarget: PresentedMenu?
+    @State private var copyMessage: String?
+
+    private var archived: Bool {
+        self.isArchived || self.session.isArchived
+    }
+
+    private func allows(_ action: OpenClawSessionMenuAction) -> Bool {
+        self.connection?.allows(action, session: self.session) == true
+    }
 
     func body(content: Content) -> some View {
         if self.isEnabled {
@@ -104,93 +124,133 @@ struct CommandSessionActionsModifier: ViewModifier {
     private func managedContent(_ content: Content) -> some View {
         content
             .contextMenu {
-                OpenClawSessionColorMenu(color: self.session.color) {
-                    self.patch(color: .some($0))
+                if let select {
+                    self.actionButton("Select Sessions…", systemImage: "checkmark.circle", action: select)
+                    Divider()
                 }
-                if !self.isArchived {
+                if ChatSessionSidebarActions.canPin(self.session), !self.archived {
                     self.actionButton(
-                        self.session.pinned == true
-                            ? OpenClawTextValue.localized("Unpin")
-                            : OpenClawTextValue.localized("Pin"),
+                        self.session.pinned == true ? .localized("Unpin") : .localized("Pin"),
                         systemImage: self.session.pinned == true ? "pin.slash" : "pin")
-                    {
-                        self.patch(pinned: self.session.pinned != true)
-                    }
-                    if self.canSnooze {
-                        self.snoozeMenu
-                    }
-                    self.actionButton(
-                        self.session.unread == true
-                            ? OpenClawTextValue.localized("Mark as Read")
-                            : OpenClawTextValue.localized("Mark as Unread"),
-                        systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
-                    {
-                        self.patch(unread: self.session.unread != true)
-                    }
-                    self.actionButton("Rename…", systemImage: "pencil") {
-                        self.beginRename()
-                    }
-                    self.actionButton(
-                        self.session.hasActiveRun == true
-                            ? OpenClawTextValue.localized("Fork from last completed message")
-                            : OpenClawTextValue.localized("Fork"),
-                        systemImage: "arrow.triangle.branch")
-                    {
-                        self.fork()
-                    }
-                    self.groupMenu
+                    { self.patch(pinned: self.session.pinned != true) }
+                        .disabled(!self.allows(.pin))
                 }
+                if let moveUp { self.actionButton("Move Up", systemImage: "arrow.up", action: moveUp) }
+                if let moveDown { self.actionButton("Move Down", systemImage: "arrow.down", action: moveDown) }
+                self.actionButton("Rename…", systemImage: "pencil") { self.present(.rename) }
+                    .disabled(!self.allows(.rename))
+                self.actionButton(
+                    self.session.unread == true ? .localized("Mark as Read") : .localized("Mark as Unread"),
+                    systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
+                { self.patch(unread: self.session.unread != true) }
+                    .disabled(!self.allows(.unread))
+                if self.connection?.hello.policy["hasMultipleSessionSharingIdentities"]?.value as? Bool == true,
+                   let hidden = self.session.hiddenFromInvolvingMe
+                {
+                    self.actionButton(
+                        hidden ? .localized("Show in Involving Me") : .localized("Hide from Involving Me"),
+                        systemImage: hidden ? "eye" : "eye.slash")
+                    {
+                        if let id = self.session.sessionId {
+                            self.mutate(
+                                .involvement,
+                                fields: ["hidden": .init(!hidden), "expectedSessionId": .init(id)])
+                        }
+                    }.disabled(!self.allows(.involvement))
+                }
+                if self.canSnooze { self.snoozeMenu.disabled(!self.allows(.snooze)) }
                 if self.canArchive {
                     self.actionButton(
-                        self.isArchived ? .localized("Unarchive") : .localized("Archive"),
-                        systemImage: "archivebox")
-                    {
-                        self.patch(archived: self.archivesSession())
+                        self.archived ? .localized("Unarchive") : .localized("Archive"), systemImage: "archivebox")
+                    { self.patch(archived: self.archived ? false : self.archivesSession()) }
+                        .disabled(!self.allows(.archive))
+                }
+                Divider()
+                self.actionButton("Icon & Color…", systemImage: "paintpalette") {
+                    self.present(.appearance)
+                }.disabled(!self.allows(.appearance))
+                if ChatSessionSidebarActions.canMoveToGroup(self.session, mainKeys: [self.mainSessionKey]) {
+                    self.groupMenu.disabled(!self.allows(.group))
+                }
+                self.actionButton("Assign to…", systemImage: "person.2") {
+                    self.present(.assignment)
+                }.disabled(!self.allows(.assignOwner))
+                Divider()
+                self.actionButton(
+                    self.session.hasActiveRun == true
+                        ? .localized("Fork from Last Completed Message") : .localized("Fork Conversation"),
+                    systemImage: "arrow.triangle.branch",
+                    action: self.fork)
+                    .disabled(!self.allows(.fork))
+                self.copyMenu
+                self.actionButton("Open in…", systemImage: "arrow.up.forward.app") {
+                    self.present(.open)
+                }.disabled(self.connection?.isCurrent() != true)
+                if ChatSessionSidebarActions.canStopCloudWorker(self.session), self.allows(.reclaim) {
+                    self.actionButton("Stop Cloud Worker…", systemImage: "stop.circle") {
+                        self.captureConfirmationTarget()
+                        self.confirmsStop = true
                     }
                 }
-                if self.canDelete {
-                    self.deleteButton
+                if self.canDelete { Divider()
+                    self.deleteButton.disabled(!self.allows(.delete))
                 }
             }
-            .alert(self.editorTitle, isPresented: self.editorBinding) {
-                TextField(self.editorPlaceholder, text: self.$draftText)
-                    .font(OpenClawType.body)
-                Button {
-                    self.commitEditor()
-                } label: {
-                    Text(self.editor == .rename
-                        ? LocalizedStringKey("Save")
-                        : LocalizedStringKey("Create"))
-                        .font(OpenClawType.subheadSemiBold)
-                }
-                Button(role: .cancel) {
-                    self.editor = nil
-                } label: {
-                    Text("Cancel")
-                        .font(OpenClawType.subheadSemiBold)
-                }
+            .sheet(item: self.$presentation) { presentation in
+                CommandSessionMenuSheet(
+                    presentation: presentation.kind,
+                    session: presentation.session,
+                    connection: presentation.connection,
+                    didMutate: { self.performMutation(nil) { _ in } })
+                    .environment(self.appModel)
             }
-            .confirmationDialog(
-                "Delete Session?",
-                isPresented: self.$confirmsDelete,
-                titleVisibility: .visible)
+            .alert("Copy", isPresented: Binding(
+                get: { self.copyMessage != nil }, set: { if !$0 { self.copyMessage = nil } }))
             {
-                Button(role: .destructive) {
-                    self.performMutation(self.session.key) { transport in
-                        try await transport.deleteSession(key: self.session.key)
+                Button { self.copyMessage = nil } label: { Text("OK").font(OpenClawType.subheadSemiBold) }
+            } message: { Text(self.copyMessage ?? "").font(OpenClawType.body) }
+                .confirmationDialog("Stop Cloud Worker?", isPresented: self.$confirmsStop, titleVisibility: .visible) {
+                    Button(role: .destructive) { self.mutate(.reclaim, fields: [:], target: self.confirmedTarget)
+                    } label: {
+                        Text("Stop Cloud Worker").font(OpenClawType.subheadSemiBold)
                     }
-                } label: {
-                    Text("Delete Session")
-                        .font(OpenClawType.subheadSemiBold)
+                    Button(role: .cancel) {} label: { Text("Cancel").font(OpenClawType.subheadSemiBold) }
+                } message: {
+                    Text("Capture the workspace and stop this session’s cloud worker.").font(OpenClawType.body)
                 }
-                Button(role: .cancel) {} label: {
-                    Text("Cancel")
-                        .font(OpenClawType.subheadSemiBold)
+                .confirmationDialog(
+                    "Delete Session?",
+                    isPresented: self.$confirmsDelete,
+                    titleVisibility: .visible)
+                {
+                    Button(role: .destructive) {
+                        self.mutate(
+                            .delete,
+                            fields: ["deleteTranscript": .init(true)],
+                            removing: true,
+                            target: self.confirmedTarget)
+                    } label: {
+                        Text("Delete Session")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
+                    Button(role: .cancel) {} label: {
+                        Text("Cancel")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
+                } message: {
+                    Text("This permanently deletes the session and its transcript.")
+                        .font(OpenClawType.caption)
                 }
-            } message: {
-                Text("This permanently deletes the session and its transcript.")
-                    .font(OpenClawType.caption)
-            }
+    }
+
+    private func present(_ kind: CommandSessionMenuPresentation) {
+        guard let connection, connection.isCurrent() else { return }
+        self.presentation = PresentedMenu(kind: kind, session: self.session, connection: connection)
+    }
+
+    private func captureConfirmationTarget() {
+        guard let connection else { return }
+        self.confirmedTarget = PresentedMenu(kind: .appearance, session: self.session, connection: connection)
     }
 
     private func patch(
@@ -201,26 +261,80 @@ struct CommandSessionActionsModifier: ViewModifier {
         archived: Bool? = nil,
         unread: Bool? = nil)
     {
-        self.performMutation(archived == true ? self.session.key : nil) { transport in
-            try await transport.patchSession(
-                key: self.session.key,
-                expectedSessionID: archived == nil ? nil : self.session.sessionId,
-                label: label,
-                category: category,
-                color: color,
-                pinned: pinned,
-                archived: archived,
-                unread: unread)
+        var fields: [String: OpenClawProtocol.AnyCodable] = [:]
+        if let label { fields["label"] = label.map(OpenClawProtocol.AnyCodable.init) ?? .init(NSNull()) }
+        if let category { fields["category"] = category.map(OpenClawProtocol.AnyCodable.init) ?? .init(NSNull()) }
+        if let color { fields["color"] = color.map(OpenClawProtocol.AnyCodable.init) ?? .init(NSNull()) }
+        fields["pinned"] = pinned.map(OpenClawProtocol.AnyCodable.init)
+        fields["archived"] = archived.map(OpenClawProtocol.AnyCodable.init)
+        fields["unread"] = unread.map(OpenClawProtocol.AnyCodable.init)
+        let action: OpenClawSessionMenuAction = archived != nil ? .archive : pinned != nil ? .pin :
+            label != nil ? .rename : category != nil ? .group : color != nil ? .appearance : .unread
+        self.mutate(action, fields: fields, removing: archived == true)
+    }
+
+    private func mutate(
+        _ action: OpenClawSessionMenuAction,
+        fields: [String: OpenClawProtocol.AnyCodable],
+        removing: Bool = false,
+        target: PresentedMenu? = nil)
+    {
+        guard let connection = target?.connection ?? self.connection else { return }
+        let session = target?.session ?? self.session
+        self.performMutation(removing ? session.key : nil) { _ in
+            guard connection.allows(action, session: session) else {
+                throw OpenClawChatTransportSendError.notDispatched
+            }
+            let request = OpenClawChatGatewayRequests.sessionMenu(action.method, session: session, fields: fields)
+            try await connection.request(.init(
+                method: request.method,
+                params: request.params,
+                timeoutMs: action == .reclaim ? 0 : action == .archive || action == .delete ? 600_000 : request
+                    .timeoutMs))
+            if action == .archive, fields["archived"]?.value as? Bool == true {
+                self.onArchived?(session, connection)
+            }
         }
     }
 
     private func patchSnooze(_ snoozedUntil: OpenClawChatSnoozePatch) {
-        self.performMutation(nil) { transport in
-            try await transport.patchSession(
-                key: self.session.key,
-                expectedSessionID: self.session.sessionId,
-                snoozedUntil: snoozedUntil)
+        let value: OpenClawProtocol.AnyCodable = switch snoozedUntil {
+        case .wake: .init(NSNull())
+        case let .until(date): .init(Int(date.timeIntervalSince1970 * 1000))
         }
+        self.mutate(.snooze, fields: ["snoozedUntil": value])
+    }
+
+    private var copyMenu: some View {
+        Menu {
+            self.actionButton("Session Link", systemImage: "link") { self.copyLink(preview: false) }
+                .disabled(self.connection?.link(self.session, false) == nil)
+            self.actionButton("Session Preview Link", systemImage: "eye") { self.copyLink(preview: true) }
+                .disabled(self.connection?.link(self.session, true) == nil)
+            self.actionButton("Markdown", systemImage: "doc.plaintext") {
+                guard let connection else { return }
+                Task {
+                    do {
+                        let markdown = try await ChatSessionSidebarActions.markdown(
+                            session: self.session,
+                            connection: connection)
+                        guard connection.isCurrent() else { return }
+                        UIPasteboard.general.string = markdown
+                        self.copyMessage = String(localized: "Markdown copied.")
+                    } catch { self.copyMessage = error.localizedDescription }
+                }
+            }.disabled(!self.allows(.markdown))
+            self.actionButton("Session ID", systemImage: "number") {
+                UIPasteboard.general.string = self.session.sessionId
+                self.copyMessage = String(localized: "Session ID copied.")
+            }.disabled(self.session.sessionId?.trimmedNonEmpty == nil)
+        } label: { Label("Copy", systemImage: "doc.on.doc").font(OpenClawType.subhead) }
+    }
+
+    private func copyLink(preview: Bool) {
+        guard let connection, connection.isCurrent(), let url = connection.link(self.session, preview) else { return }
+        UIPasteboard.general.string = url.absoluteString
+        self.copyMessage = String(localized: "Link copied.")
     }
 
     private var canSnooze: Bool {
@@ -233,7 +347,7 @@ struct CommandSessionActionsModifier: ViewModifier {
         let configuredMain = OpenClawChatSessionKey.agentID(from: mainKey) == nil
             ? mainKey
             : String(mainKey.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)[2])
-        guard !self.isArchived, !self.session.isArchived, self.session.isMain != true,
+        guard !self.archived, self.session.isMain != true,
               self.session.sessionId?.trimmedNonEmpty != nil,
               self.session.kind != "global", self.session.kind != "unknown",
               key != "main", key != "global", key != "unknown", sessionName != configuredMain,
@@ -278,14 +392,17 @@ struct CommandSessionActionsModifier: ViewModifier {
     private var groupMenu: some View {
         Menu {
             ForEach(self.categories, id: \.self) { category in
-                self.actionButton(.verbatim(category), systemImage: "folder") {
+                self.actionButton(
+                    .verbatim(category),
+                    systemImage: self.session.category == category ? "checkmark" : "folder")
+                {
                     self.patch(category: .some(category))
-                }
+                }.disabled(self.session.category == category)
             }
             self.actionButton("New Group…", systemImage: "folder.badge.plus") {
-                self.draftText = ""
-                self.editor = .newGroup
-            }
+                self.present(.newGroup)
+            }.disabled(self.appModel.sessionGroups.usesCatalog &&
+                !self.appModel.sessionGroups.allows("sessions.groups.put"))
             if self.session.category?.trimmedNonEmpty != nil {
                 self.actionButton("Remove from Group", systemImage: "folder.badge.minus") {
                     self.patch(category: .some(nil))
@@ -299,29 +416,12 @@ struct CommandSessionActionsModifier: ViewModifier {
 
     private var deleteButton: some View {
         Button(role: .destructive) {
+            self.captureConfirmationTarget()
             self.confirmsDelete = true
         } label: {
             Label("Delete…", systemImage: "trash")
                 .font(OpenClawType.subhead)
         }
-    }
-
-    private var editorBinding: Binding<Bool> {
-        Binding(
-            get: { self.editor != nil },
-            set: { if !$0 { self.editor = nil } })
-    }
-
-    private var editorTitle: String {
-        self.editor == .newGroup
-            ? String(localized: "New Group")
-            : String(localized: "Rename Session")
-    }
-
-    private var editorPlaceholder: String {
-        self.editor == .newGroup
-            ? String(localized: "Group name")
-            : String(localized: "Session name")
     }
 
     private func actionButton(
@@ -338,31 +438,6 @@ struct CommandSessionActionsModifier: ViewModifier {
             }
         }
     }
-
-    private func beginRename() {
-        self.draftText = self.session.label?.trimmedNonEmpty
-            ?? self.session.displayName?.trimmedNonEmpty
-            ?? ""
-        self.editor = .rename
-    }
-
-    private func commitEditor() {
-        let value = self.draftText.trimmedNonEmpty
-        switch self.editor {
-        case .rename:
-            self.patch(label: .some(value))
-        case .newGroup:
-            if let value {
-                // Web parity: only prompt-created groups join the stored list,
-                // so they survive as empty sections after members leave.
-                SessionGroupStore.remember(value)
-                self.patch(category: .some(value))
-            }
-        case nil:
-            break
-        }
-        self.editor = nil
-    }
 }
 
 extension View {
@@ -376,7 +451,11 @@ extension View {
         canDelete: Bool = true,
         archivesSession: @escaping () -> Bool = { true },
         performMutation: @escaping (String?, @escaping CommandSessionActionsModifier.Mutation) -> Void,
-        fork: @escaping () -> Void) -> some View
+        fork: @escaping () -> Void,
+        select: (() -> Void)? = nil,
+        onArchived: ((OpenClawChatSessionEntry, OpenClawSessionMenuConnection) -> Void)? = nil,
+        moveUp: (() -> Void)? = nil,
+        moveDown: (() -> Void)? = nil) -> some View
     {
         self.modifier(CommandSessionActionsModifier(
             session: session,
@@ -388,7 +467,11 @@ extension View {
             canDelete: canDelete,
             archivesSession: archivesSession,
             performMutation: performMutation,
-            fork: fork))
+            fork: fork,
+            select: select,
+            onArchived: onArchived,
+            moveUp: moveUp,
+            moveDown: moveDown))
     }
 }
 

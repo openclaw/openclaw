@@ -35,6 +35,7 @@ extension RootTabs {
         case docs
         case settings
         case gateway
+        case dashboards, meetings, apps, portals, systems
 
         var id: String {
             rawValue
@@ -59,6 +60,11 @@ extension RootTabs {
             case .docs: String(localized: "Docs")
             case .settings: String(localized: "Settings")
             case .gateway: String(localized: "Settings / Gateway")
+            case .dashboards: String(localized: "Dashboards")
+            case .meetings: String(localized: "Meetings")
+            case .apps: String(localized: "Apps")
+            case .portals: String(localized: "Portals")
+            case .systems: String(localized: "Systems")
             }
         }
 
@@ -88,6 +94,11 @@ extension RootTabs {
             case .docs: "book"
             case .settings: "gearshape"
             case .gateway: "gearshape"
+            case .dashboards: "rectangle.3.group"
+            case .meetings: "video"
+            case .apps: "square.grid.2x2"
+            case .portals: "globe"
+            case .systems: "server.rack"
             }
         }
 
@@ -110,6 +121,11 @@ extension RootTabs {
             case .docs: .docs
             case .settings: .settings
             case .gateway: .gateway
+            case .dashboards: .dashboard("/dashboards")
+            case .meetings: .dashboard("/meetings")
+            case .apps: .dashboard("/apps")
+            case .portals: .dashboard("/portals")
+            case .systems: .dashboard("/systems")
             }
         }
 
@@ -278,6 +294,7 @@ extension RootTabs {
         .desktop,
         .terminal,
         .docs,
+        .dashboards, .meetings, .apps, .portals, .systems,
     ]
 
     /// Home (chat) is a fixed first row like the web sidebar; only these can be
@@ -288,26 +305,4 @@ extension RootTabs {
     /// compact by default so sessions stay above the fold. The Sessions page is
     /// intentionally unpinned — the sessions section + "All Sessions…" own it.
     static let defaultPinnedSidebarPages: [SidebarDestination] = [.overview, .usage, .cron]
-
-    /// "" = never customized (defaults); "none" = user unpinned everything.
-    /// Storage order is the user's pin order (web parity); unknown or
-    /// unpinnable raw values are dropped.
-    static func pinnedSidebarPages(from storage: String) -> [SidebarDestination] {
-        let trimmed = storage.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return self.defaultPinnedSidebarPages }
-        if trimmed == "none" { return [] }
-        var seen = Set<String>()
-        return trimmed.split(separator: ",").compactMap { raw in
-            let value = String(raw)
-            guard seen.insert(value).inserted,
-                  let destination = SidebarDestination(rawValue: value),
-                  self.pinnableSidebarPages.contains(destination)
-            else { return nil }
-            return destination
-        }
-    }
-
-    static func pinnedSidebarPagesStorage(_ pages: [SidebarDestination]) -> String {
-        pages.isEmpty ? "none" : pages.map(\.rawValue).joined(separator: ",")
-    }
 }

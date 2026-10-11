@@ -152,14 +152,7 @@ struct ChatSessionSidebarRowFacts {
     }
 
     // ui/src/components/session-icon-glyph-registry.ts:9 maps the six wire glyphs.
-    static let iconGlyphs = [
-        ("braces", "curlybraces"),
-        ("book", "book"),
-        ("monitor", "desktopcomputer"),
-        ("bot", "cpu"),
-        ("kanban", "rectangle.split.3x1"),
-        ("coins", "dollarsign.circle"),
-    ]
+    static let iconGlyphs = ChatSessionSidebarActions.iconGlyphs
 
     static func icon(_ value: String) -> Glyph {
         // Native never executes SVG; unsupported artwork gets a visible default glyph.

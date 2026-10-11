@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import Observation
 import struct OpenClawKit.GatewayResponseError
@@ -435,4 +434,11 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
     }
 }
 
-#endif
+extension OpenClawSessionPullRequestSnapshot {
+    public var menuPullRequest: PullRequest? {
+        // ui/src/components/session-menu-work.ts:26 prioritizes active work; the card keeps server order.
+        ["open", "draft", "merged", "closed"].lazy.compactMap { state in
+            self.pullRequests.first { $0.state == state }
+        }.first
+    }
+}

@@ -262,7 +262,7 @@ private struct ChatSessionSidebarRowMenu: View {
             Button("Markdown") {
                 guard let connection = self.actions.connection else { return }
                 self.viewModel.performSidebarAction(refresh: false) {
-                    let markdown = try await self.viewModel.sidebarMarkdown(
+                    let markdown = try await ChatSessionSidebarActions.markdown(
                         session: self.session,
                         connection: connection)
                     guard connection.isCurrent() else { throw CancellationError() }

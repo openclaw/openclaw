@@ -198,7 +198,8 @@ extension WebChatManagerTests {
                 .absoluteString == "https://menu.example.test/control/chat/research/~key/launch")
             #expect(connection.link(row, true)?
                 .absoluteString == "https://menu.example.test/control/share/chat/research/~key/launch")
-            #expect(try await vm.sidebarMarkdown(session: row, connection: connection).contains("Ready to launch"))
+            #expect(try await ChatSessionSidebarActions.markdown(session: row, connection: connection)
+                .contains("Ready to launch"))
             try await connection.request(OpenClawChatGatewayRequests.sessionMenu(
                 "sessions.patch", session: row, fields: ["icon": .init("rocket")]))
             #expect(methods.value.contains("sessions.patch"))

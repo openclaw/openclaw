@@ -394,12 +394,4 @@ extension OpenClawSessionPullRequestSnapshot.PullRequest {
     }
 }
 
-extension OpenClawSessionPullRequestSnapshot {
-    var menuPullRequest: PullRequest? {
-        // ui/src/components/session-menu-work.ts:26 prioritizes active work; the card keeps server order.
-        ["open", "draft", "merged", "closed"].lazy.compactMap { state in
-            self.pullRequests.first { $0.state == state }
-        }.first
-    }
-}
 #endif

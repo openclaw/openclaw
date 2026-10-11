@@ -730,6 +730,9 @@ struct RootTabs: View {
 
 extension RootTabs {
     private func selectSidebarSession(_ session: OpenClawChatSessionEntry) {
+        if let agentID = OpenClawChatSessionKey.agentID(from: session.key) ?? session.agentId {
+            self.appModel.setSelectedAgentId(agentID)
+        }
         switch Self.sidebarPresentation(for: session) {
         case .chat:
             self.appModel.openChat(sessionKey: session.key)

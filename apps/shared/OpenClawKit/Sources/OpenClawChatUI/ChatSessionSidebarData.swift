@@ -45,7 +45,7 @@ public final class OpenClawChatSessionSidebarData {
         self.projections[.sidebarTree] = nil
     }
 
-    static func identity(_ row: OpenClawChatSessionEntry) -> String {
+    public static func identity(_ row: OpenClawChatSessionEntry) -> String {
         "\(OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId ?? "")\u{0}\(row.key)"
     }
 

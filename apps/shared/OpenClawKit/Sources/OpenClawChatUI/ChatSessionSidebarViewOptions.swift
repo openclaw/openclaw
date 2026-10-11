@@ -9,47 +9,72 @@ extension ChatSessionSidebarModel {
     public enum EmptyGroups: String, Sendable { case filtering, always, never }
 
     public struct ViewOptions: Equatable, Sendable {
-        var sort: Sort = .created
-        var showAutomation = false
-        var showSystem = false
-        var grouping: Grouping = .category
-        var emptyGroups: EmptyGroups = .filtering
-        var status: OpenClawChatSidebarStatus = .active
-        var ownerFilter = ""
-        var showMessagePreview = false
-        var selectedAgentID: String?
+        public var sort: Sort = .created
+        public var showAutomation = false
+        public var showSystem = false
+        public var grouping: Grouping = .category
+        public var emptyGroups: EmptyGroups = .filtering
+        public var status: OpenClawChatSidebarStatus = .active
+        public var ownerFilter = ""
+        public var showMessagePreview = false
+        public var selectedAgentID: String?
 
-        var ownerID: String? {
+        public init(
+            sort: Sort = .created,
+            showAutomation: Bool = false,
+            showSystem: Bool = false,
+            grouping: Grouping = .category,
+            emptyGroups: EmptyGroups = .filtering,
+            status: OpenClawChatSidebarStatus = .active,
+            ownerFilter: String = "",
+            showMessagePreview: Bool = false,
+            selectedAgentID: String? = nil)
+        {
+            self.sort = sort
+            self.showAutomation = showAutomation
+            self.showSystem = showSystem
+            self.grouping = grouping
+            self.emptyGroups = emptyGroups
+            self.status = status
+            self.ownerFilter = ownerFilter
+            self.showMessagePreview = showMessagePreview
+            self.selectedAgentID = selectedAgentID
+        }
+
+        public var ownerID: String? {
             self.ownerFilter.hasPrefix("owner:") ? String(self.ownerFilter.dropFirst(6)) : nil
         }
 
-        var involvingMe: Bool {
+        public var involvingMe: Bool {
             self.ownerFilter == "involving-me"
         }
 
         // ui/src/components/app-sidebar-session-filter-summary.ts:75 counts membership filters only.
-        var filterCount: Int {
+        public var filterCount: Int {
             (self.ownerFilter.isEmpty ? 0 : 1) + (self.status == .active ? 0 : 1)
         }
 
-        func effectiveGrouping(peopleAvailable: Bool) -> Grouping {
+        public func effectiveGrouping(peopleAvailable: Bool) -> Grouping {
             self.grouping == .person && !peopleAvailable ? .category : self.grouping
         }
 
-        func isChanged(peopleAvailable: Bool) -> Bool {
-            self.filterCount > 0 || self.showAutomation || self.showSystem || self.showMessagePreview ||
-                self.sort != .created || self.effectiveGrouping(peopleAvailable: peopleAvailable) != .category ||
-                self.emptyGroups != .filtering
+        public func isChanged(peopleAvailable: Bool, defaults: Self = .init()) -> Bool {
+            self.ownerFilter != defaults.ownerFilter || self.status != defaults.status ||
+                self.showAutomation != defaults.showAutomation || self.showSystem != defaults.showSystem ||
+                self.showMessagePreview != defaults.showMessagePreview || self.sort != defaults.sort ||
+                self.effectiveGrouping(peopleAvailable: peopleAvailable) != defaults.grouping ||
+                self.emptyGroups != defaults.emptyGroups
         }
 
-        mutating func reset(peopleAvailable: Bool) {
+        public mutating func reset(peopleAvailable: Bool, defaults: Self = .init()) {
             // ui/src/components/sidebar-menus-render.ts:541 preserves a capability-hidden Person preference.
-            let grouping = self.effectiveGrouping(peopleAvailable: peopleAvailable) == .category
-                ? self.grouping : .category
-            self = Self(grouping: grouping)
+            let grouping = self.effectiveGrouping(peopleAvailable: peopleAvailable) == defaults.grouping
+                ? self.grouping : defaults.grouping
+            self = defaults
+            self.grouping = grouping
         }
 
-        func includes(_ session: OpenClawChatSessionEntry) -> Bool {
+        public func includes(_ session: OpenClawChatSessionEntry) -> Bool {
             // Port src/shared/session-list-visibility.ts: cron keys own automation,
             // even when system-created; other probes use provenance, never titles.
             let key = session.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -76,7 +101,7 @@ extension ChatSessionSidebarModel {
 
         public init() {}
 
-        mutating func observe(_ keys: [String]) {
+        public mutating func observe(_ keys: [String]) {
             for key in keys where !key.isEmpty && self.indices[key] == nil {
                 self.indices[key] = self.nextIndex
                 self.nextIndex += 1

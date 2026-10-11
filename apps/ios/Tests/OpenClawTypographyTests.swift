@@ -66,7 +66,6 @@ struct OpenClawTypographyTests {
             contentsOf: Self.sourceURL("Design/CommandCenterTab.swift"),
             encoding: .utf8)
 
-        #expect(support.contains("TextField(self.editorPlaceholder"))
         #expect(support.contains("Label(\"Move to Group\""))
         #expect(support.contains("Label(\"Delete…\""))
         #expect(support.contains(".font(OpenClawType.subhead)"))

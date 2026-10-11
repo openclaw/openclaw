@@ -12,17 +12,23 @@ struct ChatSessionRosterSnapshot: Sendable {
     let isCached: Bool
     let totalCount: Int?
     let isComplete: Bool
+    let owners: [OpenClawChatSessionEntry.CreatedActor]?
+    let involvingProfileID: String?
 
     init(
         sessions: [OpenClawChatSessionEntry],
         isCached: Bool,
         totalCount: Int? = nil,
-        isComplete: Bool = true)
+        isComplete: Bool = true,
+        owners: [OpenClawChatSessionEntry.CreatedActor]? = nil,
+        involvingProfileID: String? = nil)
     {
         self.sessions = sessions
         self.isCached = isCached
         self.totalCount = totalCount
         self.isComplete = isComplete
+        self.owners = owners
+        self.involvingProfileID = involvingProfileID
     }
 
     @MainActor
@@ -32,15 +38,27 @@ struct ChatSessionRosterSnapshot: Sendable {
         var sessions: [OpenClawChatSessionEntry] = []
         var rowIndices: [String: Int] = [:]
         var totalCount: Int?
+        var owners: [OpenClawChatSessionEntry.CreatedActor]?
+        var involvingProfileID: String?
         var offset = 0
         var pageCount = 0
+
+        func snapshot(isComplete: Bool = false) -> Self {
+            Self(
+                sessions: sessions,
+                isCached: false,
+                totalCount: totalCount,
+                isComplete: isComplete,
+                owners: owners,
+                involvingProfileID: involvingProfileID)
+        }
 
         while true {
             try Task.checkCancellation()
             // Match sessions.list's bounded scan so a changing Gateway snapshot
             // cannot keep a sidebar refresh alive forever.
             guard pageCount < Self.maximumPageCount, sessions.count < Self.maximumSessionCount else {
-                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+                return snapshot()
             }
             pageCount += 1
             let response: OpenClawChatSessionsListResponse
@@ -50,21 +68,23 @@ struct ChatSessionRosterSnapshot: Sendable {
                 throw CancellationError()
             } catch {
                 guard !sessions.isEmpty else { throw error }
-                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+                return snapshot()
             }
             try Task.checkCancellation()
 
+            owners = response.owners ?? owners
+            involvingProfileID = response.involvingProfileId ?? involvingProfileID
             if let count = response.totalCount {
                 totalCount = count
             }
             for session in response.sessions {
-                if let index = rowIndices[session.key] {
+                if let index = rowIndices[OpenClawChatSessionSidebarData.identity(session)] {
                     sessions[index] = session
                 } else {
                     guard sessions.count < Self.maximumSessionCount else {
-                        return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+                        return snapshot()
                     }
-                    rowIndices[session.key] = sessions.count
+                    rowIndices[OpenClawChatSessionSidebarData.identity(session)] = sessions.count
                     sessions.append(session)
                 }
             }
@@ -73,7 +93,7 @@ struct ChatSessionRosterSnapshot: Sendable {
             let hasMore = response.hasMore ?? totalCount.map { advancedOffset < $0 } ?? false
             guard hasMore else {
                 let isComplete = totalCount.map { sessions.count >= $0 } ?? true
-                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: isComplete)
+                return snapshot(isComplete: isComplete)
             }
 
             let nextOffset = response.nextOffset ?? advancedOffset
@@ -81,7 +101,7 @@ struct ChatSessionRosterSnapshot: Sendable {
                   nextOffset > offset,
                   totalCount.map({ nextOffset < $0 }) ?? true
             else {
-                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+                return snapshot()
             }
             offset = nextOffset
         }
@@ -92,7 +112,9 @@ extension NodeAppModel {
     func loadChatSessionRoster(
         limit: Int,
         archived: Bool = false,
-        allowCachedFallback: Bool = true) async throws -> ChatSessionRosterSnapshot
+        allowCachedFallback: Bool = true,
+        sidebarQuery: OpenClawChatSidebarQuery? = nil,
+        includePreview: Bool = false) async throws -> ChatSessionRosterSnapshot
     {
         let sourceGatewayID = self.chatTranscriptCacheGatewayID
         let sourceAgentID = self.chatDeliveryAgentId
@@ -123,12 +145,14 @@ extension NodeAppModel {
                 // Every page belongs to one physical authenticated Gateway route;
                 // reconnects and gateway switches must never splice two rosters.
                 snapshot = try await ChatSessionRosterSnapshot.collect { offset in
-                    let request = OpenClawChatGatewayRequests.sessionsList(
-                        limit: limit,
-                        search: nil,
-                        archived: archived,
-                        agentID: sourceAgentID,
-                        offset: offset)
+                    let request = sidebarQuery.map {
+                        RootSidebarModel.rosterRequest(
+                            query: $0,
+                            limit: limit,
+                            offset: offset,
+                            includePreview: includePreview)
+                    } ?? OpenClawChatGatewayRequests.sessionsList(
+                        limit: limit, search: nil, archived: archived, agentID: sourceAgentID, offset: offset)
                     let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
                     return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
                 }
@@ -139,7 +163,10 @@ extension NodeAppModel {
                 }
             }
 
-            if !archived {
+            if !archived, sidebarQuery?.status != .archived, sidebarQuery?.status != .all,
+               sidebarQuery?.involvingMe != true, sidebarQuery?.ownerId == nil,
+               sidebarQuery == nil || sidebarQuery?.agentID != nil
+            {
                 // An interrupted page must not replace a more complete offline roster.
                 if snapshot.isComplete {
                     await self.storeCachedChatSessions(
@@ -185,8 +212,26 @@ final class RootSidebarModel {
     }
 
     private(set) var sessions: [OpenClawChatSessionEntry] = [] {
-        didSet { self.updateSnoozeWakeDeadline() }
+        didSet {
+            self.observedOrder.observe(self.sessions.map(OpenClawChatSessionSidebarData.identity))
+            self.updateSnoozeWakeDeadline()
+        }
     }
+
+    var showsAllAgents = false
+    private let preferences: UserDefaults
+    var viewOptions: ChatSessionSidebarModel.ViewOptions {
+        didSet { RootSidebarPreferences.save(self.viewOptions, defaults: self.preferences) }
+    }
+
+    init(preferences: UserDefaults = .standard) {
+        self.preferences = preferences
+        self.viewOptions = RootSidebarPreferences.load(defaults: preferences)
+    }
+
+    private(set) var owners: [OpenClawChatSessionEntry.CreatedActor]?
+    private(set) var involvingProfileID: String?
+    private var observedOrder = ChatSessionSidebarModel.ObservedOrder()
 
     private(set) var now: Date = .now
     private(set) var usage: CostUsageSummaryLite?
@@ -202,6 +247,10 @@ final class RootSidebarModel {
     private var sessionObserverSync: (id: UUID, task: Task<Void, Never>)?
     @ObservationIgnored private var snoozeWakeUpdatesActive = false
     @ObservationIgnored private var snoozeWakeTask: Task<Void, Never>?
+    #if DEBUG
+    @ObservationIgnored var testRosterLoad: (@MainActor () async throws -> ChatSessionRosterSnapshot)?
+    @ObservationIgnored var testGroupCatalogLoad: (@MainActor () async -> Void)?
+    #endif
 
     var failedCronJobCount: Int {
         self.cronJobs.count { Self.isFailedCronJob($0) }
@@ -230,7 +279,11 @@ final class RootSidebarModel {
             activeAgentID: activeAgentID,
             groups: groups,
             sessionRoutingContract: sessionRoutingContract,
-            now: self.now)
+            now: self.now,
+            viewOptions: self.viewOptions,
+            observedOrder: self.observedOrder,
+            owners: self.owners,
+            selfOwnerID: self.involvingProfileID)
     }
 
     static func sections(
@@ -241,7 +294,11 @@ final class RootSidebarModel {
         activeAgentID: String?,
         groups: [OpenClawChatSessionGroup],
         sessionRoutingContract: String? = nil,
-        now: Date = .now) -> [ChatSessionSidebarModel.Section]
+        now: Date = .now,
+        viewOptions: ChatSessionSidebarModel.ViewOptions? = nil,
+        observedOrder: ChatSessionSidebarModel.ObservedOrder = .init(),
+        owners: [OpenClawChatSessionEntry.CreatedActor]? = nil,
+        selfOwnerID: String? = nil) -> [ChatSessionSidebarModel.Section]
     {
         let selectedSessionKey = ChatSessionSidebarModel.selectedSessionKey(
             sessions: sessions,
@@ -253,15 +310,31 @@ final class RootSidebarModel {
             $0.key == selectedSessionKey && $0.isSnoozed(at: now)
         }
         return ChatSessionSidebarModel.sections(
-            sessions: sessions.filter { !$0.isSnoozed(at: now) },
+            sessions: viewOptions == nil ? sessions.filter { !$0.isSnoozed(at: now) } : sessions,
             // The shared sidebar otherwise creates a placeholder for a missing selected row.
-            currentSessionKey: selectedIsSnoozed ? "" : currentSessionKey,
+            currentSessionKey: viewOptions == nil && selectedIsSnoozed ? "" : currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             groups: groups,
             excludesMainSession: true,
+            includeEmptyGroups: true,
             query: query,
-            sessionRoutingContract: sessionRoutingContract)
+            sessionRoutingContract: sessionRoutingContract,
+            viewOptions: viewOptions,
+            observedOrder: observedOrder,
+            owners: owners,
+            selfOwnerID: selfOwnerID,
+            now: now)
+    }
+
+    var rosterQuery: OpenClawChatSidebarQuery {
+        OpenClawChatSidebarQuery(
+            agentID: self.viewOptions.selectedAgentID,
+            status: self.viewOptions.status,
+            ownerId: self.viewOptions.ownerID,
+            involvingMe: self.viewOptions.involvingMe,
+            excludeCron: !self.viewOptions.showAutomation,
+            excludeSystem: !self.viewOptions.showSystem)
     }
 
     func setSnoozeWakeUpdatesActive(_ active: Bool) {
@@ -327,6 +400,15 @@ final class RootSidebarModel {
     }
 
     func refreshSessions(appModel: NodeAppModel) async {
+        #if DEBUG
+        if let testGroupCatalogLoad {
+            await testGroupCatalogLoad()
+        } else {
+            await appModel.sessionGroups.refresh(appModel: appModel)
+        }
+        #else
+        await appModel.sessionGroups.refresh(appModel: appModel)
+        #endif
         self.rosterGeneration &+= 1
         let rosterGeneration = self.rosterGeneration
         self.isRefreshing = true
@@ -341,6 +423,7 @@ final class RootSidebarModel {
         switch loadedRoster {
         case let .success(roster):
             self.applyRoster(roster)
+            appModel.sessionGroups.pruneCollapsed(for: self.sessions)
         case let .failure(message):
             self.sessionErrorText = message
         case .cancelled:
@@ -516,12 +599,21 @@ final class RootSidebarModel {
         }
     }
 
-    private func handleSessionEvent(_ frame: EventFrame, appModel: NodeAppModel) async -> Bool {
+    func handleSessionEvent(_ frame: EventFrame, appModel: NodeAppModel) async -> Bool {
         guard let event = OpenClawChatGatewayPayloadCodec.event(from: frame) else { return false }
         switch event {
         case .sessionsChanged:
             await self.refreshSessions(appModel: appModel)
         case let .sessionObserver(digest):
+            if self.showsAllAgents {
+                self.sessions = self.sessions.map { row in
+                    let agent = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
+                    guard row.key == digest.sessionkey, agent == digest.agentid else { return row }
+                    return ChatSessionSidebarModel.applying(
+                        observerDigest: digest, to: [row], activeAgentId: agent).first ?? row
+                }
+                return false
+            }
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,
                 to: self.sessions,
@@ -551,6 +643,8 @@ final class RootSidebarModel {
     }
 
     private func applyRoster(_ roster: ChatSessionRosterSnapshot) {
+        self.owners = roster.owners
+        self.involvingProfileID = roster.involvingProfileID
         self.sessions = roster.sessions
         self.isSessionRosterComplete = roster.isComplete
         guard !roster.isComplete, !roster.isCached else {
@@ -569,14 +663,36 @@ final class RootSidebarModel {
         }
     }
 
+    static func rosterRequest(
+        query: OpenClawChatSidebarQuery,
+        limit: Int,
+        offset: Int = 0,
+        includePreview: Bool = false) -> OpenClawChatGatewayRequest
+    {
+        let request = OpenClawChatGatewayRequests.sidebarSessions(query: query, limit: limit, offset: offset)
+        // Menu parity must not bring web transcript-enrichment traffic into every drawer refresh.
+        var params = request.params
+        params["includeDerivedTitles"] = AnyCodable(false)
+        params["includeLastMessage"] = AnyCodable(includePreview)
+        return .init(method: request.method, params: params, timeoutMs: request.timeoutMs)
+    }
+
     private func loadRoster(
         appModel: NodeAppModel,
         allowCachedFallback: Bool = true) async -> RosterLoadResult
     {
         do {
+            #if DEBUG
+            if let testRosterLoad { return try await .success(testRosterLoad()) }
+            #endif
+            var query = self.rosterQuery
+            query.agentID = self.showsAllAgents ? nil : appModel.chatDeliveryAgentId
             return try await .success(appModel.loadChatSessionRoster(
                 limit: Self.sessionLimit,
-                allowCachedFallback: allowCachedFallback))
+                allowCachedFallback: allowCachedFallback && !self.showsAllAgents && query.status == .active &&
+                    query.involvingMe != true && query.ownerId == nil,
+                sidebarQuery: query,
+                includePreview: self.viewOptions.showMessagePreview))
         } catch is CancellationError {
             return .cancelled
         } catch {

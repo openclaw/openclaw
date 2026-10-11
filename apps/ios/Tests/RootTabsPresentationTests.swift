@@ -28,6 +28,9 @@ struct RootTabsPresentationTests {
             .skillWorkshop: .dashboard("/skills/workshop"), .instances: .dashboard("/settings/devices"),
             .dreaming: .dashboard("/settings/memory/dreams"), .usage: .dashboard("/usage"),
             .cron: .dashboard("/automations"),
+            .dashboards: .dashboard("/dashboards"), .meetings: .dashboard("/meetings"),
+            .apps: .dashboard("/apps"),
+            .portals: .dashboard("/portals"), .systems: .dashboard("/systems"),
         ]
         #expect(Set(expected.keys) == Set(RootTabs.SidebarDestination.allCases))
         for destination in RootTabs.SidebarDestination.allCases {
@@ -355,6 +358,7 @@ struct RootTabsPresentationTests {
             .desktop,
             .terminal,
             .docs,
+            .dashboards, .meetings, .apps, .portals, .systems,
         ])
         #expect(destinationIDs == [
             "chat",
@@ -374,6 +378,7 @@ struct RootTabsPresentationTests {
             "docs",
             "settings",
             "gateway",
+            "dashboards", "meetings", "apps", "portals", "systems",
         ])
         #expect(!destinationIDs.contains("agent"))
         #expect(RootTabs.sidebarDestinations.contains(.chat))
@@ -895,27 +900,6 @@ struct RootTabsPresentationTests {
         #expect(!background.isObserverVisible)
         #expect(foregroundAgain.isObserverVisible)
         #expect(!hidden.isObserverVisible)
-    }
-
-    @Test func `pinned pages storage round trips and preserves pin order`() {
-        #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
-        #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
-        #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")
-
-        // Storage order is the user's pin order (web parity).
-        let parsed = RootTabs.pinnedSidebarPages(from: "usage,overview,docs")
-        #expect(parsed == [.usage, .overview, .docs])
-
-        let storage = RootTabs.pinnedSidebarPagesStorage([.docs, .overview, .usage])
-        #expect(RootTabs.pinnedSidebarPages(from: storage) == [.docs, .overview, .usage])
-
-        // Duplicates collapse to first occurrence.
-        #expect(RootTabs.pinnedSidebarPages(from: "usage,usage,docs") == [.usage, .docs])
-
-        // Unknown raw values are dropped; chat is never pinnable.
-        #expect(RootTabs.pinnedSidebarPages(from: "chat,bogus").isEmpty)
-        #expect(!RootTabs.pinnedSidebarPages(from: "chat,overview").contains(.chat))
-        #expect(!RootTabs.pinnableSidebarPages.contains(.chat))
     }
 
     @Test func `drawer content follows reveal and dismiss drag`() {

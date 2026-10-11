@@ -1292,7 +1292,9 @@ struct ChatViewModelSessionActionTests {
         viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "other", reason: "branch-switch")))
         #expect(viewModel.replyTarget != nil)
         #expect(viewModel.canSend)
-        let reconcile = viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "branch-switch")))
+        let reconcile = viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            reason: "branch-switch")))
         #expect(viewModel.hasBlockingRunActivity)
         #expect(viewModel.canSend == false)
 
@@ -1445,7 +1447,6 @@ extension ChatViewModelSessionActionTests {
 #if os(macOS)
 extension ChatViewModelSessionActionTests {
     @Test func `sidebar Markdown pages the requested session without changing the selected conversation`() async throws {
-        let vm = OpenClawChatViewModel(sessionKey: "main", transport: SessionActionTransport())
         let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
         {"key":"agent:research:release-plan","sessionId":"session-123","label":"Release plan"}
         """#.utf8))
@@ -1472,18 +1473,16 @@ extension ChatViewModelSessionActionTests {
             ]
             return try JSONSerialization.data(withJSONObject: payload)
         }
-        let markdown = try await vm.sidebarMarkdown(session: session, connection: connection)
+        let markdown = try await ChatSessionSidebarActions.markdown(session: session, connection: connection)
         #expect(offsets == [0, 1, 0])
         let older = try #require(markdown.range(of: "older question"))
         let newer = try #require(markdown.range(of: "newer answer"))
         #expect(older.lowerBound < newer.lowerBound)
         #expect(markdown.hasPrefix("# Release plan"))
-        #expect(vm.sessionKey == "main")
     }
 
     @Test(arguments: ["sessionId", "totalMessages", "deltaCursor", "activeLeafEntryId", "nextOffset"])
     func `sidebar Markdown refuses mixed or nonadvancing transcript pages`(_ changedField: String) async throws {
-        let vm = OpenClawChatViewModel(sessionKey: "main", transport: SessionActionTransport())
         let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
         {"key":"agent:research:release-plan","sessionId":"session-123"}
         """#.utf8))
@@ -1513,13 +1512,13 @@ extension ChatViewModelSessionActionTests {
             }
             return try JSONSerialization.data(withJSONObject: payload)
         }
-        await #expect { try await vm.sidebarMarkdown(session: session, connection: connection) } throws: { error in
+        await #expect { try await ChatSessionSidebarActions.markdown(session: session, connection: connection)
+        } throws: { error in
             (error as NSError).domain == "SessionMenu" && (error as NSError).code == 1
         }
     }
 
     @Test func `sidebar Markdown preserves repeated projected messages while removing page overlap`() async throws {
-        let vm = OpenClawChatViewModel(sessionKey: "main", transport: SessionActionTransport())
         let session = try JSONDecoder().decode(
             OpenClawChatSessionEntry.self,
             from: Data(#"{"key":"agent:research:thread"}"#.utf8))
@@ -1533,7 +1532,7 @@ extension ChatViewModelSessionActionTests {
                 "{\"sessionId\":\"s-1\",\"totalMessages\":3,\"deltaCursor\":\"cursor-1\",\"hasMore\":\(count == 1),\"nextOffset\":1,\"messages\":[\(rows)]}"
                     .utf8)
         }
-        let markdown = try await vm.sidebarMarkdown(session: session, connection: connection)
+        let markdown = try await ChatSessionSidebarActions.markdown(session: session, connection: connection)
         #expect(markdown.components(separatedBy: "Repeated").count - 1 == 2)
         #expect(markdown.components(separatedBy: "Sibling projection").count - 1 == 1)
     }

@@ -14,7 +14,7 @@ struct ChatSessionIconPicker: View {
     @State private var selectedIcon: String?
 
     // ui/src/components/session-icon-picker.ts:13 and session-agent-status.ts:16 define the stored choices.
-    private let emoji = ["🦞", "🚀", "🐛", "✅", "🔥", "📦", "🧪", "📝", "🔍", "⚡", "🎯"]
+    private let emoji = ChatSessionSidebarActions.emoji
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Icon & color").font(OpenClawChatTypography.headline)
@@ -58,10 +58,7 @@ struct ChatSessionIconPicker: View {
     }
 
     static func acceptsCustomEmoji(_ input: String) -> Bool {
-        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        // session-agent-status.ts:96: clients without Unicode Sets use this grapheme precheck; Gateway validates RGI.
-        return value.count == 1 && value.utf16.count <= 16 &&
-            !value.unicodeScalars.allSatisfy { (33...126).contains($0.value) }
+        ChatSessionSidebarActions.acceptsCustomEmoji(input)
     }
 
     private func save(_ fields: [String: AnyCodable]) {
