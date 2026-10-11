@@ -19,9 +19,43 @@ Docker- or Podman-backed gateway through normal OpenShell setup; the plugin
 never talks to the container engine directly. This is opt-in: existing sandbox
 behavior is unchanged, and worker settings alone launch nothing.
 
+## Compatibility and rollback
+
+Existing sandbox-only configurations keep their `mirror`/`remote` behavior and
+defaults when `worker` is absent. The new CLI is additive; registering it does
+not create a sandbox, start a node, or select a worker profile. This plugin adds
+no database migration or worker wire protocol.
+
+Use matching, qualified Gateway and node builds for the new worker mode. The
+plugin package’s general host/API version bounds are not a guarantee that an
+older host or image implements native worker inference, required profiles, or
+the private pairing-file command. Follow the selected build’s
+[Node requirements](/install/node-compatibility); a generic image containing an
+older Node or OpenClaw executable is not sufficient. For example, the released
+OpenClaw `v2026.10.1` does not include the native worker-inference stack or
+`cloudWorkers.requiredProfile`. Installing this plugin alone on that release
+does not backport those features.
+
+Before rolling back to a plugin without this mode, remove
+`plugins.entries.openshell.config.worker`: older strict plugin schemas reject
+that field. First finish or stop turns, reclaim native placements, and remove
+any required/native worker profiles while the compatible Gateway and node are
+still available. Follow the complete
+[worker-local inference downgrade procedure](/gateway/cloud-workers/native-inference#upgrade-and-downgrade),
+including pending browser messages; deleting configuration alone does not
+migrate recorded placements or recovery state. Preserve other sandbox settings.
+This is a cleanup procedure, not a claim of tested cross-version database
+downgrade compatibility.
+
 ## Prerequisites
 
-- OpenShell **v0.1.3 or newer**, configured for the OS user running OpenClaw.
+- OpenShell **v0.1.3 or newer**, configured for the OS user running OpenClaw. This
+  minimum applies to the new worker commands, not a new version check on the
+  existing sandbox-only backend.
+- A Linux sandbox workload on a host whose kernel supports complete OpenShell
+  enforcement, including Landlock. Docker or Podman alone does not provide those
+  kernel capabilities. Native Windows worker-local inference is unsupported; a
+  container-engine choice is not a platform-compatibility guarantee.
 - Compatible OpenClaw Gateway and node builds supporting native worker inference,
   required profiles, and `connect --target-file`.
 - An OpenShell source image with Node, OpenClaw, Git, `ps`, and `sleep` on
@@ -48,7 +82,13 @@ OpenShell v0.1.3 uses the **real provider endpoint and model**, not the removed
 workspace inference route or `inference.local`. Follow its
 [inference contract](https://github.com/NVIDIA/OpenShell/blob/v0.1.3/docs/how-it-works/inference.mdx)
 and adapt the [OpenAI profile example](https://github.com/NVIDIA/OpenShell/blob/v0.1.3/providers/openai.yaml)
-to your image before importing it. For a prepared profile with ID `openai`:
+to your image before importing it. Upgrading an older OpenShell deployment to
+v0.1.3 is a separate migration: its retired managed inference route is not
+converted automatically, and upstream requires replacing pre-upgrade sandboxes.
+Follow OpenShell’s
+[migration checklist](https://github.com/NVIDIA/OpenShell/blob/v0.1.3/docs/how-it-works/inference.mdx#migration-checklist)
+before that upgrade. This plugin does not upgrade OpenShell or migrate its
+provider records. For a prepared profile with ID `openai`:
 
 ```bash
 openshell --workspace workers profile lint -f /etc/openshell/openai-worker.yaml
