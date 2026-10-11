@@ -150,7 +150,7 @@ export async function planCronStartup(params: {
       source.assertStorageCurrent();
       for (const notification of committed.notifications) {
         source.assertStorageCurrent();
-        runPostPersistCronNotifications(state, [notification]);
+        await runPostPersistCronNotifications(state, [notification]);
       }
       source.assertStorageCurrent();
       applyCronRuntimeRowsToState(state, committed.jobs);

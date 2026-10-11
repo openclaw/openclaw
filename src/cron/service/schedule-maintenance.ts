@@ -63,7 +63,6 @@ export async function recomputeUnownedCronSchedules(
         noteCronJobsStoreCommit(storeKey);
       }
       applyCronRuntimeRowsToState(state, committed.jobs);
-      runPostPersistCronNotifications(state, committed.notifications);
       for (const entry of committed.logs) {
         state.deps.log[entry.level](entry.fields, entry.message);
       }
@@ -72,5 +71,6 @@ export async function recomputeUnownedCronSchedules(
   if (!outcome) {
     throw new Error("Cron schedule maintenance did not publish its committed rows");
   }
+  await runPostPersistCronNotifications(state, outcome.notifications);
   return outcome;
 }

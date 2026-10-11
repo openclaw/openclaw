@@ -18,7 +18,6 @@ import {
   isOptionalElementDefined,
   LazyCustomElementRequestController,
 } from "../../app/lazy-custom-element.ts";
-import { t } from "../../i18n/index.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
   boardChromeRowPx,
@@ -32,6 +31,7 @@ import {
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { showToast } from "../../lib/toast.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";

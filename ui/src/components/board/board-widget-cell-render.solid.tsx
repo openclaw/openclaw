@@ -1,8 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
-import { t } from "../../i18n/index.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
 import { BOARD_SIZE_PRESETS } from "./board-widget-cell-options.ts";
 
