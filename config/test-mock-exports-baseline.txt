@@ -1921,7 +1921,6 @@
 ["src/agents/agent-command.live-model-switch.test.ts","../cli/command-secret-targets.js","3565efd150a61131f511869025bae4c872aa57ac373af0fd1bb53802f72d7f5d",1]
 ["src/agents/agent-command.live-model-switch.test.ts","../cli/deps.js","40b33b4241ace3328dfc3f1f345236c5435cbcb3a46d1f36819f5c0d0f7fd0cc",1]
 ["src/agents/agent-command.live-model-switch.test.ts","../config/io.js","6439f806288d97c9d57cc0093967d0ad5fc2238f16507dbab9230d6ccac85a9d",1]
-["src/agents/agent-command.live-model-switch.test.ts","../config/runtime-snapshot.js","3e721b5c15d147a6292d2903e623b35c962f7f41553c9b5d6c9b524cac41bfbb",1]
 ["src/agents/agent-command.live-model-switch.test.ts","../config/sessions.js","cc8b6f43787e8d034a152bdfb38f005ff04447f1c254b597840fd2040ae678fb",1]
 ["src/agents/agent-command.live-model-switch.test.ts","../config/sessions/transcript-resolve.runtime.js","3b3c31db3c7d9ca0e7a4ac37dee1bc23f24cd0c185edf6ed148fd98a7d109cd1",1]
 ["src/agents/agent-command.live-model-switch.test.ts","../config/sessions/transcript.runtime.js","f9b8d5698e04b3a9343dcc08983e1d82fd43fc4267e52b83793f81fefde6da2e",1]
