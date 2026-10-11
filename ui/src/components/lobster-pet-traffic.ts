@@ -1,6 +1,5 @@
 // Passers and bottles have seeded clocks independent of the resident's visits.
 import { expectDefined } from "@openclaw/normalization-core";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import {
   LOBSTER_BOTTLE_FORTUNES,
   resolveLobsterPasserCrossMs,
@@ -27,7 +26,7 @@ type LobsterTrafficHooks = {
 
 type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
 
-export class LobsterLedgeTraffic implements ReactiveController {
+export class LobsterLedgeTraffic {
   passer: LobsterPasserPlan | null = null;
   bottle: LobsterBottleScene | null = null;
   private connected = false;
@@ -39,17 +38,15 @@ export class LobsterLedgeTraffic implements ReactiveController {
   private crossingMs = 0;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly notify: () => void,
     private readonly hooks: LobsterTrafficHooks,
-  ) {
-    host.addController(this);
-  }
+  ) {}
 
-  hostConnected() {
+  connect() {
     this.connected = true;
   }
 
-  hostUpdate() {
+  update() {
     if (!this.hooks.visitsEnabled()) {
       this.clearTimers();
       this.passer = null;
@@ -57,13 +54,13 @@ export class LobsterLedgeTraffic implements ReactiveController {
     }
   }
 
-  hostDisconnected() {
+  dispose() {
     this.connected = false;
     this.clearTimers();
     // Clear visible guests so a reconnect cannot show a stopped passer or bottle.
     this.passer = null;
     this.bottle = null;
-    this.host.requestUpdate();
+    this.notify();
   }
 
   // Only a new seed restores a crossing already consumed by this load.
@@ -116,7 +113,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
     }
     this.bottle = { ...this.bottle, opened: true };
     this.armBottleEbb(120_000);
-    this.host.requestUpdate();
+    this.notify();
   };
 
   private clearTimers() {
@@ -153,16 +150,17 @@ export class LobsterLedgeTraffic implements ReactiveController {
         plan.kind,
         this.hooks.passerOptions().critterArtwork,
       );
-      this.host.requestUpdate();
+      this.notify();
       const crossMs = this.passerCrossMs();
       this.hooks.onPasserFacing(plan.direction === 1 ? -1 : 1);
       this.timers.schedule("passerWatchTimer", crossMs / 2, () => {
         this.hooks.onPasserFacing(plan.direction);
         this.hooks.onPasserMidCross();
+        this.notify();
       });
       this.timers.schedule("passerEndTimer", crossMs, () => {
         this.passer = null;
-        this.host.requestUpdate();
+        this.notify();
         this.hooks.onPasserDone();
       });
     });
@@ -185,7 +183,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
           "lobster bottle fortune",
         ),
       };
-      this.host.requestUpdate();
+      this.notify();
       this.armBottleEbb(300_000);
     });
   }
@@ -194,7 +192,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
     this.timers.clear("bottleEndTimer");
     this.timers.schedule("bottleEndTimer", delayMs, () => {
       this.bottle = null;
-      this.host.requestUpdate();
+      this.notify();
     });
   }
 }
