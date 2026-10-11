@@ -1,11 +1,14 @@
-#if os(macOS)
 import Observation
 import OpenClawProtocol
 import SwiftUI
 
 @MainActor
 @Observable
-final class ChatSessionGroupDefaultsModel {
+public final class ChatSessionGroupDefaultsModel: Identifiable {
+    public nonisolated var id: ObjectIdentifier {
+        ObjectIdentifier(self)
+    }
+
     let name: String
     let connection: OpenClawSessionMenuConnection
     let agentWorkspace: String?
@@ -29,7 +32,7 @@ final class ChatSessionGroupDefaultsModel {
     private var browserGeneration = 0
     private var typedLoad: Task<Void, Never>?
 
-    init(name: String, connection: OpenClawSessionMenuConnection, agentWorkspace: String?) {
+    public init(name: String, connection: OpenClawSessionMenuConnection, agentWorkspace: String?) {
         self.name = name
         self.connection = connection
         self.agentWorkspace = agentWorkspace
@@ -261,15 +264,15 @@ final class ChatSessionGroupDefaultsModel {
     }
 }
 
-struct ChatSessionGroupDefaultsSheet: View {
+public struct ChatSessionGroupDefaultsSheet: View {
     @State private var model: ChatSessionGroupDefaultsModel
     @Environment(\.dismiss) private var dismiss
 
-    init(model: ChatSessionGroupDefaultsModel) {
+    public init(model: ChatSessionGroupDefaultsModel) {
         self._model = State(initialValue: model)
     }
 
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Group defaults").font(OpenClawChatTypography.headline)
             Text(verbatim: self.model.name).foregroundStyle(.secondary)
@@ -311,7 +314,13 @@ struct ChatSessionGroupDefaultsSheet: View {
                     .keyboardShortcut(.defaultAction).disabled(!self.model.canSave)
             }
         }
-        .padding(20).frame(width: 460).font(OpenClawChatTypography.body)
+        .padding(20)
+        #if os(macOS)
+        .frame(width: 460)
+        #else
+        .frame(maxWidth: .infinity, alignment: .leading)
+        #endif
+        .font(OpenClawChatTypography.body)
         .interactiveDismissDisabled(self.model.submitting)
         // NSHostingMenu does not mount appearance tasks; the presented sheet owns loading and Retry.
         .task { await self.model.load() }
@@ -368,4 +377,3 @@ struct ChatSessionGroupDefaultsSheet: View {
         }
     }
 }
-#endif

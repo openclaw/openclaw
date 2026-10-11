@@ -10,6 +10,7 @@ struct RootSidebar: View {
     @State private var searchText = ""
     @State private var isSearchActive = false
     @State private var showsPagesEditor = false
+    @State private var expandedSessions: Set<String> = []
     @State private var presentedAttention: OpenClawChatAttentionPresentation?
     @FocusState private var isSearchFocused: Bool
     @AppStorage("sidebar.pinnedPages") private var pinnedPagesStorage: String = ""
@@ -31,17 +32,23 @@ struct RootSidebar: View {
             ScrollView {
                 // One 10pt unit everywhere: side insets, section gaps, and
                 // the picker card's clearance all match.
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // Not lazy: with three sections it saves nothing, and a lazy stack drops a section the
+                // keyboard pushes out of view, which closes an alert or sheet opened from one of its rows.
+                VStack(alignment: .leading, spacing: 10) {
                     self.agentsSection
                     self.pagesSection(pinnedSessionNodes: sessionLayout.pinnedNodes)
                     self.sessionsSection(
                         sections: sessionLayout.sections,
                         hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
             }
             self.footer
+        }
+        .task(id: self.appModel.chatViewModelIdentityID) {
+            await self.appModel.sessionGroups.refresh(appModel: self.appModel)
         }
         .foregroundStyle(OpenClawSidebarPalette.text)
         .background(OpenClawSidebarPalette.background)
@@ -364,6 +371,9 @@ struct RootSidebar: View {
     {
         let selectedSessionKey = self.resolvedSelectedSessionKey
         VStack(alignment: .leading, spacing: 6) {
+            if let failure = self.appModel.sessionGroups.failure {
+                Text(verbatim: failure).font(OpenClawType.captionMedium).foregroundStyle(OpenClawBrand.warn)
+            }
             if let sessionErrorText = self.model.sessionErrorText {
                 Text(verbatim: sessionErrorText)
                     .font(OpenClawType.captionMedium)
@@ -393,14 +403,38 @@ struct RootSidebar: View {
                     let title = section.id == "recent"
                         ? String(localized: "Sessions")
                         : (section.title ?? String(localized: "Sessions"))
-                    HStack(spacing: 0) {
-                        self.sectionTitle(title)
-                        Spacer(minLength: 0)
-                        self.attentionBadges(
-                            for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
+                    if section.id.hasPrefix("group:"), let name = section.title {
+                        CommandSessionGroupHeader(
+                            name: name,
+                            sessions: self.model.sessions,
+                            trailingCount: section.nodes.count,
+                            refresh: { await self.model.refreshSessions(appModel: self.appModel) },
+                            openSession: { key in
+                                self.appModel.openChat(sessionKey: key)
+                                self.selectSidebarDestination(.chat)
+                            },
+                            accessory: {
+                                self.attentionBadges(
+                                    for: Self.flattened(section.nodes).map(\.session),
+                                    targetID: "section:\(section.id)")
+                            })
+                            .foregroundStyle(OpenClawSidebarPalette.muted)
+                            // Leading inset only: the caret and count sit at the trailing edge.
+                            .padding(.leading, 10)
+                    } else {
+                        HStack(spacing: 0) {
+                            self.sectionTitle(title)
+                            Spacer(minLength: 0)
+                            self.attentionBadges(
+                                for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
+                        }
                     }
-                    ForEach(self.sessionNodes(for: section)) { node in
-                        self.sessionButton(node, selectedSessionKey: selectedSessionKey)
+                    if !section.id.hasPrefix("group:") ||
+                        !self.appModel.sessionGroups.collapsed.contains(section.title ?? "") || !self.searchText.isEmpty
+                    {
+                        ForEach(self.sessionRows(for: section)) { row in
+                            self.sessionButton(row.node, selectedSessionKey: selectedSessionKey, depth: row.depth)
+                        }
                     }
                 }
             }
@@ -442,8 +476,8 @@ struct RootSidebar: View {
                 .accessibilityLabel(String(localized: "Edit Pages"))
             }
             self.homeRow
-            ForEach(pinnedSessionNodes) { node in
-                self.sessionButton(node, selectedSessionKey: self.resolvedSelectedSessionKey)
+            ForEach(self.rows(pinnedSessionNodes)) { row in
+                self.sessionButton(row.node, selectedSessionKey: self.resolvedSelectedSessionKey, depth: row.depth)
             }
             ForEach(self.pinnedPages) { destination in
                 self.destinationButton(destination)
@@ -572,12 +606,12 @@ struct RootSidebar: View {
         var remainingSections = sections
         let pinnedSection = remainingSections.remove(at: pinnedIndex)
         return SessionLayout(
-            pinnedNodes: self.flattened(pinnedSection.nodes),
+            pinnedNodes: pinnedSection.nodes,
             sections: remainingSections)
     }
 
     private var sessionCategories: [String] {
-        CommandSessionGrouping.categories(from: self.model.sessions, knownGroups: SessionGroupStore.load())
+        self.appModel.sessionGroups.names(for: self.model.sessions)
     }
 
     private var sessionGroups: [OpenClawChatSessionGroup] {
@@ -590,12 +624,26 @@ struct RootSidebar: View {
         nodes.flatMap { [$0] + self.flattened($0.children) }
     }
 
-    private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Node] {
-        let nodes = Self.flattened(section.nodes)
+    private func sessionRows(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Row] {
+        let nodes = section.nodes
         guard section.id == "recent", let limit = Self.recentSessionCap(searchText: self.searchText) else {
-            return nodes
+            return self.rows(nodes)
         }
-        return Array(nodes.prefix(limit))
+        return self.rows(Array(nodes.prefix(limit)))
+    }
+
+    private func rows(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Row] {
+        ChatSessionSidebarModel.rows(nodes, showsChildren: self.showsChildren)
+    }
+
+    /// Keep search results and the selected descendant visible even when their parent was not opened.
+    private func showsChildren(of node: ChatSessionSidebarModel.Node) -> Bool {
+        self.expandedSessions.contains(node.id) || self.mustShowChildren(of: node)
+    }
+
+    private func mustShowChildren(of node: ChatSessionSidebarModel.Node) -> Bool {
+        !self.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || Self.flattened(node.children).contains { $0.session.key == self.resolvedSelectedSessionKey }
     }
 
     static func recentSessionCap(searchText: String) -> Int? {
@@ -604,7 +652,8 @@ struct RootSidebar: View {
 
     private func sessionButton(
         _ node: ChatSessionSidebarModel.Node,
-        selectedSessionKey: String) -> some View
+        selectedSessionKey: String,
+        depth: Int = 0) -> some View
     {
         let session = node.session
         let isSelected = session.key == selectedSessionKey
@@ -693,8 +742,39 @@ struct RootSidebar: View {
             .accessibilityValue(Self.sessionAccessibilityValue(
                 isPinned: session.pinned == true,
                 isUnread: session.unread == true))
+            .accessibilityIdentifier("RootTabs.Sidebar.Session.\(session.key)")
+            if !node.children.isEmpty {
+                let isExpanded = self.showsChildren(of: node)
+                Button {
+                    if self.expandedSessions.contains(node.id) {
+                        self.expandedSessions.remove(node.id)
+                    } else {
+                        self.expandedSessions.insert(node.id)
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        // The open parent shows its rows; the number is kept in the layout so the caret stays put.
+                        Text(verbatim: "\(node.children.count)")
+                            .opacity(isExpanded ? 0 : 1)
+                            .accessibilityHidden(isExpanded)
+                    }
+                    .font(OpenClawType.caption2Medium)
+                    .foregroundStyle(OpenClawSidebarPalette.muted)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isExpanded
+                    ? String(localized: "Hide Sub-sessions")
+                    : String(localized: "Show Sub-sessions"))
+                .accessibilityValue(Text(verbatim: isExpanded ? "" : String(node.children.count)))
+                .accessibilityIdentifier("RootTabs.Sidebar.Session.Children.\(session.key)")
+                .disabled(self.mustShowChildren(of: node))
+            }
             self.attentionBadges(for: Self.flattened([node]).map(\.session), targetID: "session:\(session.key)")
         }
+        .padding(.leading, CGFloat(min(depth, 6)) * 16)
     }
 
     private func attentionBadges(for sessions: [OpenClawChatSessionEntry], targetID: String) -> some View {

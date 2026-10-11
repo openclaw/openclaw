@@ -178,7 +178,7 @@ struct RootTabsSidebarRegressionTests {
         #expect(footer.contains("self.selectSidebarDestination(.settings)"))
         #expect(footer.contains("RootTabs.Sidebar.Destination.settings"))
 
-        #expect(pages.contains("ForEach(pinnedSessionNodes)"))
+        #expect(pages.contains("ForEach(self.rows(pinnedSessionNodes))"))
         #expect(sessions.contains("section.id == \"recent\""))
         #expect(sessions.contains("String(localized: \"Sessions\")"))
         #expect(!sessions.contains("String(localized: \"Recent\")"))

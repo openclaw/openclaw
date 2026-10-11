@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import OpenClawProtocol
 
@@ -43,4 +42,3 @@ extension OpenClawChatGatewayRequests {
             timeoutMs: 15000)
     }
 }
-#endif
