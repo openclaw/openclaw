@@ -65,8 +65,8 @@ command handling is enabled for the surface.
 </AccordionGroup>
 
 Command replies delivered through the shared dispatcher are part of the conversation
-on every channel. Telegram native command menus and button selections are also
-retained; other channels' native direct-send adapters are not covered. These exchanges
+on every channel. Native command menus and button selections on Discord,
+Mattermost, Slack, and Telegram are also retained after delivery. These exchanges
 appear in session history and later model context. Login codes, pairing codes,
 login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
 recorded copy; delivered instructions and command execution are unchanged.

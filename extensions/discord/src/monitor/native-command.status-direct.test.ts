@@ -12,6 +12,7 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   dispatchReplyWithDispatcher: vi.fn(),
   loadWebMedia: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async () => {
@@ -28,6 +29,10 @@ vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async () => {
 vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
   resolveDirectStatusReplyForSession: (...args: unknown[]) =>
     runtimeModuleMocks.resolveDirectStatusReplyForSession(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+  recordDeliveredCommandExchange: runtimeModuleMocks.recordDeliveredCommandExchange,
 }));
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
@@ -231,7 +236,38 @@ describe("discord native /status", () => {
       content: "status reply",
       ephemeral: true,
     });
+    expect(runtimeModuleMocks.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        commandText: "/status",
+        replyText: "status reply",
+        commandId: expect.stringMatching(/^discord:default:/),
+      }),
+    );
   });
+
+  it.each([false, true])(
+    "records the unavailable status only after delivery (failed=%s)",
+    async (failed) => {
+      runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue(undefined);
+      const command = await createStatusCommand(createConfig());
+      const interaction = createInteraction();
+      if (failed) {
+        interaction.followUp.mockRejectedValueOnce({ discordCode: 10062 });
+      }
+
+      await command.run(interaction as never);
+
+      expect(runtimeModuleMocks.recordDeliveredCommandExchange).toHaveBeenCalledTimes(
+        failed ? 0 : 1,
+      );
+      if (!failed) {
+        expect(runtimeModuleMocks.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+          expect.objectContaining({ commandText: "/status", replyText: "Status unavailable." }),
+        );
+      }
+    },
+  );
 
   it("keeps direct status media follow-up chunks ephemeral", async () => {
     runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({

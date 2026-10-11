@@ -75,6 +75,11 @@ const mockState = vi.hoisted(() => ({
   renderMattermostModelSummaryView: vi.fn(),
   renderMattermostModelsPickerView: vi.fn(),
   renderMattermostProviderPickerView: vi.fn(),
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+  recordDeliveredCommandExchange: mockState.recordDeliveredCommandExchange,
 }));
 
 vi.mock("./runtime-api.js", () => {
@@ -307,6 +312,13 @@ describe("slash-http cfg threading", () => {
           accountId: "default",
         }),
       );
+      expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          commandText: "models",
+          replyText: text,
+          commandId: expect.stringMatching(/^mattermost:default:chan-1:/),
+        }),
+      );
     },
   );
 
@@ -431,6 +443,15 @@ describe("slash-http cfg threading", () => {
       );
       const sentText = mockState.sendMessageMattermost.mock.calls[0]?.[1];
       expect(sentText?.includes("Some models could not be refreshed.")).toBe(failed);
+      expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "agent-1",
+          sessionKey: "mattermost:session:1",
+          expectedSessionId: sessionEntry.sessionId,
+          commandText: testCase.commandText,
+          replyText: expect.stringContaining(testCase.text),
+        }),
+      );
     },
   );
 

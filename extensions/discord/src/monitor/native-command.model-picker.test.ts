@@ -36,7 +36,14 @@ import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thr
 
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
-const hostSdk = vi.hoisted(() => ({ runtimeChoicesAvailable: true }));
+const hostSdk = vi.hoisted(() => ({
+  runtimeChoicesAvailable: true,
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+  recordDeliveredCommandExchange: hostSdk.recordDeliveredCommandExchange,
+}));
 
 vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => {
   const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>();
@@ -439,6 +446,7 @@ describe("Discord model picker interactions", () => {
 
   beforeEach(async () => {
     hostSdk.runtimeChoicesAvailable = true;
+    hostSdk.recordDeliveredCommandExchange.mockClear();
     tempDir = tempDirs.make("case-", sessionRoot);
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -889,6 +897,14 @@ describe("Discord model picker interactions", () => {
       JSON.stringify(serializePayload(selectInteraction.editReply.mock.calls[0]![0]!)),
     ).toContain("Selected: openai/gpt-4o · OpenClaw Default (press Submit)");
     expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(hostSdk.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandText: "/model",
+        replyId: "picker-update",
+        replyText: expect.stringContaining("Selected: openai/gpt-4o"),
+      }),
+    );
+    hostSdk.recordDeliveredCommandExchange.mockClear();
 
     const submitInteraction = await submit(createModelsViewSubmitData());
 
@@ -902,6 +918,14 @@ describe("Discord model picker interactions", () => {
       | Parameters<DispatchDiscordCommandInteraction>[0]
       | undefined;
     expect(dispatchCall?.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
+    expect(hostSdk.recordDeliveredCommandExchange).toHaveBeenCalledOnce();
+    expect(hostSdk.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandText: "/model openai/gpt-4o",
+        replyId: "selection",
+        replyText: expect.not.stringContaining("Applying model change"),
+      }),
+    );
   });
 
   it.each(["default"])(
@@ -1200,6 +1224,15 @@ describe("Discord model picker interactions", () => {
     expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker", {
       sessionEntry: expect.objectContaining(entry),
     });
+    expect(hostSdk.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "worker",
+        sessionKey: "agent:worker:subagent:bound",
+        expectedSessionId: "bound-session",
+        commandText: "/model",
+        replyText: expect.stringContaining("Select a model, then press Submit."),
+      }),
+    );
   });
 
   it("opens the first visible provider when the current model provider is filtered out", async () => {

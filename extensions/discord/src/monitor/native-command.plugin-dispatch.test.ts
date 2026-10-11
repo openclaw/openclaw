@@ -39,6 +39,11 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   dispatchReplyWithDispatcher: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
   getSessionEntry: vi.fn(),
+  recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+  recordDeliveredCommandExchange: runtimeModuleMocks.recordDeliveredCommandExchange,
 }));
 let observedNativeTurnDispatcher: unknown;
 const getSessionEntry = sessionStore.getSessionEntry;
@@ -347,6 +352,7 @@ describe("Discord native plugin command dispatch", () => {
     });
     runtimeModuleMocks.getSessionEntry.mockReset();
     runtimeModuleMocks.getSessionEntry.mockReturnValue(undefined);
+    runtimeModuleMocks.recordDeliveredCommandExchange.mockClear();
     vi.spyOn(channelInbound, "dispatchChannelInboundTurn").mockImplementation(
       dispatchChannelInboundTurnForTest,
     );
@@ -366,6 +372,9 @@ describe("Discord native plugin command dispatch", () => {
       params.agentId !== undefined
         ? runtimeModuleMocks.getSessionEntry(params)
         : getSessionEntry(params),
+    );
+    vi.spyOn(sessionStore, "getSessionEntryAsync").mockImplementation(async (params) =>
+      runtimeModuleMocks.getSessionEntry(params),
     );
   });
 
@@ -521,6 +530,15 @@ describe("Discord native plugin command dispatch", () => {
       agentId: "codex",
       sessionKey: pluginSessionKey,
     });
+    expect(runtimeModuleMocks.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "codex",
+        sessionKey: pluginSessionKey,
+        expectedSessionId: "codex-session",
+        commandText: "/pair now",
+        replyText: "paired:now",
+      }),
+    );
   });
 
   it.each([

@@ -1,6 +1,7 @@
 import type { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import type { DispatchDiscordCommandInteractionResult } from "./native-command-dispatch.js";
 import {
@@ -29,7 +30,7 @@ export async function maybeDeliverDiscordDirectStatus(params: {
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
   effectiveRoute: ResolvedAgentRoute;
-  respond: (content: string, options?: { ephemeral?: boolean }) => Promise<void>;
+  respond: (content: string, options?: { ephemeral?: boolean }) => Promise<boolean>;
 }): Promise<DispatchDiscordCommandInteractionResult | null> {
   if (params.suppressReplies || params.commandName !== "status") {
     return null;
@@ -45,7 +46,7 @@ export async function maybeDeliverDiscordDirectStatus(params: {
     defaultGroupActivation: params.defaultGroupActivation,
   });
   if (statusReply && hasRenderableReplyPayload(statusReply)) {
-    await deliverDiscordInteractionReply({
+    const delivered = await deliverDiscordInteractionReply({
       interaction: params.interaction,
       payload: statusReply,
       mediaLocalRoots: params.mediaLocalRoots,
@@ -53,8 +54,30 @@ export async function maybeDeliverDiscordDirectStatus(params: {
       preferFollowUp: params.preferFollowUp,
       responseEphemeral: params.responseEphemeral,
     });
+    if (delivered && statusReply.text) {
+      await recordDeliveredCommandExchange({
+        config: params.cfg,
+        agentId: params.effectiveRoute.agentId,
+        sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
+        commandText: "/status",
+        commandId: `discord:${params.accountId}:${params.commandTargetSessionKey?.trim() || params.sessionKey}:${params.interaction.id}`,
+        replyId: "status",
+        replyText: statusReply.text,
+      });
+    }
   } else {
-    await params.respond("Status unavailable.");
+    const delivered = await params.respond("Status unavailable.");
+    if (delivered) {
+      await recordDeliveredCommandExchange({
+        config: params.cfg,
+        agentId: params.effectiveRoute.agentId,
+        sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
+        commandText: "/status",
+        commandId: `discord:${params.accountId}:${params.commandTargetSessionKey?.trim() || params.sessionKey}:${params.interaction.id}`,
+        replyId: "status",
+        replyText: "Status unavailable.",
+      });
+    }
   }
   return { accepted: true, effectiveRoute: params.effectiveRoute };
 }

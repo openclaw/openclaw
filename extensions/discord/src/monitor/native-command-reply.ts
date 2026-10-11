@@ -31,6 +31,29 @@ import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 
 export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
 
+/** Retain visible component text, not interaction IDs or option values. */
+export function formatDiscordCommandComponents(components: readonly TopLevelComponents[]): string {
+  const text: string[] = [];
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    const component = value as Record<string, unknown>;
+    for (const key of ["content", "label", "description", "placeholder"]) {
+      if (typeof component[key] === "string") {
+        text.push(component[key]);
+      }
+    }
+    for (const key of ["components", "options"]) {
+      if (Array.isArray(component[key])) {
+        component[key].forEach(visit);
+      }
+    }
+  };
+  components.forEach((component) => visit(component.serialize()));
+  return text.join("\n");
+}
+
 export function resolveDiscordInteractionReplyOptions(
   params: Pick<DiscordCommandArgContext, "cfg" | "discordConfig" | "accountId">,
 ) {
