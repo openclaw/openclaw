@@ -48,44 +48,46 @@ export function createStaleWhileRevalidateCache<T>(options: {
       if (readOptions.refresh) {
         loads.delete(key);
       }
-      let refresh: Promise<T> | undefined;
-      refresh = getOrCreatePromise(
+      const refresh: Promise<T> = getOrCreatePromise(
         loads,
         key,
-        async () => {
+        () => {
           active += 1;
-          try {
-            const value = await load(Boolean(stale));
-            if (loads.get(key) !== refresh) {
-              return value;
-            }
-            if (options.cacheable?.(value) !== false) {
-              entries.set(key, {
-                kind: "value",
-                value,
-                expiresAt: Date.now() + options.ttlMs,
-              });
-              pruneMapToMaxSize(entries, options.maxEntries);
-            } else {
-              entries.delete(key);
-            }
-            return value;
-          } catch (error) {
-            if (loads.get(key) === refresh) {
-              entries.delete(key);
-              const ttl = options.errorTtlMs?.(error) ?? 0;
-              if (ttl > 0) {
-                entries.set(key, { kind: "error", error, expiresAt: Date.now() + ttl });
+          // Start synchronously; settle only after the promise is installed in the map.
+          return (async () => load(Boolean(stale)))()
+            .then((value) => {
+              if (loads.get(key) !== refresh) {
+                return value;
+              }
+              if (options.cacheable?.(value) !== false) {
+                entries.set(key, {
+                  kind: "value",
+                  value,
+                  expiresAt: Date.now() + options.ttlMs,
+                });
                 pruneMapToMaxSize(entries, options.maxEntries);
+              } else {
+                entries.delete(key);
               }
-              if (stale) {
-                options.onBackgroundError?.(error);
+              return value;
+            })
+            .catch((error: unknown) => {
+              if (loads.get(key) === refresh) {
+                entries.delete(key);
+                const ttl = options.errorTtlMs?.(error) ?? 0;
+                if (ttl > 0) {
+                  entries.set(key, { kind: "error", error, expiresAt: Date.now() + ttl });
+                  pruneMapToMaxSize(entries, options.maxEntries);
+                }
+                if (stale) {
+                  options.onBackgroundError?.(error);
+                }
               }
-            }
-            throw error;
-          } finally {
-            active -= 1;
-          }
+              throw error;
+            })
+            .finally(() => {
+              active -= 1;
+            });
         },
         { evictOnSettled: true },
       );
