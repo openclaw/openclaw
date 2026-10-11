@@ -42,9 +42,15 @@ const generation = { nodeId, key: "generation-1" };
 const item = { id: "pending-1", type: "location.request", priority: "high" };
 let lifecycle: AbortController;
 
-function makeContext(getSession: () => { connId: string } | undefined = () => undefined) {
+function makeContext(
+  getSession: () => { connId: string; pairingGeneration?: string } | undefined = () => undefined,
+) {
   return {
-    nodeRegistry: { get: vi.fn(), getForPairingGeneration: vi.fn(getSession) },
+    nodeRegistry: {
+      get: vi.fn(getSession),
+      getForPairingGeneration: vi.fn(getSession),
+      isConnectionCurrentPairingState: vi.fn(async () => true),
+    },
     logGateway: { info: vi.fn(), warn: vi.fn() },
     getRuntimeConfig: () => ({}),
   };
@@ -68,7 +74,9 @@ async function callPending(
   return respond;
 }
 
-function drain(context = makeContext(() => ({ connId: "conn-1" }))) {
+function drain(
+  context = makeContext(() => ({ connId: "conn-1", pairingGeneration: generation.key })),
+) {
   return callPending("node.pending.drain", { maxItems: 3 }, context, {
     connId: "conn-1",
     connect: { device: { id: nodeId } },
@@ -135,18 +143,20 @@ describe("node.pending handlers", () => {
   });
 
   it("rejects a changed pairing before draining its pending work", async () => {
-    mocks.isNodePairingGenerationCurrent.mockResolvedValue(false);
-    expectPairingChanged(await drain());
+    const context = makeContext(() => ({ connId: "conn-1", pairingGeneration: generation.key }));
+    context.nodeRegistry.isConnectionCurrentPairingState.mockResolvedValue(false);
+    expectPairingChanged(await drain(context));
     expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
   });
 
   it("rejects a same-generation reconnect before destructively draining", async () => {
     let connId = "conn-1";
-    mocks.isNodePairingGenerationCurrent.mockImplementation(async () => {
+    const context = makeContext(() => ({ connId, pairingGeneration: generation.key }));
+    context.nodeRegistry.isConnectionCurrentPairingState.mockImplementation(async () => {
       connId = "replacement";
       return true;
     });
-    expectPairingChanged(await drain(makeContext(() => ({ connId }))));
+    expectPairingChanged(await drain(context));
     expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
   });
 

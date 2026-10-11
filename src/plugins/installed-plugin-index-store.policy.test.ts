@@ -5,17 +5,16 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import {
-  publishPluginSourceAdmissionInDatabase,
   refreshPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import { createInstalledPluginIndexCandidate as createCandidate } from "./test-helpers/installed-plugin-index.js";
@@ -52,6 +51,7 @@ describe("installed plugin index policy refresh", () => {
       installRecords,
       env,
     });
+    expect(initial.plugins[0]).toMatchObject({ pluginId: "demo", installOwner: "package" });
     const admissionKey = pluginDir + "\0";
     const admission = {
       signature: "admitted-source",
@@ -95,37 +95,36 @@ describe("installed plugin index policy refresh", () => {
       "utf8",
     );
 
-    const refreshed = await refreshPersistedInstalledPluginIndex({
-      reason: "policy-changed",
-      stateDir,
-      candidates: [candidate],
-      installRecords,
-      env,
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
+    const refreshed = await withPluginLifecycleLease(
+      resolveInstalledPluginIndexStateDatabaseOptions({ stateDir, env }),
+      async (lease) => {
+        const current = await refreshPersistedInstalledPluginIndex({
+          lease,
+          reason: "policy-changed",
+          stateDir,
+          candidates: [candidate],
+          installRecords,
+          env,
+          config: {
+            plugins: {
+              entries: {
+                demo: {
+                  enabled: false,
+                },
+              },
             },
           },
-        },
-      },
-      policyPluginIds: ["demo"],
-      now: () => {
-        // Refresh owns the snapshot through publication; a newer receipt cannot replace it.
+          policyPluginIds: ["demo"],
+        });
         expect(
-          runOpenClawStateWriteTransaction(
-            ({ db }) =>
-              publishPluginSourceAdmissionInDatabase(db, {
-                ...publication,
-                receipt: newerAdmission,
-              }),
-            resolveInstalledPluginIndexStateDatabaseOptions({ stateDir }),
-          ),
+          await createPluginSourceAdmissionPublisher({ stateDir })!({
+            ...publication,
+            receipt: newerAdmission,
+          }),
         ).toBe(false);
-        return new Date();
+        return current;
       },
-    });
+    );
 
     expect(refreshed.plugins).toHaveLength(initial.plugins.length);
     expect(refreshed.plugins.find((plugin) => plugin.pluginId === "demo")).toMatchObject({
@@ -146,10 +145,11 @@ describe("installed plugin index policy refresh", () => {
     const rebuilt = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
-      candidates: [candidate],
+      discovery: { candidates: [candidate], diagnostics: [] },
       installRecords: changedInstallRecords,
       env,
     });
+    expect(rebuilt.plugins[0]).toMatchObject({ pluginId: "demo", installOwner: "package" });
     expect(rebuilt.plugins[0]?.manifestHash).not.toBe(initial.plugins[0]?.manifestHash);
     expect(rebuilt.plugins[0]?.sourceAdmissions).toBeUndefined();
   });

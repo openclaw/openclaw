@@ -220,16 +220,6 @@ export function createOpenAiCompatibleSpeechProvider<
     );
   }
 
-  function resolveBaseUrl(params: {
-    cfg?: unknown;
-    providerConfig: OpenAiCompatibleSpeechProviderConfig<ExtraConfig>;
-  }): string {
-    return normalizeBaseUrl(
-      params.providerConfig.baseUrl ??
-        trimToUndefined(readModelProviderConfig(params.cfg, providerConfigKey)?.baseUrl),
-    );
-  }
-
   return {
     id: options.id,
     label: options.label,
@@ -290,7 +280,9 @@ export function createOpenAiCompatibleSpeechProvider<
         throw new Error(options.missingApiKeyError ?? `${options.label} API key missing`);
       }
 
-      const baseUrl = resolveBaseUrl({ cfg: req.cfg, providerConfig: config });
+      const baseUrl = normalizeBaseUrl(
+        config.baseUrl ?? readModelProviderConfig(req.cfg, providerConfigKey)?.baseUrl,
+      );
       const responseFormat = config.responseFormat ?? options.defaultResponseFormat;
       const {
         assertOkOrThrowHttpError,

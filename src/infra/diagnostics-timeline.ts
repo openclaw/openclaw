@@ -51,14 +51,10 @@ type DiagnosticsTimelineEvent = {
   signal?: string | null;
 };
 
-type DiagnosticsTimelineSpanOptions = {
-  phase?: string;
-  parentSpanId?: string;
-  attributes?: DiagnosticsTimelineAttributes;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  omitErrorMessage?: boolean;
-};
+type DiagnosticsTimelineSpanOptions = DiagnosticsTimelineOptions &
+  Pick<DiagnosticsTimelineEvent, "phase" | "parentSpanId" | "attributes"> & {
+    omitErrorMessage?: boolean;
+  };
 
 type DiagnosticsTimelineOptions = {
   config?: OpenClawConfig;
@@ -66,13 +62,10 @@ type DiagnosticsTimelineOptions = {
 };
 
 /** Active timeline span carried through async-local scope for nested diagnostics. */
-type ActiveDiagnosticsTimelineSpan = {
-  name: string;
-  phase?: string;
-  spanId: string;
-  parentSpanId?: string;
-  attributes?: DiagnosticsTimelineAttributes;
-};
+type ActiveDiagnosticsTimelineSpan = Pick<
+  DiagnosticsTimelineEvent,
+  "name" | "phase" | "parentSpanId" | "attributes"
+> & { spanId: string };
 
 type StartedDiagnosticsTimelineSpan = ActiveDiagnosticsTimelineSpan & {
   config?: OpenClawConfig;
@@ -297,17 +290,7 @@ function startDiagnosticsTimelineSpan(
     ...(options.attributes ? { attributes: options.attributes } : {}),
     ...(options.omitErrorMessage ? { omitErrorMessage: true } : {}),
   };
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.start",
-      name: span.name,
-      phase: span.phase,
-      spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
-      attributes: span.attributes,
-    },
-    { config: span.config, env: span.env },
-  );
+  emitDiagnosticsTimelineEvent({ type: "span.start", ...span }, span);
   return span;
 }
 
@@ -331,12 +314,8 @@ function emitFinishedDiagnosticsTimelineSpan(
   emitDiagnosticsTimelineEvent(
     {
       type: failure ? "span.error" : "span.end",
-      name: span.name,
-      phase: span.phase,
-      spanId: span.spanId,
-      parentSpanId: span.parentSpanId,
+      ...span,
       durationMs: performance.now() - span.startedAt,
-      attributes: span.attributes,
       ...(failure
         ? {
             errorName: failure.error instanceof Error ? failure.error.name : typeof failure.error,
@@ -349,7 +328,7 @@ function emitFinishedDiagnosticsTimelineSpan(
           }
         : {}),
     },
-    { config: span.config, env: span.env },
+    span,
   );
 }
 

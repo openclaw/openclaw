@@ -138,7 +138,6 @@ function getLocalCliCredential(
   }
 }
 
-/** Resolves the stable auth epoch hash for a CLI runtime/provider session. */
 export async function resolveCliAuthEpoch(params: {
   provider: string;
   agentDir?: string;

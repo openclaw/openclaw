@@ -200,7 +200,7 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
         };
       },
       getAutostartSuppression: () => null,
-      recoverAutostartSuppression: async () => false,
+      recoverAutostartSuppression: () => undefined,
       isAmbientAutostartSuppressed: () => false,
       isHealthMonitorEnabled: () => true,
       isAccountListed: () => true,

@@ -139,8 +139,7 @@ struct ControlUIHubScreen: View {
                     Text("Open Gateway Settings")
                         .font(OpenClawType.subheadSemiBold)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(OpenClawBrand.accent)
+                .openClawProminentButton()
             }
         }
         .padding(24)

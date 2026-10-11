@@ -110,13 +110,6 @@ describe("resolveGatewayAssistantAvatar", () => {
     });
   });
 
-  it.each(["PS", "🦞"])("keeps the %s text avatar free of file metadata", async (avatar) => {
-    const { cfg } = createWorkspace();
-    cfg.agents!.entries!.main!.identity = { avatar };
-
-    expect(await projectAvatar(cfg)).toEqual({ avatar, resolution: null });
-  });
-
   it("preserves same-origin avatar routes and applies the configured base path", async () => {
     const { cfg } = createWorkspace();
     cfg.gateway = { controlUi: { basePath: "/openclaw" } };

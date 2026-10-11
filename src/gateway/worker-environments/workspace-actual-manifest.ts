@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
@@ -287,6 +287,20 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
   };
+  const addLeaf = async (relative: string, absolute: string, stats: Stats): Promise<boolean> => {
+    if (stats.isSymbolicLink()) {
+      const target = await fs.readlink(absolute);
+      if (!isPortableRootContainedSymlink(root, relative, target)) {
+        return false;
+      }
+      addEntry({ path: relative, type: "symlink", mode: 0o777, target }, Buffer.byteLength(target));
+    } else if (stats.isFile()) {
+      filePaths.push(relative);
+    } else {
+      return false;
+    }
+    return true;
+  };
   const addIncludedPath = async (
     relative: string,
     includedNodes: ReadonlySet<string>,
@@ -331,22 +345,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       }
       return "derived-only";
     }
-    if (stats.isSymbolicLink()) {
-      const target = await fs.readlink(absolute);
-      if (isPortableRootContainedSymlink(root, relative, target)) {
-        addEntry(
-          { path: relative, type: "symlink", mode: 0o777, target },
-          Buffer.byteLength(target),
-        );
-        return "included";
-      }
-      return "absent";
-    }
-    if (stats.isFile()) {
-      filePaths.push(relative);
-      return "included";
-    }
-    return "absent";
+    return (await addLeaf(relative, absolute, stats)) ? "included" : "absent";
   };
   const walk = async (
     relativeDirectory: string,
@@ -375,32 +374,11 @@ export async function readActualWorkspaceManifestImpl(params: {
         } else {
           hasDerivedEntry ||= child.hasDerivedEntry;
         }
-      } else if (stats.isSymbolicLink()) {
-        hasNonDerivedEntry = true;
-        const target = await fs.readlink(absolute);
-        if (!isPortableRootContainedSymlink(root, relative, target)) {
-          // Like other unsupported local nodes, an escaping symlink is retained
-          // as a conflict but omitted from the canonical cloud manifest.
-          continue;
-        }
-        addEntry(
-          {
-            path: relative,
-            type: "symlink",
-            mode: 0o777,
-            target,
-          },
-          Buffer.byteLength(target),
-        );
-      } else if (stats.isFile()) {
-        hasNonDerivedEntry = true;
-        filePaths.push(relative);
       } else {
+        // Unsupported nodes and escaping links still make their directory nonempty;
+        // they stay local and become conflicts if a worker changes the same path.
         hasNonDerivedEntry = true;
-        // Special local nodes cannot be represented in a cloud manifest. They
-        // remain in place and are surfaced as conflicts when the worker changed
-        // the same path; omitting them lets that conflicted turn still finish.
-        continue;
+        await addLeaf(relative, absolute, stats);
       }
     }
     return {

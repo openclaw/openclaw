@@ -12,15 +12,9 @@ import { ensureDebugProxyCa } from "../proxy-capture/ca.js";
 import { buildDebugProxyCoverageReport } from "../proxy-capture/coverage.js";
 import { resolveDebugProxySettings, applyDebugProxyEnv } from "../proxy-capture/env.js";
 import { startDebugProxyServer } from "../proxy-capture/proxy-server.js";
-import {
-  finalizeDebugProxyCaptureAsync,
-  initializeDebugProxyCaptureAsync,
-} from "../proxy-capture/runtime.js";
-import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
-import type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.types.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { withProxyCaptureOwner } from "./proxy-capture-owner.js";
 import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
 async function finalizeProxyCommand(errors: unknown[], finalizers: Array<() => Promise<void>>) {
@@ -40,19 +34,11 @@ async function finalizeProxyCommand(errors: unknown[], finalizers: Array<() => P
 }
 
 export async function runDebugProxyStartCommand(opts: { host?: string; port?: number }) {
-  const settings = resolveDebugProxySettings();
-  const { environment: env } = captureOpenClawStateWorkerContext();
-  const errors: unknown[] = [];
-  const finalizers: Array<() => Promise<void>> = [];
-  try {
-    if (settings.enabled) {
-      finalizers.push(() => finalizeDebugProxyCaptureAsync(settings));
-      await initializeDebugProxyCaptureAsync("proxy-start", settings);
-    }
-    const lease = await acquireDebugProxyCaptureStoreAsync({ env });
-    const { store } = lease;
-    finalizers.push(lease.release);
-    if (!settings.enabled) {
+  await withProxyCaptureOwner(async (store, signal) => {
+    const settings = resolveDebugProxySettings();
+    const errors: unknown[] = [];
+    const finalizers: Array<() => Promise<void>> = [];
+    try {
       finalizers.unshift(() => store.endSession(settings.sessionId));
       await store.upsertSession({
         id: settings.sessionId,
@@ -62,33 +48,34 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
         sourceProcess: "openclaw",
         proxyUrl: settings.proxyUrl,
       });
+      const ca = await ensureDebugProxyCa(settings.certDir);
+      signal.throwIfAborted();
+      const server = await startDebugProxyServer({
+        host: opts.host,
+        port: opts.port,
+        settings,
+        captureStore: store,
+      });
+      finalizers.unshift(() => server.stop());
+      signal.throwIfAborted();
+      process.stdout.write(`Debug proxy: ${server.proxyUrl}\n`);
+      process.stdout.write(`CA cert: ${ca.certPath}\n`);
+      process.stdout.write(`Capture DB: ${store.dbPath}\n`);
+      process.stdout.write("Press Ctrl+C to stop.\n");
+      await new Promise<void>((resolve) => {
+        const onSignal = () => {
+          process.off("SIGINT", onSignal);
+          process.off("SIGTERM", onSignal);
+          resolve();
+        };
+        process.on("SIGINT", onSignal);
+        process.on("SIGTERM", onSignal);
+      });
+    } catch (error) {
+      errors.push(error);
     }
-    const ca = await ensureDebugProxyCa(settings.certDir);
-    const server = await startDebugProxyServer({
-      host: opts.host,
-      port: opts.port,
-      settings,
-      env,
-    });
-    finalizers.unshift(() => server.stop());
-    process.stdout.write(`Debug proxy: ${server.proxyUrl}\n`);
-    process.stdout.write(`CA cert: ${ca.certPath}\n`);
-    process.stdout.write(`Capture DB: ${store.dbPath}\n`);
-    process.stdout.write("Press Ctrl+C to stop.\n");
-    await new Promise<void>((resolve) => {
-      const onSignal = () => {
-        process.off("SIGINT", onSignal);
-        process.off("SIGTERM", onSignal);
-        resolve();
-      };
-      process.on("SIGINT", onSignal);
-      process.on("SIGTERM", onSignal);
-    });
-  } catch (error) {
-    errors.push(error);
-  }
-  await finalizeProxyCommand(errors, finalizers);
-  process.exit(0);
+    await finalizeProxyCommand(errors, finalizers);
+  });
 }
 
 export async function runDebugProxyRunCommand(opts: {
@@ -100,55 +87,75 @@ export async function runDebugProxyRunCommand(opts: {
   if (opts.commandArgs.length === 0) {
     throw new Error("proxy run requires a command after --");
   }
-  const sessionId = randomUUID();
-  const baseSettings = resolveDebugProxySettings();
-  const settings = {
-    ...baseSettings,
-    sessionId,
-  };
-  const { environment: env } = captureOpenClawStateWorkerContext();
-  const lease = await acquireDebugProxyCaptureStoreAsync({ env });
-  const { store } = lease;
-  const errors: unknown[] = [];
-  const finalizers = [() => store.endSession(sessionId), lease.release];
-  try {
-    await store.upsertSession({
-      id: sessionId,
-      startedAt: Date.now(),
-      mode: "proxy-run",
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      proxyUrl: undefined,
-    });
-    const server = await startDebugProxyServer({
-      host: opts.host,
-      port: opts.port,
-      settings,
-      env,
-    });
-    finalizers.unshift(() => server.stop());
-    const [command, ...args] = opts.commandArgs;
-    const childEnv = applyDebugProxyEnv(process.env, {
-      proxyUrl: server.proxyUrl,
+  await withProxyCaptureOwner(async (store, signal) => {
+    const sessionId = randomUUID();
+    const baseSettings = resolveDebugProxySettings();
+    const settings = {
+      ...baseSettings,
       sessionId,
-      certDir: settings.certDir,
-    });
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(expectDefined(command, "proxy cli.runtime command"), args, {
-        stdio: "inherit",
-        env: childEnv,
-        cwd: process.cwd(),
+    };
+    const errors: unknown[] = [];
+    const finalizers = [() => store.endSession(sessionId)];
+    try {
+      await store.upsertSession({
+        id: sessionId,
+        startedAt: Date.now(),
+        mode: "proxy-run",
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        proxyUrl: undefined,
       });
-      child.once("error", reject);
-      child.once("exit", (code, signal) => {
-        process.exitCode = resolveSubprocessExitCode(code, signal);
-        resolve();
+      signal.throwIfAborted();
+      const server = await startDebugProxyServer({
+        host: opts.host,
+        port: opts.port,
+        settings,
+        captureStore: store,
       });
-    });
-  } catch (error) {
-    errors.push(error);
-  }
-  await finalizeProxyCommand(errors, finalizers);
+      finalizers.unshift(() => server.stop());
+      signal.throwIfAborted();
+      const [command, ...args] = opts.commandArgs;
+      const childEnv = {
+        ...applyDebugProxyEnv(process.env, {
+          proxyUrl: server.proxyUrl,
+          sessionId,
+          certDir: settings.certDir,
+        }),
+        ...server.captureEnv,
+      };
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(expectDefined(command, "proxy cli.runtime command"), args, {
+          stdio: "inherit",
+          env: childEnv,
+          cwd: process.cwd(),
+        });
+        const onSigint = () => {
+          child.kill("SIGINT");
+        };
+        const onSigterm = () => {
+          child.kill("SIGTERM");
+        };
+        const cleanupSignals = () => {
+          process.off("SIGINT", onSigint);
+          process.off("SIGTERM", onSigterm);
+        };
+        process.on("SIGINT", onSigint);
+        process.on("SIGTERM", onSigterm);
+        child.once("error", (error) => {
+          cleanupSignals();
+          reject(error);
+        });
+        child.once("exit", (code, childSignal) => {
+          cleanupSignals();
+          process.exitCode = resolveSubprocessExitCode(code, childSignal);
+          resolve();
+        });
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+    await finalizeProxyCommand(errors, finalizers);
+  });
 }
 
 function redactProxyUrl(value: string | undefined): string | undefined {
@@ -202,13 +209,12 @@ function formatProxyValidationNextStep(result: ProxyValidationResult): string | 
 }
 
 function formatProxyValidationText(result: ProxyValidationResult): string {
-  const redactedProxyUrl = redactProxyUrl(result.config.proxyUrl);
   const lines = [
     result.ok ? theme.success("Proxy validation passed") : theme.error("Proxy validation failed"),
     "",
     theme.heading("Proxy"),
     `  Source: ${theme.muted(result.config.source)}`,
-    `  URL:    ${redactedProxyUrl ?? theme.muted("not configured")}`,
+    `  URL:    ${result.config.proxyUrl ?? theme.muted("not configured")}`,
   ];
 
   if (result.config.errors.length > 0) {
@@ -273,17 +279,8 @@ export async function runProxyValidateCommand(opts: {
   }
 }
 
-async function withCaptureStore(action: (store: AsyncDebugProxyCaptureStore) => Promise<void>) {
-  const lease = await acquireDebugProxyCaptureStoreAsync();
-  try {
-    await action(lease.store);
-  } finally {
-    await lease.release();
-  }
-}
-
 export async function runDebugProxySessionsCommand(opts: { json?: boolean; limit?: number }) {
-  await withCaptureStore(async (store) => {
+  await withProxyCaptureOwner(async (store) => {
     const sessions = await store.listSessions(opts.limit ?? 20);
     writeRuntimeJson(defaultRuntime, opts.json ? { sessions } : sessions);
   });
@@ -294,7 +291,7 @@ export async function runDebugProxyQueryCommand(opts: {
   preset: CaptureQueryPreset;
   sessionId?: string;
 }) {
-  await withCaptureStore(async (store) => {
+  await withProxyCaptureOwner(async (store) => {
     const rows = await store.queryPreset(opts.preset, opts.sessionId);
     writeRuntimeJson(defaultRuntime, opts.json ? { rows } : rows);
   });
@@ -306,14 +303,14 @@ export async function runDebugProxyCoverageCommand() {
 }
 
 export async function runDebugProxyPurgeCommand() {
-  await withCaptureStore(async (store) => {
+  await withProxyCaptureOwner(async (store) => {
     const result = await store.purgeAll();
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   });
 }
 
 export async function readDebugProxyBlobCommand(opts: { blobId: string }) {
-  await withCaptureStore(async (store) => {
+  await withProxyCaptureOwner(async (store) => {
     const content = await store.readBlob(opts.blobId);
     if (content == null) {
       throw new Error(`Unknown blob: ${opts.blobId}`);

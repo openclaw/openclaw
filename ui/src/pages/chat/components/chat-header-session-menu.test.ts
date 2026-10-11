@@ -52,6 +52,7 @@ function settings(): UiSettings {
     navCollapsed: false,
     navWidth: 280,
     sidebarEntries: [],
+    navigationScope: "mine",
   };
 }
 
@@ -66,7 +67,6 @@ async function mountMenu({
     | "onboarding"
     | "preferencesBrowserOnly"
     | "compact"
-    | "navigationAllowed"
     | "copyMarkdownAllowed"
     | "splitAllowed"
     | "panelActions"
@@ -93,7 +93,6 @@ async function mountMenu({
   document.body.append(container);
   const menu = document.createElement("openclaw-chat-header-session-menu");
   Object.assign(menu, {
-    navigationAllowed: true,
     copyMarkdownAllowed: true,
     archiveAllowed: true,
     deleteAllowed: true,
@@ -444,14 +443,11 @@ describe("chat header session menu", () => {
           "Pin session",
           "Rename…",
           "Mark as unread",
-          "Archive session",
-          "Icon & color",
-          "Move to group",
+          "Copy link",
           "Assign to…",
-          "Fork conversation",
-          "Copy",
-          "Open in",
-          "Delete…",
+          "Move to group",
+          "Archive session",
+          "Advanced",
         ]);
         expect(menu.querySelector("[slot='submenu']")).toBeNull();
         select(menu, "open-command-palette");
@@ -459,7 +455,6 @@ describe("chat header session menu", () => {
         await navigate("open-copy");
         expect(rootLabels(menu)).toEqual([
           "Back",
-          "Session link",
           "Preview link",
           "Conversation as Markdown",
           "Session ID",
@@ -587,7 +582,6 @@ describe("chat header session menu", () => {
         actionDisabledReasons: { rename: "Operator write access is required." },
         archiveAllowed: false,
         deleteAllowed: false,
-        navigationAllowed: allowed,
         copyMarkdownAllowed: allowed,
         splitAllowed: allowed,
         forkFromLastCompleted: true,
@@ -605,19 +599,22 @@ describe("chat header session menu", () => {
       expect(item(menu, "Fork conversation").getAttribute("title")).toBe(
         "Fork from last completed message",
       );
-      const actionKinds = [
+      const navigationActions = [
         "copy-session-link",
         "copy-session-preview-link",
-        "copy-markdown",
         "open-new-tab",
         "open-new-window",
-        "split-right",
-        "split-below",
       ] as const;
-      for (const kind of actionKinds) {
+      for (const kind of navigationActions) {
         select(menu, kind);
       }
-      expect(onAction.mock.calls).toEqual(allowed ? actionKinds.map((kind) => [{ kind }]) : []);
+      expect(onAction.mock.calls).toEqual(navigationActions.map((kind) => [{ kind }]));
+      onAction.mockClear();
+      const gatedActions = ["copy-markdown", "split-right", "split-below"] as const;
+      for (const kind of gatedActions) {
+        select(menu, kind);
+      }
+      expect(onAction.mock.calls).toEqual(allowed ? gatedActions.map((kind) => [{ kind }]) : []);
       onAction.mockClear();
       dropdown?.dispatchEvent(
         new KeyboardEvent("keydown", { key: "f", bubbles: true, cancelable: true }),

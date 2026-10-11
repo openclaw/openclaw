@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -23,6 +24,7 @@ import {
   readWithCanonicalSessionReaderContinuation,
   setCanonicalSqliteSessionMainKey,
 } from "./session-canonical-key.js";
+import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 
 const healthy = "agent:main:healthy";
 const damaged = "agent:main:damaged";
@@ -37,6 +39,8 @@ function capture(database: FixtureDatabase) {
 }
 
 function corrupt(database: FixtureDatabase) {
+  // Keep the held reader receipt while seeding the unvalidated-row fixture.
+  runSqliteImmediateTransactionSync(database.db, () => seedCanonicalSessionValidation(database));
   database.db
     .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
     .run("{", damaged);
@@ -159,14 +163,13 @@ it.each([
   "readiness",
   "admission replacement",
   "owner close",
-  "worker main key",
   "active worker transaction",
 ])("requires strict fresh admission after %s", async (reason) => {
   await withReaders(({ database, reader }) => {
     const held = capture(database);
     const receipt = structuredClone(held.receipt);
     if (reason === "admission replacement") {
-      database.db.exec("UPDATE session_key_contract SET main_key = 'custom' WHERE id = 1");
+      setCanonicalSqliteSessionMainKey(database, "custom");
       assertCanonicalSqliteSessionKeysCurrent(database);
     }
     corrupt(database);
@@ -183,10 +186,6 @@ it.each([
     if (reason === "owner close") {
       closeOpenClawAgentDatabaseByPath(database.path);
       expect(observations).toContainEqual({ open: true, live: 0 });
-    }
-    if (reason === "worker main key") {
-      database.db.exec("UPDATE session_key_contract SET main_key = 'custom' WHERE id = 1");
-      expect(Atomics.load(new Int32Array(held.receipt.live), 0)).toBe(1);
     }
     if (reason === "active worker transaction") {
       reader.db.exec("BEGIN");
@@ -210,7 +209,7 @@ it.each([
       Atomics.store(new Int32Array(held.receipt.validation.canonicalReady), 0, 0);
     }
     try {
-      if (reason !== "worker main key" && reason !== "active worker transaction") {
+      if (reason !== "active worker transaction") {
         expect(() => held.assertCurrent()).toThrow("no longer current");
       }
       expect(() =>
@@ -305,7 +304,6 @@ it.each([
   { ending: "manual commit", admitted: false },
   { ending: "invalidate before commit", admitted: false },
   { ending: "rollback", admitted: true },
-  { ending: "unmanaged rollback", admitted: true },
 ])(
   "retains only committed admission after $ending (previous admission: $admitted)",
   async ({ ending, admitted }) => {
@@ -319,26 +317,20 @@ it.each([
         expect(captureCanonicalSessionReaderContinuation(current)).toBeUndefined();
       }
       try {
-        if (ending === "manual commit" || ending === "unmanaged rollback") {
+        if (ending === "manual commit") {
           current.db.exec("BEGIN");
           try {
-            if (held) {
-              current.db.exec("UPDATE session_key_contract SET main_key = 'custom' WHERE id = 1");
-            }
             assertCanonicalSqliteSessionKeysCurrent(current);
             expect(captureCanonicalSessionReaderContinuation(current)).toBeUndefined();
-            if (held) {
-              expect(Atomics.load(new Int32Array(held.receipt.live), 0)).toBe(0);
-            }
           } finally {
-            current.db.exec(ending === "manual commit" ? "COMMIT" : "ROLLBACK");
+            current.db.exec("COMMIT");
           }
         } else {
           const failure = admitted ? "rollback policy" : "abandoned admission";
           const run = () =>
             runOpenClawAgentWriteTransaction((writer) => {
               if (admitted) {
-                writer.db.exec("UPDATE session_key_contract SET main_key = 'custom' WHERE id = 1");
+                setCanonicalSqliteSessionMainKey(writer, "custom");
               }
               assertCanonicalSqliteSessionKeysCurrent(writer);
               expect(captureCanonicalSessionReaderContinuation(writer)).toBeUndefined();
@@ -357,6 +349,7 @@ it.each([
           expect(() => held.assertCurrent()).toThrow("no longer current");
         }
         if (admitted && ending === "rollback") {
+          assertCanonicalSqliteSessionKeysCurrent(current);
           const next = capture(current);
           next.assertCurrent();
           next.release();

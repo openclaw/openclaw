@@ -480,7 +480,7 @@ public struct OpenClawChatSessionsDefaults: Codable, Sendable {
     public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
     public let thinkingOptions: [String]?
     public let thinkingDefault: String?
-    public let mainSessionKey: String?
+    public var mainSessionKey: String?
 
     public init(
         modelProvider: String? = nil,

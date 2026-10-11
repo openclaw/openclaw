@@ -38,6 +38,21 @@ function createIsolatedNpmConfigEnv(dir: string): NodeJS.ProcessEnv {
 }
 
 describe("npm project install env", () => {
+  it.each([
+    ["NPM_CONFIG_FETCH_RETRIES", "0"],
+    ["NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT", "4000"],
+    ["NPM_CONFIG_FETCH_RETRY_MINTIMEOUT", "1000"],
+    ["NPM_CONFIG_FETCH_TIMEOUT", "9000"],
+    ["Npm_Config_Fetch_Timeout", "12000"],
+  ])("preserves explicit network config %s without a competing default", (key, value) => {
+    const env = createNpmProjectInstallEnv({ [key]: value }, {}, FROZEN_NOW);
+
+    expect(env[key]).toBe(value);
+    expect(
+      Object.keys(env).filter((candidate) => candidate.toLowerCase() === key.toLowerCase()),
+    ).toEqual([key]);
+  });
+
   it("uses an absolute POSIX script shell for npm lifecycle scripts", () => {
     withMockedPlatform("linux", () => {
       const existsSyncSpy = vi

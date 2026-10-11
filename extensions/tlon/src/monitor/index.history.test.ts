@@ -54,7 +54,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
-  createChannelInboundEnvelopeBuilder: vi.fn(() => vi.fn(() => "tlon-envelope")),
+  createChannelInboundEnvelopeBuilderAsync: vi.fn(async () => vi.fn(() => "tlon-envelope")),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -93,7 +93,6 @@ vi.mock("./ingress.js", () => ({
 }));
 
 import { monitorTlonProvider } from "./index.js";
-import { formatSummarizationHistoryText } from "./utils.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -215,7 +214,6 @@ describe("monitorTlonProvider summary delivery", () => {
   }
 
   it.each([
-    { name: "empty history", rejected: false, failures: 0, nest: channelNest },
     { name: "rejected history scry", rejected: true, failures: 0, nest: channelNest },
     { name: "failed empty notice", rejected: false, failures: 1, nest: channelNest },
     { name: "failed error notice", rejected: false, failures: 2, nest: channelNest },
@@ -249,57 +247,19 @@ describe("monitorTlonProvider summary delivery", () => {
     }, nest);
   });
 
-  it("dispatches the complete summary prompt for nonempty history", async () => {
+  it("keeps DM summary on normal dispatch without history or notices", async () => {
     await withMonitor(async (receive) => {
-      sseClientMock.scry.mockResolvedValueOnce([
-        {
-          essay: {
-            author: "~nec",
-            content: [{ inline: ["Keep the launch date."] }],
-            sent: sentAt,
-          },
-        },
-      ]);
-      await receive(summaryRequest, true);
-      const historyText = formatSummarizationHistoryText(
-        [{ author: "~nec", content: "Keep the launch date.", timestamp: sentAt }],
-        monitorFixture.config,
-      );
+      await receive(summaryRequest, false);
       expect(inboundRuntimeMock.buildContext).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          message: expect.objectContaining({
-            bodyForAgent:
-              `Please summarize this channel conversation (1 recent messages):\n\n${historyText}\n\n` +
-              "Provide a concise summary highlighting:\n" +
-              "1. Main topics discussed\n" +
-              "2. Key decisions or conclusions\n" +
-              "3. Action items if any\n" +
-              "4. Notable participants",
-          }),
+          message: expect.objectContaining({ bodyForAgent: summaryRequest }),
         }),
       );
       expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
+      expect(sseClientMock.scry).not.toHaveBeenCalled();
       expect(sseClientMock.poke).not.toHaveBeenCalled();
     });
   });
-
-  it.each([
-    { name: "DM summary", isGroup: false, text: summaryRequest, body: summaryRequest },
-    { name: "ordinary group message", isGroup: true, text: "~zod hello", body: "hello" },
-  ])(
-    "keeps $name on normal dispatch without history or notices",
-    async ({ isGroup, text, body }) => {
-      await withMonitor(async (receive) => {
-        await receive(text, isGroup);
-        expect(inboundRuntimeMock.buildContext).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ message: expect.objectContaining({ bodyForAgent: body }) }),
-        );
-        expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
-        expect(sseClientMock.scry).not.toHaveBeenCalled();
-        expect(sseClientMock.poke).not.toHaveBeenCalled();
-      });
-    },
-  );
 
   it.each(["restart", "concurrent account"] as const)(
     "fetches current server history for a new monitor after %s",

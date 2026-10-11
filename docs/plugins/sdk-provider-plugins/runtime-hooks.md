@@ -306,6 +306,13 @@ then `off`. Missing, null, or empty metadata returns `undefined`; a nonempty
 list without supported values returns an off-only profile. Keep model-specific
 overrides and API fallbacks in the provider policy.
 
+Provider stream adapters can call `resolveOpenAIRequestReasoning(model, level)`
+from `openclaw/plugin-sdk/llm` to resolve declared efforts, native-label maps,
+logical Off, and scalar-effort disablement through the shared transport owner.
+Translate its `effort` and `thinkingEnabled` results into the provider's wire
+dialect instead of defining another effort ladder. Read the level from each
+stream call's options before falling back to the wrapper context.
+
 Bundled and trusted official plugins can also export
 `resolveToolSearchMode(ctx)` from their lightweight `provider-policy-api`
 artifact. The context contains the final `provider`, `modelId`, `api`, and
@@ -322,7 +329,7 @@ when a provider supplies hosted search. Its `ProviderNativeWebSearchPolicyContex
 (from `openclaw/plugin-sdk/provider-model-types`) contains `config`, `provider`,
 optional `modelId`, `api`, and `baseUrl`. Return `true` only when that route
 will inject hosted search; share this policy with payload construction. Keep
-the hook synchronous and free of runtime activation or credential probes.
+the hook synchronous and free of runtime activation or credential checks.
 The host applies tool permissions independently and removes managed
 `web_search` before building Tool Search and Code Mode catalogs. Explicit
 managed-provider selection must remain authoritative.

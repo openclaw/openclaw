@@ -5,6 +5,8 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -83,9 +85,15 @@ vi.mock("./open-path.js", async (original) => ({
   ...(await original<typeof import("./open-path.js")>()),
   execOpenPath: mocks.open,
 }));
-vi.mock("../session-transcript-readers.js", async (original) => ({
-  ...(await original<typeof import("../session-transcript-readers.js")>()),
-  readSessionTranscriptVisibleMessageDeltaCore: () => ({ kind: "missing" }),
+// mock-isolation: Repository file tests have no transcript; exercise workspace policy without SQLite history.
+vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
+  withSessionTranscriptDeltaReader: ((_scope, consume) =>
+    consume({
+      visible: async () => ({ kind: "missing" }),
+      raw: async () => {
+        throw new Error("File browsing must consume visible transcript pages");
+      },
+    })) satisfies typeof withSessionTranscriptDeltaReader,
 }));
 
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
@@ -121,6 +129,7 @@ function git(...args: string[]): string {
 
 function requestContext() {
   return {
+    logGateway: createSubsystemLogger("test/repository-files"),
     getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     workerRepositoryWorkspaceMutationService: {
       mutate: async <T>(params: {

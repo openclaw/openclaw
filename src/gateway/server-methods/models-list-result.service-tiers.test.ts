@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
   dualRoutes,
@@ -9,6 +10,7 @@ import {
 import { resolveSelectedModelCredential } from "../../agents/model-auth-selected-credential.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
@@ -26,7 +28,7 @@ import {
 
 describe("models.list account service tiers", () => {
   it.each(["profile", "direct"] as const)(
-    "publishes %s API-key embedded tiers without discovery and withdraws a downgraded tier",
+    "keeps %s API-key tiers selectable and projects transient fulfillment without discovery",
     async (source) => {
       const model = {
         id: "synthetic-api-model",
@@ -96,28 +98,36 @@ describe("models.list account service tiers", () => {
       if (!selectedCredential) {
         throw new Error("Missing selected fixture credential");
       }
-      accountCatalog.prepareServiceTierObserver({
+      const record = accountCatalog.prepareServiceTierObserver({
         selectedCredential,
         credential,
-      })({
+      });
+      const observation = {
         modelId: model.id,
         runtimeId: "openclaw",
         api: platformRoute.api,
         baseUrl: platformRoute.baseUrl,
-        serviceTiers: ["priority"],
-      });
+        requestedTier: "ultrafast",
+        responseTier: "priority",
+      };
+      record(observation);
       const next = await prepare();
-      expect(next.read().models.find((row) => row.id === model.id)?.serviceTiers).toEqual([
-        "priority",
-      ]);
-      expect(first.read().models.find((row) => row.id === model.id)?.serviceTiers).toEqual([
-        "priority",
-      ]);
+      for (const projection of [first, next]) {
+        expect(projection.read().models.find((row) => row.id === model.id)).toMatchObject({
+          serviceTiers: ["priority", "ultrafast"],
+          supportsServiceTierRecovery: true,
+          serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+        });
+      }
+      record({ ...observation, responseTier: "ultrafast" });
+      expect(first.read().models.find((row) => row.id === model.id)).not.toHaveProperty(
+        "serviceTierObservation",
+      );
     },
   );
-  it.each(["codex", "openclaw"] as const)(
+  it.for(["codex", "openclaw"] as const)(
     "filters Codex tiers with %s selected while retaining account scope",
-    async (selectedRuntime) => {
+    async (selectedRuntime, { signal }) => {
       await withOpenClawTestState(
         {
           layout: "state-only",
@@ -241,7 +251,7 @@ describe("models.list account service tiers", () => {
               },
               routeResolverFactory: routeResolverFactory(dualRoutes),
             });
-          const a = await prepare(accountA);
+          const a = await prepare(accountA, false, true);
           const readRuntime = (result: typeof a, runtimeId: string) => {
             const row = result.read().models.find((entry) => entry.id === model.id);
             return row?.agentRuntime?.id === runtimeId
@@ -277,7 +287,7 @@ describe("models.list account service tiers", () => {
           const repeated = await prepare(accountA);
           expect(readRuntime(repeated, "codex")?.serviceTiers).toEqual(["priority", "ultrafast"]);
           expect(discover).toHaveBeenCalledOnce();
-          const b = await prepare(accountB);
+          const b = await prepare(accountB, false, true);
           expect(readRuntime(b, "codex")?.serviceTiers).toEqual([]);
           expect(discover).toHaveBeenCalledTimes(2);
           const preparedOnly = await prepare(accountA, true);
@@ -286,11 +296,36 @@ describe("models.list account service tiers", () => {
             "ultrafast",
           ]);
           expect(discover).toHaveBeenCalledTimes(2);
-          await prepare(accountA, false, true);
+          const entered = createDeferred();
+          const release = createDeferred();
+          const discoverAccount = discover.getMockImplementation()!;
+          discover.mockImplementationOnce(async (ctx) => {
+            entered.resolve();
+            await release.promise;
+            return discoverAccount(ctx);
+          });
+          const refreshing = prepare(accountA, false, true);
+          try {
+            await withinTest(entered.promise, signal);
+            const saved = await prepare(accountA, true);
+            expect(readRuntime(saved, "codex")?.serviceTiers).toEqual(["priority", "ultrafast"]);
+            const duringRefresh = await withinTest(prepare(accountA), signal);
+            expect(readRuntime(duringRefresh, "codex")?.serviceTiers).toEqual([
+              "priority",
+              "ultrafast",
+            ]);
+            expect(a.isCurrent()).toBe(true);
+            expect(readRuntime(await prepare(accountB), "codex")?.serviceTiers).toEqual([]);
+          } finally {
+            release.resolve();
+            await refreshing;
+          }
           expect(discover).toHaveBeenCalledTimes(3);
           expect(a.isCurrent()).toBe(false);
           current = false;
-          expect(readRuntime(a, "codex")).not.toHaveProperty("serviceTiers");
+          expect(() => readRuntime(a, "codex")).toThrow(
+            PreparedModelRuntimePublicationSupersededError,
+          );
         },
       );
     },

@@ -82,6 +82,11 @@ function createPool(
       onCreated?.(worker);
       return { worker };
     },
+    serviceNativeWorkers(nativeWorkers) {
+      for (const worker of nativeWorkers) {
+        worker.service();
+      }
+    },
     prepareResources: async () => {},
     releaseTemporaryDirectory: async () => {},
     captureTaskContext: () => undefined,

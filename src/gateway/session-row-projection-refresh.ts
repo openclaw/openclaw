@@ -178,9 +178,9 @@ export function createSessionRowRefresh(
         rows: owner.rows,
         dirty: owner.dirty,
         selected,
-        cfg: owner.state().cfg,
         revision,
         prepareRegistryFacts: owner.prepareRegistryFacts,
+        cfg: owner.state().cfg,
         env: owner.env,
       },
       {
@@ -204,7 +204,12 @@ export function createSessionRowRefresh(
     }
     // Accepted database facts already own selection metadata, even while display is dirty.
     for (const id of owner.dirty) {
-      if (!owner.rows.get(id)?.retainedDatabaseFacts) {
+      const row = owner.rows.get(id);
+      const facts = row?.retainedDatabaseFacts;
+      if (
+        !records.isPreparedSessionRowDatabaseFacts(facts) ||
+        (!records.canRetainSessionRowRuntimeOwnership(facts) && !row?.pendingDatabaseFacts)
+      ) {
         return true;
       }
     }
@@ -268,7 +273,9 @@ export function createSessionRowRefresh(
           const selected = new Set<string>();
           const held = new Set<Promise<void>>();
           for (const id of owner.dirty) {
-            if (owner.rows.get(id)?.retainedDatabaseFacts) {
+            if (
+              records.isPreparedSessionRowDatabaseFacts(owner.rows.get(id)?.retainedDatabaseFacts)
+            ) {
               continue;
             }
             const pending = bulkReads.get(id) ?? exactReads.get(id)?.completion.promise;

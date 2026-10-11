@@ -79,26 +79,6 @@ export function buildScopeUpgradeInboxEntry(params: {
   };
 }
 
-export function buildUpdateInboxEntry(params: {
-  canDismiss: boolean;
-  dismissal: SidebarAttentionDismissal | null;
-  forced: boolean;
-  requiresAction: boolean;
-  severity: "error" | "warning";
-  visible: boolean;
-}): Extract<SidebarInboxEntry, { type: "update" }> | null {
-  if (!params.visible) {
-    return null;
-  }
-  return {
-    type: "update",
-    category: "system",
-    dismissal: params.canDismiss && !params.forced ? params.dismissal : null,
-    requiresAction: params.requiresAction,
-    severity: params.severity,
-  };
-}
-
 export function buildSidebarInboxEntries(params: {
   approvals: readonly ExecApprovalRequest[];
   attention: readonly SidebarAttentionItem[];

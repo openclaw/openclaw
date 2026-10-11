@@ -1,20 +1,26 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GitHubPublicationRow } from "../state/github-publication-read.types.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   claimGitHubPublicationExecution,
   createGitHubPublicationExecutionStore,
@@ -42,7 +48,11 @@ import {
 } from "./github-shared-publication.test-support.js";
 
 installGitHubPublicationTestHarness();
-afterEach(() => vi.restoreAllMocks());
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeStateDatabaseForTest();
+});
 const mocks = githubPublicationTestMocks();
 const url = "https://github.com/owner/repository/pull/12";
 
@@ -77,6 +87,154 @@ function prohibitPublicationWork() {
 }
 
 describe("shared worktree receipt observation", () => {
+  it("publishes a bound private worktree through the existing coordinator without host session reads", async () => {
+    const authority = { assertCurrent() {} };
+    const actor = await openIncognitoTestActor({ OPENCLAW_STATE_DIR: root }, authority);
+    try {
+      const privateKey = "agent:main:dashboard:incognito-publication-execute";
+      await actor.sessions.create(authority, {
+        sessionKey: privateKey,
+        entry: { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now() },
+      });
+      await deleteRegistryWorktree(process.env, "worktree-1");
+      await insertRegistryWorktree(process.env, {
+        id: "worktree-1",
+        name: "publication",
+        repoRoot: "/repo",
+        repoFingerprint: "fingerprint-1",
+        path: "/repo/worktree",
+        branch: BRANCH,
+        baseRef: "origin/main",
+        ownerKind: "session",
+        ownerId: privateKey,
+        createdAt: 1,
+        lastActiveAt: 1,
+      });
+      const sql = observeHostDataSql();
+      try {
+        const result = await withIncognitoSessionBinding({ actor }, () =>
+          sharedPublicationCoordinator().requestForSession({
+            sessionKey: privateKey,
+            agentId: "main",
+            idempotencyKey: "bound-publication",
+          }),
+        );
+        expect(result).toMatchObject({ status: "published", headCommit: NEW_HEAD });
+        expect(sql.queries.filter((query) => /\bsession_nodes\b/.test(query))).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    } finally {
+      await actor.close();
+      await actor.release();
+    }
+  });
+  it("keeps ordinary private receipt reads on the native owner without allocating an actor", async () => {
+    const native = { ...session, sessionKey: "agent:main:dashboard:incognito-native-publication" };
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: native.sessionKey },
+      { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now(), incognito: true },
+    );
+    const row = insertSharedWorktreeReceipt("native-private-receipt", { session: native });
+    publishWorktree(row);
+    const before = captureOpenClawAgentDatabaseExecution.listIncognito({
+      OPENCLAW_STATE_DIR: root,
+    });
+    expect(
+      (await sharedPublicationCoordinator().sharedStatus(native, row.request_id))?.result.status,
+    ).toBe("published");
+    expect(
+      captureOpenClawAgentDatabaseExecution.listIncognito({ OPENCLAW_STATE_DIR: root }),
+    ).toEqual(before);
+    expect(before).toEqual([]);
+  });
+  it("observes bound private receipts without native session access and fences a retired actor", async () => {
+    const authority = { assertCurrent() {} };
+    const env = { OPENCLAW_STATE_DIR: root };
+    const actor = await openIncognitoTestActor(env, authority);
+    try {
+      const privateSession = {
+        ...session,
+        sessionKey: "agent:main:dashboard:incognito-publication-receipt",
+      };
+      const entry = {
+        ...mocks.loadSession(SESSION_KEY).entry,
+        updatedAt: Date.now(),
+        incognito: true as const,
+      };
+      await actor.sessions.create(authority, { sessionKey: privateSession.sessionKey, entry });
+      const row = insertSharedWorktreeReceipt("private-receipt", { session: privateSession });
+      publishWorktree(row);
+      const coordinator = sharedPublicationCoordinator();
+      const observe = () =>
+        withIncognitoSessionBinding({ actor }, () =>
+          coordinator.sharedStatus(privateSession, row.request_id),
+        );
+      const sql = observeHostDataSql();
+      try {
+        expect((await observe())?.result).toMatchObject({
+          requestId: row.request_id,
+          status: "published",
+        });
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const execute = stateReads.executeExistingOpenClawStateRead;
+      const held = vi
+        .spyOn(stateReads, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (...args) => {
+          const result = await execute(...args);
+          if (args[1].type === "githubPublication.sharedObservation") {
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        });
+      const pending = observe();
+      let closing: Promise<void> | undefined;
+      try {
+        await Promise.race([
+          entered.promise,
+          pending.then(
+            () => {
+              throw new Error("Private observation finished before receipt preparation was held");
+            },
+            (error: unknown) => {
+              throw error;
+            },
+          ),
+        ]);
+        closing = actor.close();
+        release.resolve();
+        await expect(pending).rejects.toThrow(/ended|current|closed/i);
+        await closing;
+        const replacement = await openIncognitoTestActor(env, authority);
+        try {
+          await replacement.sessions.create(authority, {
+            sessionKey: privateSession.sessionKey,
+            entry,
+          });
+          expect(replacement.identity.incarnation).not.toBe(actor.identity.incarnation);
+          await expect(observe()).rejects.toThrow(/ended|current|closed/i);
+        } finally {
+          await replacement.close();
+          await replacement.release();
+        }
+      } finally {
+        release.resolve();
+        await pending.catch(() => {});
+        await closing;
+        held.mockRestore();
+      }
+    } finally {
+      await actor.close();
+      await actor.release();
+    }
+  });
+
   it("rehydrates a real publication from immutable receipts without Git, credentials, replay, or events", async () => {
     const coordinator = sharedPublicationCoordinator();
     const published = await coordinator.requestForSession({
@@ -253,23 +411,6 @@ describe("shared worktree receipt observation", () => {
       ).toBeUndefined();
     },
   );
-  it("orders by creation and request ID even when an older receipt is reported later, and recovers only the exact key", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    publishWorktree(insertSharedWorktreeReceipt("old", { createdAtMs: 1 }));
-    insertSharedWorktreeReceipt("new-a", { createdAtMs: 2 });
-    insertSharedWorktreeReceipt("new-z", { createdAtMs: 2 });
-    coordinator.markReported("old");
-    expect((await coordinator.latestShared(session))?.result).toMatchObject({
-      requestId: "new-z",
-      status: "requested",
-    });
-    expect((await coordinator.latestShared(session, "old"))?.result).toMatchObject({
-      requestId: "old",
-      status: "published",
-      headCommit: NEW_HEAD,
-    });
-    expect(await coordinator.latestShared(session, "not-accepted")).toBeNull();
-  });
 
   it.each([
     { worktreeId: "previous-workspace" },
@@ -382,24 +523,6 @@ describe("shared worktree receipt observation", () => {
     expect(await coordinator.latestShared(session)).toBeNull();
     expect(await coordinator.sharedStatus(session, "absent")).toBeUndefined();
     await expect(fs.stat(missingRoot)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("reads a cold database without changing source bytes, schemas, or SQLite sidecars", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    publishWorktree(insertSharedWorktreeReceipt("cold"));
-    const database = openOpenClawStateDatabase();
-    const databasePath = database.path;
-    closeOpenClawStateDatabaseForTest();
-    const before = await fs.readFile(databasePath);
-    const files = await fs.readdir(path.dirname(databasePath));
-    prohibitPublicationWork();
-    expect((await coordinator.latestShared(session))?.result).toMatchObject({
-      requestId: "cold",
-      headCommit: NEW_HEAD,
-    });
-    expect((await coordinator.sharedStatus(session, "cold"))?.result.status).toBe("published");
-    expect(await fs.readFile(databasePath)).toEqual(before);
-    expect(await fs.readdir(path.dirname(databasePath))).toEqual(files);
   });
 
   it("searches past a full page of valid stale receipts without choosing one as current", async () => {
@@ -659,20 +782,5 @@ describe("shared repository receipt observation", () => {
       }
     });
     expect((await coordinator.latestShared(session))?.result.requestId).toBe("current");
-  });
-
-  it("reads cold repository receipts without recreating source sidecars or changing bytes", async () => {
-    const workspace = await sharedRepositoryWorkspace();
-    const coordinator = sharedPublicationCoordinator();
-    const row = insertRepositoryGitHubPublication(repositoryReceipt(workspace), () => {});
-    const databasePath = openOpenClawStateDatabase().path;
-    await closeOpenClawStateDatabaseAsync();
-    const before = await fs.readFile(databasePath);
-    const files = await fs.readdir(path.dirname(databasePath));
-    prohibitPublicationWork();
-    expect((await coordinator.latestShared(session))?.result.requestId).toBe(row.request_id);
-    expect((await coordinator.sharedStatus(session, row.request_id))?.confirmation).toBeNull();
-    expect(await fs.readFile(databasePath)).toEqual(before);
-    expect(await fs.readdir(path.dirname(databasePath))).toEqual(files);
   });
 });

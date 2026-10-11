@@ -76,7 +76,6 @@ describe("participant identity migration", () => {
       closeOpenClawAgentDatabasesForTest();
       const result = await recoverDoctorSessionSqliteTargets({
         env: state.env,
-        options: { mode: "recover" },
         targets: [{ agentId: "main", storePath: databasePath }],
         validateTarget: async () => {
           throw new Error("Unexpected failed migration manifest");

@@ -233,16 +233,24 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       throw this.runtime.failure;
     }
     this.taskPort?.assertAvailable();
-    this.referenced = true;
-    this.runtime.post({ type: "ref", id: this.id, referenced: true });
+    if (!this.referenced) {
+      this.runtime.post({ type: "ref", id: this.id, referenced: true });
+      this.referenced = true;
+    }
     this.runtime.refreshReference();
     return this;
   }
 
   unref(): this {
+    const wasReferenced = this.referenced;
     this.referenced = false;
     if (!this.joined) {
-      this.runtime.post({ type: "ref", id: this.id, referenced: false });
+      if (this.runtime.failure) {
+        throw this.runtime.failure;
+      }
+      if (wasReferenced) {
+        this.runtime.post({ type: "ref", id: this.id, referenced: false });
+      }
     }
     this.runtime.refreshReference();
     return this;

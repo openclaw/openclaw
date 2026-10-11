@@ -47,6 +47,8 @@ vi.mock("./server-worker-placement-session-evidence.js", () => ({
 import { getRuntimeConfig } from "../config/config.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./worker-environments/device-provider-identity.js";
+import type { WorkerEnvironmentPlacementFacts } from "./worker-environments/placement-read-projection.types.js";
 
 type RecoveryPlacement = {
   sessionId: string;
@@ -83,6 +85,7 @@ async function withRecoveryRuntime(
     broadcast?: () => void;
     hasContext?: boolean;
     hasSubscribers?: boolean;
+    environmentRows?: Map<string, WorkerEnvironmentPlacementFacts>;
   },
   verify: (runtime: {
     context: {
@@ -149,12 +152,13 @@ async function withRecoveryRuntime(
     }));
     let onMachineShapeChanged: ((profileId: string) => void) | undefined;
     const environments = {
-      get: (environmentId: string) => ({
-        environmentId,
-        providerId: "fake",
-        profileId: "development",
-        ownerEpoch: 1,
-      }),
+      get: (environmentId: string) =>
+        options.environmentRows?.get(environmentId) ?? {
+          environmentId,
+          providerId: "fake",
+          profileId: "development",
+          ownerEpoch: 1,
+        },
       readMachineShape: () => ({ cpu: 4 }),
       subscribeMachineShapeChanged: (listener: (profileId: string) => void) => {
         onMachineShapeChanged = listener;
@@ -181,10 +185,19 @@ async function withRecoveryRuntime(
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
-        get: (sessionId: string) => placements.get(sessionId),
-        list: () => [...placements.values()],
+        getAsync: async (sessionId: string) => placements.get(sessionId),
+        listAsync: async () => [...placements.values()],
         readChangeSnapshot,
-        retireSessionPlacement: ({ sessionId }: { sessionId: string }) => {
+        readProjection: async (sessionIds: readonly string[]) => ({
+          placements: new Map(
+            sessionIds.flatMap((id) => {
+              const placement = placements.get(id);
+              return placement ? [[id, structuredClone(placement)]] : [];
+            }),
+          ),
+          environments: options.environmentRows ?? new Map(),
+        }),
+        retireSessionPlacementAsync: async ({ sessionId }: { sessionId: string }) => {
           placements.delete(sessionId);
         },
         pruneOrphanedWorkspaceReconciliations: async () => [],
@@ -233,6 +246,64 @@ async function withRecoveryRuntime(
 }
 
 describe("worker placement recovery session events", () => {
+  it("publishes only active device bindings affected by coalesced runner edges", async () => {
+    const placement = recoveryPlacement();
+    const environmentRows = new Map<string, WorkerEnvironmentPlacementFacts>();
+    const environment = (row: RecoveryPlacement, deviceId: string) => {
+      environmentRows.set(row.environmentId!, {
+        environmentId: row.environmentId!,
+        providerId: DEVICE_WORKER_PROVIDER_ID,
+        profileId: `device:${deviceId}`,
+        profileSnapshot: {},
+        state: "attached",
+        leaseId: "device-lease",
+        ownerEpoch: 1,
+        nodeDeviceId: deviceId,
+        attachedSessionIds: [row.sessionId],
+      });
+    };
+    environment(placement, "changed-device");
+    await withRecoveryRuntime(
+      { placement, environmentRows },
+      async ({ context, changes, placements, runtime, start }) => {
+        for (const excluded of ["other-device", "inactive", "stale-epoch", "cloud"] as const) {
+          const row: RecoveryPlacement = {
+            ...placement,
+            sessionId: excluded,
+            sessionKey: `agent:main:${excluded}`,
+            environmentId: `environment-${excluded}`,
+            ...(excluded === "inactive" ? { state: "failed" } : {}),
+            ...(excluded === "stale-epoch" ? { activeOwnerEpoch: 2 } : {}),
+          };
+          placements.set(row.sessionId, row);
+          environment(row, excluded === "other-device" ? "other-device" : "changed-device");
+          if (excluded === "cloud") {
+            environmentRows.get(row.environmentId!)!.providerId = "cloud";
+          }
+        }
+        await start();
+        const published = createDeferredCore();
+        changes.mockImplementationOnce(() => published.resolve());
+        const revision = runtime.runnerAvailability.version();
+        runtime.runnerAvailability.markChanged("changed-device");
+        runtime.runnerAvailability.markChanged("changed-device");
+        expect(runtime.runnerAvailability.version()).toBe(revision + 2);
+        await published.promise;
+        await flushPendingSessionsChangedEvents(context);
+        expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+          "sessions.changed",
+          expect.objectContaining({
+            reason: "placement",
+            sessionKey: placement.sessionKey,
+            sessionId: placement.sessionId,
+          }),
+          new Set(["session-observer"]),
+          expect.objectContaining({ agentId: placement.agentId, dropIfSlow: true }),
+        );
+      },
+    );
+  });
+
   it("joins pending machine metadata reporting on stop without publishing a late reply", async () => {
     const placement = recoveryPlacement();
     await withRecoveryRuntime(
@@ -330,13 +401,16 @@ describe("worker placement recovery session events", () => {
           }
         },
       },
-      async ({ context, changes, start, time }) => {
+      async ({ context, changes, readChangeSnapshot, start, time }) => {
         const initialMutationVersion = changes.mock.calls.length;
         await start();
         await time.advanceBy(60_000);
         sweepCount = 0;
+        readChangeSnapshot.mockClear();
         await time.advanceBy(60_000);
         expect(sweepCount).toBe(1);
+        // Empty retirement and disabled auto-suspension need no reporting snapshots.
+        expect(readChangeSnapshot).toHaveBeenCalledTimes(2);
         expect(context.broadcastToConnIds).not.toHaveBeenCalled();
         expect(changes.mock.calls.length).toBe(initialMutationVersion);
 
@@ -354,6 +428,11 @@ describe("worker placement recovery session events", () => {
           new Set(["session-observer"]),
           expect.objectContaining({ agentId: recovered.agentId, dropIfSlow: true }),
         );
+        expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
+        readChangeSnapshot.mockClear();
+        await time.advanceBy(60_000);
+        // Nonempty retirement reuses its scan as the before-snapshot, then reads once after.
+        expect(readChangeSnapshot).toHaveBeenCalledTimes(3);
         expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
         expect(runtimeMocks.createDispatch.mock.lastCall?.[0]).not.toHaveProperty(
           "onRecoveredMoveTransition",
@@ -455,7 +534,7 @@ describe("worker placement recovery session events", () => {
             if (mode === "broadcast failure") {
               expect(runtimeMocks.publicationWarn).toHaveBeenCalledWith(
                 "Session change publication failed",
-                { error: expect.objectContaining({ message: "session broadcast failed" }) },
+                { error: "session broadcast failed" },
               );
             }
           }

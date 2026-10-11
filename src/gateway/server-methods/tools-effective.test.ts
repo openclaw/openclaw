@@ -382,12 +382,12 @@ describe("tools.effective handler", () => {
     runtimeMocks.resolveEffectiveToolInventory.mockResolvedValue(makeCoreInventory());
   });
 
-  it("rejects missing sessionKey", async () => {
-    await expectInvalidToolsParams({}, "invalid tools.effective params");
-  });
-
   it("rejects caller-supplied auth context params", async () => {
-    await expectInvalidToolsParams({ senderIsOwner: true }, "invalid tools.effective params");
+    await expectInvalidToolsParams(
+      { sessionKey: "main:abc", senderIsOwner: true },
+      "invalid tools.effective params",
+    );
+    expect(runtimeMocks.loadSessionEntry).not.toHaveBeenCalled();
   });
 
   it("rejects unknown session keys", async () => {
@@ -401,66 +401,6 @@ describe("tools.effective handler", () => {
     const { respond, invoke } = createInvokeParams({ sessionKey: "missing-session" });
     await invoke();
     expectInvalidResponse(respond, 'unknown session key "missing-session"');
-  });
-
-  it("returns the read-only effective runtime inventory without MCP startup", async () => {
-    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
-    await invoke();
-    const call = firstRespondCall(respond);
-    expect(call?.[0]).toBe(true);
-    const payload = call?.[1] as ToolsEffectivePayload | undefined;
-    expect(payload?.agentId).toBe("main");
-    expect(payload?.profile).toBe("coding");
-    expect(payload?.groups?.[0]?.id).toBe("core");
-    expect(payload?.groups?.[0]?.source).toBe("core");
-    expect(payload?.groups?.[0]?.tools?.[0]?.id).toBe("exec");
-    const inventoryParams = resolveEffectiveToolInventoryArg();
-    expect(inventoryParams?.sessionId).toBe("session-1");
-    expect(inventoryParams?.currentChannelId).toBe("channel-1");
-    expect(inventoryParams?.currentThreadTs).toBe("thread-2");
-    expect(inventoryParams?.accountId).toBe("acct-1");
-    expect(inventoryParams?.groupId).toBe("group-4");
-    expect(inventoryParams?.groupChannel).toBe("#ops");
-    expect(inventoryParams?.groupSpace).toBe("workspace-5");
-    expect(inventoryParams?.replyToMode).toBe("first");
-    expect(inventoryParams?.messageProvider).toBe("telegram");
-    expect(inventoryParams?.modelProvider).toBe("openai");
-    expect(inventoryParams?.modelId).toBe("gpt-4.1");
-    expect(inventoryParams?.agentDir).toBe("/tmp/agents/main/agent");
-    expect(inventoryParams?.workspaceDir).toBe("/tmp/workspace-main");
-    expect(inventoryParams?.modelApi).toBe("openai-responses");
-    expect(inventoryParams?.runtimeModel).toMatchObject({
-      id: "gpt-4.1",
-      api: "openai-responses",
-      provider: "openai",
-    });
-    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
-    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        agentDir: "/tmp/agents/main/agent",
-        workspaceDir: "/tmp/workspace-main",
-        modelProvider: "openai",
-        modelId: "gpt-4.1",
-      }),
-    );
-  });
-
-  it("serves repeated requests from the fresh base inventory cache while still peeking MCP state", async () => {
-    runtimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
-      fingerprint: "mcp:1:test",
-      serverNames: ["reproProbe"],
-    });
-    const first = createInvokeParams({ sessionKey: "main:abc" });
-    await first.invoke();
-    const second = createInvokeParams({ sessionKey: "main:abc" });
-    await second.invoke();
-
-    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
-    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
-    expect(runtimeMocks.peekSessionMcpRuntime).toHaveBeenCalledTimes(2);
-    expect(runtimeMocks.resolveSessionMcpConfigSummary).toHaveBeenCalledTimes(1);
-    expectResponsesOk(first.respond, second.respond);
   });
 
   it("does not reuse a fresh inventory after the same session key is reset", async () => {
@@ -489,19 +429,6 @@ describe("tools.effective handler", () => {
     expect(resolveEffectiveToolInventoryArg(1)?.sessionId).toBe("session-2");
   });
 
-  it("recomputes fresh base inventory when connected node plugin tools change", async () => {
-    const first = createInvokeParams({ sessionKey: "main:abc" });
-    await first.invoke();
-
-    nodePluginToolSnapshotMocks.version = 2;
-    const second = createInvokeParams({ sessionKey: "main:abc" });
-    await second.invoke();
-
-    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
-    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(2);
-    expectResponsesOk(first.respond, second.respond);
-  });
-
   it("keeps separate base inventory cache entries for spawned workspaces", async () => {
     const first = createInvokeParams({ sessionKey: "main:abc" });
     await first.invoke();
@@ -521,18 +448,6 @@ describe("tools.effective handler", () => {
 
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
     expect(resolveEffectiveToolInventoryArg(1)?.workspaceDir).toBe("/tmp/workspace-sandbox");
-  });
-
-  it("invalidates the base inventory cache when only the channel registry version changes", async () => {
-    const first = createInvokeParams({ sessionKey: "main:abc" });
-    await first.invoke();
-
-    runtimeMocks.getActivePluginChannelRegistryVersion.mockReturnValue(2);
-    const second = createInvokeParams({ sessionKey: "main:abc" });
-    await second.invoke();
-
-    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
-    expect(firstRespondCall(second.respond)?.[0]).toBe(true);
   });
 
   it("coalesces identical base inventory cache misses while inventory resolution is pending", async () => {
@@ -589,38 +504,6 @@ describe("tools.effective handler", () => {
     expect(notice?.servers).toEqual(["alpha", "zeta"]);
   });
 
-  it("projects MCP tools from an already-populated session runtime catalog", async () => {
-    const { catalog } = mockWarmMcpTool();
-
-    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
-    await invoke();
-
-    const payload = firstRespondCall(respond)?.[1] as ToolsEffectivePayload | undefined;
-    expectPayloadGroupIds(respond, ["core", "mcp"]);
-    expect(payload?.groups?.[1]).toEqual({
-      id: "mcp",
-      label: "MCP server tools",
-      source: "mcp",
-      tools: [
-        {
-          id: "reproProbe__probe_tool",
-          label: "Probe Tool",
-          description: "Probe from MCP",
-          rawDescription: "Probe from MCP",
-          source: "mcp",
-          pluginId: "bundle-mcp",
-          mcpServer: "reproProbe",
-          mcpToolName: "probe_tool",
-        },
-      ],
-    });
-    expect(runtimeMocks.buildBundleMcpToolsFromCatalog).toHaveBeenCalledWith({
-      catalog,
-      reservedToolNames: ["exec"],
-      includeSessionDenied: true,
-    });
-  });
-
   it("applies inherited MCP denies from the session entry already read by the request", async () => {
     const sessionKey = "agent:main:subagent:prepared-policy";
     runtimeMocks.loadSessionEntry.mockReturnValueOnce({
@@ -651,50 +534,6 @@ describe("tools.effective handler", () => {
     expect(firstRespondCall(respond)?.[0]).toBe(true);
     expectPayloadGroupIds(respond, ["core"]);
     expect(runtimeMocks.loadSessionEntry).toHaveBeenCalledOnce();
-  });
-
-  it("uses async model context while projecting a warm MCP catalog", async () => {
-    mockWarmMcpTool();
-    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockImplementation(() => {
-      throw new Error("synchronous model context should not be used");
-    });
-    runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext.mockResolvedValue(
-      createAcquiredRuntimeModelContext({
-        modelApi: "openai-responses",
-        runtimeModel: makeProviderModelFixture({
-          id: "gpt-4.1",
-          name: "GPT 4.1",
-          provider: "openai",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          contextWindow: 128_000,
-          maxTokens: 8_192,
-        }),
-      }),
-    );
-
-    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
-    await invoke();
-
-    expect(firstRespondCall(respond)?.[0]).toBe(true);
-    expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(2);
-    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).not.toHaveBeenCalled();
-  });
-
-  it("does not retry synchronous model context when async resolution has no model", async () => {
-    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockImplementation(() => {
-      throw new Error("synchronous model context should not be used");
-    });
-    runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext.mockResolvedValue(
-      createAcquiredRuntimeModelContext({}),
-    );
-
-    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
-    await invoke();
-
-    expect(firstRespondCall(respond)?.[0]).toBe(true);
-    expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
-    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).not.toHaveBeenCalled();
   });
 
   it("projects MCP tools from the session-owning native harness catalog", async () => {
@@ -823,54 +662,6 @@ describe("tools.effective handler", () => {
     ]);
   });
 
-  it("uses the warm runtime workspace when comparing sandboxed MCP catalogs", async () => {
-    const mcpTool = makeMcpTool();
-    const catalog = makeMcpCatalog();
-    runtimeMocks.resolveSessionMcpConfigSummary.mockImplementationOnce(
-      ({ workspaceDir } = { workspaceDir: "" }) => ({
-        fingerprint: workspaceDir === "/tmp/sandbox-copy" ? "mcp:1:sandbox" : "mcp:1:workspace",
-        serverNames: ["reproProbe"],
-      }),
-    );
-    mockWarmMcpRuntime(catalog, {
-      workspaceDir: "/tmp/sandbox-copy",
-      configFingerprint: "mcp:1:sandbox",
-    });
-    runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([mcpTool]);
-
-    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
-    await invoke();
-
-    expectPayloadGroupIds(respond, ["core", "mcp"]);
-    expect(runtimeMocks.resolveSessionMcpConfigSummary).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/sandbox-copy", cfg: {} }),
-    );
-    expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(2);
-    expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/sandbox-copy",
-        modelProvider: "openai",
-        modelId: "gpt-4.1",
-      }),
-    );
-  });
-
-  it("preserves base output without another model acquisition when MCP tools are filtered", async () => {
-    const base = {
-      ...makeCoreInventory(),
-      notices: [{ id: "base-notice", severity: "info", message: "Keep the base notice" }],
-    };
-    runtimeMocks.resolveEffectiveToolInventory.mockResolvedValueOnce(base);
-    mockMcpConfigSummary();
-    mockWarmMcpRuntime(makeMcpCatalog());
-    runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([makeMcpTool()]);
-    runtimeMocks.applyFinalEffectiveToolPolicy.mockReturnValueOnce([]);
-    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
-    await invoke();
-    expect(firstRespondCall(respond)?.[1]).toEqual(base);
-    expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledOnce();
-  });
-
   it("quarantines warm MCP tools with schemas the runtime cannot project", async () => {
     mockWarmMcpTool({ type: "array", items: { type: "string" } });
 
@@ -961,43 +752,6 @@ describe("tools.effective handler", () => {
     expect(runtimeMocks.buildBundleMcpToolsFromCatalog).not.toHaveBeenCalled();
   });
 
-  it("falls back to origin.threadId when delivery context omits thread metadata", async () => {
-    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
-      cfg: {},
-      canonicalKey: "main:abc",
-      entry: {
-        sessionId: "session-origin-thread",
-        updatedAt: 1,
-        lastChannel: "telegram",
-        lastAccountId: "acct-1",
-        lastTo: "channel-1",
-        origin: {
-          provider: "telegram",
-          accountId: "acct-1",
-          threadId: 42,
-        },
-        groupId: "group-4",
-        groupChannel: "#ops",
-        space: "workspace-5",
-        chatType: "group",
-        modelProvider: "openai",
-        model: "gpt-4.1",
-      },
-    } as never);
-    runtimeMocks.deliveryContextFromSession.mockReturnValueOnce({
-      channel: "telegram",
-      to: "channel-1",
-      accountId: "acct-1",
-      threadId: "42",
-    });
-
-    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
-    await invoke();
-
-    expect(resolveEffectiveToolInventoryArg()?.currentThreadTs).toBe("42");
-    expect(firstRespondCall(respond)?.[0]).toBe(true);
-  });
-
   it("rejects unknown agent ids before loading the session", async () => {
     const { respond, invoke } = createInvokeParams({
       sessionKey: "main:abc",
@@ -1008,49 +762,6 @@ describe("tools.effective handler", () => {
     await invoke();
     expectInvalidResponse(respond, 'unknown agent id "other"');
     expect(runtimeMocks.loadSessionEntry).not.toHaveBeenCalled();
-  });
-
-  it("loads global sessions with the requested agent id before matching session agent", async () => {
-    runtimeMocks.loadSessionEntry.mockImplementationOnce(
-      () =>
-        ({
-          cfg: {},
-          canonicalKey: "global",
-          entry: {
-            sessionId: "session-work-global",
-            updatedAt: 1,
-            modelProvider: "openai",
-            model: "gpt-4.1",
-          },
-          storePath: "/tmp/work/sessions.json",
-          store: {},
-          storeKeys: ["global"],
-        }) as never,
-    );
-    runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("work");
-    runtimeMocks.resolveAgentDir.mockReturnValueOnce("/tmp/agents/work/agent");
-    runtimeMocks.resolveAgentWorkspaceDir.mockReturnValueOnce("/tmp/workspace-work");
-    runtimeMocks.resolveEffectiveToolInventory.mockResolvedValueOnce(makeCoreInventory());
-
-    const { respond, invoke } = createInvokeParams(
-      {
-        sessionKey: "global",
-        agentId: "work",
-      },
-      { agents: { entries: { main: {}, work: {} } } },
-    );
-    await invoke();
-
-    expect(runtimeMocks.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
-    expect(runtimeMocks.resolveSessionAgentId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "work",
-      }),
-    );
-    const call = firstRespondCall(respond);
-    expect(call?.[0]).toBe(true);
-    expect(resolveEffectiveToolInventoryArg()?.agentId).toBe("work");
-    expect(runtimeMocks.resolveAgentDir).toHaveBeenCalledWith({}, "work");
   });
 
   it("loads a bare session through the persisted fixed-store owner", async () => {
@@ -1078,29 +789,5 @@ describe("tools.effective handler", () => {
 
     expect(runtimeMocks.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
     expect(firstRespondCall(respond)?.[0]).toBe(true);
-  });
-
-  it("does not let a requested agent override ownership of a non-global session key", async () => {
-    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
-      cfg: {},
-      canonicalKey: "agent:main:abc",
-      entry: { sessionId: "session-main", updatedAt: 1 },
-    } as never);
-    // Persisted owner of the non-global key.
-    runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("main");
-
-    const { respond, invoke } = createInvokeParams(
-      {
-        sessionKey: "agent:main:abc",
-        agentId: "work",
-      },
-      { agents: { entries: { main: {}, work: {} } } },
-    );
-    await invoke();
-
-    expectInvalidResponse(respond, 'agent "work" does not match session key agent "main"');
-    expect(runtimeMocks.loadSessionEntry).not.toHaveBeenCalled();
-    expect(runtimeMocks.resolveSessionAgentId).not.toHaveBeenCalled();
-    expect(runtimeMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
   });
 });

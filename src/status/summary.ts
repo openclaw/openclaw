@@ -370,8 +370,8 @@ export async function getStatusSummary(
     includeChannelSummary &&
     (await channelPluginIdsModuleLoader
       .load()
-      .then(({ hasConfiguredChannelsForReadOnlyScope }) =>
-        hasConfiguredChannelsForReadOnlyScope(channelScopeConfig),
+      .then(({ hasConfiguredChannelsForReadOnlyScopeAsync }) =>
+        hasConfiguredChannelsForReadOnlyScopeAsync(channelScopeConfig),
       ));
   const linkContext = needsChannelPlugins
     ? await linkChannelModuleLoader

@@ -5,9 +5,11 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runExecProcess } from "../bash-tools.exec-runtime.js";
 import { registerSandboxBackend } from "./backend.js";
@@ -124,6 +126,18 @@ function install(factory: SandboxBackendFactory, removeRuntime = vi.fn(async () 
 
 function resolve() {
   return resolveSandboxContext({ config, sessionKey: "agent:test:reservation", workspaceDir });
+}
+
+function observeRemovalIntent() {
+  const accepted = createDeferred();
+  probe.command(stateWorker, async (command, executeOptions, scope) => {
+    const result = await scope.execute(command, executeOptions);
+    if (command.type === "sandboxRegistry.beginRemoval") {
+      accepted.resolve();
+    }
+    return result;
+  });
+  return accepted.promise;
 }
 
 async function seedLegacyRuntime() {
@@ -345,6 +359,7 @@ describe("durable sandbox runtime generations", () => {
       if (operation === "prune") {
         advancePruneTime();
       }
+      const intent = observeRemovalIntent();
       const removing =
         operation === "recreate"
           ? removeSandboxContainer("legacy-runtime")
@@ -352,11 +367,8 @@ describe("durable sandbox runtime generations", () => {
       const creating = expect(resolve()).rejects.toThrow("removed or is being removed");
       await started.promise;
       try {
-        await vi.waitFor(async () => {
-          expect((await readRegistryEntry("legacy-runtime"))?.runtimeState).toBe(
-            "removing-pending",
-          );
-        });
+        await awaitGateBeforeSettlement(intent, removing, "Removal intent was not acknowledged");
+        expect((await readRegistryEntry("legacy-runtime"))?.runtimeState).toBe("removing-pending");
         expect(remove).not.toHaveBeenCalled();
       } finally {
         finish.resolve();
@@ -466,13 +478,7 @@ describe("durable sandbox runtime generations", () => {
       const creating = resolve();
       const failedCreation = expect(creating).rejects.toThrow("removed or is being removed");
       const id = await started.promise;
-      const discovery = createDeferred();
-      const readActualRegistry = registry.readRegistry;
-      vi.spyOn(registry, "readRegistry").mockImplementationOnce(() => {
-        const read = readActualRegistry();
-        void read.then(() => discovery.resolve(), discovery.reject);
-        return read;
-      });
+      const intent = observeRemovalIntent();
       let removing: Promise<void>;
       if (operation === "prune") {
         advancePruneTime();
@@ -481,7 +487,7 @@ describe("durable sandbox runtime generations", () => {
         removing = removeSandboxContainer(id);
       }
       try {
-        await discovery.promise;
+        await awaitGateBeforeSettlement(intent, removing, "Removal intent was not acknowledged");
         expect((await readRegistryEntry(id))?.runtimeState).toBe("removing-pending");
         expect(remove).not.toHaveBeenCalled();
       } finally {

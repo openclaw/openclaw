@@ -517,10 +517,7 @@ class ClientTurnRouter {
     if (!route.handlers && !(await waitForPromiseOrAbort(route.activated.promise, requestSignal))) {
       return undefined;
     }
-    if (requestSignal.aborted || !route.handlers) {
-      return undefined;
-    }
-    const handler = route.handlers.onRequest;
+    const handler = !requestSignal.aborted && route.handlers?.onRequest;
     if (!handler) {
       return undefined;
     }
@@ -528,20 +525,21 @@ class ClientTurnRouter {
     // new OpenClaw turn, whose requests must wait for its accepted turn id.
     while (route.gate === "armed") {
       const binding = route.binding?.promise;
-      if (!binding || !(await waitForPromiseOrAbort(binding, requestSignal))) {
-        return undefined;
-      }
-      if (requestSignal.aborted) {
+      if (
+        !binding ||
+        !(await waitForPromiseOrAbort(binding, requestSignal)) ||
+        requestSignal.aborted
+      ) {
         return undefined;
       }
     }
     if (route.gate === "bound" && scope.turnId && scope.turnId !== route.turnId) {
       return undefined;
     }
-    if (!(await waitForPromiseOrAbort(this.waitForNotifications(route), requestSignal))) {
-      return undefined;
-    }
-    if (requestSignal.aborted) {
+    if (
+      !(await waitForPromiseOrAbort(this.waitForNotifications(route), requestSignal)) ||
+      requestSignal.aborted
+    ) {
       return undefined;
     }
     try {

@@ -22,14 +22,14 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 
 <AccordionGroup>
   <Accordion title="Important behavior">
-    - these commands only read or write OpenClaw config
+    - these commands manage OpenClaw config and OAuth credential state
     - `status`, `list`, `show`, `doctor` without `--probe`, `set`, `configure`, `tools`, `logout`, `reload`, and `unset` do not connect to the target MCP server
     - `login` performs the MCP OAuth network flow for the configured HTTP server and saves the resulting local credentials
     - `status --verbose` prints resolved transport, auth, timeout, filter, and parallel-tool-call hints without connecting
     - `doctor` checks saved definitions for local setup problems such as missing stdio commands, invalid working directories, missing TLS files, disabled servers, literal sensitive header/env values, and incomplete OAuth authorization
     - `doctor --probe` adds the same live connection proof as `probe` after static checks pass
     - `probe` connects to the selected server or all configured servers, lists tools, and reports capabilities/diagnostics
-    - `add` builds a definition from flags and probes before saving unless `--no-probe` is set or OAuth authorization is needed first
+    - `add` builds a definition from flags and checks before saving unless `--no-probe` is set or OAuth authorization is needed first
     - runtime adapters decide which transport shapes they actually support at execution time
     - `enabled: false` keeps a server saved but excludes it from embedded runtime discovery
     - `requestTimeoutMs` and `connectionTimeoutMs` set per-server request and connection timeouts in milliseconds
@@ -53,6 +53,15 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 </AccordionGroup>
 
 Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
+
+CLI `login`, `logout`, `probe`, `doctor --probe`, and saved-server mutations
+(`add`, `set`, `configure`, `tools`, `unset`) require the local Gateway to be
+stopped. They acquire exclusive state ownership before loading writable state
+and retain it through OAuth callbacks, credential refresh, and cleanup. If a
+Gateway owns the selected state directory, the command refuses with stop-and-retry
+guidance before attempting a local write. Use the Control UI for supported live
+MCP settings and sign-in operations. `list`, `show`, `status`, and `doctor`
+without `--probe` remain available while the Gateway runs.
 
 ### Saved MCP server definitions
 
@@ -78,7 +87,7 @@ Notes:
 - `show` without a name prints the full configured MCP server object.
 - `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
 - `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
-- `probe` connects to enabled saved servers and reports tool counts, resources/prompts support, list-change support, and diagnostics. If none are enabled, plain output explains that no servers can be probed and shows add/enable commands; `--json` keeps its empty result envelope. A named disabled server is rejected with an enable hint.
+- `probe` connects to enabled saved servers and reports tool counts, resources/prompts support, list-change support, and diagnostics. If none are enabled, plain output explains that no servers can be checked and shows add/enable commands; `--json` keeps its empty result envelope. A named disabled server is rejected with an enable hint.
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.

@@ -1,4 +1,5 @@
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
+import { preserveSessionInheritedToolPolicy } from "../../config/sessions/session-entry-lineage.js";
 import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
@@ -24,6 +25,7 @@ export function resolveReplySessionRolloverState(
     ttsAuto: entry.ttsAuto,
     responseUsage: entry.responseUsage,
     ...selectSessionModelOverride(preservedSelection),
+    communication: preservedSelection.communication,
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
@@ -31,11 +33,16 @@ export function resolveReplySessionRolloverState(
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,
     category: entry.category,
+    sidebarRoot: entry.sidebarRoot,
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
     pendingDeliveryNotice: entry.pendingDeliveryNotice,
     ...(preserveSpawnLineage
       ? {
+          ...preserveSessionInheritedToolPolicy(entry),
+          ...(entry.inheritedToolPolicySource === "sender" && entry.sessionRoot
+            ? { sessionRoot: entry.sessionRoot }
+            : {}),
           spawnedBy: entry.spawnedBy,
           spawnedBySenderIsOwner: entry.spawnedBySenderIsOwner,
           spawnedBySessionId: entry.spawnedBySessionId,

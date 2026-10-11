@@ -59,6 +59,12 @@ engine unchanged, and tries that engine again on the next logical turn.
 - Embedding providers use `api.registerEmbeddingProvider(...)` and
   `contracts.embeddingProviders`; there is no separate memory-only registry.
 
+Memory Core implements `runtime.searchForCli(...)` for Gateway-routed CLI
+searches. The host passes the acquired manager, requested agent, query, and
+current mutation guard to that same runtime instance. This keeps recall
+recording in the instance's configured state store so later dreaming sweeps
+can promote it. Other memory plugins continue to expose their own search tools.
+
 ## Pre-compaction memory flush
 
 Register a flush resolver on `MemoryPluginCapability` to supply the silent
@@ -280,9 +286,12 @@ changes incarnation or lifecycle, or when the run that owns it ends. The host
 checks audience currency before and after opening a provider and around every
 provider call. The `context.assertCurrent()` passed to `open()` includes audience
 currency, so a provider that calls it immediately before I/O, including after its
-own awaited work, is refused instead of acting under stale authority. Audience
-revocation does not abort `context.signal`; call `assertCurrent()` before each
-effect.
+own awaited work, is refused instead of acting under stale authority. Session
+writes that keep the session ID and lifecycle revision, such as a turn's own
+activity and usage bookkeeping, do not interrupt these checks while they publish;
+a pending reset, replacement, or deletion still reports currency as unavailable
+until it settles, then revokes the audience. Audience revocation does not abort
+`context.signal`; call `assertCurrent()` before each effect.
 
 ### Compatibility and host integration
 

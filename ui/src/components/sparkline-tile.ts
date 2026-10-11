@@ -25,7 +25,6 @@ function nextGradientId(): string {
   return `sparkline-tile-gradient-${gradientCounter}`;
 }
 
-/** Stat tile with an embedded area sparkline and pointer scrubbing. */
 class SparklineTile extends OpenClawLightDomElement {
   @property() label = "";
   @property() sub = "";

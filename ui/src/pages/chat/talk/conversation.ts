@@ -16,7 +16,6 @@ export type RealtimeTalkConversationState = {
   entries: RealtimeTalkConversationEntry[];
   nextEntryId: number;
   userEntryId: string | null;
-  userEntryAwaitingFinal: boolean;
   userEntryAwaitingFinalStartedAtMs: number | null;
   assistantEntryId: string | null;
 };
@@ -36,7 +35,6 @@ export function createRealtimeTalkConversationState(): RealtimeTalkConversationS
     entries: [],
     nextEntryId: 1,
     userEntryId: null,
-    userEntryAwaitingFinal: false,
     userEntryAwaitingFinalStartedAtMs: null,
     assistantEntryId: null,
   };
@@ -125,15 +123,13 @@ function applyRealtimeTalkTranscript(
     entryId === null || shouldStartNewUserEntry
       ? finishRealtimeConversationEntry(state, "assistant", nowMs)
       : state;
-  const nextState =
-    shouldStartNewUserEntry && entryId !== null
-      ? {
-          ...finishRealtimeConversationEntry(assistantClosedState, "user", nowMs),
-          userEntryId: null,
-          userEntryAwaitingFinal: false,
-          userEntryAwaitingFinalStartedAtMs: null,
-        }
-      : assistantClosedState;
+  const nextState = shouldStartNewUserEntry
+    ? {
+        ...finishRealtimeConversationEntry(assistantClosedState, "user", nowMs),
+        userEntryId: null,
+        userEntryAwaitingFinalStartedAtMs: null,
+      }
+    : assistantClosedState;
   return upsertRealtimeConversationEntry(
     nextState,
     update.role,
@@ -165,7 +161,10 @@ function upsertRealtimeConversationEntry(
   isFinal: boolean,
   textMode?: RealtimeTalkTranscript["textMode"],
 ): RealtimeTalkConversationState {
-  if (entryId === null) {
+  const targetIndex =
+    entryId === null ? -1 : state.entries.findIndex((entry) => entry.id === entryId);
+  const entry = state.entries[targetIndex];
+  if (!entry) {
     const id = `rt-${state.nextEntryId}`;
     const entries = [
       ...state.entries,
@@ -184,19 +183,12 @@ function upsertRealtimeConversationEntry(
     );
   }
 
-  const targetIndex = state.entries.findIndex((entry) => entry.id === entryId);
-  const entry = state.entries[targetIndex];
-  if (!entry) {
-    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, textMode);
-  }
   const mergedText =
     textMode === "snapshot"
       ? text
       : textMode === "verbatim"
         ? entry.text + text
-        : role === "assistant"
-          ? mergeAssistantTranscriptText(entry.text, text, isFinal)
-          : mergeRealtimeTranscriptText(entry.text, text, isFinal);
+        : mergeRealtimeTranscriptText(entry.text, text, isFinal, role);
   const updatedText = boundRealtimeConversationText(mergedText);
   const entries =
     entry.text === updatedText && entry.isStreaming === !isFinal
@@ -206,7 +198,7 @@ function upsertRealtimeConversationEntry(
             ? { ...candidate, text: updatedText, isStreaming: !isFinal }
             : candidate,
         );
-  return rememberRealtimeConversationEntry({ ...state, entries }, role, entryId, isFinal);
+  return rememberRealtimeConversationEntry({ ...state, entries }, role, entry.id, isFinal);
 }
 
 function rememberRealtimeConversationEntry(
@@ -219,7 +211,6 @@ function rememberRealtimeConversationEntry(
     return {
       ...state,
       userEntryId: isFinal ? null : entryId,
-      userEntryAwaitingFinal: false,
       userEntryAwaitingFinalStartedAtMs: null,
     };
   }
@@ -242,7 +233,6 @@ function finishRealtimeConversationEntry(
     return {
       ...state,
       entries,
-      userEntryAwaitingFinal: true,
       userEntryAwaitingFinalStartedAtMs: nowMs,
     };
   }
@@ -270,11 +260,8 @@ function shouldStartNewRealtimeUserEntry(
   if (incoming === existing || incoming.startsWith(existing) || existing.endsWith(incoming)) {
     return false;
   }
-  if (isFinal && state.userEntryAwaitingFinal) {
-    const elapsed =
-      state.userEntryAwaitingFinalStartedAtMs === null
-        ? Number.POSITIVE_INFINITY
-        : nowMs - state.userEntryAwaitingFinalStartedAtMs;
+  if (isFinal && state.userEntryAwaitingFinalStartedAtMs !== null) {
+    const elapsed = nowMs - state.userEntryAwaitingFinalStartedAtMs;
     if (
       elapsed <= USER_FINAL_REWRITE_GRACE_MS &&
       looksLikeTranscriptReplacement(existing, incoming)
@@ -285,42 +272,30 @@ function shouldStartNewRealtimeUserEntry(
   return true;
 }
 
-// Assistant transcripts are verbatim fragment streams: providers concatenate
-// deltas into the exact transcript (OpenAI audio-transcript deltas, Google Live
-// outputTranscription chunks). Never synthesize characters between fragments —
-// the user-side ASR spacing heuristic would mangle "ChatGPT" into "Chat G PT"
-// and "Version 1.2" into "Version 1. 2".
-function mergeAssistantTranscriptText(
+function mergeRealtimeTranscriptText(
   existing: string,
   incoming: string,
   isFinal: boolean,
+  role: RealtimeTalkConversationRole,
 ): string {
   if (existing.trim() === "") {
     return incoming.trimStart();
   }
-  if (!isFinal) {
-    return `${existing}${incoming}`;
+  if (role === "assistant") {
+    // Assistant transcripts are verbatim fragment streams: providers concatenate
+    // deltas into the exact transcript (OpenAI audio-transcript deltas, Google Live
+    // outputTranscription chunks). Never synthesize characters between fragments —
+    // the user-side ASR spacing heuristic would mangle "ChatGPT" into "Chat G PT"
+    // and "Version 1.2" into "Version 1. 2".
+    // Final shape differs by provider: OpenAI-style finals carry the full
+    // transcript (replace), Google Live finals carry only the last fragment
+    // (append). Replace only when incoming restates what already streamed.
+    return isFinal &&
+      (incoming.startsWith(existing) || looksLikeTranscriptReplacement(existing, incoming))
+      ? incoming
+      : `${existing}${incoming}`;
   }
-  // Final shape differs by provider: OpenAI-style finals carry the full
-  // transcript (replace), Google Live finals carry only the last fragment
-  // (append). Replace only when incoming restates what already streamed.
-  if (incoming === existing || incoming.startsWith(existing)) {
-    return incoming;
-  }
-  if (looksLikeTranscriptReplacement(existing, incoming)) {
-    return incoming;
-  }
-  return `${existing}${incoming}`;
-}
-
-function mergeRealtimeTranscriptText(existing: string, incoming: string, isFinal: boolean): string {
-  if (existing.trim() === "") {
-    return incoming.trimStart();
-  }
-  if (incoming === "") {
-    return existing;
-  }
-  if (incoming === existing || existing.endsWith(incoming)) {
+  if (existing.endsWith(incoming)) {
     return existing;
   }
   if (incoming.startsWith(existing)) {

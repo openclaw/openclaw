@@ -12,7 +12,10 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import WebSocket from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
-import { readRealtimeErrorDetail } from "./realtime-provider-shared.js";
+import {
+  readRealtimeErrorDetail,
+  resolveOpenAIRealtimeRequestHeaders,
+} from "./realtime-provider-shared.js";
 import { buildOpenAIRealtimeSidebandUrl } from "./realtime-quicksilver-wire.js";
 import {
   OpenAIRealtimeEvents,
@@ -422,13 +425,12 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       )}`;
       return {
         url,
-        headers: this.runtime.resolveProviderRequestHeaders({
-          provider: "openai",
-          baseUrl: url,
-          capability: "audio",
-          transport: "websocket",
-          defaultHeaders: { "api-key": apiKey },
-        }) ?? { "api-key": apiKey },
+        headers: resolveOpenAIRealtimeRequestHeaders(
+          this.runtime,
+          url,
+          { "api-key": apiKey },
+          "websocket",
+        ),
       };
     }
 
@@ -472,7 +474,18 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
   ): { url: string; headers: Record<string, string> } {
     const cfg = this.config;
     let url: string;
-    if (cfg.azureEndpoint) {
+    if (cfg.baseUrl) {
+      const endpoint = new URL(cfg.baseUrl);
+      // Signed endpoint queries can depend on the original escaping of other fields.
+      const query = endpoint.search
+        ? endpoint.search
+            .slice(1)
+            .split("&")
+            .filter((part) => !new URLSearchParams(part).has("model"))
+        : [];
+      endpoint.search = [...query, `model=${encodeURIComponent(model)}`].join("&");
+      url = endpoint.toString();
+    } else if (cfg.azureEndpoint) {
       const base = cfg.azureEndpoint
         .replace(/\/$/, "")
         .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
@@ -482,17 +495,14 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
         : `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     }
-    const defaultHeaders = { Authorization: `Bearer ${apiKey}` };
     return {
       url,
-      headers:
-        this.runtime.resolveProviderRequestHeaders({
-          provider: "openai",
-          baseUrl: url,
-          capability: "audio",
-          transport: "websocket",
-          defaultHeaders,
-        }) ?? defaultHeaders,
+      headers: resolveOpenAIRealtimeRequestHeaders(
+        this.runtime,
+        url,
+        { Authorization: `Bearer ${apiKey}` },
+        "websocket",
+      ),
     };
   }
 

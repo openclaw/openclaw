@@ -46,6 +46,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { getMediaDir } from "../media/store.js";
+import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -386,6 +387,14 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             throw new Error("queued internal generated-media delivery has no owning session");
           }
           const stateDir = params.queueContext.environment.OPENCLAW_STATE_DIR;
+          const attachMedia = async (
+            messageId: string,
+            blocks: Parameters<typeof attachManagedOutgoingMediaToMessage>[0]["blocks"],
+          ) => {
+            if (!(await attachManagedOutgoingMediaToMessage({ messageId, blocks, stateDir }))) {
+              throw new Error("queued internal generated-media artifact attachment failed");
+            }
+          };
           const preparedMediaBlocks = { ...entry.preparedMediaBlocks };
           const content: Array<Record<string, unknown>> = [];
           for (const mediaUrl of mediaUrls) {
@@ -484,17 +493,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                 idempotencyKey: `${queuedRunId}:generated-media-transcript`,
                 updateMode: "inline",
                 onMessageCommitted: (receipt, acceptCompletion) => {
-                  acceptCompletion(async () => {
-                    if (
-                      !(await attachManagedOutgoingMediaToMessage({
-                        messageId: receipt.messageId,
-                        blocks: readAssistantDisplayContent(receipt.message),
-                        stateDir,
-                      }))
-                    ) {
-                      throw new Error("queued internal generated-media artifact attachment failed");
-                    }
-                  });
+                  acceptCompletion(() =>
+                    attachMedia(receipt.messageId, readAssistantDisplayContent(receipt.message)),
+                  );
                 },
               });
           if (!appended.ok) {
@@ -511,15 +512,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
           }
           params.queueContext.admission.assertCurrent();
           if (enriched) {
-            if (
-              !(await attachManagedOutgoingMediaToMessage({
-                messageId: enriched.messageId,
-                blocks: content,
-                stateDir,
-              }))
-            ) {
-              throw new Error("queued internal generated-media artifact attachment failed");
-            }
+            await attachMedia(enriched.messageId, content);
             await publishAssistantTranscriptRewrite({ scope, rewritten: [enriched] });
           }
         }
@@ -566,6 +559,22 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       params.queueContext,
     );
   }
+  const assertRequesterIdle = () => {
+    if (
+      isSessionWorkAdmissionActive(params.storePath, [params.canonicalKey, sessionEntry?.sessionId])
+    ) {
+      throw new SessionDeliveryDeferredError(
+        "queued generated-media turn is waiting for its requester to finish",
+      );
+    }
+  };
+  try {
+    // The originating turn can still own terminal persistence after its model has stopped.
+    assertRequesterIdle();
+  } catch (error) {
+    await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, params.queueContext);
+    throw error;
+  }
   // `host_owned` is the explicit-send equivalent of message-tool-only policy.
   // The queue owner fixes route/media and disables the model-facing message tool,
   // so only this one system completion can use the normal final-delivery transport.
@@ -574,7 +583,16 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   const cronSessionId = cronLifecycleRevision ? sessionEntry?.sessionId?.trim() : undefined;
   // Fence before gateway admission. Recovery clears it only for an explicit
   // pre-acceptance safe retry; accepted or deduped runs may already have effects.
-  await markSessionDeliveryAttemptStarted(entry, params.queueContext);
+  await markSessionDeliveryAttemptStarted(entry, {
+    ...params.queueContext,
+    admission: {
+      ...params.queueContext.admission,
+      assertCurrent: () => {
+        params.queueContext.admission.assertCurrent();
+        assertRequesterIdle();
+      },
+    },
+  });
   let accepted = false;
   let response: unknown;
   try {

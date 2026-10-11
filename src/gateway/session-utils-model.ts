@@ -44,6 +44,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import {
   createSessionRowModelCacheKey,
@@ -176,18 +177,11 @@ export function resolveGatewayModelThinkingProfile(
   return resolveGatewayModelThinkingFacts(params).metadata;
 }
 
-type GatewaySessionThinkingProjectionParams = {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  agentId: string;
-  sessionKey: string;
-  entry?: SessionEntry;
-  preparedAcpMeta?: SessionEntry["acp"] | null;
+type GatewaySessionThinkingProjectionParams = Parameters<
+  typeof resolveGatewaySessionRuntimeProjection
+>[0] & {
   modelCatalog?: ModelCatalogEntry[];
   modelCatalogRouteVariants?: readonly ModelCatalogEntry[];
-  metadataSnapshot?: PluginMetadataSnapshot | null;
-  rowContext?: SessionListRowContext;
   providerPolicySource?: ThinkingProviderPolicySource;
 };
 
@@ -345,7 +339,7 @@ export function getSessionDefaults(
   return {
     modelProvider: displayModel.provider ?? resolved.provider,
     model: displayModel.model ?? resolved.model,
-    contextTokens: contextTokens ?? null,
+    contextTokens,
     contextWindow: contextWindowProfile.contextWindow,
     contextWindows: contextWindowProfile.contextWindows,
     contextWindowDefault: contextWindowProfile.contextWindowDefault,
@@ -354,6 +348,7 @@ export function getSessionDefaults(
     thinkingLevels: thinkingProfile.thinkingLevels,
     thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
     thinkingDefault: thinkingProfile.thinkingDefault,
+    communication: resolveSessionCommunicationPolicy({ config: cfg }),
   };
 }
 

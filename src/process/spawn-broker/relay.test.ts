@@ -6,8 +6,9 @@ import { createChildAdapter } from "../supervisor/adapters/child.js";
 import { createServiceChildRelayAdapter } from "../supervisor/service-child-relay-host.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("brokered process lifecycle owners", () => {
   let broker: ReturnType<typeof createSpawnBrokerHost>;

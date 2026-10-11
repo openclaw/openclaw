@@ -16,25 +16,6 @@ type NextcloudTalkBotAdminEntry = {
   features?: number | string;
 };
 
-type NextcloudTalkBotResponseFeatureProbe = {
-  ok: boolean;
-  skipped?: boolean;
-  code:
-    | "ok"
-    | "missing_api_credentials"
-    | "missing_webhook_url"
-    | "missing_base_url"
-    | "bot_not_found"
-    | "missing_response_feature"
-    | "api_error"
-    | "request_failed";
-  message: string;
-  botId?: string;
-  botName?: string;
-  features?: number;
-  status?: number;
-};
-
 function normalizeUrlForMatch(value: string | undefined): string {
   const trimmed = value?.trim() ?? "";
   const url = URL.parse(trimmed);
@@ -54,15 +35,15 @@ function formatMissingResponseFeatureMessage(bot: NextcloudTalkBotAdminEntry, fe
 export async function probeNextcloudTalkBotResponseFeature(params: {
   account: ResolvedNextcloudTalkAccount;
   timeoutMs?: number;
-}): Promise<NextcloudTalkBotResponseFeatureProbe> {
+}) {
   const { account, timeoutMs } = params;
   const baseUrl = account.baseUrl?.trim();
   if (!baseUrl) {
     return {
       ok: true,
       skipped: true,
-      code: "missing_base_url",
-      message: "Nextcloud Talk bot response feature probe skipped: baseUrl is not configured.",
+      code: "missing_base_url" as const,
+      message: "Nextcloud Talk bot response feature check skipped: baseUrl is not configured.",
     };
   }
 
@@ -71,9 +52,9 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
     return {
       ok: true,
       skipped: true,
-      code: "missing_webhook_url",
+      code: "missing_webhook_url" as const,
       message:
-        "Nextcloud Talk bot response feature probe skipped: webhookPublicUrl is not configured.",
+        "Nextcloud Talk bot response feature check skipped: webhookPublicUrl is not configured.",
     };
   }
 
@@ -86,9 +67,9 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
     return {
       ok: true,
       skipped: true,
-      code: "missing_api_credentials",
+      code: "missing_api_credentials" as const,
       message:
-        "Nextcloud Talk bot response feature probe skipped: apiUser/apiPassword are not configured.",
+        "Nextcloud Talk bot response feature check skipped: apiUser/apiPassword are not configured.",
     };
   }
 
@@ -119,22 +100,22 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
         const body = await readNextcloudTalkErrorBody(response, auth, credentials.apiPassword);
         return {
           ok: false,
-          code: "api_error",
+          code: "api_error" as const,
           status: response.status,
-          message: `Nextcloud Talk bot response feature probe failed (${response.status})${body ? `: ${body}` : ""}`,
+          message: `Nextcloud Talk bot response feature check failed (${response.status})${body ? `: ${body}` : ""}`,
         };
       }
 
       const payload = await readProviderJsonResponse<{
         ocs?: { data?: NextcloudTalkBotAdminEntry[] };
-      }>(response, "Nextcloud Talk bot response feature probe failed");
+      }>(response, "Nextcloud Talk bot response feature check failed");
       const bots = Array.isArray(payload.ocs?.data) ? payload.ocs.data : [];
       const bot = bots.find((entry) => normalizeUrlForMatch(entry.url) === webhookUrl);
       if (!bot) {
         return {
           ok: false,
-          code: "bot_not_found",
-          message: `Nextcloud Talk bot response feature probe could not find a bot with webhook URL ${webhookUrl}.`,
+          code: "bot_not_found" as const,
+          message: `Nextcloud Talk bot response feature check could not find a bot with webhook URL ${webhookUrl}.`,
         };
       }
 
@@ -142,7 +123,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
       if (features == null || (features & BOT_FEATURE_RESPONSE) !== BOT_FEATURE_RESPONSE) {
         return {
           ok: false,
-          code: "missing_response_feature",
+          code: "missing_response_feature" as const,
           botId: bot.id == null ? undefined : String(bot.id),
           botName: bot.name,
           features,
@@ -152,7 +133,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
 
       return {
         ok: true,
-        code: "ok",
+        code: "ok" as const,
         botId: bot.id == null ? undefined : String(bot.id),
         botName: bot.name,
         features,
@@ -165,8 +146,8 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
     const detail = error instanceof Error ? error.message : formatErrorMessage(error);
     return {
       ok: false,
-      code: "request_failed",
-      message: `Nextcloud Talk bot response feature probe failed: ${detail}`,
+      code: "request_failed" as const,
+      message: `Nextcloud Talk bot response feature check failed: ${detail}`,
     };
   }
 }

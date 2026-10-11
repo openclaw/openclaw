@@ -17,6 +17,7 @@ import {
   setReplyPayloadMetadata,
 } from "openclaw/plugin-sdk/reply-payload-testing";
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { makeAgentAssistantMessage, makeAgentUserMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
@@ -74,6 +75,95 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     };
     return { context, scope, workspace, manager, cfg };
   }
+
+  it("retries the saved transcript-correlated final without rerunning the model", async () => {
+    const { context, manager } = await transcriptCase("ambiguous-transcript-final");
+    let modelRuns = 0;
+    let preparations = 0;
+    installHook((event) => {
+      if (event.kind !== "final") {
+        return;
+      }
+      preparations += 1;
+      expect(event.payload.channelData?.telegram).toEqual({
+        promptContextSource: {
+          transcriptMessageId: expect.any(String),
+          deliverySignature: expect.any(String),
+        },
+      });
+    });
+    let attempts = 0;
+    http.respondToCall = (call) => {
+      if (
+        call.method === "sendMessage" &&
+        call.fields.text === recoveredAnswer &&
+        ++attempts === 1
+      ) {
+        throw Object.assign(new Error("socket closed after request"), { code: "ECONNRESET" });
+      }
+    };
+    await dispatchProgressTurn(
+      async () => {
+        modelRuns += 1;
+        manager.appendMessage(assistant(recoveredAnswer));
+        manager.flushPendingPersistence();
+      },
+      { context, mode: "off", toolProgress: false, finalReply: { text: recoveredAnswer } },
+    );
+    expect(modelRuns).toBe(1);
+    expect(preparations).toBe(1);
+    expect(
+      calls.filter((call) => call.method === "sendMessage").map((call) => call.fields.text),
+    ).toEqual([recoveredAnswer, recoveredAnswer]);
+    expect(sends().map((call) => call.fields.text)).toEqual([recoveredAnswer]);
+    expect([...visibleMessages.values()]).toEqual([recoveredAnswer]);
+  });
+
+  it.each([
+    { telegram: { buttons: [[{ text: "Continue", callback_data: "continue" }]] } },
+    { other: { action: "send" } },
+  ])("does not replay a final carrying channel controls (%j)", async (controls) => {
+    const { context, manager } = await transcriptCase("ambiguous-controlled-final");
+    installHook((event) => {
+      if (event.kind !== "final") {
+        return undefined;
+      }
+      const channelData = event.payload.channelData;
+      const telegram = channelData?.telegram;
+      return {
+        payload: {
+          ...event.payload,
+          channelData: {
+            ...channelData,
+            ...controls,
+            telegram: { ...(isRecord(telegram) ? telegram : {}), ...controls.telegram },
+          },
+        },
+      };
+    });
+    let attempts = 0;
+    http.respondToCall = (call) => {
+      if (call.method === "sendMessage" && call.fields.text === recoveredAnswer) {
+        attempts += 1;
+        throw Object.assign(new Error("socket closed after request"), { code: "ECONNRESET" });
+      }
+    };
+    await dispatchProgressTurn(
+      async () => {
+        manager.appendMessage(assistant(recoveredAnswer));
+        manager.flushPendingPersistence();
+      },
+      {
+        context,
+        mode: "off",
+        toolProgress: false,
+        allowErrors: true,
+        finalReply: { text: recoveredAnswer },
+      },
+    );
+    expect(attempts).toBe(1);
+    expect(sends().some((call) => call.fields.text === recoveredAnswer)).toBe(false);
+  });
 
   it("recovers the latest scoped answer without reopening an accepted first target", async () => {
     const { context, manager } = await transcriptCase("latest-queued-answer");

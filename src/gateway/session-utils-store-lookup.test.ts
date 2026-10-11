@@ -56,12 +56,18 @@ import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-re
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./session-utils.js";
 
-vi.mock("./github-publication-availability.js", () => ({
-  prepareCurrentGitHubPublicationOptionsIdentity: vi.fn(async (agentId: string) => ({
-    source: "system",
-    account: { accountId: `account-${agentId}`, login: `synthetic-${agentId}` },
-  })),
-}));
+vi.mock("./github-publication-availability.js", async () => {
+  const actual = await vi.importActual<typeof import("./github-publication-availability.js")>(
+    "./github-publication-availability.js",
+  );
+  return {
+    ...actual,
+    prepareCurrentGitHubPublicationOptionsIdentity: vi.fn(async (agentId: string) => ({
+      source: "system",
+      account: { accountId: `account-${agentId}`, login: `synthetic-${agentId}` },
+    })),
+  };
+});
 
 async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) => Promise<void>) {
   await withStateDirEnv("gateway-global-lookup-", async ({ stateDir }) => {
@@ -513,7 +519,10 @@ describe("global session lookup ownership", () => {
             login: `synthetic-${agentId}`,
           },
         });
-        expect(prepareCurrentGitHubPublicationOptionsIdentity).toHaveBeenLastCalledWith(agentId);
+        expect(prepareCurrentGitHubPublicationOptionsIdentity).toHaveBeenLastCalledWith(
+          agentId,
+          expect.any(Function),
+        );
         expect(latestShared).toHaveBeenLastCalledWith(
           expect.objectContaining({
             agentId,

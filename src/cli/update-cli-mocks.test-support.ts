@@ -446,7 +446,7 @@ vi.mock("../process/exec.js", async (importOriginal) => {
   const transport = await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
-    isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
+    ...actual,
     runCommandBuffered: transport.runUpdateStateSnapshotFixture,
     runCommandWithTimeout: await transport.createUpdateCommandTransportFixture({
       ...commandTransport,
@@ -633,6 +633,12 @@ vi.mock("../infra/ports-format.js", () => ({
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: (opts: CallGatewayOptions) => callGateway(opts),
+}));
+
+// These cases simulate a ready Gateway; no listener is started for HTTP startup probes.
+vi.mock("./daemon-cli/restart-health-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./daemon-cli/restart-health-probe.js")>()),
+  readGatewayStartupPhase: vi.fn(async () => undefined),
 }));
 
 vi.mock("./daemon-cli/restart-health.js", async (importOriginal) => {

@@ -139,6 +139,10 @@ export async function registerNativeSubagentParent(
   const requesterSessionKey = state.requesterSessionKey;
   state.pendingRegistrations = (state.pendingRegistrations ?? 0) + 1;
   const registeredState = state;
+  const isCurrent = () =>
+    !dependencies.isClosed() &&
+    !dependencies.isRetired(registeredState) &&
+    dependencies.states.get(parentThreadId) === registeredState;
   const ownerKey = Symbol("codex-native-subagent-owner");
   let owner: ParentOwner = {
     configurationQualification: params.configurationQualification,
@@ -180,9 +184,7 @@ export async function registerNativeSubagentParent(
       ? await dependencies.runtime.captureAgentHarnessCompletionCustody(params.completionScope)
       : undefined;
     if (
-      dependencies.isClosed() ||
-      dependencies.isRetired(state) ||
-      dependencies.states.get(parentThreadId) !== state ||
+      !isCurrent() ||
       state.requesterSessionKey !== requesterSessionKey ||
       (owner.completionCustody && !owner.completionCustody.isCurrent())
     ) {
@@ -195,11 +197,7 @@ export async function registerNativeSubagentParent(
         params.modelSource,
         state,
         () => {
-          if (
-            dependencies.isClosed() ||
-            dependencies.isRetired(registeredState) ||
-            dependencies.states.get(parentThreadId) !== registeredState
-          ) {
+          if (!isCurrent()) {
             throw new Error("Codex native model source owner is no longer current");
           }
         },
@@ -225,7 +223,6 @@ export async function registerNativeSubagentParent(
     state.owners.set(ownerKey, owner);
     state.preparing = undefined;
     dependencies.deliverDetached(state);
-    dependencies.submissions.restore(state, owner);
   } catch (error) {
     releaseRootModelBinding();
     state.owners.delete(ownerKey);
@@ -240,7 +237,9 @@ export async function registerNativeSubagentParent(
     state.pendingRegistrations -= 1;
     dependencies.prune(registeredState);
   }
-  const ready = dependencies.assignments.restore(state, owner);
+  const ready = dependencies.submissions
+    .restore(state, owner)
+    .then(() => dependencies.assignments.restore(state, owner));
   let registered = true;
   let settlement: Promise<void> | undefined;
   return {

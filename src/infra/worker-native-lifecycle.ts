@@ -113,11 +113,13 @@ function closeNativeBroker(source: NativeSource): Promise<void> {
     : closing;
 }
 
+function nativeCleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
+  return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+}
+
 async function joinNativeBrokerCloses(attempts: readonly Promise<void>[]): Promise<void> {
   const results = await Promise.allSettled(attempts);
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
+  const failures = nativeCleanupFailures(results);
   if (failures.length === 1) {
     throw failures[0];
   }
@@ -242,6 +244,12 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         port1.postMessage(message, [...transfers]);
       },
       resourceBroker() {
+        if (source.closing) {
+          throw new Error("Native worker source is closing");
+        }
+        if (source.runtime?.failure) {
+          throw source.runtime.failure;
+        }
         return (source.broker ??= runInDetachedAsyncContext(() =>
           createSpawnBrokerHost({ nativeResources: true, workerUrl: source.brokerModuleUrl }),
         ));
@@ -369,9 +377,7 @@ export function captureRetainedNativeWorkerSource(options?: {
         const closing = [...owners.values()].map((owner) => owner.close());
         joinSource();
         const results = await Promise.allSettled(closing.length ? closing : [joined.promise]);
-        const errors = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
+        const errors = nativeCleanupFailures(results);
         if (errors.length) {
           throw new AggregateError(errors, "Native worker execution owner cleanup failed");
         }
@@ -488,9 +494,7 @@ export function captureRetainedNativeWorkerSource(options?: {
         forgetNativeSource(source);
         owners.clear();
       }
-      const failures = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
+      const failures = nativeCleanupFailures(outcomes);
       if (failures.length > 1 && !Object.is(failures[0], failures[1])) {
         throw new AggregateError(failures, "Automatic and final native broker cleanup failed");
       }

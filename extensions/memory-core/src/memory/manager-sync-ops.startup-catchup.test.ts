@@ -18,8 +18,15 @@ import {
   appendSessionTranscriptMessageByIdentity,
   publishSessionTranscriptUpdateByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ensureMemorySessionTombstones,
+  recordMemorySessionTombstonesInDatabase,
+} from "../memory-session-tombstones.js";
+import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
 import {
   SessionStartupCatchupHarness,
   emitSessionTranscriptUpdate,
@@ -478,8 +485,34 @@ describe("session startup catch-up", () => {
       true,
     );
 
-    await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
-    await harness.waitForSessionSync();
+    const observed = observeHostDataSql();
+    const cpuStart = process.threadCpuUsage();
+    const started = performance.now();
+    try {
+      await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
+      await harness.waitForSessionSync();
+      const sourceSql = observed.queries.filter((sql) =>
+        /\b(?:from|update)\s+["`]?memory_index_sources\b/i.test(sql),
+      );
+      if (process.env.OPENCLAW_MEMORY_RETRIEVAL_BENCH === "1") {
+        const cpu = process.threadCpuUsage(cpuStart);
+        console.log(
+          "MEMORY_PUBLICATION_BENCH",
+          JSON.stringify({
+            operation: "source-refresh",
+            cohortSqlObservations: sourceSql.length,
+            wholeMainSqlCalls: observed.calls
+              .slice(1)
+              .reduce((total, call) => total + call.mock.calls.length, 0),
+            wholeMainCpuMs: (cpu.user + cpu.system) / 1000,
+            endToEndMs: performance.now() - started,
+          }),
+        );
+      }
+      expect(sourceSql).toEqual([]);
+    } finally {
+      observed.restore();
+    }
 
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
     expect(harness.indexedPaths).toEqual([]);
@@ -549,7 +582,7 @@ describe("session startup catch-up", () => {
     expect(harness.corpusListCalls).toBe(0);
   });
 
-  it("resolves identity-targeted updates through a custom session store", async () => {
+  it("checks only targeted tombstones in a custom session store", async () => {
     const storePath = path.join(stateDir, "custom-sessions", "sessions.json");
     const session = await writeSqliteSession({
       storePath,
@@ -557,19 +590,38 @@ describe("session startup catch-up", () => {
       sessionKey: "agent:main:chat:custom",
       content: "custom store target",
     });
+    const forgotten = await writeSqliteSession({ storePath, sessionId: "forgotten-thread" });
+    await writeSqliteSession({ storePath, sessionId: "unrelated-thread" });
+    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    ensureMemorySessionTombstones(db);
+    recordMemorySessionTombstonesInDatabase(db, {
+      agentId: "main",
+      sessionIds: [forgotten.sessionId, "unrelated-thread"],
+    });
     const harness = new SessionStartupCatchupHarness([]);
     harness.addPendingSessionTarget({
       agentId: "main",
       sessionId: "custom-thread",
       sessionKey: "agent:main:chat:custom",
     });
+    harness.addPendingSessionTarget({ agentId: "main", sessionId: forgotten.sessionId });
+    const reads = vi.spyOn(cpuRuntime, "runMemoryOriginRead");
+    try {
+      await harness.processPendingSessionUpdates();
+      await Promise.resolve();
 
-    await harness.processPendingSessionUpdates();
-    await Promise.resolve();
-
-    expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
-    expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.sessionKey]);
-    expect(harness.syncCalls[0]?.sessions).toHaveLength(1);
+      expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
+      expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.sessionKey]);
+      expect(harness.syncCalls[0]?.sessions).toHaveLength(2);
+      const queriedSessionIds = reads.mock.calls.flatMap(([request]) =>
+        request.kind === "session-tombstones" ? (request.sessionIds ?? []) : [],
+      );
+      expect(queriedSessionIds.toSorted()).toEqual(
+        [session.sessionId, forgotten.sessionId].toSorted(),
+      );
+    } finally {
+      reads.mockRestore();
+    }
   });
 
   it("keeps targeted indexing on the SQLite store resolved by its corpus snapshot", async () => {

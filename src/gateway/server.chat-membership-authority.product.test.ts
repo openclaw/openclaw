@@ -13,18 +13,19 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { readUserProfileIdentity } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as sessionStoreLookup from "./session-utils-store-lookup.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -35,38 +36,26 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 function holdSessionAuthorizationRead(sessionKey: string) {
   const readCaptured = createDeferredCore();
   const resumeRead = createDeferredCore();
-  const read = historyLane.pool.run.bind(historyLane.pool);
+  const read = sessionStoreLookup.withGatewaySessionStoreTarget;
   let held = false;
-  const workerRead = vi
-    .spyOn(historyLane.pool, "run")
-    .mockImplementation(async (prepare, options) => {
-      if (typeof prepare !== "function") {
-        return read(prepare, options);
-      }
-      let matchesAuthorization = false;
-      const reply = await read(async () => {
-        const input = await prepare();
-        matchesAuthorization =
-          input.kind === "session-exact-entries" &&
-          input.projection === "full" &&
-          input.includeMembers === true &&
-          input.includeAuthorization === true &&
-          input.sessionKeys.length === 1 &&
-          input.sessionKeys[0] === sessionKey;
-        return input;
-      }, options);
-      if (!held && matchesAuthorization) {
-        held = true;
-        readCaptured.resolve();
-        await resumeRead.promise;
-      }
-      return reply;
-    });
+  const readWithHold: typeof read = async (params, consume) => {
+    const reply = await read(params, consume);
+    if (!held && params.key === sessionKey && params.includeMembership === true) {
+      held = true;
+      readCaptured.resolve();
+      // The ordered read releases its writer FIFO before the test commits a revocation.
+      await resumeRead.promise;
+    }
+    return reply;
+  };
+  const authorizationRead = vi
+    .spyOn(sessionStoreLookup, "withGatewaySessionStoreTarget")
+    .mockImplementation(readWithHold);
   return {
     entered: readCaptured.promise,
     resume: () => resumeRead.resolve(),
     wasHeld: () => held,
-    restore: () => workerRead.mockRestore(),
+    restore: () => authorizationRead.mockRestore(),
   };
 }
 
@@ -135,6 +124,7 @@ it(
         response.writeHead(500).end("fixture provider failed");
       });
     });
+    const agentExecutions: Array<{ release(): Promise<void> }> = [];
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     let administrator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let backingClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
@@ -241,6 +231,10 @@ it(
         scopes: ["operator.read", "operator.write"],
       });
       await gateway.server.startupSettled;
+      // Keep both fixture agents resident while alternating owners; the runtime retains one idle executor.
+      for (const agentId of ["main", "work"]) {
+        agentExecutions.push(captureOpenClawAgentDatabaseExecution({ agentId, env: state.env }));
+      }
       administrator = await connectGatewayClient({
         url: `wss://127.0.0.1:${gateway.port}`,
         clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -690,8 +684,15 @@ it(
           }
         } finally {
           if (gateway) {
-            await disconnectGatewayClient(gateway.client);
-            await gateway.server.close({ reason: "membership authority proof complete" });
+            try {
+              await disconnectGatewayClient(gateway.client);
+            } finally {
+              try {
+                await Promise.all(agentExecutions.map((execution) => execution.release()));
+              } finally {
+                await gateway.server.close({ reason: "membership authority proof complete" });
+              }
+            }
           }
         }
       } finally {

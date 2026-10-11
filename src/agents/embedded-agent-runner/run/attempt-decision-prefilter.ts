@@ -47,6 +47,12 @@ export type DecisionPrefilterResult = {
 export async function evaluateAttemptDecisionToolPrefilter(
   params: EvaluateAttemptDecisionToolPrefilterParams,
 ): Promise<DecisionPrefilterResult> {
+  const skip = (reason: string, context?: DecisionContextFacts): DecisionPrefilterResult => ({
+    shouldPruneTools: false,
+    status: "skipped",
+    reason,
+    ...(context ? { context } : {}),
+  });
   params.signal.throwIfAborted();
   params.assertActive();
   const readConfig = createRuntimeConfigReader(params.config);
@@ -56,16 +62,12 @@ export async function evaluateAttemptDecisionToolPrefilter(
     params.supportsTurnScopedToolRestrictions !== true ||
     !isDecisionAssistanceEligible(config, params.agentId)
   ) {
-    return { shouldPruneTools: false, status: "skipped", reason: "ineligible" };
+    return skip("ineligible");
   }
   const userMessage = params.userMessage?.trim();
   // A named explicit evaluation is an action even if its supplied evidence is a greeting.
   if (!userMessage || /\bdecision_evaluate\b/i.test(userMessage)) {
-    return {
-      shouldPruneTools: false,
-      status: "skipped",
-      reason: userMessage ? "explicit-evaluation" : "empty-request",
-    };
+    return skip(userMessage ? "explicit-evaluation" : "empty-request");
   }
   const context = prepareDecisionContext({
     latestRequest: userMessage,
@@ -73,12 +75,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
     currentInputExcluded: params.currentInputExcluded,
   });
   if (context.status === "skipped") {
-    return {
-      shouldPruneTools: false,
-      status: "skipped",
-      reason: context.reason,
-      context: context.facts,
-    };
+    return skip(context.reason, context.facts);
   }
   const promptBuildFields = params.promptBuildFields;
   const promptBuildChars = promptBuildFields
@@ -88,12 +85,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
       )
     : 0;
   if (context.facts.contextChars + promptBuildChars > MAX_DECISION_TEXT_CHARS) {
-    return {
-      shouldPruneTools: false,
-      status: "skipped",
-      reason: "prompt-build-context-too-large",
-      context: context.facts,
-    };
+    return skip("prompt-build-context-too-large", context.facts);
   }
   const started = log.isEnabled("debug") ? performance.now() : undefined;
   const selection = resolveDecisionModelSetting(config, params.agentId);

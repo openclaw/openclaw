@@ -118,7 +118,8 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   >(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   isPluginMetadataSnapshotCompatible: () => true,
   resolvePluginMetadataSnapshotCacheKey: () => "fixed-prepared-runtime-plugin-inventory",
   projectPluginMetadataSnapshot: (snapshot: PluginMetadataSnapshot) => snapshot,
@@ -220,7 +221,8 @@ vi.mock("./agent-model-discovery.js", () => ({
   },
 }));
 
-vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
+vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/synthetic-auth.runtime.js")>()),
   resolveRuntimeSyntheticAuthProviderRefs: () =>
     preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs,
 }));

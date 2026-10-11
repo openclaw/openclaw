@@ -88,7 +88,7 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
   }
 }
 
-async function runDiscordReactionHandler(initialParams: {
+async function runDiscordReactionHandler(params: {
   data: DiscordReactionEvent;
   client: Client;
   action: "added" | "removed";
@@ -96,24 +96,21 @@ async function runDiscordReactionHandler(initialParams: {
   listener: string;
   event: string;
 }): Promise<void> {
-  const policy = await initialParams.handlerParams.readPolicy?.();
-  const params = policy
+  const policy = await params.handlerParams.readPolicy?.();
+  const handlerParams = policy
     ? {
-        ...initialParams,
-        handlerParams: {
-          ...initialParams.handlerParams,
-          ...policy,
-          isPolicyCurrent: policy.isCurrent,
-        },
+        ...params.handlerParams,
+        ...policy,
+        isPolicyCurrent: policy.isCurrent,
       }
-    : initialParams;
+    : params.handlerParams;
   await runDiscordListenerWithSlowLog({
-    logger: params.handlerParams.logger,
+    logger: handlerParams.logger,
     listener: params.listener,
     event: params.event,
     run: async () =>
       handleDiscordReactionEvent({
-        ...params.handlerParams,
+        ...handlerParams,
         data: params.data,
         client: params.client,
         action: params.action,
@@ -280,9 +277,7 @@ async function handleDiscordReactionEvent(
     if (isGuildMessage && guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
       return;
     }
-    const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => roleId)
-      : [];
+    const memberRoleIds = Array.isArray(data.rawMember?.roles) ? data.rawMember.roles.slice() : [];
     const reactionMode = guildInfo?.reactionNotifications ?? "own";
     if (
       isGuildMessage &&
@@ -315,9 +310,7 @@ async function handleDiscordReactionEvent(
     const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel = channelContext.isThreadChannel;
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
-      isPolicyCurrent: params.isPolicyCurrent,
-      cfg: params.cfg,
-      accountId: params.accountId,
+      ...params,
       user,
       memberRoleIds,
       isDirectMessage,
@@ -326,13 +319,6 @@ async function handleDiscordReactionEvent(
       channelId: data.channel_id,
       channelName,
       channelSlug,
-      dmEnabled: params.dmEnabled,
-      groupDmEnabled: params.groupDmEnabled,
-      groupDmChannels: params.groupDmChannels,
-      dmPolicy: params.dmPolicy,
-      allowFrom: params.allowFrom,
-      groupPolicy: params.groupPolicy,
-      allowNameMatching: params.allowNameMatching,
       guildInfo,
     };
     if (!isGuildMessage) {

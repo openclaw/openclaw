@@ -80,35 +80,27 @@ export async function openSidebarCustomizationPage(
   return { context, page };
 }
 
-export async function openSidebarMoreMenu(page: Page): Promise<Locator> {
-  const sidebar = page.locator("openclaw-app-sidebar");
-  // Under load, Playwright can sample a stable frame while the scale-in animation
-  // still moves items between pointer-down and pointer-up. Arm before opening.
-  const transition = await sidebar.evaluateHandle((element) => {
-    const controller = new AbortController();
-    const shown = new Promise<void>((resolve) => {
-      element.addEventListener(
-        "wa-after-show",
-        (event) => {
-          if (
-            event.target instanceof Element &&
-            event.target.matches("wa-dropdown.sidebar-more-menu")
-          ) {
-            controller.abort();
-            resolve();
-          }
-        },
-        { signal: controller.signal },
-      );
-    });
-    return { shown, dispose: () => controller.abort() };
-  });
-  try {
-    await sidebar.locator(".sidebar-nav__head-action").click();
-    await transition.evaluate(({ shown }) => shown);
-  } finally {
-    await transition.evaluate(({ dispose }) => dispose());
-    await transition.dispose();
-  }
-  return sidebar.locator("wa-dropdown.sidebar-more-menu");
+export async function openSidebarPages(page: Page): Promise<Locator> {
+  const sidebar = page.locator("openclaw-app-sidebar:visible");
+  await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+  const pages = sidebar.locator(".sidebar-pages");
+  await pages.waitFor();
+  return pages;
+}
+
+export async function openSidebarPinMenu(page: Page, entry = "route:dashboards"): Promise<Locator> {
+  const row = page
+    .locator("openclaw-app-sidebar:visible")
+    .locator(`[data-sidebar-entry="${entry}"]`);
+  const menu = row.locator("wa-dropdown.sidebar-reorder-menu");
+  const transition = await menu.evaluateHandle((element) => ({
+    shown: new Promise<void>((resolve) => {
+      element.addEventListener("wa-after-show", () => resolve(), { once: true });
+    }),
+  }));
+  await row.getByRole("button", { name: /^Reorder / }).focus();
+  await page.keyboard.press("Enter");
+  await transition.evaluate(({ shown }) => shown);
+  await transition.dispose();
+  return menu;
 }

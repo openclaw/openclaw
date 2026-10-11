@@ -21,6 +21,7 @@ import {
   resolveCoreToolExecutionLocation,
 } from "../../agents/tool-catalog.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -31,13 +32,14 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
-  completeWorkerLaunchDescriptor,
+  parseWorkerLaunchDescriptor,
   parseWorkerLaunchPlan,
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import { registerWorkerTurnInferenceTests } from "./worker-turn-execution.inference.suite.js";
 import {
   acknowledgeCompletedWorkerTurn,
   createWorkerTurnTunnel,
@@ -268,7 +270,10 @@ describe("worker turn execution", () => {
         expect(outcome).toBeInstanceOf(SessionTranscriptMessageCommittedError);
         expect(outcome).toMatchObject({
           committedMessageId,
-          committedTarget: sessionTarget,
+          committedTarget: {
+            ...sessionTarget,
+            storePath: resolveSqliteReadScope(sessionTarget).path,
+          },
           cause: expectedFailure,
         });
         expect(isRecordedModelFallbackStop(outcome)).toBe(true);
@@ -295,6 +300,7 @@ describe("worker turn execution", () => {
         capacity: { total: 1, available: 1 },
         environmentSession: 1,
         capturedExecPolicy: true,
+        promptContext: 1,
         ...(declared ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] } : {}),
       });
       const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
@@ -421,7 +427,8 @@ describe("worker turn execution", () => {
           {
             ...input,
             abortSignal: abort.signal,
-            onExecutionStarted: async () => {
+            onExecutionStarted: async (info) => {
+              expect(info?.backend).toBe("cloud-worker");
               // Earlier workspace recovery and externally owned writes retain their own ordering.
               hydration.mockClear();
               acquireTurnCredential.mockClear();
@@ -764,9 +771,12 @@ describe("worker turn execution", () => {
       let descriptor: WorkerLaunchPlan | undefined;
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         descriptor = roundTripWorkerLaunchDescriptor(
-          completeWorkerLaunchDescriptor(plan, {
-            kind: "unix",
-            socketPath: "/tmp/worker-approval.sock",
+          parseWorkerLaunchDescriptor({
+            ...plan,
+            connectionEndpoint: {
+              kind: "unix",
+              socketPath: "/tmp/worker-approval.sock",
+            },
           }),
         );
         throw new WorkerRunnerCapacityError();
@@ -848,6 +858,8 @@ describe("worker turn execution", () => {
       });
     },
   );
+
+  registerWorkerTurnInferenceTests();
 
   it.each([
     [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],

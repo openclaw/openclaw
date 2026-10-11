@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveExecutablePath } from "./executable-path.js";
+import type { ImmutableRecoveryRuntimeReference } from "./package-update-activation-immutable-recovery-schema.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
+import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
 
@@ -33,10 +36,12 @@ export function resolvePackageActivationAnchor(installKey: string): string {
   return path.join(path.dirname(installKey), `${PACKAGE_ACTIVATION_PREFIX}${key}`);
 }
 
-export function isPackageActivationControlName(name: string): boolean {
+export function isPackageActivationArtifactName(name: string): boolean {
   return (
     name.startsWith(PACKAGE_ACTIVATION_PREFIX) &&
-    /^[a-f0-9]{24}\.control$/u.test(name.slice(PACKAGE_ACTIVATION_PREFIX.length))
+    /^[a-f0-9]{24}(?:\.control|\.superseded-[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?$/u.test(
+      name.slice(PACKAGE_ACTIVATION_PREFIX.length),
+    )
   );
 }
 
@@ -119,30 +124,22 @@ export function assertPackageActivationLayout(anchor: string): void {
 
 /** A receipt is a read-only completion fact, never a grant for another effect. */
 export function isPackageActivationComplete(
-  anchor: string,
+  _anchor: string,
   record: PackageActivationRecord,
 ): boolean {
   if (record.phase === "superseded") {
     if (
       record.intent?.kind !== "superseded-by-manual-install" &&
       record.intent?.kind !== "recovery-lease-identity-changed" &&
+      record.intent?.kind !== "publication-settled-external-change" &&
       record.intent?.kind !== "recovery-lease-missing"
     ) {
       throw new Error("Package supersession fact is missing.");
     }
-    if (
-      !record.intent.settled ||
-      fs.lstatSync(anchor, { throwIfNoEntry: false }) ||
-      fs.lstatSync(resolvePackageActivationHelper(anchor), { throwIfNoEntry: false })
-    ) {
-      return false;
-    }
-    const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
-    return (
-      packageActivationIdentity(retained, true) === record.descriptor.anchorIdentity &&
-      packageActivationIdentity(path.join(retained, "recovery.mjs"), false) ===
-        record.descriptor.helperIdentity
-    );
+    // Settlement already relinquished rollback custody. Retained evidence may
+    // be inspected, moved, or removed without reviving the closed operation.
+    // Archival is maintenance, not another recovery obligation.
+    return record.intent.settled;
   }
   if (record.phase !== "anchor-retired" || record.intent?.kind !== "unlink-helper") {
     return false;
@@ -150,15 +147,15 @@ export function isPackageActivationComplete(
   if (record.intent.identity !== record.descriptor.helperIdentity) {
     throw new Error("Final helper unlink identity is invalid.");
   }
-  for (const file of [anchor, resolvePackageActivationHelper(anchor)]) {
-    try {
-      fs.lstatSync(file);
-      return false;
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-        throw error;
-      }
-    }
-  }
+  // The final unlink intent follows verified retirement of rollback custody.
+  // A helper left by an interrupted unlink or a later replacement is cleanup,
+  // not permission to restore an earlier generation or block a new update.
   return true;
+}
+
+export function resolveImmutableRecoveryCommand(
+  reference: ImmutableRecoveryRuntimeReference,
+  descriptor: ImmutableInstallDescriptor,
+): string {
+  return `${quoteCliArg(descriptor.runtime.path)} ${quoteCliArg(reference.helperPath)}`;
 }

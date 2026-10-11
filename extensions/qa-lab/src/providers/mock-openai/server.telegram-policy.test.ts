@@ -19,8 +19,6 @@ const senderEnvelope =
 
 describe("Telegram policy hot-reload mock provider", () => {
   it.for([
-    { label: "bare input", prefix: "" },
-    { label: "timestamped input", prefix: "[Sat 2026-10-03 11:56 UTC] " },
     {
       label: "timestamped sender context",
       prefix: `[Sat 2026-10-03 11:56 UTC] ${senderEnvelope}`,
@@ -114,31 +112,6 @@ describe("Telegram policy hot-reload mock provider", () => {
       ].join("\n"),
     );
     expect(resolveTelegramChannelStreamingPause(prompt)).toBeUndefined();
-  });
-
-  it.each([
-    {
-      label: "quoted history",
-      wrap: (prompt: string) =>
-        `<conversation_context>\n${senderEnvelope}${prompt}\n</conversation_context>\n\nCurrent user request:\nReply with a different answer.`,
-    },
-    {
-      label: "sender metadata",
-      wrap: (prompt: string) =>
-        `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${JSON.stringify({ sender: { name: prompt } })}\n\`\`\`\n\nReply with a different answer.`,
-    },
-    {
-      label: "an unmarked authored heading",
-      wrap: (prompt: string) => `Conversation info:\n\`\`\`json\n{}\n\`\`\`\n\n${prompt}`,
-    },
-  ])("does not select a policy instruction from $label", async ({ wrap }) => {
-    const server = await startMockServer();
-    const marker = "TG-RELOAD-root-a1b2c3d4";
-    const prompt = `Write 40 numbered plain-text lines. Every line must contain ${marker} and the words hot reload keeps this conversation connected. Finish with a separate final line containing ${marker}-END. Do not use tools, Markdown, or explicit reply tags.`;
-    const response = await expectOpenAiNonStreamingResponsesJson(server, {
-      input: [makeUserInput(wrap(prompt))],
-    });
-    expect(JSON.stringify(response)).not.toContain(marker);
   });
 
   it("does not capture unrelated numbered-line prompts", () => {

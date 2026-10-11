@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { TerminalStates, type CallId } from "../types.js";
+import { TerminalStates, type CallId, type CallRecord } from "../types.js";
 import type { CallEndResult, CallManagerContext } from "./context.js";
 import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
 
@@ -20,6 +20,17 @@ type MaxDurationTimerContext = Pick<
   "activeCalls" | "maxDurationTimers" | "config" | "trackCallWork" | "isStopping"
 >;
 type TranscriptWaiterContext = Pick<TimerContext, "transcriptWaiters">;
+
+/** Per-call limits can shorten a call, but never extend the configured cap. */
+export function resolveCallMaxDurationSeconds(
+  call: Pick<CallRecord, "metadata"> | undefined,
+  configuredCap: number,
+): number {
+  const requested = call?.metadata?.maxDurationSeconds;
+  return typeof requested === "number" && Number.isFinite(requested) && requested > 0
+    ? Math.min(requested, configuredCap)
+    : configuredCap;
+}
 
 /** Clear and forget the max-duration timer for a call. */
 export function clearMaxDurationTimer(
@@ -44,7 +55,12 @@ export function startMaxDurationTimer(params: {
 
   const maxDurationMs =
     params.timeoutMs === undefined
-      ? resolveVoiceCallSecondsTimerDelayMs(params.ctx.config.maxDurationSeconds)
+      ? resolveVoiceCallSecondsTimerDelayMs(
+          resolveCallMaxDurationSeconds(
+            params.ctx.activeCalls.get(params.callId),
+            params.ctx.config.maxDurationSeconds,
+          ),
+        )
       : resolveTimerTimeoutMs(params.timeoutMs, 1);
   console.log(
     `[voice-call] Starting max duration timer (${Math.ceil(maxDurationMs / 1000)}s) for call ${params.callId}`,

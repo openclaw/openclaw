@@ -23,6 +23,7 @@ import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lin
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import * as environmentServiceModule from "./service.js";
+import { registerWorkerDelegationPolicyTests } from "./worker-session-tool-executor.delegation.suite.js";
 import { registerWorkerGatewayToolExecutionTests } from "./worker-session-tool-executor.gateway-tools.suite.js";
 const {
   workerSessionToolTestMocks,
@@ -861,6 +862,8 @@ describe("worker spawn startup composition", () => {
     },
   );
 });
+
+registerWorkerDelegationPolicyTests(fixtureMocks);
 
 describe.each([false, true])(
   "worker spawn parent authority (audit=%s)",

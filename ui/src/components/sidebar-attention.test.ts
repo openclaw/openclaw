@@ -26,8 +26,6 @@ import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import { resolveUpdateAttentionDismissal } from "./sidebar-attention-dismissals.ts";
-import { buildUpdateInboxEntry } from "./sidebar-attention-entries.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
@@ -890,14 +888,14 @@ describe("update attention", () => {
       overlays: { snapshot: overlaySnapshot },
     } as unknown as ApplicationContext;
 
-    expect(resolveSidebarUpdateAttention(element.context).present).toBe(false);
+    expect(resolveSidebarUpdateAttention(element.context)).toBeNull();
 
     gatewaySnapshot.hello.auth.scopes = ["operator.read"];
-    expect(resolveSidebarUpdateAttention(element.context).present).toBe(true);
+    expect(resolveSidebarUpdateAttention(element.context)).not.toBeNull();
 
     gatewaySnapshot.hello.auth.scopes = ["operator.admin"];
     overlaySnapshot.updateCampaignStatusHydrated = true;
-    expect(resolveSidebarUpdateAttention(element.context).present).toBe(true);
+    expect(resolveSidebarUpdateAttention(element.context)).not.toBeNull();
   });
 
   it("keeps restart reconciliation visible after update metadata clears", () => {
@@ -915,32 +913,6 @@ describe("update attention", () => {
       },
     } as unknown as ApplicationContext;
 
-    expect(resolveSidebarUpdateAttention(element.context).present).toBe(true);
-  });
-
-  it.each([
-    { name: "stable admin update", canDismiss: true, forced: false, dismissible: true },
-    { name: "read-only update", canDismiss: false, forced: false, dismissible: false },
-    { name: "forced update", canDismiss: true, forced: true, dismissible: false },
-  ])("projects $name with explicit dismissal policy", ({ canDismiss, forced, dismissible }) => {
-    const dismissal = resolveUpdateAttentionDismissal({
-      gatewayBootId: "boot-a",
-      updateAvailable: {
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.2",
-        channel: "latest",
-      },
-    });
-
-    const entry = buildUpdateInboxEntry({
-      canDismiss,
-      dismissal,
-      forced,
-      requiresAction: true,
-      severity: "warning",
-      visible: true,
-    });
-
-    expect(Boolean(entry?.dismissal)).toBe(dismissible);
+    expect(resolveSidebarUpdateAttention(element.context)).not.toBeNull();
   });
 });

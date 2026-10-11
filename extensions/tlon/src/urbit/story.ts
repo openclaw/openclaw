@@ -38,9 +38,48 @@ type StoryVerse = { block: StoryBlock } | { inline: StoryInline[] };
 
 export type Story = StoryVerse[];
 
+type InlineMatch = { readonly 0: string; readonly [index: number]: string | undefined };
+
+function matchMarkdownDestination(text: string, image: boolean): InlineMatch | null {
+  const prefix = (image ? /^!\[([^\]]*)\]\(/ : /^\[([^\]]+)\]\(/).exec(text);
+  if (!prefix) {
+    return null;
+  }
+  const start = prefix[0].length;
+  let depth = 0;
+  for (let end = start; end < text.length; end++) {
+    if (text[end] === "\\") {
+      end++;
+    } else if (text[end] === "(") {
+      depth++;
+    } else if (text[end] === ")") {
+      if (depth === 0) {
+        return end > start ? [text.slice(0, end + 1), prefix[1], text.slice(start, end)] : null;
+      }
+      depth--;
+    }
+  }
+  return null;
+}
+
+// In running prose a bare URL never ends in sentence punctuation or a stray paren. A closing
+// paren ends the URL only when it balances one inside it, as in .../wiki/Function_(mathematics).
+function matchBareUrl(text: string): InlineMatch | null {
+  let url = /^https?:\/\/[^\s<>"\]]+/.exec(text)?.[0];
+  if (!url) {
+    return null;
+  }
+  let unbalanced = url.split(")").length - url.split("(").length;
+  while (/[.,;:!?(]$/.test(url) || (url.endsWith(")") && unbalanced > 0)) {
+    unbalanced += url.endsWith(")") ? -1 : url.endsWith("(") ? 1 : 0;
+    url = url.slice(0, -1);
+  }
+  return /^https?:\/\/./.test(url) ? [url, url] : null;
+}
+
 const INLINE_MARKDOWN_RULES: ReadonlyArray<{
-  pattern: RegExp;
-  render: (match: RegExpMatchArray) => StoryInline;
+  pattern: RegExp | ((text: string) => InlineMatch | null);
+  render: (match: InlineMatch) => StoryInline;
 }> = [
   {
     pattern: /^(~[a-z][-a-z0-9]*)/,
@@ -69,7 +108,7 @@ const INLINE_MARKDOWN_RULES: ReadonlyArray<{
     render: (match) => ({ "inline-code": expectDefined(match[1], "inline code capture") }),
   },
   {
-    pattern: /^\[([^\]]+)\]\(([^)]+)\)/,
+    pattern: (text) => matchMarkdownDestination(text, false),
     render: (match) => ({
       link: {
         href: expectDefined(match[2], "link URL capture"),
@@ -78,7 +117,7 @@ const INLINE_MARKDOWN_RULES: ReadonlyArray<{
     }),
   },
   {
-    pattern: /^!\[([^\]]*)\]\(([^)]+)\)/,
+    pattern: (text) => matchMarkdownDestination(text, true),
     render: (match) => ({
       imageBlock: {
         src: expectDefined(match[2], "image URL capture"),
@@ -87,15 +126,15 @@ const INLINE_MARKDOWN_RULES: ReadonlyArray<{
     }),
   },
   {
-    pattern: /^(https?:\/\/[^\s<>"\]]+)/,
+    pattern: matchBareUrl,
     render: (match) => {
       const url = expectDefined(match[1], "plain URL capture");
       return { link: { href: url, content: url } };
     },
   },
   {
-    // Stop before special characters and URL separators so earlier rules get priority.
-    pattern: /^[^*_`~[#\n:/]+/,
+    // Stop before special characters, image markers, and URL starts so earlier rules get priority.
+    pattern: /^(?:(?!https?:\/\/)[^*_`~[#\n!])+/,
     render: (match) => expectDefined(match[0], "plain text match"),
   },
 ];
@@ -107,7 +146,10 @@ function parseInlineMarkdown(text: string): StoryInline[] {
     let consumed = 1;
     let inline: StoryInline = remaining.charAt(0);
     for (const rule of INLINE_MARKDOWN_RULES) {
-      const match = remaining.match(rule.pattern);
+      const match =
+        typeof rule.pattern === "function"
+          ? rule.pattern(remaining)
+          : remaining.match(rule.pattern);
       if (match) {
         inline = rule.render(match);
         consumed = match[0].length;
@@ -154,17 +196,42 @@ export function isImageUrl(url: string): boolean {
   return imageExtensions.test(path);
 }
 
-function parseInlinesWithBreaks(text: string): {
-  inlines: StoryInline[];
-  imageBlocks: StoryVerse[];
-} {
+// Stories carry images only as blocks, so move every image marker out of its
+// inline context and drop the styles it leaves empty.
+function hoistImageBlocks(inlines: StoryInline[], imageBlocks: StoryVerse[]): StoryInline[] {
+  const wrap = <T>(content: StoryInline[], make: (content: StoryInline[]) => T): T[] =>
+    content.length > 0 ? [make(content)] : [];
+  const hoisted = inlines.flatMap((inline): StoryInline[] => {
+    if (typeof inline !== "object") {
+      return [inline];
+    }
+    if ("imageBlock" in inline) {
+      imageBlocks.push(createImageBlock(inline.imageBlock.src, inline.imageBlock.alt));
+      return [];
+    }
+    if ("bold" in inline) {
+      return wrap(hoistImageBlocks(inline.bold, imageBlocks), (bold) => ({ bold }));
+    }
+    if ("italics" in inline) {
+      return wrap(hoistImageBlocks(inline.italics, imageBlocks), (italics) => ({ italics }));
+    }
+    if ("strike" in inline) {
+      return wrap(hoistImageBlocks(inline.strike, imageBlocks), (strike) => ({ strike }));
+    }
+    if ("blockquote" in inline) {
+      return wrap(hoistImageBlocks(inline.blockquote, imageBlocks), (blockquote) => ({
+        blockquote,
+      }));
+    }
+    return [inline];
+  });
+  return mergeAdjacentStrings(hoisted);
+}
+
+function parseInlinesWithBreaks(text: string) {
   const withBreaks: StoryInline[] = [];
   const imageBlocks: StoryVerse[] = [];
-  for (const inline of parseInlineMarkdown(text)) {
-    if (typeof inline === "object" && "imageBlock" in inline) {
-      imageBlocks.push(createImageBlock(inline.imageBlock.src, inline.imageBlock.alt));
-      continue;
-    }
+  for (const inline of hoistImageBlocks(parseInlineMarkdown(text), imageBlocks)) {
     if (typeof inline !== "string" || !inline.includes("\n")) {
       withBreaks.push(inline);
       continue;
@@ -182,18 +249,7 @@ function parseInlinesWithBreaks(text: string): {
   return { inlines: withBreaks, imageBlocks };
 }
 
-type MarkdownListItem = {
-  indent: number;
-  contentIndent: number;
-  markerType: Exclude<StoryListType, "tasklist">;
-  markerKey: string;
-  orderedStart?: number;
-  hasSourceBody: boolean;
-  hasBlockBody: boolean;
-  hasImages: boolean;
-  content: StoryInline[];
-  checked?: boolean;
-};
+type MarkdownListItem = NonNullable<ReturnType<typeof parseMarkdownListItem>>;
 
 const MARKDOWN_LIST_ITEM_PATTERN = /^([ \t]*)([-+*]|\d{1,9}[.)])(?:([ \t]+)(.*))?$/;
 
@@ -219,14 +275,16 @@ function whitespaceColumns(text: string, startColumn = 0): number {
   return column;
 }
 
-function parseMarkdownListItem(line: string): MarkdownListItem | undefined {
+function parseMarkdownListItem(line: string) {
   const match = line.match(MARKDOWN_LIST_ITEM_PATTERN);
   if (!match || isMarkdownThematicBreak(line.trim())) {
     return undefined;
   }
 
   const marker = expectDefined(match[2], "list marker capture");
-  const markerType = /^\d/.test(marker) ? "ordered" : "unordered";
+  const markerType: Exclude<StoryListType, "tasklist"> = /^\d/.test(marker)
+    ? "ordered"
+    : "unordered";
   const padding = match[3] ?? " ";
   const sourceBody = match[4] ?? "";
   let body = sourceBody;
@@ -498,14 +556,15 @@ export function markdownToStory(markdown: string): Story {
     if (headerMatch) {
       const tag =
         HEADING_TAGS[expectDefined(headerMatch[1], "header marker capture").length - 1] ?? "h6";
-      story.push({
-        block: {
-          header: {
-            tag,
-            content: parseInlineMarkdown(expectDefined(headerMatch[2], "header body capture")),
-          },
-        },
-      });
+      const imageBlocks: StoryVerse[] = [];
+      const content = hoistImageBlocks(
+        parseInlineMarkdown(expectDefined(headerMatch[2], "header body capture")),
+        imageBlocks,
+      );
+      if (content.length > 0) {
+        story.push({ block: { header: { tag, content } } });
+      }
+      story.push(...imageBlocks);
       i++;
       continue;
     }
@@ -527,9 +586,15 @@ export function markdownToStory(markdown: string): Story {
         i++;
       }
       const quoteText = quoteLines.join("\n");
-      story.push({
-        inline: [{ blockquote: parseInlineMarkdown(quoteText) }],
-      });
+      const imageBlocks: StoryVerse[] = [];
+      const inline = hoistImageBlocks(
+        [{ blockquote: parseInlineMarkdown(quoteText) }],
+        imageBlocks,
+      );
+      if (inline.length > 0) {
+        story.push({ inline });
+      }
+      story.push(...imageBlocks);
       continue;
     }
 

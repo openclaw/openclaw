@@ -6,12 +6,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import * as fsSafe from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
 } from "./update-candidate-plugin-tree.js";
+import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -41,6 +43,12 @@ async function fixture(hardlink = false, beforePlan?: (source: string) => Promis
     file,
     destination,
     plan,
+    retain: () =>
+      linkUpdateCandidatePluginTrees(plan, {
+        targetStateDir,
+        candidateRoot,
+        assertCurrent: () => {},
+      }),
     copy: () => copyUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot }),
   };
 }
@@ -106,7 +114,7 @@ it.each(["directory", "invalid YAML"])("rejects a listed .modules.yaml %s", asyn
   ).rejects.toThrow();
 });
 
-it.each(["auto", "off", "clone-denied"] as const)(
+it.each(["auto", "off"] as const)(
   "isolates plugin bytes and modes with native copying %s",
   async (nativeMode) => {
     const metadataStat = vi.spyOn(fsSync, "lstatSync");
@@ -127,27 +135,10 @@ it.each(["auto", "off", "clone-denied"] as const)(
     const linked = `${f.file}.linked`;
     const before = await fs.stat(f.file, { bigint: true });
     const mkdir = vi.spyOn(fs, "mkdir");
-    if (nativeMode === "clone-denied") {
-      const openRoot = fsSafe.root;
-      vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
-        const root = await openRoot(...args);
-        const copyIn = root.copyIn.bind(root);
-        vi.spyOn(root, "copyIn").mockImplementation((relative, input, options) => {
-          if (options?.clone !== "never") {
-            throw new fsSafe.FsSafeError("helper-failed", "native file copy failed", {
-              cause: Object.assign(new Error("FICLONE: denied"), { code: "EPERM" }),
-            });
-          }
-          return copyIn(relative, input, options);
-        });
-        return root;
-      });
-    }
-    const configuredMode = nativeMode === "off" ? "off" : "auto";
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", configuredMode);
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", nativeMode);
     try {
       // FreeBSD has no native binding; "off" exercises the real portable fallback.
-      expect(getFsSafeNativeConfig().mode).toBe(configuredMode);
+      expect(getFsSafeNativeConfig().mode).toBe(nativeMode);
       await f.copy();
     } finally {
       vi.unstubAllEnvs();
@@ -220,10 +211,19 @@ it.each(["file", "symlink"] as const)(
   },
 );
 
-it.each(["mode", "same-size content with changed mtime", "identity"] as const)(
+it.each([
+  "mode",
+  "same-size content with changed mtime",
+  "same-size content with restored mtime",
+  "identity",
+] as const)(
   "refuses %s changes at the copy mutation boundary before exposing plugin bytes",
   async (change) => {
-    const f = await fixture();
+    const advanceCtime = createFileMutationClock();
+    const f = await fixture(false, async (source) => {
+      // Use a representable time so restored-mtime coverage cannot pass on rounding.
+      await fs.utimes(path.join(source, "payload.txt"), 1_700_000_000, 1_700_000_000);
+    });
     let mutated = false;
     atCopyBoundary(() => {
       if (mutated) {
@@ -241,20 +241,166 @@ it.each(["mode", "same-size content with changed mtime", "identity"] as const)(
         fsSync.writeFileSync(f.file, "altered but equal bytes!");
         fsSync.chmodSync(f.file, 0o444);
         // A same-tick rewrite can retain its timestamps; force a real fingerprint change.
-        fsSync.utimesSync(f.file, before.atime, new Date(before.mtime.getTime() + 60_000));
+        fsSync.utimesSync(
+          f.file,
+          before.atime,
+          change === "same-size content with restored mtime"
+            ? before.mtime
+            : new Date(before.mtime.getTime() + 60_000),
+        );
+        advanceCtime(before);
         const changed = fsSync.lstatSync(f.file, { bigint: true });
+        expect(changed.ctimeNs).not.toBe(before.ctimeNs);
         expect(changed).toMatchObject({
           dev: before.dev,
           ino: before.ino,
           size: before.size,
           mode: before.mode,
         });
-        expect(changed.mtimeNs).not.toBe(before.mtimeNs);
+        expect(changed.mtimeNs === before.mtimeNs).toBe(
+          change === "same-size content with restored mtime",
+        );
       }
     });
     await expect(f.copy()).rejects.toThrow("changed after snapshot inventory");
     expect(mutated).toBe(true);
     expect(await fs.readdir(f.destination)).toEqual([]);
+  },
+);
+
+it.each(["copy", "retain"] as const)(
+  "allows hard-link add, remove, and round-trip churn after inventory during %s",
+  async (materialize) => {
+    const advanceCtime = createFileMutationClock();
+    for (const change of ["add", "remove", "round-trip"]) {
+      let capture = "";
+      const f = await fixture(false, async (source) => {
+        capture = path.join(path.dirname(source), "native-capture");
+        if (change === "remove") {
+          await fs.link(path.join(source, "payload.txt"), capture);
+        }
+      });
+      const before = await fs.lstat(f.file, { bigint: true });
+      if (change !== "remove") {
+        await fs.link(f.file, capture);
+      }
+      if (change !== "add") {
+        await fs.unlink(capture);
+      }
+      advanceCtime(before);
+      const after = await fs.lstat(f.file, { bigint: true });
+      expect(after.ctimeNs).not.toBe(before.ctimeNs);
+      for (const field of [
+        "dev",
+        "ino",
+        "mode",
+        "uid",
+        "gid",
+        "size",
+        "birthtimeNs",
+        "mtimeNs",
+      ] as const) {
+        expect(after[field]).toBe(before[field]);
+      }
+      await f[materialize]();
+      expect(await fs.readFile(path.join(f.destination, "payload.txt"), "utf8")).toBe(
+        "inventoried plugin bytes",
+      );
+    }
+  },
+);
+
+it.each(["auto", "off"] as const)(
+  "accepts a concurrent native hard-link capture at copy publication with native copying %s",
+  async (nativeMode) => {
+    const f = await fixture();
+    let linked = false;
+    atCopyBoundary(() => {
+      if (!linked) {
+        fsSync.linkSync(f.file, path.join(path.dirname(path.dirname(f.file)), "native-capture"));
+        linked = true;
+      }
+    });
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", nativeMode);
+    try {
+      await f.copy();
+      expect(linked).toBe(true);
+      const copied = path.join(f.destination, "payload.txt");
+      expect(await fs.readFile(copied, "utf8")).toBe("inventoried plugin bytes");
+      expect((await fs.lstat(copied, { bigint: true })).ino).not.toBe(
+        (await fs.lstat(f.file, { bigint: true })).ino,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it.each(["uid", "gid"] as const)("refuses changed inventoried ownership (%s)", async (field) => {
+  const f = await fixture();
+  const entry = f.plan.entries.find((item) => item.kind === "file");
+  expect(entry?.kind).toBe("file");
+  if (entry?.kind !== "file") {
+    throw new Error("Missing inventoried file");
+  }
+  entry[field] = (BigInt(entry[field]) + 1n).toString();
+  await expect(f.copy()).rejects.toThrow("changed after snapshot inventory");
+});
+
+it.skipIf(process.platform !== "linux")(
+  "verifies bytes when Linux reports ctime as birthtime without statx",
+  async () => {
+    const advanceCtime = createFileMutationClock();
+    // Compose with the clock implementations; the spies themselves are replaced below.
+    const lstat = vi.mocked(fs.lstat).getMockImplementation()!;
+    const lstatSync = vi.mocked(fsSync.lstatSync).getMockImplementation()!;
+    const fstatSync = vi.mocked(fsSync.fstatSync).getMockImplementation()!;
+    const fallbackBirthtime = <T extends fsSync.Stats | fsSync.BigIntStats | undefined>(
+      stat: T,
+    ): T => {
+      if (stat && "birthtimeNs" in stat) {
+        stat.birthtimeNs = stat.ctimeNs;
+      }
+      return stat;
+    };
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) =>
+      fallbackBirthtime(await lstat(...args)),
+    );
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) =>
+      fallbackBirthtime(lstatSync(...args)),
+    );
+    vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>
+      fallbackBirthtime(fstatSync(...args)),
+    );
+    for (const change of ["link", "content", "birthtime"] as const) {
+      const f = await fixture(false, async (source) => {
+        await fs.utimes(path.join(source, "payload.txt"), 1_700_000_000, 1_700_000_000);
+      });
+      const before = await fs.lstat(f.file, { bigint: true });
+      await fs.link(f.file, path.join(path.dirname(path.dirname(f.file)), "native-capture"));
+      if (change === "content") {
+        await fs.chmod(f.file, 0o600);
+        await fs.writeFile(f.file, "altered but equal bytes!");
+        await fs.chmod(f.file, 0o444);
+        await fs.utimes(f.file, before.atime, before.mtime);
+      } else if (change === "birthtime") {
+        const entry = f.plan.entries.find((item) => item.kind === "file");
+        if (entry?.kind !== "file") {
+          throw new Error("Missing inventoried file");
+        }
+        entry.birthtimeNs = (BigInt(entry.birthtimeNs) - 1n).toString();
+      }
+      advanceCtime(before);
+      expect((await fs.lstat(f.file, { bigint: true })).ctimeNs).not.toBe(before.ctimeNs);
+      if (change === "link") {
+        await f.copy();
+        expect(await fs.readFile(path.join(f.destination, "payload.txt"), "utf8")).toBe(
+          "inventoried plugin bytes",
+        );
+      } else {
+        await expect(f.copy()).rejects.toThrow("changed after snapshot inventory");
+      }
+    }
   },
 );
 

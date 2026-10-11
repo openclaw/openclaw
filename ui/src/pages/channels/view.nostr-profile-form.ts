@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { html as staticHtml, literal } from "lit/static-html.js";
 import type { NostrProfile as NostrProfileType } from "../../api/types.ts";
 import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -22,19 +23,27 @@ export interface NostrProfileFormCallbacks {
   onToggleAdvanced: () => void;
 }
 
-function isFormDirty(state: NostrProfileFormState): boolean {
-  const { values, original } = state;
-  return (
-    values.name !== original.name ||
-    values.displayName !== original.displayName ||
-    values.about !== original.about ||
-    values.picture !== original.picture ||
-    values.banner !== original.banner ||
-    values.website !== original.website ||
-    values.nip05 !== original.nip05 ||
-    values.lud16 !== original.lud16
-  );
-}
+type ProfileField = readonly [
+  key: keyof NostrProfileType,
+  label: string,
+  placeholder: string,
+  help: string,
+  type: "text" | "url" | "textarea",
+];
+
+const BASIC_FIELDS = [
+  ["name", "username", "placeholders.username", "usernameHelp", "text"],
+  ["displayName", "displayName", "placeholders.displayName", "displayNameHelp", "text"],
+  ["about", "bio", "bioPlaceholder", "bioHelp", "textarea"],
+  ["picture", "avatarUrl", "placeholders.avatarUrl", "avatarHelp", "url"],
+] as const satisfies readonly ProfileField[];
+
+const ADVANCED_FIELDS = [
+  ["banner", "bannerUrl", "placeholders.bannerUrl", "bannerHelp", "url"],
+  ["website", "website", "placeholders.website", "websiteHelp", "url"],
+  ["nip05", "nip05Identifier", "placeholders.nip05", "nip05Help", "text"],
+  ["lud16", "lightningAddress", "placeholders.lightningAddress", "lightningHelp", "text"],
+] as const satisfies readonly ProfileField[];
 
 export function renderNostrProfileForm(params: {
   state: NostrProfileFormState;
@@ -42,18 +51,19 @@ export function renderNostrProfileForm(params: {
   accountId: string;
 }): TemplateResult {
   const { state, callbacks, accountId } = params;
-  const isDirty = isFormDirty(state);
+  const isDirty = [...BASIC_FIELDS, ...ADVANCED_FIELDS].some(
+    ([field]) => state.values[field] !== state.original[field],
+  );
 
-  const renderField = (
-    field: keyof NostrProfileType,
-    label: string,
-    opts: {
-      type?: "text" | "url" | "textarea";
-      placeholder?: string;
-      help?: string;
-    } = {},
-  ) => {
-    const { type = "text", placeholder, help } = opts;
+  const renderField = ([field, labelKey, placeholderKey, helpKey, type]: ProfileField) => {
+    const label = t(`channels.nostr.${labelKey}`);
+    const placeholder = t(`channels.nostr.${placeholderKey}`);
+    const help = t(`channels.nostr.${helpKey}`);
+    const onInput = (event: InputEvent) =>
+      callbacks.onFieldChange(
+        field,
+        (event.target as HTMLInputElement | HTMLTextAreaElement).value,
+      );
     const value = state.values[field] ?? "";
     const error = state.fieldErrors[field];
 
@@ -61,42 +71,21 @@ export function renderNostrProfileForm(params: {
     const helpId = `${inputId}-help`;
     const errorId = `${inputId}-error`;
     const descriptionIds = [help ? helpId : "", error ? errorId : ""].filter(Boolean).join(" ");
-    const control =
-      type === "textarea"
-        ? html`
-            <textarea
-              id="${inputId}"
-              class="settings-input"
-              .value=${value}
-              placeholder=${placeholder ?? ""}
-              maxlength="2000"
-              rows="3"
-              aria-describedby=${descriptionIds || nothing}
-              aria-invalid=${error ? "true" : nothing}
-              @input=${(e: InputEvent) => {
-                const target = e.target as HTMLTextAreaElement;
-                callbacks.onFieldChange(field, target.value);
-              }}
-              ?disabled=${state.saving}
-            ></textarea>
-          `
-        : html`
-            <input
-              id="${inputId}"
-              class="settings-input"
-              type=${type}
-              .value=${value}
-              placeholder=${placeholder ?? ""}
-              maxlength="256"
-              aria-describedby=${descriptionIds || nothing}
-              aria-invalid=${error ? "true" : nothing}
-              @input=${(e: InputEvent) => {
-                const target = e.target as HTMLInputElement;
-                callbacks.onFieldChange(field, target.value);
-              }}
-              ?disabled=${state.saving}
-            />
-          `;
+    const multiline = type === "textarea";
+    const tag = multiline ? literal`textarea` : literal`input`;
+    const control = staticHtml`<${tag}
+      id=${inputId}
+      class="settings-input"
+      type=${multiline ? nothing : type}
+      .value=${value}
+      placeholder=${placeholder}
+      maxlength=${multiline ? "2000" : "256"}
+      rows=${multiline ? "3" : nothing}
+      aria-describedby=${descriptionIds || nothing}
+      aria-invalid=${error ? "true" : nothing}
+      @input=${onInput}
+      ?disabled=${state.saving}
+    ></${tag}>`;
 
     return html`
       <div class="settings-row settings-row--stacked">
@@ -114,30 +103,6 @@ export function renderNostrProfileForm(params: {
         <div class="settings-row__control">${control}</div>
       </div>
     `;
-  };
-
-  const renderPicturePreview = () => {
-    const picture = state.values.picture;
-    if (!picture) {
-      return nothing;
-    }
-
-    return renderSettingsRow({
-      title: t("channels.nostr.profilePicturePreview"),
-      control: html`<img
-        src=${picture}
-        alt=${t("channels.nostr.profilePicturePreview")}
-        style="max-width: 80px; max-height: 80px; border-radius: 50%; object-fit: cover;"
-        @error=${(e: Event) => {
-          const img = e.target as HTMLImageElement;
-          img.style.display = "none";
-        }}
-        @load=${(e: Event) => {
-          const img = e.target as HTMLImageElement;
-          img.style.display = "block";
-        }}
-      />`,
-    });
   };
 
   return html`
@@ -165,47 +130,32 @@ export function renderNostrProfileForm(params: {
           `
         : nothing
     }
-    ${renderPicturePreview()}
-    ${renderField("name", t("channels.nostr.username"), {
-      placeholder: t("channels.nostr.placeholders.username"),
-      help: t("channels.nostr.usernameHelp"),
-    })}
-    ${renderField("displayName", t("channels.nostr.displayName"), {
-      placeholder: t("channels.nostr.placeholders.displayName"),
-      help: t("channels.nostr.displayNameHelp"),
-    })}
-    ${renderField("about", t("channels.nostr.bio"), {
-      type: "textarea",
-      placeholder: t("channels.nostr.bioPlaceholder"),
-      help: t("channels.nostr.bioHelp"),
-    })}
-    ${renderField("picture", t("channels.nostr.avatarUrl"), {
-      type: "url",
-      placeholder: t("channels.nostr.placeholders.avatarUrl"),
-      help: t("channels.nostr.avatarHelp"),
-    })}
+    ${
+      state.values.picture
+        ? renderSettingsRow({
+            title: t("channels.nostr.profilePicturePreview"),
+            control: html`<img
+              src=${state.values.picture}
+              alt=${t("channels.nostr.profilePicturePreview")}
+              style="max-width: 80px; max-height: 80px; border-radius: 50%; object-fit: cover;"
+              @error=${(e: Event) => {
+                const img = e.target as HTMLImageElement;
+                img.style.display = "none";
+              }}
+              @load=${(e: Event) => {
+                const img = e.target as HTMLImageElement;
+                img.style.display = "block";
+              }}
+            />`,
+          })
+        : nothing
+    }
+    ${BASIC_FIELDS.map(renderField)}
     ${
       state.showAdvanced
         ? html`
             ${renderSettingsRow({ title: t("channels.nostr.advanced") })}
-            ${renderField("banner", t("channels.nostr.bannerUrl"), {
-              type: "url",
-              placeholder: t("channels.nostr.placeholders.bannerUrl"),
-              help: t("channels.nostr.bannerHelp"),
-            })}
-            ${renderField("website", t("channels.nostr.website"), {
-              type: "url",
-              placeholder: t("channels.nostr.placeholders.website"),
-              help: t("channels.nostr.websiteHelp"),
-            })}
-            ${renderField("nip05", t("channels.nostr.nip05Identifier"), {
-              placeholder: t("channels.nostr.placeholders.nip05"),
-              help: t("channels.nostr.nip05Help"),
-            })}
-            ${renderField("lud16", t("channels.nostr.lightningAddress"), {
-              placeholder: t("channels.nostr.placeholders.lightningAddress"),
-              help: t("channels.nostr.lightningHelp"),
-            })}
+            ${ADVANCED_FIELDS.map(renderField)}
           `
         : nothing
     }
@@ -254,16 +204,9 @@ export function renderNostrProfileForm(params: {
 export function createNostrProfileFormState(
   profile: NostrProfileType | undefined,
 ): NostrProfileFormState {
-  const values: NostrProfileType = {
-    name: profile?.name ?? "",
-    displayName: profile?.displayName ?? "",
-    about: profile?.about ?? "",
-    picture: profile?.picture ?? "",
-    banner: profile?.banner ?? "",
-    website: profile?.website ?? "",
-    nip05: profile?.nip05 ?? "",
-    lud16: profile?.lud16 ?? "",
-  };
+  const values: NostrProfileType = Object.fromEntries(
+    [...BASIC_FIELDS, ...ADVANCED_FIELDS].map(([field]) => [field, profile?.[field] ?? ""]),
+  );
 
   return {
     values,

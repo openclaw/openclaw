@@ -1,8 +1,3 @@
-/**
- * Interactive terminal theme loader.
- *
- * Validates theme JSON, resolves color variables, and exposes terminal styling helpers.
- */
 import * as fs from "node:fs";
 import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -100,6 +95,14 @@ type ThemeBg =
 
 type ColorMode = "truecolor" | "256color";
 
+const THINKING_BORDER_COLORS = new Map<string, ThemeColor>([
+  ["minimal", "thinkingMinimal"],
+  ["low", "thinkingLow"],
+  ["medium", "thinkingMedium"],
+  ["high", "thinkingHigh"],
+  ["xhigh", "thinkingXhigh"],
+]);
+
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const cleaned = hex.replace("#", "");
   if (cleaned.length !== 6) {
@@ -176,8 +179,6 @@ function rgbTo256(r: number, g: number, b: number): number {
   const minC = Math.min(r, g, b);
   const spread = maxC - minC;
 
-  // Only consider grayscale if color is nearly neutral (spread < 10)
-  // AND grayscale is actually closer
   if (spread < 10 && grayDist < cubeDist) {
     return grayIndex;
   }
@@ -314,22 +315,8 @@ export class Theme {
   getThinkingBorderColor(
     level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
   ): (str: string) => string {
-    switch (level) {
-      case "off":
-        return (str: string) => this.fg("thinkingOff", str);
-      case "minimal":
-        return (str: string) => this.fg("thinkingMinimal", str);
-      case "low":
-        return (str: string) => this.fg("thinkingLow", str);
-      case "medium":
-        return (str: string) => this.fg("thinkingMedium", str);
-      case "high":
-        return (str: string) => this.fg("thinkingHigh", str);
-      case "xhigh":
-        return (str: string) => this.fg("thinkingXhigh", str);
-      default:
-        return (str: string) => this.fg("thinkingOff", str);
-    }
+    const color = THINKING_BORDER_COLORS.get(level) ?? "thinkingOff";
+    return (str: string) => this.fg(color, str);
   }
 
   getBashModeBorderColor(): (str: string) => string {
@@ -452,10 +439,6 @@ const cliHighlightTheme: Record<string, (s: string) => string> = {
   punctuation: (s) => interactiveAgentTheme.fg("syntaxPunctuation", s),
 };
 
-/**
- * Highlight code with syntax coloring based on file extension or language.
- * Returns array of highlighted lines.
- */
 export function highlightCode(code: string, lang?: string): string[] {
   // Validate language before highlighting to avoid stderr spam from cli-highlight
   const validLang = lang && supportsLanguage(lang) ? lang : undefined;
@@ -472,9 +455,6 @@ export function highlightCode(code: string, lang?: string): string[] {
   }
 }
 
-/**
- * Get language identifier from file path extension.
- */
 export function getLanguageFromPath(filePath: string): string | undefined {
   const ext = filePath.split(".").pop()?.toLowerCase();
   if (!ext) {

@@ -25,18 +25,15 @@ const DISCORD_REALTIME_INTERRUPTION_MESSAGES = new Map([
   ["server:response.cancelled", "interrupt confirmed"],
 ]);
 
-export function formatRealtimeInterruptionLog(event: RealtimeVoiceBridgeEvent): string | undefined {
+export function formatRealtimeInfoLog(event: RealtimeVoiceBridgeEvent): string | undefined {
   const eventKey = `${event.direction}:${event.type}`;
   const message =
     eventKey === "server:error" && event.detail === "Cancellation failed: no active response found"
       ? "interrupt raced"
       : DISCORD_REALTIME_INTERRUPTION_MESSAGES.get(eventKey);
-  return message
-    ? `discord voice: realtime model ${message} ${eventKey}${event.detail ? ` ${event.detail}` : ""}`
-    : undefined;
-}
-
-export function formatRealtimeLifecycleLog(event: RealtimeVoiceBridgeEvent): string | undefined {
+  if (message) {
+    return `discord voice: realtime model ${message} ${eventKey}${event.detail ? ` ${event.detail}` : ""}`;
+  }
   if (
     !event.type.startsWith("session.") ||
     event.type.startsWith("session.output_audio") ||

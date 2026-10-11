@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, onTestFinished, vi } from "vitest";
-import { getRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {

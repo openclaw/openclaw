@@ -87,7 +87,6 @@ function describeIMessageBridgeStall(error: unknown): unknown {
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-  timer?: NodeJS.Timeout;
 };
 
 const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
@@ -154,7 +153,6 @@ export class IMessageRpcClient {
   private terminalResolve: ((error: Error) => void) | null = null;
   private readonly reaped: Promise<void>;
   private reapedResolve: (() => void) | null = null;
-  private isReaped = false;
   private child: ChildProcessWithoutNullStreams | null = null;
   private stopPromise: Promise<void> | null = null;
   private readonly stdoutFramer = createLfLineFramer((line) => this.handleStdoutLine(line));
@@ -195,19 +193,16 @@ export class IMessageRpcClient {
     });
     this.child = child;
 
-    child.stdout.on("data", (chunk) => {
-      if (this.child !== child) {
-        return;
-      }
-      this.stdoutFramer.write(chunk);
-    });
-
-    child.stderr?.on("data", (chunk) => {
-      if (this.child !== child) {
-        return;
-      }
-      this.stderrFramer.write(chunk);
-    });
+    for (const [stream, framer] of [
+      [child.stdout, this.stdoutFramer],
+      [child.stderr, this.stderrFramer],
+    ] as const) {
+      stream.on("data", (chunk) => {
+        if (this.child === child) {
+          framer.write(chunk);
+        }
+      });
+    }
 
     // Every process/stdio error is terminal for this RPC transport. Settle the
     // client once and terminate a helper whose pipe failed; otherwise the
@@ -291,21 +286,20 @@ export class IMessageRpcClient {
     const line = `${JSON.stringify(payload)}\n`;
     const timeoutMs = opts?.timeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
 
-    const response = new Promise<T>((resolve, reject) => {
-      const key = String(id);
-      const timer =
-        timeoutMs > 0
-          ? setTimeout(() => {
-              this.pending.delete(key);
-              reject(new Error(`imsg rpc timeout (${method})`));
-            }, timeoutMs)
-          : undefined;
+    const key = String(id);
+    const pendingResponse = new Promise<T>((resolve, reject) => {
       this.pending.set(key, {
         resolve: (value) => resolve(value as T),
         reject,
-        timer,
       });
     });
+    const response =
+      timeoutMs > 0
+        ? raceWithTimeout(pendingResponse, timeoutMs, () => {
+            this.pending.delete(key);
+            throw new Error(`imsg rpc timeout (${method})`);
+          })
+        : pendingResponse;
 
     // Reject the specific pending request on write error (e.g. EPIPE)
     // instead of letting it hang until timeout. (#75438)
@@ -358,7 +352,7 @@ export class IMessageRpcClient {
   }
 
   private async waitForReap(timeoutMs: number): Promise<boolean> {
-    if (this.isReaped) {
+    if (!this.reapedResolve) {
       return true;
     }
     return await raceWithTimeout(
@@ -425,9 +419,6 @@ export class IMessageRpcClient {
       if (!pending) {
         return;
       }
-      if (pending.timer) {
-        clearTimeout(pending.timer);
-      }
       this.pending.delete(key);
 
       if (parsed.error) {
@@ -480,9 +471,6 @@ export class IMessageRpcClient {
 
   private failAll(err: Error) {
     for (const [key, pending] of this.pending.entries()) {
-      if (pending.timer) {
-        clearTimeout(pending.timer);
-      }
       pending.reject(err);
       this.pending.delete(key);
     }
@@ -500,10 +488,6 @@ export class IMessageRpcClient {
   }
 
   private markReaped(): void {
-    if (this.isReaped) {
-      return;
-    }
-    this.isReaped = true;
     const resolve = this.reapedResolve;
     this.reapedResolve = null;
     resolve?.();

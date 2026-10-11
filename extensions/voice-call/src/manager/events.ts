@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
 import { TerminalStates, type CallRecord, type NormalizedEvent } from "../types.js";
+import { buildCallbackMetadata, findRecentOutboundCallback } from "./callbacks.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
@@ -19,6 +20,7 @@ import {
 import { addTranscriptEntry, copyCallRecord, transitionState } from "./state.js";
 import { findCallInStore, persistCallRecord } from "./store.js";
 import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
+import { playDetectedCallMessage } from "./voicemail.js";
 
 const log = createSubsystemLogger("voice-call/events");
 
@@ -65,10 +67,35 @@ function shouldAcceptInbound(
   }
 }
 
-export function processEvent(
+export async function processEvent(
   ctx: CallManagerContext,
   event: NormalizedEvent,
 ): Promise<ProcessEventResult> {
+  if (event.type === "call.ended" || (event.type === "call.error" && !event.retryable)) {
+    const call =
+      findCall({
+        activeCalls: ctx.activeCalls,
+        providerCallIdMap: ctx.providerCallIdMap,
+        callIdOrProviderCallId: event.callId,
+      }) ??
+      (event.providerCallId
+        ? findCall({
+            activeCalls: ctx.activeCalls,
+            providerCallIdMap: ctx.providerCallIdMap,
+            callIdOrProviderCallId: event.providerCallId,
+          })
+        : undefined);
+    // Bridge close emits final transcripts through this same queue, so drain outside it.
+    if (call && ctx.beforeCallEnd) {
+      try {
+        await ctx.beforeCallEnd(call);
+      } catch (error) {
+        log.warn(
+          `Failed to drain final transcript for ${call.callId}: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
+  }
   return ctx.mutationQueue.enqueue("state", () => processEventInQueue(ctx, event));
 }
 
@@ -120,7 +147,15 @@ async function processEventInQueue(
   if (!call && providerCallId && event.direction) {
     // Apply inbound policy for true inbound calls; external outbound-api calls
     // are implicitly trusted because the caller controls the webhook URL.
-    if (event.direction === "inbound" && !shouldAcceptInbound(ctx.config, event.from)) {
+    const callback =
+      event.direction === "inbound" && ctx.config.realtime.enabled
+        ? await findRecentOutboundCallback(ctx, event.from)
+        : undefined;
+    if (
+      event.direction === "inbound" &&
+      !callback &&
+      !shouldAcceptInbound(ctx.config, event.from)
+    ) {
       const pid = providerCallId;
       if (!ctx.provider) {
         log.warn(
@@ -184,6 +219,7 @@ async function processEventInQueue(
       ctx.config,
       event.direction === "inbound" ? to : undefined,
     );
+    const agentId = normalizeAgentId(callback?.agentId ?? effectiveConfig.agentId);
     call = {
       callId,
       providerCallId,
@@ -193,12 +229,12 @@ async function processEventInQueue(
       from,
       to,
       sessionKey: resolveVoiceCallSessionKey({
-        config: effectiveConfig,
+        config: { ...effectiveConfig, agentId },
         callId,
         phone: event.direction === "outbound" ? to : from,
         coreSession: ctx.coreSession,
       }),
-      agentId: normalizeAgentId(effectiveConfig.agentId),
+      agentId,
       startedAt: Date.now(),
       transcript: [],
       processedEventIds: [],
@@ -208,6 +244,7 @@ async function processEventInQueue(
             ? effectiveConfig.inboundGreeting || "Hello! How can I help you today?"
             : undefined,
         ...(numberRouteKey ? { numberRouteKey } : {}),
+        ...(callback ? buildCallbackMetadata(callback, effectiveConfig) : {}),
       },
     };
     await persistCallRecord(ctx.storePath, call, ctx.stateRuntime);
@@ -223,6 +260,14 @@ async function processEventInQueue(
   }
 
   const activeCall = copyCallRecord(call);
+  if (event.answeredBy) {
+    activeCall.metadata = {
+      ...activeCall.metadata,
+      answeredByFirst:
+        activeCall.metadata?.answeredByFirst ?? activeCall.metadata?.answeredBy ?? event.answeredBy,
+      answeredBy: event.answeredBy,
+    };
+  }
   const previousProviderCallId = call.providerCallId;
   const shouldCommitReplayKey = !(event.type === "call.error" && event.retryable);
   const effects: Array<() => void> = [];
@@ -261,6 +306,56 @@ async function processEventInQueue(
   if (shouldCommitReplayKey) {
     appendCallReplayKey(activeCall.processedEventIds, dedupeKey);
   }
+
+  if (
+    event.answeredBy &&
+    event.type !== "call.ended" &&
+    event.type !== "call.error" &&
+    activeCall.direction === "outbound" &&
+    ctx.config.voicemail.detection === "twilio" &&
+    (activeCall.provider === "twilio" || activeCall.provider === "mock")
+  ) {
+    const detectedCall = call;
+    const machine = event.answeredBy.startsWith("machine_");
+    if (machine && !activeCall.metadata?.voicemailStatus) {
+      if (ctx.config.voicemail.onMachine === "hang-up") {
+        activeCall.metadata = { ...activeCall.metadata, voicemailStatus: "hang-up" };
+        delete activeCall.metadata.pendingNotifyAmd;
+        effects.push(() =>
+          ctx.trackCallWork(endCall(ctx, detectedCall.callId, { reason: "voicemail" })),
+        );
+      } else if (event.answeredBy.startsWith("machine_end_")) {
+        activeCall.metadata = { ...activeCall.metadata, voicemailStatus: "pending" };
+        delete activeCall.metadata.pendingNotifyAmd;
+        effects.push(() =>
+          ctx.trackCallWork(playDetectedCallMessage(ctx, detectedCall, "voicemail")),
+        );
+      }
+    } else if (
+      activeCall.metadata?.pendingNotifyAmd &&
+      (event.answeredBy === "human" || event.answeredBy === "unknown")
+    ) {
+      activeCall.metadata = { ...activeCall.metadata, notifyStatus: "pending" };
+      delete activeCall.metadata.pendingNotifyAmd;
+      effects.push(() => ctx.trackCallWork(playDetectedCallMessage(ctx, detectedCall, "notify")));
+    } else if (activeCall.metadata?.pendingNotifyAmd && event.answeredBy === "fax") {
+      activeCall.metadata = {
+        ...activeCall.metadata,
+        notifyStatus: "failed",
+        notifyError: "A fax answered the call",
+      };
+      delete activeCall.metadata.pendingNotifyAmd;
+      effects.push(() =>
+        ctx.trackCallWork(endCall(ctx, detectedCall.callId, { reason: "failed" })),
+      );
+    }
+  }
+  const carrierStatusKey =
+    activeCall.metadata?.voicemailStatus === "playing"
+      ? "voicemailStatus"
+      : activeCall.metadata?.notifyStatus === "playing"
+        ? "notifyStatus"
+        : undefined;
 
   switch (event.type) {
     case "call.initiated": {
@@ -310,6 +405,9 @@ async function processEventInQueue(
       activeCall.answeredAt = event.timestamp;
       transitionState(activeCall, "answered");
       effects.push(startDurationTimer, () => ctx.onCallAnswered?.(call));
+      break;
+
+    case "call.amd":
       break;
 
     case "call.active":
@@ -372,11 +470,25 @@ async function processEventInQueue(
         result = { kind: "processed", replayable: true };
         break;
       }
+      if (carrierStatusKey) {
+        const errorKey = carrierStatusKey === "voicemailStatus" ? "voicemailError" : "notifyError";
+        activeCall.metadata = {
+          ...activeCall.metadata,
+          [carrierStatusKey]:
+            event.type === "call.ended" && event.reason === "completed" ? "left" : "failed",
+          ...(event.type === "call.error" ? { [errorKey]: event.error } : {}),
+        };
+      }
       await finalizeCall({
         ctx,
         call,
         preparedCall: activeCall,
-        endReason: event.type === "call.ended" ? event.reason : "error",
+        endReason:
+          event.type === "call.error"
+            ? "error"
+            : event.reason === "completed" && carrierStatusKey === "voicemailStatus"
+              ? "voicemail"
+              : event.reason,
         endedAt: event.timestamp,
         transcriptRejectReason:
           event.type === "call.error" ? `Call error: ${event.error}` : undefined,
@@ -394,6 +506,7 @@ async function processEventInQueue(
     rememberManagerReplayKey(ctx.processedEventIds, dedupeKey);
   }
   if (!ctx.isStopping()) {
+    void ctx.onCallUpdated?.(call);
     for (const effect of effects) {
       effect();
     }

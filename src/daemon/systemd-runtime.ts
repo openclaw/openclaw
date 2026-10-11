@@ -7,12 +7,14 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
   sanitizeServiceInspectionError,
   ServiceInspectionError,
 } from "./service-inspection-error.js";
 import {
   createServiceRuntimeInspectionFailure,
+  resolveSystemdServiceStartRefusal,
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
 import type {
@@ -35,26 +37,6 @@ import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
 import { readSystemdServiceExecStart, resolveSystemdServiceName } from "./systemd-service-files.js";
 import { readSystemdUserTransport } from "./systemd-user-transport.js";
 
-function parseSystemdShow(output: string) {
-  const entries = parseKeyValueOutput(output, "=");
-  return {
-    loadState: entries.loadstate || undefined,
-    activeState: entries.activestate || undefined,
-    subState: entries.substate || undefined,
-    mainPid: parseStrictPositiveInteger(entries.mainpid),
-    execMainStatus: parseStrictInteger(entries.execmainstatus),
-    execMainCode: entries.execmaincode || undefined,
-    result: entries.result || undefined,
-    nRestarts: parseStrictInteger(entries.nrestarts),
-    startLimitBurst: parseStrictInteger(entries.startlimitburst),
-    unit: entries.id || undefined,
-    controlGroup: entries.controlgroup || undefined,
-    killMode: entries.killmode || undefined,
-    tasksCurrent: parseStrictNonNegativeInteger(entries.taskscurrent),
-    memoryCurrent: parseStrictNonNegativeInteger(entries.memorycurrent),
-  };
-}
-
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const env = args.env ?? process.env;
   const installed = await findInstalledSystemdGatewayScope(env, { timeoutMs: args.timeoutMs });
@@ -64,7 +46,9 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   const res =
     installed.scope === "system"
       ? await execSystemctl(["is-enabled", installed.unitName], env, args.timeoutMs)
-      : await execSystemctlUser(env, ["is-enabled", installed.unitName], args.timeoutMs);
+      : await withServiceInspectionBudget(() =>
+          execSystemctlUser(env, ["is-enabled", installed.unitName], args.timeoutMs),
+        );
   if (res.code === 0) {
     return true;
   }
@@ -142,12 +126,12 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent,ControlGroup",
+    "Id,LoadState,UnitFileState,RefuseManualStart,CanStart,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent,ControlGroup",
   ];
   const res =
     installed?.scope === "system"
       ? await execSystemctl(showArgs, env, timeoutMs)
-      : await execSystemctlUser(env, showArgs, timeoutMs);
+      : await withServiceInspectionBudget(() => execSystemctlUser(env, showArgs, timeoutMs));
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
     const error = systemdInspectionError(res, detail, installed?.scope);
@@ -159,17 +143,30 @@ export async function readSystemdServiceRuntime(
       ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
     };
   }
-  const parsed = parseSystemdShow(res.stdout || "");
-  const loadState = normalizeLowercaseStringOrEmpty(parsed.loadState);
-  const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
+  const entries = parseKeyValueOutput(res.stdout || "", "=");
+  const loadState = normalizeLowercaseStringOrEmpty(entries.loadstate);
+  const activeState = normalizeLowercaseStringOrEmpty(entries.activestate);
+  const startRefusal = resolveSystemdServiceStartRefusal({
+    unit: unitName,
+    scope: installed?.scope,
+    loadState,
+    activeState,
+    unitFileState: entries.unitfilestate || undefined,
+    refuseManualStart: entries.refusemanualstart === "yes",
+    canStart: entries.canstart === "yes" ? true : entries.canstart === "no" ? false : undefined,
+  });
   if (loadState !== "loaded") {
     return {
       status: "unknown",
       missingUnit: false,
+      ...(startRefusal
+        ? { systemd: { scope: installed?.scope ?? "user", unit: unitName, startRefusal } }
+        : {}),
       detail:
-        loadState === "not-found"
+        startRefusal?.message ??
+        (loadState === "not-found"
           ? `Unit ${unitName} is not visible in the ${installed?.scope ?? "user"} systemd manager.`
-          : `Unit ${unitName} has an unverified systemd load state.`,
+          : `Unit ${unitName} has an unverified systemd load state.`),
     };
   }
   // Restart and shutdown transitions can still own or respawn the process.
@@ -183,22 +180,24 @@ export async function readSystemdServiceRuntime(
   return {
     ...commandInspectionFailure,
     status,
-    state: parsed.activeState,
-    subState: parsed.subState,
-    pid: parsed.mainPid,
-    lastExitStatus: parsed.execMainStatus,
-    lastExitReason: parsed.execMainCode,
+    ...(startRefusal ? { detail: startRefusal.message } : {}),
+    state: entries.activestate || undefined,
+    subState: entries.substate || undefined,
+    pid: parseStrictPositiveInteger(entries.mainpid),
+    lastExitStatus: parseStrictInteger(entries.execmainstatus),
+    lastExitReason: entries.execmaincode || undefined,
     systemd: {
       scope: installed?.scope ?? "user",
       transport: installed?.scope === "system" ? undefined : await readSystemdUserTransport(env),
-      unit: parsed.unit ?? unitName,
-      controlGroup: parsed.controlGroup,
-      killMode: parsed.killMode,
-      tasksCurrent: parsed.tasksCurrent,
-      memoryCurrent: parsed.memoryCurrent,
-      result: parsed.result,
-      nRestarts: parsed.nRestarts,
-      startLimitBurst: parsed.startLimitBurst,
+      unit: entries.id || unitName,
+      ...(startRefusal ? { startRefusal } : {}),
+      controlGroup: entries.controlgroup || undefined,
+      killMode: entries.killmode || undefined,
+      tasksCurrent: parseStrictNonNegativeInteger(entries.taskscurrent),
+      memoryCurrent: parseStrictNonNegativeInteger(entries.memorycurrent),
+      result: entries.result || undefined,
+      nRestarts: parseStrictInteger(entries.nrestarts),
+      startLimitBurst: parseStrictInteger(entries.startlimitburst),
     },
   };
 }

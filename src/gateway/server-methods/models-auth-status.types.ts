@@ -1,13 +1,5 @@
-import type {
-  AuthProfileHealthStatus,
-  AuthProviderHealthStatus,
-} from "../../agents/auth-health.js";
-import type { AuthCredentialReasonCode } from "../../agents/auth-profiles.js";
-import type {
-  ProviderUsageBilling,
-  UsageProviderId,
-  UsageWindow,
-} from "../../infra/provider-usage.types.js";
+import type { AuthProviderHealth, AuthProviderHealthStatus } from "../../agents/auth-health.js";
+import type { ProviderUsageSnapshot } from "../../infra/provider-usage.types.js";
 
 /** Time-bounded credential expiry projected to gateway clients. */
 export type ModelAuthExpiry = {
@@ -16,11 +8,10 @@ export type ModelAuthExpiry = {
   label: string;
 };
 
-export type ModelAuthStatusProfile = {
-  profileId: string;
-  type: "oauth" | "token" | "api_key";
-  status: AuthProfileHealthStatus;
-  reasonCode?: AuthCredentialReasonCode;
+export type ModelAuthStatusProfile = Pick<
+  AuthProviderHealth["profiles"][number],
+  "profileId" | "type" | "status" | "reasonCode"
+> & {
   expiry?: ModelAuthExpiry;
   /** True only for saved OAuth/token profiles this gateway can remove. */
   logoutSupported?: boolean;
@@ -51,14 +42,12 @@ export type ModelAuthStatusProvider = {
     source: "config" | "env";
     envVar?: string;
   };
-  usage?: {
+  usage?: Pick<
+    ProviderUsageSnapshot,
+    "windows" | "summary" | "plan" | "billing" | "accountEmail"
+  > & {
     /** Normalized provider id the usage payload was fetched under. */
-    providerId: UsageProviderId;
-    windows: UsageWindow[];
-    summary?: string;
-    plan?: string;
-    billing?: ProviderUsageBilling[];
-    accountEmail?: string;
+    providerId: ProviderUsageSnapshot["provider"];
   };
 };
 

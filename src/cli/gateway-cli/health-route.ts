@@ -1,4 +1,3 @@
-// Route-first machine-readable Gateway health command.
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 type GatewayHealthRpcOpts = Parameters<
@@ -37,9 +36,8 @@ export async function runGatewayHealthJsonRoute(
   args: GatewayHealthJsonRouteArgs,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  let rpc: GatewayHealthRpcOpts | undefined;
+  const rpc = await resolveRouteRpcOptions(args);
   try {
-    rpc = await resolveRouteRpcOptions(args);
     const { callGatewayFromCliWithTransport } = await import("../gateway-rpc.js");
     writeRuntimeJson(
       runtime,
@@ -49,9 +47,6 @@ export async function runGatewayHealthJsonRoute(
       }),
     );
   } catch (error) {
-    if (!rpc) {
-      throw error;
-    }
     const [
       { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig },
       {

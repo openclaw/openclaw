@@ -21,7 +21,6 @@ import {
 } from "../config/sessions/paths.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
-import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   listDurableSqliteTargetPathsForSessionStorePath,
@@ -29,6 +28,7 @@ import {
   resolveSqliteTargetFromSessionStorePath,
 } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -37,6 +37,11 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveRealpathOrAbsolute } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
+import {
+  readIncognitoUsageTranscript,
+  captureUsageCostIncognitoBinding,
+  type UsageCostIncognitoBinding,
+} from "./session-cost-usage-incognito.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
@@ -354,17 +359,28 @@ export async function resolveUsageCostTranscriptFiles(
 
 export async function* readTranscriptRecords(
   filePath: string,
+  incognito?: UsageCostIncognitoBinding,
 ): AsyncGenerator<Record<string, unknown>> {
   const marker = parseSqliteSessionFileMarker(filePath);
+  if (incognito && !marker) {
+    throw new Error("Usage actor transcript requires its captured SQLite marker");
+  }
   if (marker) {
-    const { restoreSessionColdTranscript } =
-      await import("../config/sessions/session-cold-storage.js");
-    await restoreSessionColdTranscript(marker);
-    for (const event of selectVisibleTranscriptEvents(loadTranscriptEventsSync(marker))) {
+    let events: unknown[];
+    if (incognito) {
+      events = await readIncognitoUsageTranscript(incognito, marker);
+    } else {
+      events = await loadTranscriptEvents(marker);
+    }
+    for (const event of selectVisibleTranscriptEvents(events)) {
+      incognito?.actor.assertCurrent();
+      incognito?.authority.assertCurrent();
       if (isRecord(event)) {
         yield event;
       }
     }
+    incognito?.actor.assertCurrent();
+    incognito?.authority.assertCurrent();
     return;
   }
   // Durable byte-offset scans own their checkpoint reader. Diagnostic history
@@ -384,9 +400,10 @@ export async function* readTranscriptRecords(
 
 export async function* readTranscriptRecordsBestEffort(
   filePath: string,
+  incognito?: UsageCostIncognitoBinding,
 ): AsyncGenerator<Record<string, unknown>> {
   try {
-    yield* readTranscriptRecords(filePath);
+    yield* readTranscriptRecords(filePath, incognito);
   } catch (error) {
     if (parseSqliteSessionFileMarker(filePath)) {
       throw error;
@@ -396,10 +413,11 @@ export async function* readTranscriptRecordsBestEffort(
   }
 }
 
-export async function resolveUsageSessionSource(params: {
+export async function resolveUsageSessionSource(input: {
   sessionId?: string;
   sessionFile?: string;
   agentId: string;
+  incognito?: UsageCostIncognitoBinding;
   sessionTarget?: {
     agentId: string;
     sessionId: string;
@@ -407,6 +425,7 @@ export async function resolveUsageSessionSource(params: {
     storePath: string;
   };
 }): Promise<{ sessionFile: string; entry?: SessionEntry } | undefined> {
+  const params = { ...input, incognito: captureUsageCostIncognitoBinding(input) };
   const signal = getAsyncWorkSignal();
   const assertCurrent = () => signal?.throwIfAborted();
   assertCurrent();
@@ -427,6 +446,31 @@ export async function resolveUsageSessionSource(params: {
       (targetKeyAgentId && targetKeyAgentId !== agentId)
     ) {
       return undefined;
+    }
+    if (params.incognito) {
+      const { actor, authority } = params.incognito;
+      const selected = params.incognito.target;
+      if (
+        actor.agentId !== agentId ||
+        actor.path !== path.resolve(storePath) ||
+        (selected && (selected.sessionKey !== sessionKey || selected.sessionId !== targetSessionId))
+      ) {
+        throw new Error("Usage session source belongs to another actor");
+      }
+      params.incognito.retainSource?.(sessionKey);
+      const read = await actor.sessions.read(authority, { sessionKey }, signal);
+      if (read.entry && read.entry.sessionId !== targetSessionId) {
+        return undefined;
+      }
+      read.claim.assertCurrent();
+      return {
+        entry: read.entry,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId,
+          sessionId: targetSessionId,
+          storePath: actor.path,
+        }),
+      };
     }
     return withSessionEntryReadOnlyInWorker(
       { agentId, sessionKey, storePath, projection: "list" },
@@ -499,20 +543,14 @@ export async function resolveUsageSessionSource(params: {
       return { sessionFile: path.join(sessionsDir, primary.name) };
     }
 
+    const archiveTimestamp = (name: string) =>
+      parseSessionArchiveTimestamp(name, "deleted") ??
+      parseSessionArchiveTimestamp(name, "reset") ??
+      0;
     const latestArchive = entries
       .filter((entry) => isSessionArchiveArtifactName(entry.name))
       .map((entry) => entry.name)
-      .toSorted((a, b) => {
-        const tsA =
-          parseSessionArchiveTimestamp(a, "deleted") ??
-          parseSessionArchiveTimestamp(a, "reset") ??
-          0;
-        const tsB =
-          parseSessionArchiveTimestamp(b, "deleted") ??
-          parseSessionArchiveTimestamp(b, "reset") ??
-          0;
-        return tsB - tsA || b.localeCompare(a);
-      })[0];
+      .toSorted((a, b) => archiveTimestamp(b) - archiveTimestamp(a) || b.localeCompare(a))[0];
 
     const sessionFile = latestArchive ? path.join(sessionsDir, latestArchive) : candidate;
     return sessionFile ? { sessionFile } : undefined;

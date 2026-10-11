@@ -3,7 +3,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { resolveChannelAccount } from "../channels/account-resolution.js";
-import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../channels/plugins/read-only.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
@@ -100,14 +100,6 @@ async function isChannelPluginConfigured(
   return false;
 }
 
-function normalizePluginIdSet(entries: string[]): Set<string> {
-  return new Set(
-    entries
-      .map((entry) => normalizeOptionalLowercaseString(entry))
-      .filter((entry): entry is string => Boolean(entry)),
-  );
-}
-
 function resolveEnabledExtensionPluginIds(params: {
   cfg: OpenClawConfig;
   pluginDirs: string[];
@@ -117,16 +109,9 @@ function resolveEnabledExtensionPluginIds(params: {
     return [];
   }
 
-  const allowSet = normalizePluginIdSet(normalized.allow);
-  const denySet = normalizePluginIdSet(normalized.deny);
-  const entryById = new Map<string, { enabled?: boolean }>();
-  for (const [id, entry] of Object.entries(normalized.entries)) {
-    const normalizedId = normalizeOptionalLowercaseString(id);
-    if (!normalizedId) {
-      continue;
-    }
-    entryById.set(normalizedId, entry);
-  }
+  const allowSet = new Set(normalized.allow);
+  const denySet = new Set(normalized.deny);
+  const entryById = new Map(Object.entries(normalized.entries));
 
   const enabled: string[] = [];
   for (const id of params.pluginDirs) {
@@ -275,7 +260,7 @@ export async function collectPluginsTrustFindings(params: {
     }
 
     if (!allowConfigured) {
-      const channelPlugins = listReadOnlyChannelPluginsForConfig(params.cfg, {
+      const channelPlugins = await listReadOnlyChannelPluginsForConfigAsync(params.cfg, {
         stateDir: params.stateDir,
       });
       const skillCommandsLikelyExposed = (

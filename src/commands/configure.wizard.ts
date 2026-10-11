@@ -118,45 +118,39 @@ async function promptWebToolsConfig(
         initialValue: existingSearch?.openaiCodex?.enabled === true,
       });
 
+      const codexMode = enableCodexNative
+        ? await prompts.select({
+            message: "Native Codex web search mode",
+            options: [
+              {
+                value: "cached",
+                label: "cached (recommended)",
+                hint: "Uses cached web content",
+              },
+              {
+                value: "live",
+                label: "live",
+                hint: "Allows live external web access",
+              },
+            ],
+            initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
+          })
+        : undefined;
+      nextSearch = {
+        ...nextSearch,
+        openaiCodex: {
+          ...existingSearch?.openaiCodex,
+          enabled: enableCodexNative,
+          ...(enableCodexNative ? { mode: codexMode } : {}),
+        },
+      };
       if (enableCodexNative) {
-        const codexMode = await prompts.select({
-          message: "Native Codex web search mode",
-          options: [
-            {
-              value: "cached",
-              label: "cached (recommended)",
-              hint: "Uses cached web content",
-            },
-            {
-              value: "live",
-              label: "live",
-              hint: "Allows live external web access",
-            },
-          ],
-          initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
-        });
-        nextSearch = {
-          ...nextSearch,
-          openaiCodex: {
-            ...existingSearch?.openaiCodex,
-            enabled: true,
-            mode: codexMode,
-          },
-        };
         configureManagedProvider = await prompts.confirm({
           message: existingSearch?.provider
             ? `Change the separate web search provider (currently ${existingSearch.provider})?`
             : "Also configure a separate web search provider for other models?",
           initialValue: Boolean(existingSearch?.provider),
         });
-      } else {
-        nextSearch = {
-          ...nextSearch,
-          openaiCodex: {
-            ...existingSearch?.openaiCodex,
-            enabled: false,
-          },
-        };
       }
     }
 
@@ -331,7 +325,7 @@ export async function runConfigureWizard(
             hint: localProbe.ok
               ? `Gateway reachable (${localUrl})`
               : "authUnavailable" in localProbe
-                ? `Gateway auth unavailable; probe skipped (${localUrl})`
+                ? `Gateway auth unavailable; check skipped (${localUrl})`
                 : `No gateway detected (${localUrl})`,
           },
           {
@@ -674,20 +668,15 @@ export async function runConfigureWizard(
     }
 
     const bind = nextConfig.gateway?.bind ?? "loopback";
-    const displayLinks = await resolveAdvertisedControlUiLinks({
+    const linkParams = {
       bind,
       port: gatewayPort,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
-    const probeLinks = resolveLocalControlUiProbeLinks({
-      bind,
-      port: gatewayPort,
-      customBindHost: nextConfig.gateway?.customBindHost,
-      basePath: nextConfig.gateway?.controlUi?.basePath,
-      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
+    };
+    const displayLinks = await resolveAdvertisedControlUiLinks(linkParams);
+    const probeLinks = resolveLocalControlUiProbeLinks(linkParams);
     const probeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg: nextConfig,
       env: process.env,
@@ -699,7 +688,7 @@ export async function runConfigureWizard(
     const probe =
       daemonSetupOutcome === "succeeded" ? waitForGatewayReachable : probeGatewayReachable;
     let gatewayProbe = probeAuth.warning
-      ? { ok: false, detail: "auth unavailable; probe skipped" }
+      ? { ok: false, detail: "auth unavailable; check skipped" }
       : await probe({
           ...(daemonSetupOutcome === "succeeded" ? resolveGatewayStartupTiming() : {}),
           url: probeLinks.wsUrl,
@@ -726,7 +715,7 @@ export async function runConfigureWizard(
       }
     }
     const gatewayStatusLine = probeAuth.warning
-      ? "Gateway: auth unavailable (probe skipped)"
+      ? "Gateway: auth unavailable (check skipped)"
       : gatewayProbe.ok
         ? "Gateway: reachable"
         : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
@@ -752,4 +741,3 @@ export async function runConfigureWizard(
     throw err;
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

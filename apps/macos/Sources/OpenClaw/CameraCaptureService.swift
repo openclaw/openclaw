@@ -1,7 +1,6 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
-import OpenClawIPC
 import OpenClawKit
 import OSLog
 
@@ -47,13 +46,12 @@ actor CameraCaptureService {
     }
 
     func snap(
-        facing: CameraFacing?,
+        facing: OpenClawCameraFacing,
         maxWidth: Int?,
         quality: Double?,
         deviceId: String?,
         delayMs: Int) async throws -> (data: Data, size: CGSize)
     {
-        let facing = facing ?? .front
         let (maxWidth, quality) = Self.normalizeSnap(maxWidth: maxWidth, quality: quality)
         let delayMs = max(0, delayMs)
         let deviceId = deviceId?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -118,13 +116,11 @@ actor CameraCaptureService {
     }
 
     func clip(
-        facing: CameraFacing?,
+        facing: OpenClawCameraFacing,
         durationMs: Int?,
         includeAudio: Bool,
-        deviceId: String?,
-        outPath: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
+        deviceId: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
     {
-        let facing = facing ?? .front
         let durationMs = CaptureRateLimits.clampDurationMs(durationMs, defaultMs: 3000)
         let deviceId = deviceId?.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -137,12 +133,8 @@ actor CameraCaptureService {
             .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mov")
         defer { try? FileManager().removeItem(at: tmpMovURL) }
 
-        let outputURL = if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            URL(fileURLWithPath: outPath)
-        } else {
-            FileManager().temporaryDirectory
-                .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mp4")
-        }
+        let outputURL = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mp4")
         let logger = self.logger
         let recordedURL = try await CameraCapturePipelineSupport.withWarmMovieSession(
             options: CameraMovieSessionOptions(

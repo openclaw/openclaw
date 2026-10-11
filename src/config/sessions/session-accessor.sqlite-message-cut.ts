@@ -44,14 +44,24 @@ import type {
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
+import {
+  captureIncognitoSessionSource,
+  publishIncognitoSessionEntry,
+} from "./session-incognito-binding.js";
+import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import { extractEditorText } from "./session-message-cut-content.js";
-import type { SessionMessageCutIntent } from "./session-message-cut.types.js";
+import type {
+  SessionMessageCutIntent,
+  SessionMessageCutPreconditions,
+  SessionMessageCutResult,
+} from "./session-message-cut.types.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
 } from "./session-transcript-index.js";
+import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -73,11 +83,6 @@ type MessageCut = {
   prefix: TranscriptEvent[];
 };
 
-type SessionTranscriptMutationResult =
-  | SessionMessageCutMutationResult
-  | SessionBranchSwitchMutationResult
-  | { status: "conflict" };
-
 type SessionTranscriptMutationMode = "fork" | "rewind" | "switch";
 type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
 
@@ -96,17 +101,13 @@ export async function forkSessionAtMessage(
 }
 
 /** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
-export async function forkSessionAtMessageWithPreconditions(
-  params: SessionMessageCutMutationParams & { targetKey: string },
+export async function mutateSessionAtMessageWithPreconditions(
+  params: SessionMessageCutMutationParams,
+  mode: SessionTranscriptMutationMode,
   expectedState: SessionEntryExpectedState | undefined,
-  preconditions: { sourceRepositoryWorkspaceId: string },
-): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
-  return await mutateSqliteSessionAtMessage(
-    params,
-    "fork",
-    expectedState,
-    preconditions.sourceRepositoryWorkspaceId,
-  );
+  preconditions: SessionMessageCutPreconditions,
+): Promise<SessionMessageCutResult> {
+  return mutateSqliteSessionAtMessage(params, mode, expectedState, preconditions);
 }
 
 export async function switchSessionBranch(
@@ -124,20 +125,27 @@ function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "fork" | "rewind",
   expectedState?: SessionEntryExpectedState,
-  sourceRepositoryWorkspaceId?: string,
+  preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }>;
 function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "switch",
   expectedState?: SessionEntryExpectedState,
+  preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }>;
+function mutateSqliteSessionAtMessage(
+  params: SessionMessageCutMutationParams,
+  mode: SessionTranscriptMutationMode,
+  expectedState?: SessionEntryExpectedState,
+  preconditions?: SessionMessageCutPreconditions,
+): Promise<SessionMessageCutResult>;
 
 async function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
-  sourceRepositoryWorkspaceId?: string,
-): Promise<SessionTranscriptMutationResult> {
+  preconditions?: SessionMessageCutPreconditions,
+): Promise<SessionMessageCutResult> {
   const canonicalSourceKey = normalizeStoreSessionKey(params.sessionKey);
   const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
   const targetKey =
@@ -153,19 +161,130 @@ async function mutateSqliteSessionAtMessage(
     creation: params.creation ? structuredClone(params.creation) : undefined,
     forkWorkspace: params.forkWorkspace ? structuredClone(params.forkWorkspace) : undefined,
     entryId: params.entryId,
-    expectedState,
+    expectedState: expectedState ? { ...expectedState } : undefined,
     mode,
     repositoryWorkspaceId: params.repositoryWorkspaceId,
     sourceKey,
     targetKey,
   };
   const options = toDatabaseOptions(resolved);
+  const binding = isMainThread ? captureIncognitoSessionSource(params) : undefined;
+  if (binding && "kind" in binding) {
+    binding.assertCurrent();
+    return { status: "missing-session" };
+  }
+  if (binding) {
+    const { actor } = binding;
+    binding.admissionSignal?.throwIfAborted();
+    return actor.sessions.withSharedState(async () => {
+      const authority = {
+        assertCurrent() {
+          actor.assertCurrent();
+          params.commitGuard?.();
+        },
+      };
+      const { entry } = await actor.sessions.read(
+        authority,
+        { sessionKey: sourceKey },
+        binding.admissionSignal,
+      );
+      binding.admissionSignal?.throwIfAborted();
+      if (!entry) {
+        return { status: "missing-session" };
+      }
+      intent.expectedState ??= {
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      };
+      const target = { sessionKey: sourceKey, entry };
+      const mutate = async (
+        assertResetCurrent: () => void,
+        capture?: Parameters<Parameters<typeof withSqliteSessionContextReset>[2]>[1],
+      ) => {
+        // Preparation can be cancelled; an admitted native write must settle.
+        binding.admissionSignal?.throwIfAborted();
+        let transactionSessionId: string | undefined;
+        let changed = false;
+        const current: IncognitoSessionAuthority = {
+          assertCurrent() {
+            authority.assertCurrent();
+            assertResetCurrent();
+          },
+          authorize(stage, facts) {
+            if (facts.sessionKey === sourceKey) {
+              if (stage === "transaction") {
+                transactionSessionId = facts.sharing?.entry?.sessionId;
+              } else {
+                changed = facts.sharing?.entry?.sessionId !== transactionSessionId;
+              }
+            }
+          },
+        };
+        const settlement = capture?.([target]);
+        return actor.sessions.lifecycle(
+          current,
+          {
+            type: "session.lifecycle.messageCut",
+            input: {
+              intent,
+              sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId,
+              ...(mode !== "fork" ? { target } : {}),
+            },
+          },
+          undefined,
+          settlement
+            ? () => ({
+                beforeCommit() {
+                  if (changed) {
+                    settlement.beforeCommit();
+                  }
+                },
+                settle: (outcome) => settlement.settle(outcome),
+              })
+            : undefined,
+          ({ result }) => {
+            if (result.status === "created") {
+              invalidateSessionBranchCache(actor.path, [entry.sessionId, result.entry.sessionId]);
+              publishIncognitoSessionEntry(
+                actor,
+                result.key,
+                mode === "fork" ? undefined : entry,
+                result.entry,
+              );
+            }
+          },
+        );
+      };
+      const { result, projectionNeedsReconcile } =
+        mode === "fork"
+          ? await mutate(() => {})
+          : await withSqliteSessionContextReset(
+              { ...resolved, path: actor.path },
+              target,
+              mutate,
+              preconditions?.assertUpstreamCurrent,
+              actor,
+            );
+      if (result.status === "created" && projectionNeedsReconcile) {
+        startSessionTranscriptIndexReconcile(
+          { ...options, path: actor.path, preferredSessionId: result.entry.sessionId },
+          {
+            actor,
+            authority,
+            target: {
+              sessionKey: result.key,
+              sessionId: result.entry.sessionId,
+              lifecycleRevision: result.entry.lifecycleRevision,
+            },
+          },
+        );
+      }
+      return result;
+    });
+  }
   if (isMainThread && supportsOpenClawAgentDatabaseExecution(options)) {
     const pathname = resolveOpenClawAgentSqlitePath(options);
     const source = readDatabasePathIdentitySync(pathname);
-    if (intent.expectedState) {
-      intent.expectedState = { ...intent.expectedState };
-    }
     const env = captureSessionTranscriptStorageEnvironment(resolved.env ?? process.env);
     const selection =
       !intent.expectedState && source.key.startsWith("file:")
@@ -188,10 +307,10 @@ async function mutateSqliteSessionAtMessage(
             { ...resolved, env },
             prepared,
             assertCurrent,
-            sourceRepositoryWorkspaceId,
+            preconditions,
           ),
         selection,
-        sourceRepositoryWorkspaceId,
+        preconditions,
       );
     } finally {
       selection?.release();
@@ -224,13 +343,14 @@ async function mutateSqliteSessionAtMessage(
       resolved,
       { ...intent, expectedState: preparedExpectedState },
       assertPreparedCurrent,
-      sourceRepositoryWorkspaceId,
+      preconditions,
     );
   return mode !== "fork" && preparedEntry
     ? await withSqliteSessionContextReset(
         resolved,
         { sessionKey: sourceKey, entry: preparedEntry },
         mutate,
+        preconditions?.assertUpstreamCurrent,
       )
     : await mutate();
 }
@@ -240,8 +360,8 @@ function mutatePreparedSqliteSessionAtMessage(
   resolved: ResolvedSqliteScope,
   intent: SessionMessageCutIntent,
   assertPreparedCurrent?: () => void,
-  sourceRepositoryWorkspaceId?: string,
-): Promise<SessionTranscriptMutationResult> {
+  preconditions?: SessionMessageCutPreconditions,
+): Promise<SessionMessageCutResult> {
   return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
@@ -250,6 +370,7 @@ function mutatePreparedSqliteSessionAtMessage(
         (database) => {
           assertPreparedCurrent?.();
           params.commitGuard?.();
+          preconditions?.assertUpstreamCurrent?.();
           const identityKeys = uniqueStrings([
             ...collectSessionEntryLookupKeys(intent.sourceKey),
             ...collectSessionEntryLookupKeys(intent.targetKey),
@@ -259,18 +380,20 @@ function mutatePreparedSqliteSessionAtMessage(
             database,
             resolved,
             intent,
-            { sourceRepositoryWorkspaceId },
+            { sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId },
           );
           const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+          const publishIdentity = prepareSessionIdentityPublication(
+            database,
+            resolved.agentId,
+            previousIdentity,
+            currentIdentity,
+          );
+          preconditions?.assertUpstreamCurrent?.();
           return {
             databasePath: database.path,
             result: mutationResult,
-            publish: prepareSessionIdentityPublication(
-              database,
-              resolved.agentId,
-              previousIdentity,
-              currentIdentity,
-            ),
+            publish: publishIdentity,
           };
         },
         toDatabaseOptions(resolved),
@@ -300,7 +423,7 @@ export function mutateSqliteSessionAtMessageInTransaction(
     onProjectionReconcileNeeded?: () => void;
     sourceRepositoryWorkspaceId?: string;
   },
-): SessionTranscriptMutationResult {
+): SessionMessageCutResult {
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
@@ -394,20 +517,61 @@ export function mutateSqliteSessionAtMessageInTransaction(
 
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
   // target the old session and cannot erase this leaf repoint from the active session.
-  const nextEntry = {
-    ...cloneMessageCutSessionEntry({
-      currentEntry,
-      forked: params.mode === "fork",
-      forkSource:
-        params.mode === "fork"
-          ? {
-              sessionKey: params.canonicalSourceKey,
-              sessionId: currentEntry.sessionId,
-              entryId: params.entryId,
-            }
-          : undefined,
-      nextSessionId,
-    }),
+  const forked = params.mode === "fork";
+  const nextEntry: SessionEntry = {
+    // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
+    ...(forked ? inheritSessionSelection(currentEntry) : currentEntry),
+    sessionId: nextSessionId,
+    lifecycleRevision: forked ? randomUUID() : currentEntry.lifecycleRevision,
+    updatedAt: Date.now(),
+    systemSent: false,
+    abortedLastRun: false,
+    lifecycleRunId: undefined,
+    lastRunId: undefined,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    status: undefined,
+    inputTokens: undefined,
+    outputTokens: undefined,
+    cacheRead: undefined,
+    cacheWrite: undefined,
+    estimatedCostUsd: undefined,
+    totalTokens: undefined,
+    totalTokensFresh: undefined,
+    totalTokensVersion: undefined,
+    // A rotated transcript cannot resume provider/runtime identity from the old tail.
+    // Clear transcript-derived accounting too so the next turn rebuilds canonical state.
+    contextTokens: undefined,
+    contextTokensSource: undefined,
+    contextBudgetStatus: undefined,
+    compactionCount: undefined,
+    transcriptByteCompactionLatch: undefined,
+    memoryFlush: undefined,
+    cliSessionBindings: undefined,
+    cliSessionIds: undefined,
+    claudeCliSessionId: undefined,
+    agentHarnessId: undefined,
+    modelSelectionLocked: undefined,
+    skillsSnapshot: undefined,
+    systemPromptReport: undefined,
+    restartRecoveryRuns: undefined,
+    restartRecoveryForceSafeTools: undefined,
+    abortCutoffMessageSid: undefined,
+    abortCutoffTimestamp: undefined,
+    usageFamilyKey: forked ? undefined : currentEntry.usageFamilyKey,
+    usageFamilySessionIds: forked ? undefined : currentEntry.usageFamilySessionIds,
+    previousSessionId: forked ? undefined : currentEntry.sessionId,
+    ...(forked
+      ? {
+          forkSource: {
+            sessionKey: params.canonicalSourceKey,
+            sessionId: currentEntry.sessionId,
+            entryId: params.entryId,
+          },
+          parentSessionKey: params.canonicalSourceKey,
+        }
+      : {}),
     ...(params.mode === "fork" ? params.forkWorkspace : {}),
     ...(params.mode === "fork" && params.creation
       ? buildSessionCreationStamp(params.creation)
@@ -487,65 +651,6 @@ function resolveMessageCut(
     ...(editorMediaRefs ? { editorMediaRefs } : {}),
     parentId: target.parentId,
     prefix,
-  };
-}
-
-function cloneMessageCutSessionEntry(params: {
-  currentEntry: SessionEntry;
-  forked: boolean;
-  forkSource?: NonNullable<SessionEntry["forkSource"]>;
-  nextSessionId: string;
-}): SessionEntry {
-  // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
-  const baseEntry = params.forked
-    ? inheritSessionSelection(params.currentEntry)
-    : params.currentEntry;
-  return {
-    ...baseEntry,
-    sessionId: params.nextSessionId,
-    lifecycleRevision: params.forked ? randomUUID() : params.currentEntry.lifecycleRevision,
-    updatedAt: Date.now(),
-    systemSent: false,
-    abortedLastRun: false,
-    lifecycleRunId: undefined,
-    lastRunId: undefined,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    status: undefined,
-    inputTokens: undefined,
-    outputTokens: undefined,
-    cacheRead: undefined,
-    cacheWrite: undefined,
-    estimatedCostUsd: undefined,
-    totalTokens: undefined,
-    totalTokensFresh: undefined,
-    totalTokensVersion: undefined,
-    // A rotated transcript cannot resume provider/runtime identity from the old tail.
-    // Clear transcript-derived accounting too so the next turn rebuilds canonical state.
-    contextTokens: undefined,
-    contextTokensSource: undefined,
-    contextBudgetStatus: undefined,
-    compactionCount: undefined,
-    transcriptByteCompactionLatch: undefined,
-    memoryFlush: undefined,
-    cliSessionBindings: undefined,
-    cliSessionIds: undefined,
-    claudeCliSessionId: undefined,
-    agentHarnessId: undefined,
-    modelSelectionLocked: undefined,
-    skillsSnapshot: undefined,
-    systemPromptReport: undefined,
-    restartRecoveryRuns: undefined,
-    restartRecoveryForceSafeTools: undefined,
-    abortCutoffMessageSid: undefined,
-    abortCutoffTimestamp: undefined,
-    usageFamilyKey: params.forked ? undefined : params.currentEntry.usageFamilyKey,
-    usageFamilySessionIds: params.forked ? undefined : params.currentEntry.usageFamilySessionIds,
-    previousSessionId: params.forked ? undefined : params.currentEntry.sessionId,
-    ...(params.forkSource
-      ? { forkSource: params.forkSource, parentSessionKey: params.forkSource.sessionKey }
-      : {}),
   };
 }
 

@@ -11,7 +11,7 @@ import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
-import type { MessageContentItem, ToolCard } from "../../../lib/chat/chat-types.ts";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import "../../../components/person-reference.ts";
 import { extractThinkingCached } from "../../../lib/chat/message-extract.ts";
@@ -77,6 +77,7 @@ import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolOutcome,
+  type ToolRenderOptions,
 } from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { renderToolPreview } from "./widget-card.ts";
@@ -127,9 +128,7 @@ function renderInlineToolCards(
         return renderToolCard(card, {
           ...opts,
           expanded,
-          onToggleExpanded: opts.onToggleToolExpanded
-            ? () => opts.onToggleToolExpanded?.(disclosureId, expanded)
-            : () => undefined,
+          onToggleExpanded: () => opts.onToggleToolExpanded?.(disclosureId, expanded),
         });
       })}
     </div>
@@ -187,7 +186,6 @@ export function renderGroupedMessage(
     showToolCalls?: boolean;
     runActive?: boolean;
     asyncQuestions?: AsyncQuestionPresentation;
-    autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
     isUserMessageExpanded?: (messageId: string) => boolean;
@@ -217,6 +215,7 @@ export function renderGroupedMessage(
     githubRepo?: MarkdownRenderOptions["githubRepo"];
     githubRepositories?: MarkdownRenderOptions["githubRepositories"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+    subagents?: ToolRenderOptions["subagents"];
     fileLinkSessionKey?: string;
     avatar?: TemplateResult | typeof nothing;
     entryId?: string;
@@ -307,13 +306,11 @@ export function renderGroupedMessage(
     resolveArtifactDownload: opts.resolveArtifactDownload,
   };
   const actionText = opts.messageActions?.markdown ?? displayMarkdown;
-  const omittedMedia = normalizedMessage.content.filter(
-    (item): item is Extract<MessageContentItem, { type: "omitted_media" }> =>
-      item.type === "omitted_media",
-  );
-  const assistantViewBlocks = normalizedMessage.content.filter(
-    (item): item is Extract<MessageContentItem, { type: "canvas" }> => item.type === "canvas",
-  );
+  const omittedMedia = normalizedMessage.content.filter((item) => item.type === "omitted_media");
+  const assistantViewBlocks = normalizedMessage.content.filter((item) => item.type === "canvas");
+  const hasImagesOrNotices = hasImages || expiredPairingQrCount !== 0 || omittedMedia.length !== 0;
+  const hasMediaContent =
+    hasImagesOrNotices || visibleAttachments.length !== 0 || assistantViewBlocks.length !== 0;
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
@@ -344,10 +341,8 @@ export function renderGroupedMessage(
     normalizedRole === "user" &&
     !markdown &&
     !normalizedMessage.replyTarget &&
-    !hasImages &&
+    !hasImagesOrNotices &&
     !hasToolCards &&
-    omittedMedia.length === 0 &&
-    expiredPairingQrCount === 0 &&
     visibleAttachments.length > 0 &&
     visibleAttachments.every(
       (item) => isSentCommentAttachment(item) || isSentPastedTextAttachment(item),
@@ -377,11 +372,7 @@ export function renderGroupedMessage(
     !asyncQuestions &&
     !reasoningMarkdown &&
     !hasToolCards &&
-    !hasImages &&
-    expiredPairingQrCount === 0 &&
-    omittedMedia.length === 0 &&
-    visibleAttachments.length === 0 &&
-    assistantViewBlocks.length === 0 &&
+    !hasMediaContent &&
     clawHubCards.length === 0 &&
     !normalizedMessage.replyTarget
   ) {
@@ -483,66 +474,53 @@ export function renderGroupedMessage(
   // Pure tool messages (no text/images/attachments) skip the "Tool output"
   // shell and render as flat kind-aware rows, one disclosure level deep.
   const onlyToolCards =
-    isStandaloneToolMessage &&
-    hasToolCards &&
-    !markdown &&
-    !hasImages &&
-    expiredPairingQrCount === 0 &&
-    omittedMedia.length === 0 &&
-    visibleAttachments.length === 0 &&
-    assistantViewBlocks.length === 0 &&
-    !reasoningMarkdown;
+    isStandaloneToolMessage && hasToolCards && !markdown && !hasMediaContent && !reasoningMarkdown;
 
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
-  const renderText = () =>
-    asyncQuestions
-      ? renderAsyncQuestionSummary(asyncQuestions, opts.asyncQuestions!)
-      : jsonResult
-        ? renderMessageJson(
-            jsonResult,
-            messageKey,
-            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
-            markdownRenderOptions,
-          )
-        : bodyMarkdown
-          ? renderMessageMarkdown(
-              bodyMarkdown,
-              messageKey,
-              { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
-              markdownRenderOptions,
-              duplicateSuffix,
-            )
-          : nothing;
-  const renderOrderedContent = () => {
-    const prepared = prepareMarkdownMedia(orderedContent, (item) => {
-      if (item.type === "image") {
-        return renderMessageImages([item.image], imageRenderOptions);
-      }
-      return renderAssistantAttachments(
-        [item],
-        imageRenderOptions,
-        onOpenSidebar,
-        opts.onAssistantAttachmentLoaded,
+  const renderMessageContent = () => {
+    if (asyncQuestions) {
+      return renderAsyncQuestionSummary(asyncQuestions, opts.asyncQuestions!);
+    }
+    const textOptions = {
+      ...opts,
+      role: isStandaloneToolMessage && !renderInOrder ? "tool" : normalizedRole,
+    };
+    if (!renderInOrder && jsonResult) {
+      return renderMessageJson(jsonResult, messageKey, textOptions, markdownRenderOptions);
+    }
+    let text = bodyMarkdown;
+    let media: Parameters<typeof renderMessageMarkdown>[5];
+    if (renderInOrder) {
+      const prepared = prepareMarkdownMedia(orderedContent, (item) =>
+        item.type === "image"
+          ? renderMessageImages([item.image], imageRenderOptions)
+          : renderAssistantAttachments(
+              [item],
+              imageRenderOptions,
+              onOpenSidebar,
+              opts.onAssistantAttachmentLoaded,
+            ),
       );
-    });
-    const text = resolveMessageDisplayMarkdown(message, {
-      ...normalizedMessage,
-      content: [{ type: "text", text: prepared.markdown }],
-    });
+      text = resolveMessageDisplayMarkdown(message, {
+        ...normalizedMessage,
+        content: [{ type: "text", text: prepared.markdown }],
+      });
+      textOptions.assistantMessageDisclosure = disclosure
+        ? { ...disclosure, markdown: text }
+        : undefined;
+      media = { ...prepared.media, text: bodyMarkdown ?? "" };
+    } else if (!text) {
+      return nothing;
+    }
     return renderMessageMarkdown(
       text,
       messageKey,
-      {
-        ...opts,
-        role: normalizedRole,
-        assistantMessageDisclosure: disclosure ? { ...disclosure, markdown: text } : undefined,
-      },
+      textOptions,
       markdownRenderOptions,
-      markdown ? duplicateSuffix : undefined,
-      { ...prepared.media, text: bodyMarkdown ?? "" },
+      duplicateSuffix,
+      media,
     );
   };
-  const renderMessageContent = () => (renderInOrder ? renderOrderedContent() : renderText());
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const transcriptVisible =

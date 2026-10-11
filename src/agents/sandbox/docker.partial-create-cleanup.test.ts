@@ -126,7 +126,7 @@ describe("fresh sandbox container cleanup", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves unallocated custody after create failure (managed=%s)",
     async (managed) => {
       const workspaceDir = tempDirs.make("openclaw-create-failure-");

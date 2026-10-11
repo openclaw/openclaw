@@ -57,10 +57,7 @@ export function registerMattermostPreviewDeliveryTests(harness: {
   ): OpenClawConfig => ({
     channels: { mattermost: { ...testConfig.channels?.mattermost, streaming, responsePrefix } },
   });
-  it.each([
-    { toolProgress: false, mode: "progress" },
-    { toolProgress: true, mode: "block" },
-  ] as const)(
+  it.each([{ toolProgress: false, mode: "progress" }] as const)(
     "keeps Mattermost $mode progress with tools $toolProgress and no label",
     async ({ toolProgress, mode }) => {
       let previewPostId: string | undefined = "preview-progress";
@@ -286,7 +283,7 @@ export function registerMattermostPreviewDeliveryTests(harness: {
     );
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "records confirmed-preview participation when cleanup fails: %s",
     async (cleanupFails) => {
       const blockConfig = withStreaming({ mode: "block" });

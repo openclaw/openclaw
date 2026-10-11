@@ -61,15 +61,12 @@ export function isPayloadMissing(env: NodeJS.ProcessEnv, rawInstallPath?: string
 export async function collectMissingPluginInstallPayloads(params: {
   records: Record<string, PluginInstallRecord>;
   config?: OpenClawConfig;
-  skipDisabledPlugins?: boolean;
-  syncOfficialPluginInstalls?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<MissingPluginInstallPayload[]> {
   const env = params.env ?? process.env;
-  const normalizedPluginConfig =
-    params.skipDisabledPlugins && params.config
-      ? normalizePluginsConfig(params.config.plugins)
-      : undefined;
+  const normalizedPluginConfig = params.config
+    ? normalizePluginsConfig(params.config.plugins)
+    : undefined;
   const missing: MissingPluginInstallPayload[] = [];
   for (const [pluginId, record] of Object.entries(params.records).toSorted(([left], [right]) =>
     left.localeCompare(right),
@@ -77,12 +74,14 @@ export async function collectMissingPluginInstallPayloads(params: {
     if (!TRACKED_SOURCES.has(record.source)) {
       continue;
     }
-    const officialNpmSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.npmSpec
-      : undefined;
-    const officialClawHubSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record })?.clawhubSpec
-      : undefined;
+    const officialNpmSpec = resolveTrustedSourceLinkedOfficialNpmInstall({
+      pluginId,
+      record,
+    })?.npmSpec;
+    const officialClawHubSpec = resolveTrustedSourceLinkedOfficialClawHubInstall({
+      pluginId,
+      record,
+    })?.clawhubSpec;
     if (normalizedPluginConfig && params.config) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
@@ -263,28 +262,17 @@ function formatPackagePayloadReadFailure(params: {
   installPath: string;
   packagePayload: Exclude<PackagePayloadManifestReadResult, { status: "present" }>;
 }): PluginPayloadSmokeFailure {
-  if (params.packagePayload.status === "unreadable") {
-    const packageJsonPath = path.join(params.installPath, "package.json");
-    return {
-      pluginId: params.pluginId,
-      installPath: params.installPath,
-      reason: "unreadable-package-json",
-      detail: `Could not read package.json at ${packageJsonPath}: ${params.packagePayload.error}`,
-    };
-  }
-  if (params.packagePayload.status === "invalid") {
-    return {
-      pluginId: params.pluginId,
-      installPath: params.installPath,
-      reason: "invalid-package-json",
-      detail: `Could not parse package.json: ${params.packagePayload.error}`,
-    };
-  }
+  const { pluginId, installPath, packagePayload } = params;
   return {
-    pluginId: params.pluginId,
-    installPath: params.installPath,
-    reason: "missing-package-json",
-    detail: `package.json is missing under ${params.installPath}`,
+    pluginId,
+    installPath,
+    reason: `${packagePayload.status}-package-json`,
+    detail:
+      packagePayload.status === "unreadable"
+        ? `Could not read package.json at ${path.join(installPath, "package.json")}: ${packagePayload.error}`
+        : packagePayload.status === "invalid"
+          ? `Could not parse package.json: ${packagePayload.error}`
+          : `package.json is missing under ${installPath}`,
   };
 }
 
@@ -332,25 +320,21 @@ async function validatePackagePayload(params: {
   }
 
   const extensionResolution = resolvePackageExtensionEntries(params.manifest);
-  if (extensionResolution.status === "invalid" || extensionResolution.status === "empty") {
-    failures.push({
-      pluginId: params.pluginId,
-      installPath: params.installPath,
-      reason: "missing-extension-entry",
-      detail: `Plugin extension entry validation failed: ${
-        extensionResolution.status === "invalid"
-          ? extensionResolution.error
-          : "package.json openclaw.extensions is empty"
-      }`,
-    });
-    return failures;
-  }
-  if (extensionResolution.status === "ok") {
-    const extensionValidation = await validatePackageExtensionEntriesForInstall({
-      packageDir: params.installPath,
-      extensions: extensionResolution.entries,
-      manifest: params.manifest,
-    });
+  if (extensionResolution.status !== "missing") {
+    const extensionValidation =
+      extensionResolution.status === "ok"
+        ? await validatePackageExtensionEntriesForInstall({
+            packageDir: params.installPath,
+            extensions: extensionResolution.entries,
+            manifest: params.manifest,
+          })
+        : {
+            ok: false,
+            error:
+              extensionResolution.status === "invalid"
+                ? extensionResolution.error
+                : "package.json openclaw.extensions is empty",
+          };
     if (!extensionValidation.ok) {
       failures.push({
         pluginId: params.pluginId,

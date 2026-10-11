@@ -13,6 +13,7 @@ import {
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { holdQueuedSwarmRun, isSwarmRunActive } from "../swarm/swarm-scheduler.js";
+import { matchesSubagentKillIntent } from "./subagent-control-kill-intent.js";
 import {
   persistSubagentAbortedLastRun,
   prepareSubagentKillSession,
@@ -37,8 +38,6 @@ import { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
-
-export { preserveSubagentRunForRestart } from "./subagent-registry-run-wait.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 
@@ -91,7 +90,6 @@ class SubagentRunManager extends SubagentLaunchManager {
     sessionLifecycleRevision?: string;
     suppressTaskDelivery?: boolean;
     assertCurrent?: () => void;
-    assertPublicationCurrent?: () => void;
     context?: OpenClawStateWorkerContext;
   }): Promise<SubagentRunRecord["killIntent"]> => {
     const runId = claimParams.runId.trim();
@@ -130,7 +128,7 @@ class SubagentRunManager extends SubagentLaunchManager {
         runs: this.options.runs,
         context,
         pendingKillClaim: claimParams.expected,
-        assertCurrent: () => assertClaimCurrent(),
+        assertCurrent: assertClaimCurrent,
       },
     );
   };
@@ -148,18 +146,12 @@ class SubagentRunManager extends SubagentLaunchManager {
       (rows) => {
         const entry = rows.get(runId);
         const claim = entry?.killIntent;
-        const expectedClaim = releaseParams.claim;
         if (
           !runId ||
           !entry ||
           !isSameSubagentRunOwner(entry, releaseParams.expected) ||
           !claim ||
-          claim.requestedAt !== expectedClaim.requestedAt ||
-          claim.reason !== expectedClaim.reason ||
-          claim.lifecycleGeneration !== expectedClaim.lifecycleGeneration ||
-          claim.sessionId !== expectedClaim.sessionId ||
-          claim.sessionLifecycleRevision !== expectedClaim.sessionLifecycleRevision ||
-          claim.suppressTaskDelivery !== expectedClaim.suppressTaskDelivery
+          !matchesSubagentKillIntent(claim, releaseParams.claim)
         ) {
           return { value: false };
         }
@@ -433,50 +425,38 @@ class SubagentRunManager extends SubagentLaunchManager {
       }
       for (const entry of entriesByChildSessionKey.values()) {
         const reconciliation = entry.killReconciliation;
+        const ownsSessionEffects = () =>
+          this.currentRunOwnsSession(entry) &&
+          !shouldSuppressSubagentRecoverySessionEffects(
+            this.options.runs.get(entry.runId) ?? entry,
+          );
+        const warnCleanupFailure = (message: string, err: unknown) => {
+          if (hasSqliteWorkerOutcomeUnknown(err)) {
+            throw err;
+          }
+          log.warn(message, { err, runId: entry.runId, childSessionKey: entry.childSessionKey });
+        };
         await runWithGatewayIndependentRootWorkAdmission(async () => {
           await Promise.all([
             persistSubagentSessionTiming(entry, {
               session: sessions.get(entry.runId),
-              isCurrentGeneration: () =>
-                this.currentRunOwnsSession(entry) &&
-                !shouldSuppressSubagentRecoverySessionEffects(
-                  this.options.runs.get(entry.runId) ?? entry,
-                ),
+              isCurrentGeneration: ownsSessionEffects,
               assertCommitAllowed: () => {
                 assertCurrent();
-                if (
-                  !this.currentRunOwnsSession(entry) ||
-                  shouldSuppressSubagentRecoverySessionEffects(
-                    this.options.runs.get(entry.runId) ?? entry,
-                  )
-                ) {
+                if (!ownsSessionEffects()) {
                   throw new Error("killed subagent session owner retired before timing commit");
                 }
               },
-            }).catch((err: unknown) => {
-              if (hasSqliteWorkerOutcomeUnknown(err)) {
-                throw err;
-              }
-              log.warn("failed to persist killed subagent session timing", {
-                err,
-                runId: entry.runId,
-                childSessionKey: entry.childSessionKey,
-              });
-            }),
+            }).catch((err: unknown) =>
+              warnCleanupFailure("failed to persist killed subagent session timing", err),
+            ),
             shouldRemoveSubagentAttachments(entry)
               ? safeRemoveAttachmentsDir(entry)
               : Promise.resolve(),
           ]);
-        }, "subagents:session-finalize").catch((err: unknown) => {
-          if (hasSqliteWorkerOutcomeUnknown(err)) {
-            throw err;
-          }
-          log.warn("failed to run killed subagent cleanup tail", {
-            err,
-            runId: entry.runId,
-            childSessionKey: entry.childSessionKey,
-          });
-        });
+        }, "subagents:session-finalize").catch((err: unknown) =>
+          warnCleanupFailure("failed to run killed subagent cleanup tail", err),
+        );
         await this.options.completeCleanupBookkeeping({
           runId: entry.runId,
           entry,
@@ -495,10 +475,7 @@ class SubagentRunManager extends SubagentLaunchManager {
         const session = markParams.runId === entry.runId ? markParams.session : undefined;
         if (session) {
           const ownsOriginalKill = () =>
-            this.currentRunOwnsSession(entry) &&
-            !shouldSuppressSubagentRecoverySessionEffects(
-              this.options.runs.get(entry.runId) ?? entry,
-            ) &&
+            ownsSessionEffects() &&
             this.options.runs.get(entry.runId)?.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
             this.options.runs.get(entry.runId)?.suppressAnnounceReason !== "steer-restart" &&
             reconciliation !== undefined &&
@@ -510,10 +487,7 @@ class SubagentRunManager extends SubagentLaunchManager {
           // The same row can receive an earlier completion while cleanup yields.
           await persistSubagentAbortedLastRun({
             childSessionKey: entry.childSessionKey,
-            storePath: session.storePath,
-            hasSessionEntry: session.entry !== undefined,
-            expectedSessionId: session.entry?.sessionId,
-            expectedLifecycleRevision: session.entry?.lifecycleRevision,
+            session,
             abortedLastRun: true,
             isCurrent: ownsOriginalKill,
             assertCommitAllowed: () => {

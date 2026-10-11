@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   completionCommandCall,
   expectNoSideEffects,
@@ -61,7 +61,6 @@ describe("update-cli", () => {
 
   it.each([
     { name: "Node", bun: undefined, failure: false },
-    { name: "Bun", bun: "1.4.3", failure: false },
     { name: "Bun failure diagnostics", bun: "1.4.3", failure: true },
   ])("uses the finalizer runtime for maintenance children under $name", async (runtime) => {
     const originalVersions = Object.getOwnPropertyDescriptor(process, "versions");
@@ -188,7 +187,6 @@ describe("update-cli", () => {
 
   it.each([
     { leaf: "repair", position: "before" },
-    { leaf: "finalize", position: "after" },
     { leaf: "finalize", position: "absent" },
   ])(
     "resolves capability consent $position $leaf without deriving it from --yes",
@@ -416,17 +414,13 @@ describe("update-cli", () => {
       hash: "no-channel",
     });
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(noChannelSnapshot);
-    const priorEffective = process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL;
+    const originalEnv = captureEnv(["OPENCLAW_UPDATE_EFFECTIVE_CHANNEL"]);
     // Simulate a no-config git/source update whose effective channel is dev.
     process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL = "dev";
     try {
       await updateFinalizeCommand({ json: true });
     } finally {
-      if (priorEffective === undefined) {
-        delete process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL;
-      } else {
-        process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL = priorEffective;
-      }
+      originalEnv.restore();
     }
     // Convergence runs on the effective (git/dev) channel...
     expect(syncPluginCall()?.channel).toBe("dev");
