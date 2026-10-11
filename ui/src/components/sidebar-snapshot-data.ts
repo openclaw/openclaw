@@ -1,65 +1,10 @@
 import { z } from "zod";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
+import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
 
 const text = z.string();
 const optionalText = text.optional();
-const actor = z.object({
-  type: z.enum(["human", "agent", "system"]),
-  id: optionalText,
-  label: optionalText,
-});
-// Routing and the first header need stable row facts, never live activity or permissions.
-const bootRow = z.object({
-  key: z.string().refine((key) => !isIncognitoSessionKey(key)),
-  kind: z.enum(["direct", "group", "global", "unknown"]),
-  incognito: z.never().optional(),
-  sessionId: optionalText,
-  agentId: optionalText,
-  label: optionalText,
-  autoLabel: optionalText,
-  icon: optionalText,
-  color: optionalText,
-  channel: optionalText,
-  displayName: optionalText,
-  derivedTitle: optionalText,
-  lastMessagePreview: optionalText,
-  updatedAt: z.number().nullable().optional(),
-  category: optionalText,
-  pinned: z.boolean().optional(),
-  archived: z.boolean().optional(),
-  hasBoard: z.boolean().optional(),
-  boardFace: z.enum(["chat", "dashboard"]).optional(),
-  boardPresentation: z.enum(["split", "expanded"]).optional(),
-  workspaceDir: optionalText,
-  spawnedWorkspaceDir: optionalText,
-  spawnedCwd: optionalText,
-  execNode: optionalText,
-  execCwd: optionalText,
-  worktree: z.object({ id: z.string(), branch: z.string(), repoRoot: z.string() }).optional(),
-  repository: z.object({ url: z.string(), ref: optionalText, branch: z.string() }).optional(),
-  thinkingLevel: optionalText,
-  model: optionalText,
-  modelProvider: optionalText,
-  owner: z.object({ actor }).optional(),
-});
-export const bootRosterSchema = z.object({
-  agentId: z.string().nullable(),
-  result: z.object({
-    ts: z.number(),
-    path: z.string(),
-    count: z.number(),
-    defaults: z.object({
-      model: z.string().nullable(),
-      modelProvider: z.string().nullable(),
-      contextTokens: z.number().nullable(),
-    }),
-    sessions: bootRow.array().max(200),
-  }),
-  groups: z.string().array(),
-  groupSettings: z.object({ name: z.string(), position: z.number() }).array(),
-  sectionOrder: z.string().array(),
-});
 const user = z.object({
   id: text,
   name: optionalText,

@@ -1,5 +1,5 @@
-import { bootRosterSchema } from "../components/sidebar-snapshot-data.ts";
 import type { SidebarSnapshotModel } from "../components/sidebar-snapshot-model.ts";
+import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
 import type { BootRoster } from "../lib/sessions/session-boot-roster.ts";
 
 export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotModel {

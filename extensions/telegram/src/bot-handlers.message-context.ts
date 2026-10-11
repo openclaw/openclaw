@@ -4,7 +4,7 @@ import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-nat
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import {
-  getSessionEntry,
+  getSessionEntryAsync,
   readAmbientTranscriptWatermark,
   resolveAmbientTranscriptWatermarkKey,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -152,7 +152,7 @@ export function createTelegramMessageSessionRuntime({
   RegisterTelegramHandlerParams,
   "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
 >) {
-  const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
+  const loadSessionEntry = telegramDeps.getSessionEntryAsync ?? getSessionEntryAsync;
   const resolveTelegramSessionState = async (params: ResolveTelegramSessionStateParams) => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const { topicConfig } = resolveTelegramGroupConfig(
@@ -175,17 +175,35 @@ export function createTelegramMessageSessionRuntime({
     const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const entry = loadSessionEntry({ storePath, sessionKey });
-    const storedOverride = resolveStoredModelOverride({
+    const entry = await loadSessionEntry({ agentId: route.agentId, storePath, sessionKey });
+    const overrideParams = {
       sessionEntry: entry,
-      loadSessionEntry: (parentSessionKey) =>
-        loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
       sessionKey,
       defaultProvider: resolveDefaultModelForAgent({
         cfg: params.runtimeCfg,
         agentId: route.agentId,
       }).provider,
+    };
+    // Discover the inherited row before asking the worker to load it.
+    let parentSessionKey: string | undefined;
+    let storedOverride = resolveStoredModelOverride({
+      ...overrideParams,
+      loadSessionEntry: (key) => {
+        parentSessionKey = key;
+        return undefined;
+      },
     });
+    if (parentSessionKey) {
+      const parentEntry = await loadSessionEntry({
+        agentId: route.agentId,
+        storePath,
+        sessionKey: parentSessionKey,
+      });
+      storedOverride = resolveStoredModelOverride({
+        ...overrideParams,
+        loadSessionEntry: () => parentEntry,
+      });
+    }
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();
     const modelCfg = params.runtimeCfg.agents?.defaults?.model;

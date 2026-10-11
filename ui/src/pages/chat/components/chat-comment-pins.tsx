@@ -18,7 +18,7 @@ type ChatCommentPinsProps = {
 };
 
 /** Draft attachments own the data; this transcript-local view owns source pins. */
-export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
+defineSolidBridge<ChatCommentPinsProps>(
   "openclaw-chat-comment-pins",
   (props, host) => {
     let root: HTMLElement | null = null;

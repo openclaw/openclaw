@@ -64,7 +64,7 @@ function TruncationNote(props: { truncated: boolean | undefined; label: string }
 }
 
 function FileContent(props: { file: ControlUiLinkReaderFile; expanded: boolean }) {
-  // Unrelated panel revisions must preserve the reader's native disclosure state.
+  // Preserve native toggles until the document changes its expansion preference.
   const expanded = createMemo(() => props.expanded);
   return (
     <details class="lr-file" open={expanded()}>

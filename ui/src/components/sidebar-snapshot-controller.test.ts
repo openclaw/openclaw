@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import { clearBootRecords, type BootRecord } from "../app/boot-record.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
+import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { subscribeSnapshotInvalidation } from "../pages/chat/session-snapshot-invalidation-events.ts";
 import {
@@ -19,7 +20,6 @@ import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { SidebarSnapshotController } from "./sidebar-snapshot-controller.ts";
-import { bootRosterSchema } from "./sidebar-snapshot-data.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 const scope = {

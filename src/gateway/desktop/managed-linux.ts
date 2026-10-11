@@ -44,7 +44,6 @@ type ManagedDesktopProcess = {
 };
 
 type ManagedPair = {
-  current: boolean;
   processes: ManagedDesktopProcess[];
   computerLeases: Set<{ onStop(): Promise<void> }>;
   audio: ManagedLinuxAudio;
@@ -197,7 +196,6 @@ export function createManagedLinuxDesktop(
   let stopPromise: Promise<void> | undefined;
   let stopProcesses: (() => Promise<void>) | undefined;
   let audioOwner: ReturnType<typeof createManagedLinuxAudio> | undefined;
-  let epoch = 0;
   let stopping = false;
   let stderrTail = "";
   const restartTimes = new Map<"desktop" | "audio", number[]>();
@@ -218,11 +216,11 @@ export function createManagedLinuxDesktop(
   const isPairCurrent = (current: ManagedPair) =>
     !stopping &&
     pair === current &&
-    current.current &&
+    !current.stopPromise &&
     current.processes.every(({ run }) => !run.activity.resultSettled);
 
-  const assertStartupCurrent = (activeEpoch: number) => {
-    if (activeEpoch !== epoch || stopping) {
+  const assertStartupCurrent = () => {
+    if (stopping) {
       throw new Error("managed Linux desktop stopped during startup");
     }
   };
@@ -307,11 +305,11 @@ export function createManagedLinuxDesktop(
     }
   };
 
-  const waitUntilReady = async (active: ManagedResources, activeEpoch: number) => {
+  const waitUntilReady = async (active: ManagedResources) => {
     const deadline = nowMs() + readinessTimeoutMs;
     let lastProbe = "unreachable";
     for (;;) {
-      if (activeEpoch !== epoch || stopping) {
+      if (stopping) {
         break;
       }
       const probe = await probeRfb({
@@ -328,7 +326,7 @@ export function createManagedLinuxDesktop(
       }
       await wait(readinessPollMs);
     }
-    assertStartupCurrent(activeEpoch);
+    assertStartupCurrent();
     throw new Error(
       `managed Linux desktop did not become ready on 127.0.0.1:${active.port} within ${readinessTimeoutMs}ms (last check: ${lastProbe})`,
     );
@@ -338,13 +336,10 @@ export function createManagedLinuxDesktop(
     if (current?.stopPromise) {
       return current.stopPromise;
     }
-    if (current) {
-      current.current = false;
-    }
-    const retiringAudio = audioOwner;
-    const audioStopped = retiringAudio?.stop();
-    void audioStopped?.catch(() => undefined);
     const stopped = Promise.resolve().then(async () => {
+      const retiringAudio = audioOwner;
+      const audioStopped = retiringAudio?.stop();
+      void audioStopped?.catch(() => undefined);
       // Native users must finish cleanup before their X11 and D-Bus session disappears.
       const outcomes = await Promise.allSettled(
         [...(current?.computerLeases ?? [])].map(async (lease) => {
@@ -394,7 +389,6 @@ export function createManagedLinuxDesktop(
   const spawnRun = async (
     binary: ManagedDesktopProcess["binary"],
     argv: string[],
-    activeEpoch: number,
     env?: NodeJS.ProcessEnv,
     onStdout?: (chunk: string) => void,
   ): Promise<ManagedDesktopProcess> => {
@@ -405,7 +399,7 @@ export function createManagedLinuxDesktop(
         mode: "child",
         argv,
         ...(env ? { env } : {}),
-        assertCurrent: () => assertStartupCurrent(activeEpoch),
+        assertCurrent: assertStartupCurrent,
         ...(onStdout ? { onStdout } : {}),
         stdinMode: "pipe-closed",
         maxCapturedOutputChars: STDERR_TAIL_CHARS,
@@ -432,21 +426,21 @@ export function createManagedLinuxDesktop(
       assertCurrent,
     });
 
-  const startPair = async (active: ManagedResources, activeEpoch: number): Promise<ManagedPair> => {
+  const startPair = async (active: ManagedResources): Promise<ManagedPair> => {
     status = { state: "starting", display: active.display, port: active.port };
     stopProcesses = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
-    const vnc = await spawnRun("Xtigervnc", buildTigerVncArgv(active), activeEpoch);
+    const vnc = await spawnRun("Xtigervnc", buildTigerVncArgv(active));
     try {
       await Promise.race([
-        waitUntilReady(active, activeEpoch),
+        waitUntilReady(active),
         vnc.exited.then((exit) => {
           throw new Error(describeExit("Xtigervnc", exit));
         }),
       ]);
-      assertStartupCurrent(activeEpoch);
+      assertStartupCurrent();
       let audioPair: ManagedPair | null = null;
       audioOwner = createPairAudio(active, () => {
-        if (activeEpoch !== epoch || stopping || (audioPair && !isPairCurrent(audioPair))) {
+        if (stopping || (audioPair && !isPairCurrent(audioPair))) {
           throw new Error("managed Linux desktop stopped");
         }
       });
@@ -470,7 +464,6 @@ export function createManagedLinuxDesktop(
           "--print-address=1",
           `--address=${active.env.DBUS_SESSION_BUS_ADDRESS}`,
         ],
-        activeEpoch,
         env,
         (chunk) => {
           busOutput = appendTail(busOutput, chunk);
@@ -494,9 +487,8 @@ export function createManagedLinuxDesktop(
           throw new Error("managed Linux desktop D-Bus session did not become ready");
         },
       );
-      const session = await spawnRun("startxfce4", ["startxfce4"], activeEpoch, env);
+      const session = await spawnRun("startxfce4", ["startxfce4"], env);
       const nextPair: ManagedPair = {
-        current: true,
         processes: [vnc, bus, session],
         computerLeases: new Set(),
         audio,
@@ -512,13 +504,13 @@ export function createManagedLinuxDesktop(
     }
   };
 
-  const monitorPair = (current: ManagedPair, active: ManagedResources, activeEpoch: number) => {
+  const monitorPair = (current: ManagedPair, active: ManagedResources) => {
     const desktopExit = Promise.race(
       current.processes.map(({ binary, exited }) =>
         exited.then((exit) => describeExit(binary, exit)),
       ),
     );
-    const stillOwned = () => pair === current && activeEpoch === epoch && !stopping;
+    const stillOwned = () => pair === current && !stopping;
     const task = (async () => {
       for (;;) {
         const audio = current.audio;
@@ -584,7 +576,7 @@ export function createManagedLinuxDesktop(
         }
         if (!claimRestart("desktop")) {
           await stopPair(current);
-          if (activeEpoch === epoch && !stopping) {
+          if (!stopping) {
             markFailed(
               new Error(
                 `managed Linux desktop failed after ${RESTART_LIMIT} restarts within 5 minutes: ${failure}`,
@@ -595,18 +587,18 @@ export function createManagedLinuxDesktop(
         }
         status = { state: "starting", display: active.display, port: active.port };
         await stopPair(current);
-        if (activeEpoch !== epoch || stopping) {
+        if (stopping) {
           return;
         }
-        const restarted = await startPair(active, activeEpoch);
-        monitorPair(restarted, active, activeEpoch);
+        const restarted = await startPair(active);
+        monitorPair(restarted, active);
         return;
       }
     })().catch(async (error: unknown) => {
       try {
         await stopPair(current);
       } finally {
-        if (activeEpoch === epoch && !stopping) {
+        if (!stopping) {
           markFailed(error instanceof Error ? error : new Error(String(error)));
         }
       }
@@ -615,15 +607,15 @@ export function createManagedLinuxDesktop(
     void task.finally(() => monitorTasks.delete(task)).catch(() => undefined);
   };
 
-  const start = async (activeEpoch: number): Promise<ManagedResources> => {
+  const start = async (): Promise<ManagedResources> => {
     try {
       resources = await prepareResources();
-      assertStartupCurrent(activeEpoch);
-      const started = await startPair(resources, activeEpoch);
-      monitorPair(started, resources, activeEpoch);
+      assertStartupCurrent();
+      const started = await startPair(resources);
+      monitorPair(started, resources);
       return resources;
     } catch (error) {
-      if (activeEpoch === epoch && !stopping) {
+      if (!stopping) {
         markFailed(error instanceof Error ? error : new Error(String(error)));
       }
       throw error;
@@ -648,8 +640,7 @@ export function createManagedLinuxDesktop(
         stopping = false;
         restartTimes.clear();
         stderrTail = "";
-        const activeEpoch = ++epoch;
-        startPromise = start(activeEpoch).finally(() => {
+        startPromise = start().finally(() => {
           startPromise = undefined;
         });
       }
@@ -675,7 +666,6 @@ export function createManagedLinuxDesktop(
         return stopPromise;
       }
       stopping = true;
-      ++epoch;
       const failed = status.state === "failed" ? status : undefined;
       const stopped = Promise.resolve().then(async () => {
         await stopPair(pair);

@@ -21,7 +21,7 @@ export function captureBootRoster(
   if (!state.result || state.resultCached || state.loading || state.error) {
     return null;
   }
-  // The deferred sidebar serializer validates and strips live fields before persistence.
+  // The lazy sidebar snapshot boundary validates and strips fields before persistence.
   return {
     agentId: state.agentId,
     groups: state.groups,

@@ -24,7 +24,7 @@ declare module "@solidjs/web" {
   }
 }
 
-export type TerminalSessionPickerState = {
+type TerminalSessionPickerState = {
   hosted: boolean;
   open: boolean;
   loading: boolean;

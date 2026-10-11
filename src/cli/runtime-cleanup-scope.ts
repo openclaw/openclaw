@@ -46,11 +46,9 @@ export async function retainCliProcessJobUntilExit(): Promise<void> {
   if (process.platform !== "win32" || !hasCliProcessScope()) {
     return;
   }
-  const [{ default: koffi }, { retainWindowsProcessJobUntilExit }] = await Promise.all([
-    import("koffi"),
-    import("../process/supervisor/service-child-windows-job-native.js"),
-  ]);
-  retainWindowsProcessJobUntilExit(koffi);
+  const { retainWindowsProcessJobUntilExit } =
+    await import("../process/supervisor/service-child-windows-job-native.js");
+  retainWindowsProcessJobUntilExit();
 }
 
 export async function withCliCommandCleanup<T>(

@@ -1,5 +1,3 @@
-import { strict as assert } from "node:assert";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import {
   controlUiSessionUrl,
@@ -7,6 +5,7 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session list row events" });
@@ -145,12 +144,9 @@ suite.define(() => {
         await page.clock.runFor(59_499);
         expect(await gateway.getRequests("sessions.list")).toEqual(before);
         for (const request of before) {
-          const params = request.params;
-          assert(isRecord(params));
-          const dashboardList = params.source === "dashboard" && params.hasBoard === true;
+          const params = requireRecord(request.params);
           expect(params).toMatchObject({
-            rowMode: dashboardList ? "dashboard" : "compact",
-
+            rowMode: params.hasBoard === true ? "dashboard" : "compact",
             source: expect.any(String),
           });
         }
