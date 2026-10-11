@@ -1091,7 +1091,13 @@ const reviewedOperations = new Map([
           "compareAndCertifyCanonicalSessionValidationBatch",
         ],
         evidence:
-          "Only session-accessor.sqlite-mutation-worker.runtime.ts:375,280,381 calls these operations in the mutation-worker message handler. Shared host readiness hasPendingCanonicalSessionValidation stays T1.",
+          "Only session-accessor.sqlite-mutation-worker.runtime.ts:375,280,381 calls these operations in the mutation-worker message handler.",
+      },
+      {
+        tier: "T2",
+        operations: ["hasPendingCanonicalSessionValidation"],
+        evidence:
+          "Native readiness is startup-migration.ts:359 via session-canonical-validation-readiness.ts:91. Runtime request-authorization.ts:461 and session-row-prepared-read.ts:240 pass captured PendingCanonicalValidation.source and skip that probe; the other caller is the mutation worker's has-pending operation.",
       },
     ],
   ],

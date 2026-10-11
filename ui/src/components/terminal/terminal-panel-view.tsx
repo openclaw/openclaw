@@ -404,7 +404,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
           id={viewportId}
           class="tp-viewport"
           name={props.view().activeId ?? "terminal"}
-          prop:active
+          prop:active={true}
           aria-labelledby={
             props.view().activeId && !props.view().hosted
               ? `${idPrefix}-tab-${props.view().activeId}`
