@@ -6,12 +6,13 @@ import {
   findOpenAIStrictSchemaViolations,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
   normalizeOpenAIStrictCompatSchema,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_NESTED_KEYS,
   stripUnsupportedSchemaKeywords,
-  ToolSchemaDepthExceededError,
+  truncateToolSchemaDepth,
 } from "@openclaw/ai/internal/tool-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 // Provider tool helpers expose shared tool-call payload contracts for provider plugins.
-import { logWarn } from "../logger.js";
 import type { TSchema } from "typebox";
 import {
   mergeLiteralSchemas,
@@ -45,12 +46,20 @@ export function findUnsupportedSchemaKeywords(
   /** Schema keywords unsupported by the target provider family. */
   unsupportedKeywords: ReadonlySet<string>,
 ): string[] {
+  return inspectSchemaKeywords(truncateToolSchemaDepth(schema), path, unsupportedKeywords);
+}
+
+function inspectSchemaKeywords(
+  schema: unknown,
+  path: string,
+  unsupportedKeywords: ReadonlySet<string>,
+): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
   if (Array.isArray(schema)) {
     return schema.flatMap((item, index) =>
-      findUnsupportedSchemaKeywords(item, `${path}[${index}]`, unsupportedKeywords),
+      inspectSchemaKeywords(item, `${path}[${index}]`, unsupportedKeywords),
     );
   }
   const record = schema as Record<string, unknown>;
@@ -58,7 +67,7 @@ export function findUnsupportedSchemaKeywords(
   if (isSchemaRecord(record.properties)) {
     for (const [key, value] of Object.entries(record.properties)) {
       violations.push(
-        ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
+        ...inspectSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
       );
     }
   }
@@ -69,10 +78,14 @@ export function findUnsupportedSchemaKeywords(
     if (unsupportedKeywords.has(key)) {
       violations.push(`${path}.${key}`);
     }
-    if (value && typeof value === "object") {
-      violations.push(
-        ...findUnsupportedSchemaKeywords(value, `${path}.${key}`, unsupportedKeywords),
-      );
+    if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+      for (const [name, child] of Object.entries(value)) {
+        violations.push(
+          ...inspectSchemaKeywords(child, `${path}.${key}.${name}`, unsupportedKeywords),
+        );
+      }
+    } else if (SCHEMA_NESTED_KEYS.has(key)) {
+      violations.push(...inspectSchemaKeywords(value, `${path}.${key}`, unsupportedKeywords));
     }
   }
   return violations;
@@ -80,36 +93,22 @@ export function findUnsupportedSchemaKeywords(
 
 function normalizeToolSchemasIfChanged(
   ctx: ProviderNormalizeToolSchemasContext,
-  normalizeSchema: (schema: unknown) => unknown,
+  normalizeSchema: (schema: unknown, toolName?: string) => unknown,
 ): AnyAgentTool[] {
-  return ctx.tools.flatMap((tool) => {
+  return ctx.tools.map((tool) => {
     if (!tool.parameters || typeof tool.parameters !== "object") {
-      return [tool];
+      return tool;
     }
-    let parameters: unknown;
-    try {
-      parameters = normalizeSchema(tool.parameters);
-    } catch (error) {
-      if (error instanceof ToolSchemaDepthExceededError) {
-        // Contain the depth rejection at the tool boundary and quarantine the
-        // rejected tool: returning the original (un-cleaned) schema could ship
-        // provider-unsupported constraints downstream, so the tool is omitted
-        // with a warning while every healthy sibling still prepares.
-        logWarn(
-          `provider tool "${tool.name}" omitted: its schema exceeds the depth budget and cannot be safely cleaned (${error.message})`,
-        );
-        return [];
-      }
-      throw error;
-    }
+    const parameters = normalizeSchema(
+      truncateToolSchemaDepth(tool.parameters, tool.name),
+      tool.name,
+    );
     return parameters === tool.parameters
-      ? [tool]
-      : [
-          {
-            ...tool,
-            parameters: parameters as TSchema,
-          },
-        ];
+      ? tool
+      : {
+          ...tool,
+          parameters: parameters as TSchema,
+        };
   });
 }
 
@@ -118,7 +117,10 @@ function inspectToolSchemas(
   inspect: (schema: unknown, path: string) => string[],
 ): ProviderToolSchemaDiagnostic[] {
   return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = inspect(tool.parameters, `${tool.name}.parameters`);
+    const violations = inspect(
+      truncateToolSchemaDepth(tool.parameters, tool.name),
+      `${tool.name}.parameters`,
+    );
     return violations.length > 0 ? [{ toolName: tool.name, toolIndex, violations }] : [];
   });
 }
@@ -130,15 +132,7 @@ export function normalizeGeminiToolSchemas(
   /** Provider tool-schema normalization context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
-    }
-    return {
-      ...tool,
-      parameters: cleanSchemaForGemini(tool.parameters),
-    };
-  });
+  return normalizeToolSchemasIfChanged(ctx, cleanSchemaForGemini);
 }
 
 /**
@@ -181,25 +175,12 @@ export function normalizeOpenAIToolSchemas(
     if (tool.parameters != null && typeof tool.parameters !== "object") {
       return tool;
     }
-    try {
-      return {
-        ...tool,
-        parameters: normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}),
-      };
-    } catch (error) {
-      if (error instanceof ToolSchemaDepthExceededError) {
-        // Contain the depth rejection at the tool boundary: one pathological
-        // external schema must not abort preparation of every healthy sibling
-        // tool. Keep the tool with its original schema; the shared depth
-        // accounting treats map containers transparently, so only genuinely
-        // past-budget schemas land here.
-        logWarn(
-          `openai strict compat skipped for tool "${tool.name}": ${error.message}`,
-        );
-        return tool;
-      }
-      throw error;
-    }
+    return {
+      ...tool,
+      parameters: normalizeOpenAIStrictCompatSchema(
+        truncateToolSchemaDepth(tool.parameters ?? {}, tool.name),
+      ),
+    };
   });
 }
 
@@ -290,7 +271,17 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     Object.entries(record)
       .filter(([key]) => key !== unionKey)
       .map(([key, value]) => {
-        const next = normalizeDeepSeekSchema(value);
+        let next = value;
+        if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+          const entries = Object.entries(value).map(
+            ([name, child]) => [name, normalizeDeepSeekSchema(child)] as const,
+          );
+          if (entries.some(([name, child]) => child !== value[name])) {
+            next = Object.fromEntries(entries);
+          }
+        } else if (SCHEMA_NESTED_KEYS.has(key)) {
+          next = normalizeDeepSeekSchema(value);
+        }
         changed ||= next !== value;
         return [key, next];
       }),

@@ -1,5 +1,6 @@
 import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Provider tool tests cover tool schema conversion and provider payload compatibility.
 import { describe, expect, it } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
@@ -119,6 +120,61 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       expect(hooks.normalizeToolSchemas).toBe(normalizeToolSchemas);
       expect(hooks.inspectToolSchemas).toBe(inspectToolSchemas);
     }
+  });
+
+  it.each(["deepseek", "gemini", "llamacpp-gbnf", "openai"] as const)(
+    "retains a callable deep tool through the %s provider hooks",
+    async (family) => {
+      let parameters: unknown = { type: "string" };
+      for (let depth = 0; depth < 5_000; depth++) {
+        parameters = objectSchema({ nested: parameters });
+      }
+      const execute = async () => ({ content: [], details: { called: true } });
+      const source = Object.assign(tool(parameters, "deep_tool"), { execute });
+      const sibling = tool(objectSchema({}), "healthy_tool");
+      const hooks = buildProviderToolCompatFamilyHooks(family);
+      const context = providerContext([source, sibling]);
+
+      expect(hooks.inspectToolSchemas(context)).toEqual([]);
+      const normalized = hooks.normalizeToolSchemas(context);
+      expect(normalized.map((entry) => entry.name)).toEqual(["deep_tool", "healthy_tool"]);
+      const normalizedTool = expectDefined(normalized[0], "normalized deep tool");
+      let leaf: unknown = normalizedTool.parameters;
+      let levels = 0;
+      while (isRecord(leaf) && isRecord(leaf.properties) && "nested" in leaf.properties) {
+        leaf = leaf.properties.nested;
+        levels++;
+      }
+      expect(levels).toBeGreaterThan(0);
+      expect(levels).toBeLessThan(5_000);
+      expect(leaf).toEqual({});
+      expect(() => JSON.stringify(normalizedTool.parameters)).not.toThrow();
+      expect(normalizedTool.execute).toBe(execute);
+      await expect(normalizedTool.execute("depth-proof", {})).resolves.toMatchObject({
+        details: { called: true },
+      });
+    },
+  );
+
+  it("preserves deep literal data while normalizing and inspecting schema keywords", () => {
+    let literal: unknown = { anyOf: [{ const: "first" }, { const: "second" }], pattern: "data" };
+    for (let depth = 0; depth < 5_000; depth++) {
+      literal = { nested: literal };
+    }
+    const parameters = objectSchema(
+      { choice: { const: literal } },
+      { default: literal, examples: [literal] },
+    );
+    const source = tool(parameters);
+    const context = deepSeekContext([source]);
+
+    expect(normalizeDeepSeekToolSchemas(context)[0]).toBe(source);
+    expect(inspectDeepSeekToolSchemas(context)).toEqual([]);
+    expect(
+      inspectGeminiToolSchemas(
+        providerContext([tool(objectSchema({ choice: { const: literal } }))]),
+      ),
+    ).toEqual([]);
   });
 
   it.each([

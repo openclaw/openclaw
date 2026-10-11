@@ -5,25 +5,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
-import { MAX_TOOL_SCHEMA_DEPTH, ToolSchemaDepthExceededError } from "./tool-schema-depth.js";
 import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
-
-function deepNestedSchema(levels: number): unknown {
-  let schema: unknown = { type: "object" };
-  for (let index = 0; index < levels; index += 1) {
-    schema = { type: "object", properties: { child: schema } };
-  }
-  return schema;
-}
-
-function deepRefChainSchema(links: number): unknown {
-  const defs: Record<string, unknown> = {};
-  for (let index = 0; index < links - 1; index += 1) {
-    defs[`link_${index}`] = { $ref: `#/$defs/link_${index + 1}` };
-  }
-  defs[`link_${links - 1}`] = { type: "object" };
-  return { $ref: "#/$defs/link_0", $defs: defs };
-}
 
 const detail = {
   type: "object",
@@ -399,51 +381,5 @@ describe("root unions with preset and custom strings", () => {
         expect(normalized).toHaveProperty("properties.value", valueSchema);
       }
     }
-  });
-});
-
-describe("tool schema depth budget", () => {
-  it("rejects deeply nested external schemas with a typed error instead of a RangeError", () => {
-    expect(() => normalizeToolParameterSchema(deepNestedSchema(3000))).toThrow(
-      ToolSchemaDepthExceededError,
-    );
-  });
-
-  it("rejects deep local $ref chains with a typed error instead of a RangeError", () => {
-    expect(() => normalizeToolParameterSchema(deepRefChainSchema(3000))).toThrow(
-      ToolSchemaDepthExceededError,
-    );
-  });
-
-  it("still normalizes schemas within the depth budget", () => {
-    // Well under the budget: ordinary tool schemas stay far below this size.
-    const normalized = normalizeToolParameterSchema(
-      deepNestedSchema(Math.floor(MAX_TOOL_SCHEMA_DEPTH / 4)),
-    );
-    expect(normalized).toBeDefined();
-    expect(normalizeToolParameterSchema(deepRefChainSchema(100))).toBeDefined();
-  });
-
-  it("keeps a near-budget properties chain accepted by the shared budget strict-compatible", () => {
-    // A 300-level properties chain is within the shared 512-level budget. The
-    // strict-compat pass must count map containers transparently (one level per
-    // schema, like the general normalizer) so previously accepted schemas stay
-    // accepted instead of being rejected by double-counted depth.
-    const schema = normalizeToolParameterSchema(deepNestedSchema(300), { modelProvider: "openai" });
-    expect(() =>
-      convertResponsesToolPayload([{ name: "deep_probe", description: "d", parameters: schema }]),
-    ).not.toThrow();
-    const [tool] = convertResponsesToolPayload([
-      { name: "deep_probe", description: "d", parameters: schema },
-    ]);
-    expect(tool?.name).toBe("deep_probe");
-  });
-
-  it("contains a past-budget tool rejection at the tool boundary instead of aborting the list", () => {
-    const tools = convertResponsesToolPayload([
-      { name: "pathological", description: "too deep", parameters: deepNestedSchema(3000) },
-      { name: "healthy", description: "fine", parameters: { type: "object", properties: {} } },
-    ]);
-    expect(tools.map((tool) => tool.name)).toEqual(["healthy"]);
   });
 });

@@ -168,7 +168,11 @@ export function projectAnthropicTools(
       if (!name) {
         continue;
       }
-      const schemaProjection = projectRuntimeToolInputSchema(tool.parameters, `${name}.parameters`);
+      const schemaProjection = projectRuntimeToolInputSchema(
+        tool.parameters,
+        `${name}.parameters`,
+        name,
+      );
       if (
         !isRecord(schemaProjection.schema) ||
         schemaProjection.violations.some((violation) => !isProviderSupportedViolation(violation))

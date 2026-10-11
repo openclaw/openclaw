@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import { SCHEMA_MAP_KEYS, SCHEMA_NESTED_KEYS } from "./schema-walk.js";
+import { truncateToolSchemaDepth, wasToolSchemaTruncated } from "./tool-schema-depth.js";
 import { normalizeToolSchema } from "./tool-schema-normalization.js";
-import { truncateToolSchemaDepth } from "./tool-schema-depth.js";
 
 /** Repairs recoverable OpenAI tool-schema shapes before canonical normalization. */
 export function normalizeOpenAIStrictCompatSchema(schema: unknown): TSchema {
@@ -36,7 +36,10 @@ export function findOpenAIStrictSchemaViolations(
   path: string,
   options?: { requireObjectRoot?: boolean },
 ): string[] {
-  return collectStrictSchemaViolations(truncateToolSchemaDepth(schema), path, options);
+  const bounded = truncateToolSchemaDepth(schema);
+  return wasToolSchemaTruncated(bounded)
+    ? [`${path}.depth`]
+    : collectStrictSchemaViolations(bounded, path, options);
 }
 
 function collectStrictSchemaViolations(

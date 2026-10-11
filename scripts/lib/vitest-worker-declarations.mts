@@ -98,8 +98,6 @@ export const vitestWorkerDeclarationEntries = {
     "packages/llm-core/src/retention-runtime.test-support.ts",
   "packages/agent-core/retention-runtime.test-support":
     "packages/agent-core/src/retention-runtime.test-support.ts",
-  "packages/ai/providers/clean-for-gemini-runtime.test-support":
-    "packages/ai/src/providers/clean-for-gemini-runtime.test-support.ts",
   "packages/terminal-core/table-runtime.test-support":
     "packages/terminal-core/src/table-runtime.test-support.ts",
   "extensions/discord/src/voice/audio-worker-entrypoints.test-support":

@@ -1,6 +1,14 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
-import { assertToolSchemaDepth, isWithinToolSchemaDepth } from "./tool-schema-depth.js";
+import { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
+import {
+  MAX_TOOL_SCHEMA_DEPTH,
+  inheritToolSchemaTruncation,
+  reportToolSchemaTruncation,
+  truncateToolSchemaDepth,
+} from "./tool-schema-depth.js";
+
+export { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
 
 export function setOwnSchemaProperty(
   target: Record<string, unknown>,
@@ -78,27 +86,6 @@ function resolveJsonPointerPath(value: unknown, tokens: readonly string[]): unkn
   return current;
 }
 
-export const SCHEMA_MAP_KEYS = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  "patternProperties",
-  "properties",
-]);
-
-export const SCHEMA_OBJECT_KEYS = new Set([
-  "additionalProperties",
-  "contains",
-  "else",
-  "if",
-  "items",
-  "not",
-  "propertyNames",
-  "then",
-]);
-
-export const SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "items", "oneOf", "prefixItems"]);
-
 export const SCHEMA_LITERAL_KEYS = new Set(["const", "default", "enum", "examples"]);
 
 function tryResolveLocalRef(
@@ -124,11 +111,14 @@ function inlineLocalSchemaRefsWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
   refStack: Set<string> | undefined,
-  state: { unresolvedLocalRefs: boolean },
+  state: { unresolvedLocalRefs: boolean; truncated: boolean },
   rootDocument: unknown,
   depth = 0,
 ): unknown {
-  assertToolSchemaDepth(depth);
+  if (depth > MAX_TOOL_SCHEMA_DEPTH) {
+    state.truncated = true;
+    return {};
+  }
   if (Array.isArray(schema)) {
     return schema.map((entry) =>
       inlineLocalSchemaRefsWithDefs(entry, defs, refStack, state, rootDocument, depth + 1),
@@ -221,25 +211,31 @@ function inlineLocalSchemaRefsWithDefs(
 }
 
 /** Inline local $ref pointers so providers receive self-contained tool schemas. */
-export function inlineLocalToolSchemaRefs(schema: unknown): unknown {
+export function inlineLocalToolSchemaRefs(schema: unknown, toolName?: string): unknown {
   if (!schema || typeof schema !== "object") {
     return schema;
   }
+  const boundedSchema = truncateToolSchemaDepth(schema, toolName);
+  const state = { unresolvedLocalRefs: false, truncated: false };
   // SAFETY: Objects, including legacy array roots, can carry definition-table keys.
-  const schemaRecord = schema as Record<string, unknown>;
-  return inlineLocalSchemaRefsWithDefs(
-    schema,
-    Array.isArray(schema) ? extendSchemaDefs(undefined, schemaRecord) : undefined,
+  const schemaRecord = boundedSchema as Record<string, unknown>;
+  const normalized = inlineLocalSchemaRefsWithDefs(
+    boundedSchema,
+    Array.isArray(boundedSchema) ? extendSchemaDefs(undefined, schemaRecord) : undefined,
     undefined,
-    {
-      unresolvedLocalRefs: false,
-    },
-    schema,
+    state,
+    boundedSchema,
   );
+  const bounded = truncateToolSchemaDepth(normalized);
+  if (state.truncated || bounded !== normalized) {
+    reportToolSchemaTruncation(schema, toolName);
+  }
+  return inheritToolSchemaTruncation(boundedSchema, bounded, state.truncated);
 }
 
 /** Keep compact root definitions. Fall back for scopes or refs we must rewrite. */
-export function canPreserveRootSchemaRefs(schema: unknown): boolean {
+export function canPreserveRootSchemaRefs(inputSchema: unknown): boolean {
+  const schema = truncateToolSchemaDepth(inputSchema);
   if (
     !isSchemaRecord(schema) ||
     schema.type !== "object" ||
@@ -252,12 +248,7 @@ export function canPreserveRootSchemaRefs(schema: unknown): boolean {
   }
   let hasRefs = false;
   const ancestors = new Set<object>();
-  function visit(node: unknown, inDefinitions = false, depth = 0): boolean {
-    if (!isWithinToolSchemaDepth(depth)) {
-      // Too deep to certify ref preservation; the caller falls back to the
-      // bounded inliner, which rejects genuinely un-manageable schemas.
-      return false;
-    }
+  function visit(node: unknown, inDefinitions = false): boolean {
     if (!isSchemaRecord(node)) {
       return true;
     }
@@ -287,14 +278,14 @@ export function canPreserveRootSchemaRefs(schema: unknown): boolean {
       for (const [key, value] of Object.entries(node)) {
         if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
           const childInDefinitions = inDefinitions || key === "$defs" || key === "definitions";
-          if (!Object.values(value).every((entry) => visit(entry, childInDefinitions, depth + 1))) {
+          if (!Object.values(value).every((entry) => visit(entry, childInDefinitions))) {
             return false;
           }
         } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-          if (!value.every((entry) => visit(entry, inDefinitions, depth + 1))) {
+          if (!value.every((entry) => visit(entry, inDefinitions))) {
             return false;
           }
-        } else if (SCHEMA_OBJECT_KEYS.has(key) && !visit(value, inDefinitions, depth + 1)) {
+        } else if (SCHEMA_OBJECT_KEYS.has(key) && !visit(value, inDefinitions)) {
           return false;
         }
       }

@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { normalizeMcpCatalogSchema } from "./agent-bundle-mcp-schema-guard.js";
 import {
   getPluginToolMeta,
   setPluginToolMeta,
@@ -83,7 +82,7 @@ function buildAppToolPolicyProjections(params: {
       name,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
-      parameters: normalizeMcpCatalogSchema(tool, tool.inputSchema, "App-only tool"),
+      parameters: normalizeToolParameterSchema(tool.inputSchema, { toolName: name }),
       execute: async () => {
         throw new Error("MCP App policy projections cannot execute tools");
       },
@@ -232,7 +231,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
-      parameters: normalizeMcpCatalogSchema(tool, tool.inputSchema),
+      parameters: normalizeToolParameterSchema(tool.inputSchema, { toolName: safeToolName }),
       executionMode,
       ...(params.createExecute && !sessionDeniedOnly
         ? { resultContentSource: "network" as const }
